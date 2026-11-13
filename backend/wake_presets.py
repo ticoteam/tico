@@ -34,8 +34,8 @@ import os
 from . import hubdb as H
 from . import bot_settings as BS
 
-# A run's tokens: its input (uncached and cached) and output, as its usage records them.
-RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.output_tokens,0)"
+# A run's tokens: its input (uncached, cached and written to the cache) and output, as its usage records them.
+RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.cache_write_tokens,0)+coalesce(a.output_tokens,0)"
 
 CURRENT = "current"
 TOKEN_SAVER = "token_saver"

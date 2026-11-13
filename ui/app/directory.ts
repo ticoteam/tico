@@ -36,7 +36,8 @@ interface DirType {
   built_in: number | boolean; mode: string | null; created_by_type: string | null; created_by_id: string | null;
 }
 interface DirCount { type: string; count: number; approximate: boolean }
-interface DirListState { run: number; type: string; q: string; link: string; next: string | null; rows: DirBrief[] }
+// search counts the list's searches (a read from the top): only the newest one's rows or error draw.
+interface DirListState { run: number; type: string; q: string; link: string; next: string | null; rows: DirBrief[]; search: number }
 
 let DIRP: { run: number } | null = null;   // the page on screen: a late answer for a page left behind draws nothing
 let DIRL: DirListState | null = null;      // the list's query and the rows shown
@@ -111,7 +112,7 @@ async function pageDirectory(query: string): Promise<void> {
     && (DIR_MAIN_TYPES.includes(t.key) || (counted.get(t.key)?.count ?? 0) > 0))
     .sort((a, b) => dirTabOrder(a.key) - dirTabOrder(b.key));
   const type = tabs.some(t => t.key === want.type) ? want.type : 'person';
-  DIRL = { run, type, q: want.q, link: want.link, next: null, rows: [] };
+  DIRL = { run, type, q: want.q, link: want.link, next: null, rows: [], search: 0 };
   const root = document.getElementById('dir-root');
   if (!root) return;
   const relations = Object.keys(DIR_RELATIONS);
@@ -176,16 +177,18 @@ async function dirLoadRows(root: HTMLElement, types: DirType[], reset: boolean):
   if (state.q) p.set('name', state.q);
   if (state.link) p.set('link', state.link);
   if (!reset && state.next) p.set('after', state.next);
-  const asked = { q: state.q, link: state.link, type: state.type };
+  // A new search starts a new count; Load more stays within the search it extends.
+  const search = reset ? ++state.search : state.search;
+  // A newer search has been typed since (or the page left): its own read draws, rows or error.
+  const current = (): boolean => DIRL === state && dirLive(state.run) && state.search === search;
   let page: DirFind;
   try {
     page = await get<DirFind>(`/v2/entities/find/${encodeURIComponent(state.type)}?${p.toString()}`, { fresh: true });
   } catch (e) {
-    if (DIRL === state && dirLive(state.run)) body.innerHTML = dirErr(e);
+    if (current()) body.innerHTML = dirErr(e);
     return;
   }
-  // A newer query has been typed since: its own read draws.
-  if (DIRL !== state || !dirLive(state.run) || asked.q !== state.q || asked.link !== state.link) return;
+  if (!current()) return;
   state.rows = reset ? page.rows : [...state.rows, ...page.rows];
   state.next = page.next;
   const plural = dirTypeName(types, state.type, true).toLowerCase();

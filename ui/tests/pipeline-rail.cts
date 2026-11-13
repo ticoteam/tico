@@ -2,12 +2,14 @@
 //  - the columns are the pipeline's work stages, in order (Done and Closed are not columns), and they share the width;
 //  - the manager's rail is closed at first: the header's chat icon opens it as a column at the RIGHT of the stages
 //    (never under them), its close button closes it, and open or closed is kept in this browser;
-//  - a pipeline with no manager, or a phone, has no chat icon and no rail.
+//  - a pipeline with no manager, or a phone, has no chat icon and no rail;
+//  - a Late row and a Log line with a task open that task, by click and by Enter or Space (the rail is outside
+//    #task-body, so the page's own row handler never sees them).
 // Run: node scripts/ui-tests.cts pipeline-rail
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open, PIPELINES} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
+const {open, PIPELINES, fixtures} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 
 const box = (page: Page, sel: string) => page.locator(sel).evaluate(el => {
   const r = el.getBoundingClientRect();
@@ -54,6 +56,43 @@ const box = (page: Page, sel: string) => page.locator(sel).evaluate(el => {
       await page.close();
     }
     {
+      // A late task and a Log line about another task: each row opens its task.
+      const tasks = fixtures();
+      tasks.find(t => t.id === 't-1')!.late = {level: 'told', since: new Date(Date.now() - 3 * 3600e3).toISOString()};
+      const log = {log: [{at: new Date().toISOString(), text: 'Pushed past Build', why: 'checks green', task_id: 't-4', by: 'bot:pm'}], learned: []};
+      const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=product&layout=columns', beforeGoto: (pg: Page) =>
+        pg.route('**/api/v2/pipelines/product/log', r => r.fulfill({contentType: 'application/json', body: JSON.stringify(log)}))});
+      await page.evaluate(() => {
+        const w = window as unknown as {taskModalOpen: (id: string) => Promise<void>; opened: string[]};
+        w.opened = [];
+        w.taskModalOpen = async (id: string) => { w.opened.push(id); };
+      });
+      const opened = () => page.evaluate(() => (window as unknown as {opened: string[]}).opened.splice(0));
+      if ((await page.locator('#task-manager').getAttribute('aria-pressed')) !== 'true') await page.locator('#task-manager').click();
+      const late = page.locator('#task-rail .pm-row[data-task="t-1"]'), line = page.locator('#task-rail .pm-line[data-task="t-4"]');
+      await late.waitFor();
+      await line.waitFor();
+      await late.click();
+      assert.deepEqual(await opened(), ['t-1'], 'a Late row opens its task');
+      await line.click();
+      assert.deepEqual(await opened(), ['t-4'], 'a Log line with a task opens it');
+      await late.focus();
+      await page.keyboard.press('Enter');
+      assert.deepEqual(await opened(), ['t-1'], 'Enter on a focused Late row opens it');
+      await line.focus();
+      await page.keyboard.press(' ');
+      assert.deepEqual(await opened(), ['t-4'], 'Space on a focused Log line opens it');
+      await page.locator('#task-rail .pm-tab[data-pm-tab="tasks"]').click();
+      assert.deepEqual(await opened(), [], 'a tab is not a task');
+      const row = page.locator('#task-rail .pm-body .tk-row[data-task]').first();
+      await row.waitFor();
+      const want = await row.getAttribute('data-task');
+      await row.click();
+      assert.deepEqual(await opened(), [want], 'a row in the Tasks tab opens its task');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
       const {page, errors} = await open(browser, {needs: [], hash: '#/tasks?pipeline=ops'});
       assert.equal(await page.locator('#task-manager').isVisible(), false, 'no manager, no chat icon');
       assert.equal((await box(page, '#task-rail')).hidden, true);
@@ -67,6 +106,6 @@ const box = (page: Page, sel: string) => page.locator(sel).evaluate(el => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('pipeline columns are its work stages sharing the width; the manager rail is closed, opens at the right: ok');
+    console.log('pipeline columns are its work stages sharing the width; the manager rail is closed, opens at the right; its task rows open their task: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

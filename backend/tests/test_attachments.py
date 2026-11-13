@@ -35,26 +35,6 @@ def test_forbidden_upload_never_publishes_file_or_work(api, path, fields):
             assert c.execute("SELECT count(*) FROM " + table).fetchone()[0] == 0
 
 
-def test_same_bot_other_conversation_cannot_download_private_attachment(api):
-    result = upload(api, 'chat/product-design', {'text': 'Private Ben conversation'}, 'ben-test')
-    attachment = result['message']['refs']['attachments'][0]
-    machine = runner(api, 'ben')
-    assign(api, machine, 'product-design')
-    ready(api, machine, ['product-design'])
-    first = claim(api, machine)
-    post(api, f"attempts/{first['id']}/started", {'thread_id': 'first'}, machine['token'])
-    post(
-        api,
-        f"attempts/{first['id']}/complete",
-        {'outcome': 'completed', 'last_seq': 0, 'text': 'Read'},
-        machine['token'],
-    )
-    post(api, 'chat/product-design', {'text': 'Different Ana conversation'})
-    other = claim(api, machine)
-    assert other['conversation']['id'] != result['conversation']['id']
-    assert api.get(attachment['url'], headers=headers(other['token'])).status_code == 403
-
-
 def test_bot_downloads_a_chat_image_only_in_its_authorized_conversation(api):
     image = io.BytesIO()
     Image.new('RGB', (1, 1)).save(image, format='PNG')

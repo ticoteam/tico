@@ -3,7 +3,7 @@
 // the stream would. Each list is counted: no list read after many events, a row changes in place, a row that no longer
 // belongs leaves, and the 2-minute refresh catches up with a changed_after delta from the list's cursor.
 //  - a bot's page: its Open rows and its filter tabs (Assigned to others), decided by each tab's rows client-side;
-//  - a person's page: the tasks they own, open and finished (a snoozed one is off it);
+//  - a person's page: the tasks they own, open, snoozed and finished;
 //  - My dashboard: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
 //    read and activity events; the place is not read again for any of them;
 //  - a read that lands late (Codex review 1): a first read or a catch-up held back by a slow server, a removal coming
@@ -181,12 +181,13 @@ const holdNext = (match: Held['match']): Held => {
   const personListed = reads.tasks;
   await emit('tasks', ...Array.from({length: 20}, (_, i) => event(task('t6', `Order the badges ${i + 1}`, 'spec', {owner_id: 'human:sam', version: 4 + i}))));
   await page.locator('#person-tasks', {hasText: 'Order the badges 20'}).waitFor();
-  // Done: still Sam's, under Finished. Snoozed and handed to Ana: off the list. New for Sam: on it.
+  // Done: still Sam's, under Finished. Snoozed: still on the list with the open ones (status=all, #3418). Handed to Ana:
+  // off it. New for Sam: on it.
   await emit('tasks', event(task('t6', 'Order the badges 20', 'done', {owner_id: 'human:sam'})),
     event(task('t7', 'Call the venue', 'spec', {owner_id: 'human:sam', snoozed: true})),
     event(task('t8', 'Print the menus', 'spec', {owner_id: 'human:sam'}), 'insert'));
   await page.locator('#person-tasks', {hasText: 'Print the menus'}).waitFor();
-  await page.waitForFunction(() => !document.querySelector('#person-tasks')?.textContent?.includes('Call the venue'));
+  assert.match(await text('#person-tasks .v2-group'), /Call the venue/);
   assert.match(await text('.person-tasks-done'), /Order the badges 20/);
   await emit('tasks', event(task('t8', 'Print the menus', 'spec', {owner_id: 'human:ana'})));
   await page.waitForFunction(() => !document.querySelector('#person-tasks')?.textContent?.includes('Print the menus'));

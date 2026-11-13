@@ -76,8 +76,9 @@ LOG_PATTERNS = (
         re.compile(r"unpushed commits and push failed", re.I),
         1,
         "A bot's checkout has commits it cannot push (the branch has diverged)",
-        "BotOps: on that computer, fetch the bot's repository, rebase its unpushed commits onto the remote branch "
-        "(or save them on a new branch) and push, so the runner can pull again.",
+        "BotOps: the runner's own rebase already kept both sides of memory notes, so a real conflict is left (the "
+        "error names its files). On that computer, fetch the bot's repository, rebase its unpushed commits onto the "
+        "remote branch keeping both sides' facts (or save them on a new branch) and push, so the runner can pull again.",
     ),
     (
         "cannot_fetch",

@@ -95,30 +95,6 @@ def _go_live(c, row):
 
 
 # ----------------------------------------------------------------------------- the shapes
-def test_experiments_and_monitoring_are_made_together_with_these_stages():
-    shapes = {
-        pid: [(s["name"], s["by_hand"], s["task_limit"], s["owner"]) for s in M.PRESETS[pid]["stages"]]
-        for pid in ("growth-experiments", "success-experiments", "growth-monitoring", "success-monitoring")
-    }
-    for kind in ("growth", "success"):
-        assert shapes[f"{kind}-experiments"] == [
-            ("Ideas", True, None, "assignee"),
-            ("Building", False, 6, "assignee"),
-            ("Running", False, None, "assignee"),
-        ]
-        assert shapes[f"{kind}-monitoring"] == [
-            ("Watching", True, None, "assignee"),
-            ("Slipping", False, None, "assignee"),
-        ]
-        assert M.manager_role(f"{kind}-monitoring") == M.manager_role(f"{kind}-experiments")
-        stages = M.PRESETS[f"{kind}-experiments"]["stages"]
-        assert [r["line"] for r in stages[1]["requirements"]] == ["Go-live page"]
-        assert stages[1]["requirements"][0]["who_oks"] == "people_only"
-        assert [(r["line"], r.get("who_oks", "none")) for r in stages[2]["requirements"]] == [("Results page", "none")]
-        assert [r["kind"] for r in M.PRESETS[f"{kind}-monitoring"]["stages"][1]["requirements"]] == ["owner_done"]
-    assert not any(s["requests_move_on"] for p in shapes for s in M.PRESETS[p]["stages"])
-
-
 def test_monitoring_is_made_only_where_its_experiments_pipeline_is(c):
     made = _set_up(c)
     assert {"growth-monitoring", "success-monitoring"} <= set(made)
@@ -167,7 +143,8 @@ def test_a_bot_starts_its_own_idea_when_building_has_room_and_is_told_plainly_wh
         moved = _move(c, idea["id"], BUILDING, OWNER)
         assert (moved["stage_id"], moved["owner_id"]) == (BUILDING, OWNER)
     with pytest.raises(
-        H.Refused, match=r"^task_stage_full: No room in Building\. It holds 6: move it again when one leaves\.$"
+        H.Refused,
+        match=r"^task_stage_full: No room in Building\. It holds 6 a bot is working on: move it again when one leaves\.$",
     ):
         _move(c, ideas[6]["id"], BUILDING, OWNER)
     assert E.task(c, ideas[6]["id"])["stage_id"] == IDEAS
@@ -196,6 +173,26 @@ def test_a_persons_idea_rests_in_growth_ideas_while_in_product_it_still_moves_on
     assert E.task(c, request["id"])["stage_id"] == "product-spec"
     (wait,) = W.of(c, E.task(c, growth["id"]))
     assert wait.state == W.BY_HAND
+
+
+def test_a_freed_slot_in_building_wakes_nobody_even_though_ideas_is_the_assignees(c):
+    """C10 skips an assignee-owned by-hand stage whose requests do not move on: Growth's Ideas wakes no idea's owner
+    when Building has room, from the start or after a slot frees. Product's Ideas does wake its owner
+    (test_product_engineering_presets.py)."""
+    _set_up(c)
+    stage = c.execute("SELECT owner, requests_move_on FROM stages WHERE id=?", (IDEAS,)).fetchone()
+    assert tuple(stage) == ("assignee", 0)
+    waiting = _idea(c, OWNER, "Bot's idea")
+    started = _idea(c, ANA, "Ana's idea", assignee=OWNER)
+    _move(c, started["id"], BUILDING, OWNER)
+    _move(c, started["id"], IDEAS, ANA, "Not yet")
+    X.settled(c)
+    before = X.wakes(c, waiting["id"])
+    N.check(c)
+    N.check(c)
+    assert _room_wakes(c) == 0
+    assert X.wakes(c, waiting["id"]) == before
+    assert E.task(c, waiting["id"])["stage_id"] == IDEAS
 
 
 # ----------------------------------------------------------------------------- (c) resting

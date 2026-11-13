@@ -21,7 +21,7 @@ from . import threads
 
 BATCH = 200  # messages one transaction deletes
 MAX_BATCHES = 10  # batches one run takes; the rest wait for the next run
-MAX_ROOTS = 200  # roots one run looks at; the next run goes on after the last one
+MAX_ROOTS = 200  # roots one run looks at; the next run goes on after the last one it reached
 
 _after = {"root": ""}  # where the last run stopped (in this process: a restart starts over, which only reads)
 
@@ -69,7 +69,10 @@ def sweep(store, now=None):
         ).fetchall()
     _after["root"] = roots[-1]["id"] if len(roots) == MAX_ROOTS else ""
     total = batches = 0
-    for root in roots:
+    for n, root in enumerate(roots):
+        if batches >= MAX_BATCHES:  # the next run starts with the roots this one never reached
+            _after["root"] = roots[n - 1]["id"]
+            break
         cutoff = H.shift(now, days=-int(root["retention_days"]))
         while batches < MAX_BATCHES:
             with store.read() as c:

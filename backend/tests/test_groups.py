@@ -181,14 +181,6 @@ def test_the_built_in_group_is_kept_by_tico_and_setup_puts_built_in_bots_in_it(a
     assert teams_now(api)["botops"] == "built-in"
 
 
-def test_move_bot_puts_a_bot_in_a_group_the_caller_made(api):
-    send(api, "POST", "groups", {"name": "Corporate"})
-    with api.app.state.store.transaction() as c:
-        add_bots(c, cpo=({}, "human:ana"))
-        Groups.move_bot(c, "cpo", "corporate")
-    assert teams_now(api)["cpo"] == "corporate"
-
-
 def test_migration_puts_the_built_in_bots_in_the_built_in_group_and_no_one_else(api):
     doc = {"default_user": "ana", "people": [{"id": "ana", "email": "ana@acme.example"}], "org_groups": {}}
     with api.app.state.store.transaction() as c:

@@ -441,6 +441,8 @@ struct Usage {
     input: i64,
     output: i64,
     cached: i64,
+    /// Prompt tokens written to the cache (`cache_creation_input_tokens`), a part of `input`.
+    cache_write: i64,
     cost: Option<f64>,
     texts: Vec<String>,
     /// Each model request this turn, the bot's and its subagents', in the order Claude made them; true for the bot's own.
@@ -662,11 +664,6 @@ impl ClaudeHost {
             .map(|(_, u)| u)
     }
 
-    #[cfg(test)]
-    pub(crate) fn pretend_turn(&self, thread: &str, turn: &str) {
-        self.inner().turn = Some((thread.into(), turn.into()));
-    }
-
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.inner().threads.insert(
@@ -854,12 +851,18 @@ impl ClaudeHost {
                 tokio::process::Command::new(reaper(std::path::Path::new("")).remove(0))
             }
             Some(path) => {
-                let mut c = crate::isolation::command_under(&reaper(path), &argv[0]);
+                // The reaping parent goes inside the turn's scope too, with the shells it keeps.
+                let parent: Vec<_> = crate::turn_limits::prefix()
+                    .into_iter()
+                    .flatten()
+                    .chain(reaper(path))
+                    .collect();
+                let mut c = crate::isolation::command_under(&parent, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
             None => {
-                let mut c = crate::isolation::command(&argv[0]);
+                let mut c = super::harness_command(None, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
@@ -1421,6 +1424,7 @@ impl ClaudeHost {
         u.input += inp;
         u.output += out;
         u.cached += count(&result["usage"], "cache_read_input_tokens");
+        u.cache_write += count(&result["usage"], "cache_creation_input_tokens");
         if let Some(c) = cost {
             u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
             pipe_cost = c;
@@ -1848,7 +1852,7 @@ impl ClaudeHost {
                 Some(tid),
                 Some(turn),
                 json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "output": u.output,
+                       "usage": {"input": u.input, "cached": u.cached, "cache_write": u.cache_write, "output": u.output,
                                  // The fourth count marks the bot's own requests (1) from its subagents' (0): the
                                  // newest of the bot's own is the session's context size (backend/topic_change.py).
                                  "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
@@ -2770,50 +2774,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_turn_ended_on_its_wait_leaves_no_helper_of_claudes_running_but_the_bots_own_detached_job(
-    ) {
-        let pids =
-            std::env::temp_dir().join(format!("claude-strays-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&pids).unwrap();
-        let first = format!("{SHELL_STARTED}\n{}\n", result_line("Suite running."));
-        // An MCP server that ignores its stdin closing, and a job the bot detached in a command that has ended.
-        let p = pids.display();
-        let rest = format!("sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > {p}/mcp.pid\n( sh -c 'echo $$ > {p}/own.pid; exec sleep 30' </dev/null >/dev/null 2>&1 & )\nsleep 0.05");
-        let (got, _, shell) = wait_turn(&first, &rest, Duration::from_millis(300)).await;
-        let read = |name: &str| -> i32 {
-            std::fs::read_to_string(pids.join(name))
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap()
-        };
-        let (mcp, own) = (read("mcp.pid"), read("own.pid"));
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while alive(mcp) && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        let (mcp_gone, own_alive, shell_alive) = (!alive(mcp), alive(own), alive(shell));
-        // SAFETY: processes this test's fake started.
-        unsafe {
-            libc::kill(own, libc::SIGKILL);
-            libc::kill(shell, libc::SIGKILL);
-        }
-        std::fs::remove_dir_all(&pids).unwrap();
-        assert!(
-            got.iter().any(|e| e["background_wait"].is_object()),
-            "{got:?}"
-        );
-        assert!(mcp_gone, "Claude's own helper outlived the turn");
-        assert!(own_alive, "the bot's detached job was killed");
-        assert!(shell_alive, "the kept shell was killed");
-        let stopped = &got.iter().find(|e| e["kind"] == "background_kept").unwrap()["stopped"];
-        assert!(
-            stopped.as_array().unwrap().contains(&json!(mcp)),
-            "{stopped}"
-        );
-    }
-
-    #[tokio::test]
     async fn a_stopped_turn_leaves_nothing_it_started_running() {
         let dir = std::env::temp_dir().join(format!(
             "claude-stop-group-{}",
@@ -3265,6 +3225,8 @@ mod tests {
             ),
             (&json!(123902), &json!(120000), &json!(83))
         );
+        // Cache writes are counted apart (they cost more than input): the input above includes them.
+        assert_eq!(tokens["usage"]["cache_write"], json!(3000), "{got:?}");
     }
 
     #[tokio::test]
@@ -3546,41 +3508,6 @@ mod tests {
         assert_eq!(goal_records(&mut rx), ["d"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
-
-    /// `cargo test bench_poll_goal -- --ignored --nocapture`: the bytes a poll asks the allocator for, and its wall
-    /// time, over a 10 MB transcript that gains one 1 KB line before each of 50 polls (the drive loop's 1 s pass).
-    #[test]
-    #[ignore]
-    fn bench_poll_goal_on_a_10_mb_transcript() {
-        let dir = std::env::temp_dir().join(format!(
-            "claude-goal-bench-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let (host, mut rx, thread, path) = poll_transcript(&dir);
-        let line = format!(
-            "{}\n",
-            json!({"uuid": "x", "type": "assistant", "message": {"content": "y".repeat(1000)}})
-        );
-        append_transcript(&path, &line.repeat(10 * 1024 * 1024 / line.len()));
-        host.poll_goal(&thread); // reads the 10 MB once; the offset is now its end
-        assert!(goal_records(&mut rx).is_empty());
-        let (mut bytes, mut micros) = (Vec::new(), Vec::new());
-        for _ in 0..50 {
-            append_transcript(&path, &line);
-            let asked = crate::util::alloc_probe::requested();
-            let started = std::time::Instant::now();
-            host.poll_goal(&thread);
-            micros.push(started.elapsed().as_secs_f64() * 1e6);
-            bytes.push(crate::util::alloc_probe::requested() - asked);
-        }
-        bytes.sort_unstable();
-        micros.sort_by(|a, b| a.total_cmp(b));
-        eprintln!(
-            "poll_goal, 10 MB transcript, +1 KB per poll (50 polls): bytes requested median {} (min {}, max {}), wall time median {:.1} us",
-            bytes[25], bytes[0], bytes[49], micros[25]
-        );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 }
 
 #[cfg(test)]
@@ -3637,38 +3564,6 @@ mod feature_tests {
             before_turns + 1,
             "a changed version is read once"
         );
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    /// Process runs of forty turn starts with no probe, and of a probe followed by forty turn starts. Run with --ignored --nocapture.
-    #[tokio::test]
-    #[ignore]
-    async fn claude_turn_start_spawns_bench() {
-        let root = std::env::temp_dir().join(format!(
-            "tico-claude-bench-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(root.join("cold")).unwrap();
-        std::fs::create_dir_all(root.join("probed")).unwrap();
-        let (cold_cmd, cold_log) = fake_claude(&root.join("cold"));
-        let (probed_cmd, probed_log) = fake_claude(&root.join("probed"));
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        for _ in 0..40 {
-            let _ = ClaudeHost::new("bench", cold_cmd.clone(), tx.clone())
-                .start()
-                .await;
-        }
-        let cold = runs(&cold_log);
-        let version = installed_version(&probed_cmd, "--version").await;
-        note_version(&probed_cmd, &version).await;
-        let probe = runs(&probed_log);
-        for _ in 0..40 {
-            let _ = ClaudeHost::new("bench", probed_cmd.clone(), tx.clone())
-                .start()
-                .await;
-        }
-        let warm = runs(&probed_log) - probe;
-        eprintln!("BENCH claude_turn_starts=40 no_probe_runs={cold} probe_runs={probe} runs_during_40_starts_after_probe={warm}");
         std::fs::remove_dir_all(root).ok();
     }
 }

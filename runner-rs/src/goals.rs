@@ -44,11 +44,6 @@ fn frontmatter_cache() -> &'static Mutex<HashMap<(PathBuf, i128, u64), Fields>> 
     C.get_or_init(Default::default)
 }
 
-/// Test-only: how many frontmatter files were read (a cache miss).
-#[cfg(test)]
-pub static FRONTMATTER_READS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// The leading `---` block's plain `key: value` fields; folded and literal values become one line. Kept per (path, mtime,
 /// size) because each heartbeat pass reads every bot's skill and command files (readiness::document): a plain read of
 /// thirty skills on every pass cost about 1200 reads per forty passes against 30 with the memo (goals::frontmatter_bench).
@@ -66,8 +61,6 @@ pub fn frontmatter(path: &Path) -> Fields {
     if let Some(f) = frontmatter_cache().lock().unwrap().get(&key) {
         return f.clone();
     }
-    #[cfg(test)]
-    FRONTMATTER_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut head = vec![0u8; 8192];
     let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)) else {
         return Fields::new();
@@ -446,41 +439,5 @@ mod tests {
         assert_eq!(merged[1]["help"], "Ship the site");
         assert_eq!(merged[1]["args"], "[env]");
         std::fs::remove_dir_all(root).ok();
-    }
-}
-
-/// Skill frontmatter reads and wall time for forty heartbeat passes over thirty skills: the median of fifty runs, each
-/// over its own skills. Run with --ignored --nocapture.
-#[cfg(test)]
-mod frontmatter_bench {
-    use super::*;
-
-    #[test]
-    #[ignore]
-    fn skill_frontmatter_reads_bench() {
-        let (mut walls, mut reads) = (Vec::new(), Vec::new());
-        for _ in 0..50 {
-            let root = std::env::temp_dir()
-                .join(format!("tico-fm-bench-{}", uuid::Uuid::new_v4().simple()));
-            for i in 0..30 {
-                let dir = root.join(".claude/skills").join(format!("skill-{i:02}"));
-                std::fs::create_dir_all(&dir).unwrap();
-                std::fs::write(dir.join("SKILL.md"), format!("---\nname: skill-{i:02}\ndescription: Skill number {i}\nargument-hint: [arg]\n---\nbody\n")).unwrap();
-            }
-            let before = FRONTMATTER_READS.load(std::sync::atomic::Ordering::Relaxed);
-            let started = std::time::Instant::now();
-            for _ in 0..40 {
-                let _ = with_repo_commands(&[], &root);
-            }
-            walls.push(started.elapsed().as_micros() as u64);
-            reads.push(FRONTMATTER_READS.load(std::sync::atomic::Ordering::Relaxed) - before);
-            std::fs::remove_dir_all(root).ok();
-        }
-        reads.sort();
-        walls.sort();
-        eprintln!(
-            "BENCH frontmatter_passes=40 skills=30 runs=50 reads_median={} wall_us_median={}",
-            reads[25], walls[25]
-        );
     }
 }

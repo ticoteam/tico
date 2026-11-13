@@ -1,5 +1,10 @@
 """Task list routes: task filters, notes, labels."""
 
+import base64
+import json
+import re
+from typing import Any
+
 from .store import H
 from . import models as M
 from .store import Problem
@@ -9,9 +14,65 @@ from . import delivery
 from . import lifecycle
 from . import org_rule_check
 from . import task_privacy as privacy
-import re
 from . import reach
 from . import views
+
+
+# The query parameters GET /api/v2/tasks takes: its own filters (the handler's keywords below, kept equal by
+# test_task_reads) and `on_behalf_of`, which the BotOps middleware reads on every v2 route. Any other name is refused:
+# FastAPI drops unknown query parameters, so a misspelled or unsupported filter (`assignee=`) used to answer the
+# whole list instead of the filtered one.
+LIST_FILTERS = frozenset(
+    {
+        "owner",
+        "requester",
+        "status",
+        "lane",
+        "label",
+        "limit",
+        "offset",
+        "sort",
+        "number",
+        "updated_since",
+        "brief",
+        "member",
+        "role",
+        "changed_after",
+        "ids",
+        "snoozed",
+        "q",
+        "pipeline",
+        "stage",
+        "waiting_on",
+        "pushed_past",
+        "search",
+        "owners",
+        "stages",
+        "requesters",
+        "labels",
+        "turn",
+        "due",
+        "late",
+        "after",
+    }
+)
+# Passed through and ignored. `type`: the Recorder's task picker sends `type=<task type>` from 0.5.181 (Nov 5, 2026)
+# until the build that stopped (recorder/src/task_links.rs `search_tasks`); installed copies keep sending it, so it is
+# accepted rather than refused. The list has no type filter, so it never narrowed the answer.
+_LIST_PASSED = frozenset({"on_behalf_of", "type"})
+_FILTER_HINTS = {"assignee": "use owner= (who has it now)"}
+
+
+def unknown_filters(names):
+    """Refuse a list read naming a filter it does not take (422 `filter`), with the filters it does take."""
+    unknown = sorted(set(names) - LIST_FILTERS - _LIST_PASSED)
+    if unknown:
+        hints = "".join(f" For {n}, {_FILTER_HINTS[n]}." for n in unknown if n in _FILTER_HINTS)
+        raise Problem(
+            "filter",
+            f"Unknown filter: {', '.join(unknown)}.{hints} Filters: {', '.join(sorted(LIST_FILTERS))}.",
+            422,
+        )
 
 
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
@@ -40,15 +101,30 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         stage: str | None = None,
         waiting_on: str | None = None,
         pushed_past: bool | None = None,
+        search: str = "",
+        owners: str | None = None,
+        stages: str | None = None,
+        requesters: str | None = None,
+        labels: str | None = None,
+        turn: str | None = None,
+        due: str | None = None,
+        late: bool | None = None,
+        after: str | None = None,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
         bot's turn, or a bot that can't run); `pushed_past=true` keeps the tasks that entered their stage pushed past
-        a requirement (false, the rest)."""
+        a requirement (false, the rest). `search`, `owners`, `stages`, `requesters`, `labels`, `turn`, `due` and
+        `late` are the Tasks page's search and filters, with its meaning (backend/task_match.py). Every page answers
+        `next_after` when there is more: pass it back as `after` for the next page (a keyset page, which a task added
+        or removed meanwhile does not shift); `next_offset` stays for offset paging."""
+        from . import task_match
         from . import task_reads as reads
+        from . import teammate_access
 
         who = request.state.identity
         auth.domain(who)
+        unknown_filters(request.query_params.keys())
         with store.read_transaction() as c:
             if limit < 1 or limit > 500:
                 raise Problem("limit", "limit is between 1 and 500", 422)
@@ -88,6 +164,37 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             if waiting_on is not None:
                 waits_on = waited_on(c, waiting_on, visible_sql, narrow)
                 filters["ids"] = [t for t in filters["ids"] if t in waits_on] if "ids" in filters else sorted(waits_on)
+            hidden = frozenset(teammate_access.Known(c, who, auth).people if (owners or requesters or turn) else ())
+            match = task_match.parse(
+                H.now(), search, owners, stages, requesters, labels, turn, due, late, hidden=hidden
+            )
+            if match.sql:
+                filters["match"] = match.sql
+            if after is not None:
+                if changed_after is not None or offset:
+                    raise Problem("after", "after is a page's start: not with changed_after or offset", 422)
+                filters["after"] = keyset_start(after, sort)
+
+            def matched(restrict=None):
+                """The search's and Waiting on's ids among the rows the other filters leave (all of the view's, or
+                `restrict`'s); None when neither is set."""
+                if not (match.words or match.turn is not None):
+                    return None
+                kw = {k: v for k, v in filters.items() if k not in ("visible_sql", "narrow", "order", "after")}
+                if restrict is not None:
+                    chosen = set(restrict)
+                    kw["ids"] = [t for t in kw["ids"] if t in chosen] if "ids" in kw else list(restrict)
+                candidates: Any = H.tasks(
+                    c,
+                    owner=owner,
+                    requester=requester,
+                    limit=None,
+                    order=sort,
+                    visible=f"({visible_sql}) AND ({narrow})" if narrow else visible_sql,
+                    keys_only=True,
+                    **kw,
+                )
+                return task_match.kept(c, match, candidates, visible_sql)
 
             def brief_rows(rows):
                 # A board or a bot's task list polling many tasks needs neither their text nor their criteria.
@@ -125,6 +232,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 # A waiting-on (or ids) selection already in the filters keeps only the changed tasks it holds.
                 chosen = set(filters.pop("ids")) if "ids" in filters else None
                 changed_ids = [tid for tid in changed_ids if chosen is None or tid in chosen]
+                kept = matched(changed_ids) if changed_ids else None
+                if kept is not None:
+                    changed_ids = [tid for tid in changed_ids if tid in set(kept)]
                 rows = (
                     visible_tasks(c, who, owner, requester, limit=len(changed_ids), ids=changed_ids, **filters)[0]
                     if changed_ids
@@ -141,21 +251,53 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     who.task_actor,
                     sorted(request.query_params.multi_items()),
                 )
-                rows, next_offset = visible_tasks(c, who, owner, requester, limit=limit, offset=offset, **filters)
+                kept = matched()
+                if kept is not None:
+                    filters["ids"] = [t for t in filters["ids"] if t in set(kept)] if "ids" in filters else kept
+                rows, last = visible_tasks(c, who, owner, requester, limit=limit, offset=offset, keyset=True, **filters)
+                next_offset = offset + limit if last is not None else None
+                next_after = keyset_token(last) if last is not None else None
                 brief_rows(rows)
                 # The validator is the answer itself and the reader's access. A change this reader cannot read (a
                 # hidden ticket, another team's) leaves it as it was, so it sends no new ETag for identical data.
-                tag = reads.etag("tasks", rows, next_offset, *reader)
+                tag = reads.etag("tasks", rows, next_offset, next_after, *reader)
                 if reads.fresh(request, tag):
                     return reads.not_modified(tag)
                 response.headers["ETag"] = tag
-                result = {"tasks": rows, "next_offset": next_offset, "cursor": reads.cursor(c, visible_sql)}
+                result = {
+                    "tasks": rows,
+                    "next_offset": next_offset,
+                    "next_after": next_after,
+                    "cursor": reads.cursor(c, visible_sql),
+                }
                 if typed is not None:
                     # What was asked for and is not here: unknown, ambiguous, outside the filters or not readable.
                     returned = {row["id"] for row in rows}
                     result["missing"] = [ident for ident in typed if found[ident] not in returned]
             brief_rows(rows)
             return result
+
+    def keyset_token(key):
+        return base64.urlsafe_b64encode(json.dumps(key, separators=(",", ":")).encode()).decode().rstrip("=")
+
+    def keyset_start(token, sort):
+        """The sort key a page's `next_after` carries, checked: four parts in queue order, two in finished order."""
+        try:
+            key = (
+                json.loads(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode())
+                if len(token) < 2000
+                else None
+            )
+        except (ValueError, UnicodeDecodeError):
+            key = None
+        shapes = {"queue": (int, (int, float), str, str), "finished": (str, str)}[sort]
+        if (
+            not isinstance(key, list)
+            or len(key) != len(shapes)
+            or any(isinstance(v, bool) or not isinstance(v, kind) for v, kind in zip(key, shapes, strict=True))
+        ):
+            raise Problem("after", "after is a page's next_after, in the same sort", 422)
+        return key
 
     def narrowing(c, pipeline, stage, pushed_past):
         """The list's pipeline, stage and pushed-past filters as one WHERE fragment over the task's own columns, or

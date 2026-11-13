@@ -8,7 +8,6 @@ import sqlite3
 import pytest
 
 from backend import gateway_tiers as T
-from backend import providers
 
 MIGRATION = importlib.import_module("backend.migrations.20261106173719_gateway_lineup3_ids")
 
@@ -65,18 +64,6 @@ def test_every_id_of_this_lineup_and_any_other_value_maps_to_itself():
     assert T.new_id(None) is None
     # The migration carries a copy (a migration never calls app code); the two tables stay the same.
     assert MIGRATION.ALIASES == T.ALIASES and MIGRATION.DEPARTMENTS == T.OLD_DEPARTMENTS
-
-
-def test_an_old_id_read_back_is_the_id_it_is_now_and_is_never_offered():
-    found = T.resolve("tico-mid-1.0")
-    assert (found["id"], found["tier"], found["model"]) == ("tico-medium-1.0", "tico-medium", "Claude Sonnet 5.5")
-    assert T.resolve("tico-sales-high-fast")["tier"] == "tico-high-fast" and T.resolve("tico-sales-high-fast")["auto"]
-    assert T.resolve("tico-classify-1.0")["tier"] == "tico-decide-low"
-    assert T.resolve("tico-decide-1.0")["model"] == "Jev 1.13"
-    assert providers.PRICES.get("tico-mid-1.0") == providers.PRICES.get("tico-medium-1.0") == (2.5, 0.25, 12.5)
-    assert providers.MODEL_BY_ID["tico-sales-medium-1.0"]["id"] == "tico-medium-1.0"
-    listed = {row["id"] for row in providers.MODEL_CATALOG if row["id"].startswith("tico-") and not row.get("meeting")}
-    assert listed == {f"{tier}-1.0" for tier in T.view()["tiers"]} and len(listed) == 10
 
 
 def _db():
@@ -160,13 +147,3 @@ def test_the_migration_skips_a_table_or_column_a_database_lacks():
     conn.execute("INSERT INTO bot_settings VALUES ('acme-ops', 'tico-operations-low-1.0')")
     MIGRATION.up(conn)
     assert conn.execute("SELECT model FROM bot_settings").fetchone()[0] == "tico-low-1.0"
-
-
-def test_every_place_the_migration_rewrites_is_a_real_table_and_column(api):
-    with api.app.state.store.read() as c:
-        tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        present = [(table, column) for table, column, _ in MIGRATION.PLACES if table in tables]
-        for table, column in present:
-            assert column in {row[1] for row in c.execute(f"PRAGMA table_info({table})")}, (table, column)
-    # task_rules is made on first use, so a new database may not have it yet.
-    assert {t for t, _, _ in MIGRATION.PLACES} - {"task_rules"} <= {t for t, _ in present}

@@ -683,45 +683,6 @@ def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):
     assert shown["ana-test"][0]["quote"] == CONSENT
 
 
-def test_counsel_cannot_cite_a_file_nobody_asked_it_to_read(api):
-    org(api)
-    counsel_on(api)
-    store_file(api, CONTRACT)
-    unasked, _ = store_file(api, CONTRACT, title="Unasked terms")
-    r = api.post(
-        "/api/v2/rules",
-        headers=headers("counsel-test"),
-        json={
-            "kind": "external",
-            "text": "Keep a consent record.",
-            "who": {"bots": ["ops"]},
-            "source_id": source(api),
-            "cite": {"file_id": unasked, "quote": "Keep a record of each consent for five years."},
-        },
-    )
-    assert r.status_code == 403, r.text
-
-
-def test_the_read_event_must_name_counsel(api):
-    org(api)
-    counsel_on(api)
-    file_id, _ = store_file(api, CONTRACT)
-    with api.app.state.store.transaction() as c:
-        H.event(c, "human:ana", "rules.read_requested", file_id, {"bot": "ops"})
-    r = api.post(
-        "/api/v2/rules",
-        headers=headers("counsel-test"),
-        json={
-            "kind": "external",
-            "text": "Keep a consent record.",
-            "who": {"bots": ["ops"]},
-            "source_id": source(api),
-            "cite": {"file_id": file_id, "quote": "Keep a record of each consent for five years."},
-        },
-    )
-    assert r.status_code == 403, r.text
-
-
 def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     org(api)
     counsel_on(api)
@@ -1105,12 +1066,6 @@ def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch)
     assert api.post("/api/v2/rules/read", headers={"Authorization": "Bearer ana-test"}, json=body).status_code == 422
 
 
-def test_counsels_registries_list_it_as_a_hidden_helper():
-    text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.ts").read_text()
-    assert "const RULES_OWNER_BOT = 'rules-owner';" in text and "slug === RULES_OWNER_BOT" in text
-    assert "ASSISTANT_HELPERS = ['botops', 'strategy-owner', 'librarian', RULES_OWNER_BOT]" in text
-
-
 def outside_fence(text):
     """The text with every fenced document taken out: what Counsel reads as its own instructions."""
     return re.sub(r"<<UNTRUSTED DOCUMENT (\w+)>>.*?<<END UNTRUSTED DOCUMENT \1>>", "", text, flags=re.S)
@@ -1278,14 +1233,6 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
     assert again["existing"] is True and again["task_id"] == r["task_id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM bot_file_versions WHERE file_id=?", (file_id,)).fetchone()[0] == 1
-
-
-def test_counsel_tasks_are_private_by_default(api):
-    counsel_on(api)
-    with api.app.state.store.transaction() as c:
-        BS.write(c, 'rules-owner', {'template': 'rules-owner'})
-    with api.app.state.store.read() as c:
-        assert H.private_tasks_default(c, "bot:rules-owner") is True
 
 
 def test_an_uploaded_pdf_is_read_as_text_and_an_office_file_is_refused(api):

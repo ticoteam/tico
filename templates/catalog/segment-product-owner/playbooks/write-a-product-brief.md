@@ -19,7 +19,7 @@ reason did not cover.
 
 One page, plain words, in this shape:
 
-    Title: Product brief: <the problem, in the customer's words, under ten words>
+    Title: <the problem, in the customer's words, under ten words>
     Segment: <name> (segment:<slug>), or "all customers"
     Problem: <one or two sentences: what the customer tries to do, and where it fails>
     Who has it: <distinct accounts in the window, out of the segment's accounts in the cohort, with the window>
@@ -43,7 +43,7 @@ One page, plain words, in this shape:
 
 Save the page to a file in your checkout, then file it in the Product pipeline. It starts in Ideas, which you own:
 
-    tico task create --owner <your slug> --pipeline product --title "Product brief: <problem>" --body-file <file> --label segment:<slug>
+    tico task create --owner <your slug> --pipeline product --title "<problem>" --body-file <file> --label segment:<slug>
 
 Leave out the label when you own the whole product. If the problem is already a Product task, comment the brief on that
 task instead of filing a new one. Record the brief in `knowledge/briefs.md`: the date, the problem, the task id, and
@@ -52,5 +52,5 @@ task instead of filing a new one. Record the brief in `knowledge/briefs.md`: the
 ## 5. Stop there
 
 Do not tell a customer, a salesperson or a marketer that the problem will be fixed. Your manager's decision comes back
-on the task, and the next weekly review records it. An idea moves to Spec only when Spec has room and it is the one you
-pick (the one your manager approved, else the one the evidence supports most).
+on the task, and the next weekly review records it. Your brief waits in Ideas until a person moves it to Spec.
+Nobody is told when Spec has room.

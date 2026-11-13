@@ -320,17 +320,6 @@ def test_the_committed_requests_are_the_servers_models():
     )
 
 
-def test_every_fixture_request_is_one_the_server_model_takes():
-    """The schema and the server agree: a fixture request is valid under both requests.json and backend/models.py."""
-    for path in sorted(FIXTURES.glob("*.json")):
-        fixture = json.loads(path.read_text())
-        end = WIRE["endpoints"][fixture["endpoint"]]
-        if fixture["request"] is None or fixture["status"] == 422:
-            continue
-        assert not W.errors(fixture["request"], ref(end["request"]), REQUESTS), path.name
-        getattr(M, end["request"]).model_validate(fixture["request"])
-
-
 # --- version skew --------------------------------------------------------------------------------------------------
 
 

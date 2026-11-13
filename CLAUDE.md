@@ -21,6 +21,7 @@ A Tico bot working a task on this repository follows these where the rest of thi
 - Never enqueue or merge: Tico queues the PR when the task reaches Merge. Never tag, and never cut or change a release.
 - Never edit `.github/workflows/`: the push is refused. Say so on the task; a person lands that part.
 - Branches are `tico/<first 8 of the task id>-<slug>`, as Tico's task worktrees name them.
+- Tico opens the branch's draft PR at its first push and links it: edit it with `gh pr edit`, never `gh pr create`.
 
 ## Tests
 `python3 -m pytest -q` (parallel by default) runs the default Python suite, which leaves out tests marked

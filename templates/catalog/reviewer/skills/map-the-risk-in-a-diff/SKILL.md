@@ -32,7 +32,8 @@ Checks before you finish:
 - Every risky file is in a surface, or the review says why none applies.
 - Each surface has its question and its evidence, or a blocking question.
 - Nothing in the map is called safe; it says which checks were read.
-- A secret found in the diff is reported to a human at once and never copied into the review.
+- A secret found in the diff is never copied into the review. On an Engineering task it is blocking on the page and its
+  rotation goes to the Security Owner; outside the pipeline it is reported to a human at once.
 
 Example (invented, for illustration): "Change touches `billing/refund.py` (money) and `migrations/0142_refund_status.py`
 (migration). Money: the rounding is per refund, tested at 0.005 (the boundary). Migration: adds a nullable column, so the

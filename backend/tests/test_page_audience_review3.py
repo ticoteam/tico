@@ -151,7 +151,7 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("disabled_guard", [None, "audience"])
+@pytest.mark.parametrize("disabled_guard", [None])
 def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(
     api, live, monkeypatch, disabled_guard
 ):

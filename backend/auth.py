@@ -12,6 +12,7 @@ from http.cookies import SimpleCookie, CookieError
 
 import yaml
 
+from . import app_view
 from . import bot_access as A
 from . import identity_proxy
 from . import people as P
@@ -100,6 +101,8 @@ class Identity:
     # Tico support in a session a person opened (backend/support_access.py): "app" or "full". Its actor is
     # human:tico-support, its session id in token_id, and `support_access.gate` decides what it reaches.
     support: str = ""
+    # A bot's read-only view of the app (backend/app_view.py): the view's id. `app_view.gate` lets it read only.
+    view: str = ""
 
 
 def touch(c, sql, args):
@@ -160,6 +163,11 @@ def bot_identity(c, actor, *, attempt_id=""):
 
 
 def validate_identity(c, who):
+    if who.view:
+        # The view must still be open and the bot still allowed; then the run it came from is checked as any bot's.
+        from . import app_view
+
+        app_view.check_live(c, who)
     if who.support:
         # No roster row: the session it came in with must still be live.
         from . import support_access
@@ -636,6 +644,10 @@ class Auth:
                 who = self.identity_from_service_key(c, token, path, method)
             elif token.startswith(skill_devices.PREFIX):
                 who = self.identity_from_skills_device(c, token, path, method)
+            elif token.startswith(app_view.TOKEN_PREFIX):
+                who = app_view.identity(c, token)
+                if path:  # a stream's re-check passes no path; it was gated when it opened
+                    app_view.gate(path, method)
             elif token.startswith("tico_sa_"):
                 from . import support_access
 

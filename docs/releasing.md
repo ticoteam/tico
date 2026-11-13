@@ -382,7 +382,8 @@ changes, or the core browser scripts plus the smoke set when the UI mapping is u
 check runs are picked by path too (rule 6, `browser_direct`), on a ready pull request and in the queue: a changed
 `ui/tests/*.cts` script, every script that uses a changed `ui/tests/support/` helper (through other helpers too), and,
 for UI source with no `UI_MAP` entry, the scripts named after the file (`ui/app/tools.ts` runs `tools`, `bot-tools`,
-`redesign-e2e-tools` and the rest). More than 40 picked runs every script the release check runs, in shards. A change to
+`redesign-e2e-tools` and the rest). Any change under `ui/app/` or `ui/styles/`, or to `ui/tests/support/phone-rules.cts`, also picks
+the five `phone-dead-ends-*` scripts. More than 40 picked runs every script the release check runs, in shards. A change to
 what a slow content sweep reads runs that sweep in the contracts job (rule 7, `CONTENT_SWEEPS`): `templates/`, `skills/`,
 `clients/commands/`, `clients/cli_spec.py`, the CLI code or `e2e/cli/` run `test_e2e_cli.py` with every command
 (`TICO_E2E_CLI_ALL=1`, as the release gate runs it), and `templates/` or `clients/catalog.py` run `test_e2e_templates.py`.

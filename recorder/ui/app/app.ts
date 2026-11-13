@@ -341,8 +341,8 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     }
     if (m.sent) html += badge(`${icon('check', 12)}In Tico`, '');
     else if (sending) html += `<button class="btn small" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
-    // While recording, Stop finishes; Finish stays for a stopped meeting not yet saved.
-    else if (st.recording?.id !== m.id) html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
+    // While recording, Stop finishes; Finish stays for a stopped meeting not yet saved. Tico files a call's.
+    else if (st.recording?.id !== m.id && !m.call) html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
     html += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}${m.audio.attention ? '<span class="dot"></span>' : ''}</button>`;
     return html;
   }
@@ -436,7 +436,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     const org = row.org ? { ...row.org, ...(orgById(row.org.id) || {}) } : null;
     const menu = S.ui.pop?.anchorId === row.id ? 'menu-open' : '';
     const sub = [isNaN(date) ? '' : timeOf(date), length(row.duration_ms), org ? org.name : 'This Mac only'].filter(Boolean).map(esc).join(' · ');
-    const save = row.local && row.can_send ? `<button class="btn small" data-act="finish-open" data-id="${id}">Save to Tico</button>` : '';
+    const save = row.local && row.can_send && !row.call ? `<button class="btn small" data-act="finish-open" data-id="${id}">Save to Tico</button>` : '';
     const trash = row.recording ? '' : `<button class="icon-btn trash hover-only" data-act="ask-delete" data-id="${id}" title="Delete" aria-label="Delete ${esc(row.title)}">${icon('trash', 15)}</button>`;
     return `<div class="row ${menu}" data-act="open" data-id="${id}" role="button" tabindex="0" aria-label="${esc(row.title)}">
       ${org ? orgTile(org, 's32') : macTile()}
@@ -1097,15 +1097,15 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
   function finishSource(id: string) {
     if (S.meeting?.id === id) {
       const m = S.meeting!;
-      return { id, title: m.title, live_org: m.live_org, team: m.people.team, live: !!m.live && !m.kept_local, targets: m.targets, paused: m.paused_warning, blocked: m.send_blocked, sent: m.sent, connected: m.connected };
+      return { id, title: m.title, live_org: m.live_org, team: m.people.team, live: !!m.live && !m.kept_local, targets: m.targets, paused: m.paused_warning, blocked: m.send_blocked, sent: m.sent, connected: m.connected, call: !!m.call };
     }
     const row = S.library?.rows.find((r) => r.id === id);
     if (!row) return null;
-    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library!.connected };
+    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library!.connected, call: !!row.call };
   }
   function openFinish(id: string) {
     const src = finishSource(id);
-    if (!src) return;
+    if (!src || src.call) return;
     S.ui.pop = null;
     S.ui.share = null;
     const choices = src.targets.filter((t) => !t.already);
@@ -1157,6 +1157,8 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     if (!id) return;
     const src = finishSource(id);
     const m = S.meeting?.id === id ? S.meeting : null;
+    // A call's recording stops only: Tico files the call's transcript.
+    if (src?.call) { await act('stop_recording'); return; }
     const done = !src || src.sent || m?.kept_local || m?.discarded;
     const live = src && !done && src.live && src.live_org && src.targets.some((t) => t.id === src.live_org && !t.already);
     if (live && m?.live_state !== 'paused' && !src.paused && !S.status.busy) {
@@ -1245,7 +1247,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     html += line('Microphone', `<select class="field" data-model="form.microphone">${mics.map((name) => `<option value="${esc(name)}" ${name === f.microphone ? 'selected' : ''}>${esc(name || 'System default')}</option>`).join('')}</select>`);
     html += line('Also record meeting audio', toggle('meeting_audio', f.meeting_audio));
     // macOS only: Meet names need Accessibility, asked for here rather than at launch.
-    if (st.speaker_access != null && f.meeting_audio) html += line('Meet speaker names', st.speaker_access ? '<span class="faint">On</span>' : `<button class="btn small" data-act="allow-speaker-names">Allow</button>`);
+    if (st.speaker_access != null && f.meeting_audio) html += line('Speaker names', st.speaker_access ? '<span class="faint">On</span>' : `<button class="btn small" data-act="allow-speaker-names">Allow</button>`);
     html += `</div></div>`;
     // Updates: version, Check for updates, Move to Applications (update.ts).
     html += window.ticoUpdateRow?.(st.update) || '';
@@ -1374,6 +1376,12 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     const host = address.split('://')[1] || address;
     return `<div class="connect"><div class="card"><div class="host">Connect to ${esc(host)}?</div><p>Continue only if you chose Connect recorder in your browser.</p><div class="buttons"><button class="btn" data-act="connect-cancel">Cancel</button><button class="btn primary" data-act="connect-ok" ${S.status.busy ? 'disabled' : ''}>Sign in</button></div></div></div>`;
   }
+  /** A call or calendar event from an org just signed in to records only on Record. */
+  function recordCard() {
+    const prompt = S.status.record_prompt;
+    if (!prompt) return '';
+    return `<div class="connect"><div class="card"><div class="host">Record ${esc(prompt.title || 'meeting')}?</div><div class="buttons"><button class="btn" data-act="record-cancel">Cancel</button><button class="btn primary" data-act="record-ok" ${S.status.busy ? 'disabled' : ''}>Record</button></div></div></div>`;
+  }
   // Screen sharing: a private live share in the chosen org first, then the system picker.
   function screenCard() {
     const d = S.ui.screen;
@@ -1416,7 +1424,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     const first = S.status.first_run && !S.library?.rows?.length;
     if (first && S.page === 'library') S.page = 'signin';
     else if (!first && S.page === 'signin') S.page = 'library';
-    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
+    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + recordCard() + screenCard() };
     // Read as an input: a key or model is only on the fields, and the selection is read only where there is one.
     const active = document.activeElement as HTMLInputElement | null;
     const key = active?.dataset?.key || active?.dataset?.model;
@@ -1953,6 +1961,8 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     'dismiss-speaker-names': () => act('dismiss_speaker_names'),
     'connect-ok': () => act('confirm_connect'),
     'connect-cancel': () => act('dismiss_connect'),
+    'record-ok': () => act('confirm_record'),
+    'record-cancel': () => act('dismiss_record'),
     signin: () => { const address = model('signin').trim(); if (address) { S.ui.signingDesktop = ''; act('sign_in', { address }); } },
     'sign-out': (el) => act('sign_out', { id: el.dataset.id! }),
     'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id! }); },

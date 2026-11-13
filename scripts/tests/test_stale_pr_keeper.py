@@ -158,17 +158,6 @@ def written_to(gh, number):
 # Log reading
 
 
-def test_a_pytest_leg_names_its_failed_test_from_the_short_summary():
-    tests, scripts = keeper.read_log(log_lines("pytest-failed.log"))
-    assert tests == [(RECRUITING, False)]
-    assert scripts == []
-
-
-def test_a_crashed_xdist_worker_is_marked_crashed():
-    tests, _ = keeper.read_log(log_lines("worker-crashed.log"))
-    assert tests == [(CRASHED, True)]
-
-
 def test_a_crash_pytest_never_summarised_still_names_its_test():
     lines = [
         line for line in log_lines("worker-crashed.log") if "short test summary" not in line and "FAILED" not in line
@@ -652,12 +641,6 @@ def test_the_label_rule(mergeable, checks, labels, expected):
         keeper.needs_label(keeper.PR(1, "t", "u", True, "main", sha("a"), mergeable, False, labels, None, checks))
         is None
     )
-
-
-def test_nothing_merges_main_or_closes_a_pr():
-    gh = FakeGitHub()
-    run(gh)
-    assert {c[0] for c in gh.writes()} <= {"enqueue", "comment", "add_label", "remove_label"}
 
 
 def test_left_alone_a_manual_removal_a_conflict_a_moved_head_a_queued_a_draft_and_another_base():

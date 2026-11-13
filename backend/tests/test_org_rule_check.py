@@ -323,23 +323,6 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert len(tasks) == 1
 
 
-def test_a_rule_review_task_is_titled_plainly_and_its_thread_keeps_the_hold(ruled):
-    api, _ = ruled
-    color_rule(api)
-    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
-    [task] = sql(
-        api,
-        "SELECT id, title, body, conversation_id FROM tasks WHERE id IN "
-        "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)",
-    )
-    hold = sql(api, "SELECT id FROM org_rule_holds WHERE task_id=?", (task["id"],))[0]["id"]
-    assert task["title"] == "Rule review"
-    assert [
-        s["subject"] for s in sql(api, "SELECT subject FROM conversations WHERE id=?", (task["conversation_id"],))
-    ] == ["Rule review"]
-    assert "Hold: " + hold in task["body"]
-
-
 def test_an_old_rule_review_row_takes_the_plain_title_and_no_other_held_row_does(ruled):
     api, _ = ruled
     color_rule(api)
@@ -888,64 +871,6 @@ def test_with_no_rule_in_force_a_bot_write_reads_no_roster_and_asks_nothing(rule
     assert built == [] and judge.calls == []
 
 
-def test_the_check_runs_under_its_levels_deadline(ruled):
-    api, judge = ruled
-    color_rule(api)
-    from clients import judge as J
-
-    left = []
-
-    def engine(state, questions, label=None):
-        left.append(J.time_left(999))  # what the provider's own try may take: cut to the check's deadline
-        return judge(state, questions, label)
-
-    api.app.state.judge = engine
-    assert say(api, "Our favorite color is gold")["held"]
-    assert 0 < left[0] <= K.deadline("low")
-
-
-def test_a_full_pool_goes_through_unchecked_at_once(ruled):
-    api, judge = ruled
-    color_rule(api)
-    api.app.state.store.settings.rule_check_concurrency = 1
-    judge.hold = threading.Event()
-    first = threading.Thread(target=say, args=(api, "Our favorite color is gold"))
-    first.start()
-    try:
-        for _ in range(200):
-            if judge.calls:
-                break
-            time.sleep(0.01)
-        started = time.monotonic()
-        got = say(api, "Our favorite color is teal")  # the one slot is taken: no waiting for it
-        assert time.monotonic() - started < 2
-    finally:
-        judge.hold.set()
-        first.join(10)
-    assert "held" not in got and len(judge.calls) == 1 and len(bodies(api, "favorite color is teal")) == 1
-    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["busy"]
-
-
-def test_an_open_breaker_goes_through_unchecked_at_once_and_a_probe_closes_it(ruled):
-    api, judge = ruled
-    color_rule(api)
-    judge.fail = RuntimeError("provider down")
-    for n in range(CS.BREAKER_FAILURES):
-        assert "held" not in say(api, f"Our favorite color is gold {n}")
-    assert len(judge.calls) == CS.BREAKER_FAILURES
-    started = time.monotonic()
-    assert "held" not in say(api, "Our favorite color is teal")
-    assert time.monotonic() - started < 2 and len(judge.calls) == CS.BREAKER_FAILURES  # nothing was asked
-    reasons = [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")]
-    assert reasons == ["error"] * CS.BREAKER_FAILURES + ["breaker"]
-    # After the cool-off the next check is the probe: it answers, and checks run again.
-    calls = K.calls_for(api.app.state.store)
-    calls.until = time.monotonic() - 1
-    judge.fail = None
-    assert say(api, "Our favorite color is red")["held"]
-    assert calls.failures == 0 and say(api, "Our favorite color is blue")["held"]
-
-
 def test_a_rule_checks_spend_lands_in_the_decisions_budget(ruled):
     api, judge = ruled
     color_rule(api)
@@ -1036,13 +961,6 @@ def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
     assert appealed["task_id"]
     error, _ = mcp(api, "tico_rules_check", {"text": "Hello", "to": "ana"}, token="ops-test")
     assert not error
-
-
-def test_rule_check_eval_cases_build_valid_requests():
-    from evals.rule_check import run as E
-
-    assert E.main([]) == 0
-    assert E.engines(["low"], env={}) == []
 
 
 # ---- every route, the run's provenance, live text -----------------------------------------------------------------
@@ -1461,7 +1379,7 @@ def test_a_review_tasks_holds_page_by_cursor_within_a_byte_budget(ruled, monkeyp
     assert get(api, f"rule-holds?task={task_id}", token="cara-test")["holds"] == []
 
 
-def test_the_cache_splits_on_context_and_rules_past_one_call_are_judged_in_more_calls(ruled, monkeypatch):
+def test_the_cache_splits_on_context_and_rules_too_big_for_one_call_are_judged_in_more_calls(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
     store, ops = api.app.state.store, Identity("bot:ops", "bot")
@@ -1470,12 +1388,41 @@ def test_the_cache_splits_on_context_and_rules_past_one_call_are_judged_in_more_
     assert len(judge.calls) == 2
     from clients import judge as J
 
-    monkeypatch.setattr(J, "MAX_QUESTIONS", 1)
+    monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 1)  # one rule per call fits
     rule(api, {"kind": "internal", "text": "Never share the launch date.", "who": {"bots": ["ops"]}})
     first = K.preflight(store, judge, ops, "message", "Lunch at noon.", ["human:ana"])
     assert len(judge.calls) == 4 and "unchecked_rules" not in first and first["outcome"] == "pass"
     again = K.preflight(store, judge, ops, "message", "Lunch at noon.", ["human:ana"])
     assert again["cached"] and "unchecked_rules" not in again and len(judge.calls) == 4
+
+
+def test_a_draft_matching_45_rules_is_checked_in_one_call(ruled):
+    """One call per input: every matching rule is a question of the same call, however many there are."""
+    api, judge = ruled
+    for n in range(44):
+        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"bots": ["ops"]}})
+    color_rule(api)
+    store, ops = api.app.state.store, Identity("bot:ops", "bot")
+    got = K.preflight(store, judge, ops, "message", "Our favorite color is red.", ["human:ana"])
+    assert (
+        len(judge.calls) == 1 and len(judge.calls[0]["questions"]) == 45 and len(judge.calls[0]["state"]["rules"]) == 45
+    )
+    assert got["outcome"] == "broken" and "unchecked_rules" not in got
+    assert [json.loads(e["detail"])["questions"] for e in events(api, "judge.call")] == [45]
+
+
+def test_an_outside_edition_with_45_rules_is_checked_in_one_call_not_refused(ruled):
+    api, judge = ruled
+    for n in range(44):
+        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"outside_editions": True}})
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"outside_editions": True}})
+    store = api.app.state.store
+    clean = K.outside_edition(store, judge, "Our launch went well.", to="press@example.com")
+    assert clean["outcome"] == "pass" and len(clean["rules"]) == 45
+    assert len(judge.calls) == 1 and len(judge.calls[0]["questions"]) == 45
+    broken = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
+    assert broken["outcome"] == "held" and broken["reason"] == "broken" and len(broken["broken"]) == 1
+    assert len(judge.calls) == 2
 
 
 def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):

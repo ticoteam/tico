@@ -938,6 +938,11 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                 detail.pop(key, None)
         elif not released and detail.get('release_requested') and row['state'] != 'removed':
             detail.pop('release_requested', None)
+            if closed:
+                # The release's refusals do not count against the finished task's removal: that one saves unpushed
+                # commits to wip/ instead of refusing (runner-rs worktrees.rs), so it gets its own tries.
+                for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
+                    detail.pop(key, None)
         # Only worktrees that actually existed when closed are eligible on reopening.
         if closed and row['state'] == 'present' and not detail.get('delete_requested'):
             detail['restore_on_reopen'] = True

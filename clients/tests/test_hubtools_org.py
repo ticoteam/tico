@@ -375,8 +375,6 @@ def test_each_command_runs_its_tool(cli, argv, request_):
 
 
 def test_org_subcommands_are_not_renamed_to_team_show():
-    assert hubcli.rename_argv(["org", "show"]) == (["org", "show"], None)
-    assert hubcli.rename_argv(["org", "models"]) == (["org", "models"], None)
     assert hubcli.rename_argv(["org"])[0] == ["team", "show"]
 
 

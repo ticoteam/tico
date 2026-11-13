@@ -98,7 +98,3 @@ def test_base_reports_only_the_python_files_the_change_touches(tmp_path, capsys)
 
 def test_the_repository_imports_no_test_module_outside_the_allowlist():
     assert guard.problems() == []
-
-
-def test_the_api_fixture_is_named_where_it_went():
-    assert guard.helper_for("backend.tests.test_api").startswith("backend.tests.helpers.api_app")

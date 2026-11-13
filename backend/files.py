@@ -12,6 +12,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -33,6 +34,29 @@ from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
 from clients import bot_files as BF
+
+LOG = logging.getLogger("tico.files")
+# Why Files.serve answered 404, one word each (logged, never sent: every refusal answers the same).
+REFUSALS = ("no_row", "audience", "blob_fence", "scan", "file_fence", "rules_read", "no_version")
+
+
+def refuse_serve(c, who, fid, number, category, version=None, message="File not found"):
+    """Log which check refused a version read, then raise the caller's unchanged 404. A fence refusal also names the
+    version's run and whether it is still running and readable to the caller: a run's tasks and inputs move while it
+    is live, the likeliest reason a just-published page reads as missing. No page text, names or tokens are logged."""
+    fields = {"category": category, "file": fid, "version": number, "actor": who.actor, "role": who.role}
+    aid = version["attempt_id"] if version is not None and category in ("blob_fence", "file_fence") else None
+    if aid:
+        state = c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (aid,)).fetchone()
+        fields.update(
+            attempt=aid,
+            attempt_state=state["state"] if state else None,
+            attempt_running=bool(state and state["state"] in ("leased", "running") and not state["finished_at"]),
+            attempt_readable=privacy.attempt_readable(c, privacy.actor(who), aid),
+        )
+    LOG.warning("file version read refused %s", encode(fields), extra={"file_refusal": fields})
+    raise Problem("not_found", message, 404)
+
 
 # A video or audio file spooled to disk by publish_stream: its digest and size, hashed as it arrived.
 Staged = namedtuple("Staged", "stream digest size")
@@ -174,6 +198,7 @@ def prime_visible(c, rows):
         ):
             versions[v["file_id"]].append(v)
     read_cache.prime_rows(c, VERSIONS_SQL, {(fid,): found for fid, found in versions.items()})
+    restricted_page_rows(c, sorted(versions))
     privacy.prime_blobs(c, {v["blob_id"] for found in versions.values() for v in found})
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
@@ -201,6 +226,30 @@ def asked_to_read(c, who, file_id, version=None, cache=None, auth=None):
     return counsel.page_copy_readable(c, read, who, auth)
 
 
+# One JSON array bound as a single parameter: a lookup is one statement however many identities a response names.
+ANY_OF = "(SELECT value FROM json_each(?))"
+IDENTITY_COLUMNS = ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest")
+DIGEST = re.compile(r"[0-9a-f]{64}")
+# Marks a snapshot's memo as holding every page (page_graph): an id it lacks names no page.
+WHOLE = ("whole",)
+
+
+def _memo(c, name):
+    privacy.snapshot(c)
+    return read_cache.value(c, (name,), dict, shared=True)
+
+
+def _missing(memo, ids):
+    if memo.get(WHOLE):
+        return []
+    return sorted({i for i in ids if isinstance(i, str) and i and i not in memo})
+
+
+def _no_table(exc, *also):
+    if not any(text in str(exc) for text in ("no such table", *also)):
+        raise exc  # standalone hubdb and pre-pages migration databases have none
+
+
 def restricted_pages(c):
     """The restricted set is neutral input, read once in this snapshot, including for SQL callbacks."""
     privacy.snapshot(c)
@@ -221,10 +270,35 @@ def restricted_pages(c):
     return read_cache.value(c, ("restricted_pages",), build, shared=True)
 
 
+def restricted_page_rows(c, ids):
+    """restricted_pages for only these ids, read by primary key and kept for the rest of this snapshot. A snapshot that
+    already read the whole set answers from it."""
+    values = read_cache.cache(c)
+    whole = values.get(("restricted_pages",)) if values is not None else None
+    if whole is not None:
+        return {i: whole[i] for i in ids if i in whole}
+    memo = _memo(c, "restricted_page_rows")
+    if wanted := _missing(memo, ids):
+        found = {}
+        try:
+            for r in c.execute(
+                "SELECT f.*,p.audience FROM pages p JOIN bot_files f ON f.id=p.file_id "
+                f"WHERE p.audience IS NOT NULL AND p.file_id IN {ANY_OF}",
+                (json.dumps(wanted),),
+            ):
+                found[r["id"]] = dict(r)
+        except sqlite3.OperationalError as exc:
+            _no_table(exc, "no such column: p.audience")
+        # Only a finished read says "not restricted": a failed one leaves these ids to be read again.
+        memo.update(dict.fromkeys(wanted))
+        memo.update(found)
+    return {i: memo[i] for i in ids if isinstance(i, str) and memo.get(i)}
+
+
 def page_audience_visible(c, auth, who, row, cache):
     """A page only narrows its inherited visibility, with management kept outside its audience."""
     privacy.snapshot(c)
-    page = restricted_pages(c).get(row["id"])
+    page = restricted_page_rows(c, [row["id"]]).get(row["id"])
     if page:
         from . import pages, teammate_access
 
@@ -298,87 +372,135 @@ def file_visible(c, auth, who, row, cache):
     return cards.widened(c, auth, who, row["id"], cache)
 
 
-def page_rows(c):
-    """Neutral page/file rows shared by all blob checks in one snapshot, including tombstones."""
-    privacy.snapshot(c)
-
-    def build():
-        try:
-            return {r["id"]: dict(r) for r in c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id")}
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc):
-                raise
-            return {}
-
-    return read_cache.value(c, ("page_rows",), build, shared=True)
-
-
-def page_identities(c):
-    """All page aliases, including purged versions, resolved once per read snapshot."""
-    privacy.snapshot(c)
-
-    def build():
+def page_rows(c, ids):
+    """Neutral page/file rows, tombstones included, for these file ids only: read through the primary key and kept for
+    the rest of this snapshot. Nothing about a reader is kept."""
+    memo = _memo(c, "page_rows")
+    if wanted := _missing(memo, ids):
         found = {}
-
-        def add(identity, fid):
-            if identity:
-                found.setdefault(identity, set()).add(fid)
-
         try:
-            for fid in page_rows(c):
-                add(fid, fid)
-            for r in c.execute("SELECT v.* FROM bot_file_versions v JOIN pages p ON p.file_id=v.file_id"):
-                for key in ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest"):
-                    add(r[key], r["file_id"])
-            for r in c.execute("SELECT identity,file_id FROM page_identities"):
-                add(r[0], r[1])
-            # A digest describes bytes, not a deleted identity. A live file in the same context wins.
-            live = {}
-            digests = [
-                identity
-                for identity, ids in found.items()
-                if re.fullmatch(r"[0-9a-f]{64}", identity)
-                and any(page_rows(c).get(fid, {}).get("state") == "deleted" for fid in ids)
-            ]
-            rows = []
-            for chunk in H.chunks(digests):
-                marks = ",".join("?" * len(chunk))
-                rows.extend(
-                    c.execute(
-                        "SELECT f.*,v.digest,v.source_digest FROM bot_file_versions v "
-                        "JOIN bot_files f ON f.id=v.file_id WHERE f.state<>'deleted' "
-                        f"AND (v.digest IN ({marks}) OR v.source_digest IN ({marks}))",
-                        (*chunk, *chunk),
-                    )
-                )
-            for r in rows:
-                context = ("task", r["task_id"]) if r["task_id"] else (r["bot_id"], r["scope"], r["conversation_id"])
+            for r in c.execute(
+                f"SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id IN {ANY_OF}",
+                (json.dumps(wanted),),
+            ):
+                found[r["id"]] = dict(r)
+        except sqlite3.OperationalError as exc:
+            _no_table(exc)
+        memo.update(dict.fromkeys(wanted))
+        memo.update(found)
+    return {i: memo[i] for i in ids if isinstance(i, str) and memo.get(i)}
+
+
+def _context(row):
+    return ("task", row["task_id"]) if row["task_id"] else (row["bot_id"], row["scope"], row["conversation_id"])
+
+
+def _identities(c, wanted=None):
+    """{identity: page file ids}: a page's own id, any version's blob, poster, thumb, digest or source digest, and the
+    aliases a purge kept (page_identities). With `wanted`, only those identities, each through an index; without it,
+    every page (page_graph)."""
+    if wanted is None:
+        found, arg = {}, ()
+
+        def where(column):
+            return f"{column} IS NOT NULL AND {column}<>''"
+    else:
+        found, arg = {identity: set() for identity in wanted}, (json.dumps(wanted),)
+
+        def where(column):
+            return f"{column} IN {ANY_OF}"
+
+    try:
+        parts = [
+            f"SELECT f.id,f.id FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE {where('f.id')}",
+            *(
+                f"SELECT v.{key},v.file_id FROM bot_file_versions v JOIN pages p ON p.file_id=v.file_id "
+                f"WHERE {where('v.' + key)}"
+                for key in IDENTITY_COLUMNS
+            ),
+            f"SELECT identity,file_id FROM page_identities WHERE {where('identity')}",
+        ]
+        for r in c.execute(" UNION ALL ".join(parts), arg * len(parts)):
+            found.setdefault(r[0], set()).add(r[1])
+        # A digest describes bytes, not a deleted identity. A live file in the same context wins.
+        rows = page_rows(c, {fid for ids in found.values() for fid in ids})
+        digests = [
+            identity
+            for identity, ids in found.items()
+            if DIGEST.fullmatch(identity) and any(rows.get(fid, {}).get("state") == "deleted" for fid in ids)
+        ]
+        if digests:
+            live, arg = {}, json.dumps(digests)
+            for r in c.execute(
+                " UNION ".join(
+                    "SELECT f.task_id,f.bot_id,f.scope,f.conversation_id,v.digest,v.source_digest "
+                    f"FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+                    f"WHERE f.state<>'deleted' AND v.{key} IN {ANY_OF}"
+                    for key in ("digest", "source_digest")
+                ),
+                (arg, arg),
+            ):
                 for key in ("digest", "source_digest"):
                     if r[key]:
-                        live.setdefault(r[key], set()).add(context)
-            for identity, contexts in live.items():
-                for fid in list(found.get(identity, ())):
-                    row = page_rows(c).get(fid)
-                    if row and row["state"] == "deleted":
-                        context = (
-                            ("task", row["task_id"])
-                            if row["task_id"]
-                            else (row["bot_id"], row["scope"], row["conversation_id"])
-                        )
-                        if context in contexts:
-                            found[identity].discard(fid)
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc):
-                raise
-        return found
+                        live.setdefault(r[key], set()).add(_context(r))
+            for identity in digests:
+                for fid in list(found[identity]):
+                    row = rows.get(fid)
+                    if row and row["state"] == "deleted" and _context(row) in live.get(identity, ()):
+                        found[identity].discard(fid)
+    except sqlite3.OperationalError as exc:
+        _no_table(exc)
+    return found
 
-    return read_cache.value(c, ("page_identities",), build, shared=True)
+
+def page_identities(c, identities):
+    """The page file ids each identity names, including purged versions' aliases, for only these identities. Each
+    identity's answer depends on it alone, so it is kept for the rest of this read snapshot (a write starts over)."""
+    memo = _memo(c, "page_identities")
+    if wanted := _missing(memo, identities):
+        memo.update(_identities(c, wanted))
+    return {i: memo[i] for i in identities if isinstance(i, str) and memo.get(i)}
+
+
+def page_graph(c):
+    """Every page's rows, identities and tombstones, once in this snapshot, for a caller that checks rows one at a time
+    across a whole table (the SQL tool's per-row privacy functions), so its statements do not grow with the rows. A
+    read of one response uses the lookups above instead."""
+    rows, identities, deleted = _memo(c, "page_rows"), _memo(c, "page_identities"), _memo(c, "deleted_page_refs")
+    if identities.get(WHOLE):
+        return
+    restricted_pages(c)  # so restricted_page_rows answers from the whole set too
+    try:
+        rows.update({r["id"]: dict(r) for r in c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id")})
+    except sqlite3.OperationalError as exc:
+        _no_table(exc)
+    rows[WHOLE] = True
+    identities.clear()
+    identities.update(_identities(c))
+    identities[WHOLE] = True
+    try:
+        deleted.update(
+            dict.fromkeys(
+                (
+                    r[0]
+                    for r in c.execute(
+                        "SELECT file_id FROM pages WHERE deleted_at IS NOT NULL "
+                        "UNION SELECT id FROM bot_files WHERE state='deleted' AND lower(mime) LIKE 'text/html%'"
+                    )
+                ),
+                True,
+            )
+        )
+        deleted[WHOLE] = True
+    except sqlite3.OperationalError as exc:
+        _no_table(exc, "no such column")
 
 
 def page_blobs(c, bid):
     """The pages whose bytes or previews this blob holds, including deleted provenance."""
-    rows = page_rows(c)
-    return [rows[fid] for fid in page_references(bid, c) if fid in rows]
+    ids = page_references(bid, c)
+    rows = page_rows(c, ids)
+    return [rows[fid] for fid in ids if fid in rows]
 
 
 def page_blob_visible(c, auth, who, bid):
@@ -426,10 +548,9 @@ def page_reference(value):
         return None
 
 
-def page_references(value, c=None, *, file_ids=None):
-    """Resolve file, version, blob and digest identities through one recognizer on every transport."""
-    found = set()
-    aliases = page_identities(c) if c is not None else {}
+def _names(value, file_ids=None):
+    """The file ids `value` names outright, and every (candidate identity, the file ids its structure names) in it."""
+    found, names = set(), []
 
     def collect(part, explicit=None):
         if isinstance(part, str):
@@ -443,29 +564,7 @@ def page_references(value, c=None, *, file_ids=None):
                     candidate = url.path
                 candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
                 candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
-                candidate = re.split(r"[/?@]", candidate, maxsplit=1)[0]
-                resolved = aliases.get(candidate, ())
-                # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
-                if (
-                    resolved
-                    and explicit
-                    and not set(resolved).issubset(explicit)
-                    and c is not None
-                    and re.fullmatch(r"[0-9a-f]{64}", candidate)
-                ):
-                    live = {
-                        fid
-                        for fid in explicit
-                        if read_cache.one(
-                            c,
-                            "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
-                            "WHERE v.file_id=? AND f.state<>'deleted' AND (v.digest=? OR v.source_digest=?) LIMIT 1",
-                            (fid, candidate, candidate),
-                        )
-                    }
-                    if live:
-                        resolved = set(resolved) & live
-                found.update(resolved)
+                names.append((re.split(r"[/?@]", candidate, maxsplit=1)[0], explicit))
             except ValueError:
                 pass
             if part.startswith(("{", "[")):
@@ -479,31 +578,85 @@ def page_references(value, c=None, *, file_ids=None):
                 collect(child, explicit)
 
     collect(value, file_ids)
+    return found, names
+
+
+def page_references(value, c=None, *, file_ids=None):
+    """Resolve file, version, blob and digest identities through one recognizer on every transport. Every candidate in
+    `value` is gathered first and looked up in one batch, so a response naming many pages costs no more statements."""
+    found, names = _names(value, file_ids)
+    if c is None or not names:
+        return found
+    aliases = page_identities(c, {candidate for candidate, _ in names})
+
+    # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
+    def narrowed(candidate, explicit):
+        resolved = aliases.get(candidate, ())
+        return bool(resolved and explicit and not set(resolved).issubset(explicit) and DIGEST.fullmatch(candidate))
+
+    asked = {(fid, candidate) for candidate, explicit in names if narrowed(candidate, explicit) for fid in explicit}
+    live = set()
+    if asked:
+        for r in c.execute(
+            "SELECT v.file_id,v.digest,v.source_digest FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+            f"WHERE f.state<>'deleted' AND v.file_id IN {ANY_OF}",
+            (json.dumps(sorted({fid for fid, _ in asked})),),
+        ):
+            live.update({(r[0], r[1]), (r[0], r[2])} & asked)
+    for candidate, explicit in names:
+        resolved = aliases.get(candidate, ())
+        if narrowed(candidate, explicit):
+            mine = {fid for fid in explicit if (fid, candidate) in live}
+            if mine:
+                resolved = set(resolved) & mine
+        found.update(resolved)
     return found
+
+
+def deleted_page_refs(c, ids):
+    """Which of these ids are retained page tombstones, which deny every saved reference, even for managers. Read by
+    primary key for only these ids, and kept for the rest of this snapshot."""
+    memo = _memo(c, "deleted_page_refs")
+    if wanted := _missing(memo, ids):
+        arg, found = json.dumps(wanted), set()
+        try:
+            for r in c.execute(
+                f"SELECT file_id FROM pages WHERE deleted_at IS NOT NULL AND file_id IN {ANY_OF} "
+                f"UNION SELECT id FROM bot_files WHERE state='deleted' AND lower(mime) LIKE 'text/html%' "
+                f"AND id IN {ANY_OF}",
+                (arg, arg),
+            ):
+                found.add(r[0])
+        except sqlite3.OperationalError as exc:
+            _no_table(exc, "no such column")
+        # Only a finished read says "not a tombstone": a failed one leaves these ids to be read again.
+        memo.update(dict.fromkeys(wanted, False))
+        memo.update(dict.fromkeys(found, True))
+    return {i for i in ids if isinstance(i, str) and memo.get(i)}
+
+
+def prime_page_references(c, values):
+    """Look up together every identity these values name, and the tombstones and audiences of the pages they find, so
+    checking each value afterwards (page_references, page_ref_denials, readable_page_refs) reads nothing more: a list
+    of messages, comments or events costs one lookup, not one per item."""
+    found, candidates = set(), set()
+    for value in values:
+        named, names = _names(value)
+        found.update(named)
+        candidates.update(candidate for candidate, _ in names)
+    found.update(fid for ids in page_identities(c, candidates).values() for fid in ids)
+    if found:
+        deleted_page_refs(c, found)
+        restricted_page_rows(c, found)
 
 
 def page_ref_denials(c, auth, who, refs):
     ids = page_references(refs, c)
     if not ids:
         return {}
-    pages, cache = restricted_pages(c), {}
+    pages, cache = restricted_page_rows(c, ids), {}
 
-    # Retained page tombstones deny every saved reference, even for managers.
-    def tombstones():
-        try:
-            return {
-                r[0]
-                for r in c.execute(
-                    "SELECT file_id FROM pages WHERE deleted_at IS NOT NULL "
-                    "UNION SELECT id FROM bot_files WHERE state='deleted' AND lower(mime) LIKE 'text/html%'"
-                )
-            }
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc) and "no such column" not in str(exc):
-                raise
-            return set()  # standalone hubdb and pre-files migration databases
-
-    deleted = read_cache.value(c, ("deleted_page_refs",), tombstones, shared=True)
+    deleted = deleted_page_refs(c, ids)
     return {
         fid: "A deleted page" if fid in deleted else "A page you can't open"
         for fid in ids
@@ -555,8 +708,21 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
             return set()
 
         def build():
-            rows = page_rows(c)
-            if not rows:
+            try:
+                rows = {
+                    r["id"]: dict(r)
+                    for r in c.execute(
+                        "SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.task_id=? "
+                        # Every file's bot is a bots row (a foreign key; bots are never deleted), so the scope is
+                        # found through the (bot_id, scope, identity) key rather than by reading every file.
+                        "UNION SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
+                        "WHERE f.bot_id IN (SELECT id FROM bots) AND f.scope=?",
+                        (tid, "task:" + tid),
+                    )
+                }
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
                 return set()
             attached = {
                 r[0]
@@ -573,13 +739,12 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
                         "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%'", ("task:" + tid,)
                     )
                 )
-            return {
-                row["title"]
-                for row in rows.values()
-                if (row["task_id"] == tid or row["scope"] == "task:" + tid or row["id"] in attached)
-                and row["state"] != "deleted"
-                and page_ref_denials(c, auth, who, row["id"])
-            }
+            rows.update(page_rows(c, attached - rows.keys()))
+            shown = [row for row in rows.values() if row["state"] != "deleted"]
+            # One batch for all of the task's pages; each check below then reads what it found.
+            page_identities(c, {row["id"] for row in shown})
+            deleted_page_refs(c, {row["id"] for row in shown})
+            return {row["title"] for row in shown if page_ref_denials(c, auth, who, row["id"])}
 
         return read_cache.value(
             c, ("hidden_page_titles", who.actor, who.role, getattr(who, "task_actor", ""), tid, auth is not None), build
@@ -1935,11 +2100,13 @@ class Files:
             return {"file": fid, "activity": rows}
 
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
-        """The bytes of one version through Tico, never a storage address."""
+        """The bytes of one version through Tico, never a storage address. Each refusal logs its check (refuse_serve)."""
         with self.store.read() as c:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row or not page_audience_visible(c, self.auth, who, row, {}):
-                raise Problem("not_found", "File not found", 404)
+            if not row:
+                refuse_serve(c, who, fid, version, "no_row")
+            if not page_audience_visible(c, self.auth, who, row, {}):
+                refuse_serve(c, who, fid, version, "audience")
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
             v = c.execute(
@@ -1948,19 +2115,27 @@ class Files:
                 (fid, number),
             ).fetchone()
             if v and not page_blob_visible(c, self.auth, who, v["blob_id"]):
-                raise Problem("not_found", "File not found", 404)
+                refuse_serve(c, who, fid, number, "blob_fence", v)
             from . import postal_mail
 
             scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
             if scan is not None:
                 if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
-                    raise Problem("not_found", "File not found", 404)
+                    refuse_serve(c, who, fid, number, "scan")
             else:
-                self.visible_file(c, who, fid)
+                if not self.visible(c, who, row, {}):
+                    refuse_serve(c, who, fid, number, "file_fence", v)
                 if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                    raise Problem("not_found", "File not found", 404)  # the Rules Owner's read names one version of it
+                    refuse_serve(c, who, fid, number, "rules_read")  # the Rules Owner's read names one version of it
             if not v or row["locator"] != "tico_blob":
-                raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
+                refuse_serve(
+                    c,
+                    who,
+                    fid,
+                    number,
+                    "no_version",
+                    message="This file has no stored copy to open" if not v else "File not found",
+                )
             if meta:
                 return {
                     "id": fid,

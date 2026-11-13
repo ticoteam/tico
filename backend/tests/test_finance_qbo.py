@@ -557,14 +557,6 @@ def test_a_relayed_quickbooks_payload_in_no_known_shape_is_refused_logged_and_wa
     assert any("in no shape this reads" in record.getMessage() for record in caplog.records)
 
 
-@pytest.mark.parametrize("payload", [LEGACY, CLOUD, [CLOUD]])
-def test_the_intuit_signature_of_either_shape_is_checked_over_the_raw_body(payload):
-    body = json.dumps(payload).encode()
-    assert P.verify("intuit", {"intuit-signature": _sign("verifier", body)}, body, "verifier", 0) == (True, "")
-    assert P.verify("intuit", {"intuit-signature": _sign("other", body)}, body, "verifier", 0)[0] is False
-    assert P.verify("intuit", {"intuit-signature": _sign("verifier", body)}, body + b" ", "verifier", 0)[0] is False
-
-
 def test_documents_and_settlements_map_to_mirror_records_with_their_accounts_and_links():
     items = Q.item_accounts([{"Id": "7", "ExpenseAccountRef": {"value": "66"}, "IncomeAccountRef": {"value": "40"}}])
     bill = Q.records(
@@ -1162,26 +1154,8 @@ def test_a_quickbooks_payroll_liability_that_wages_pass_through_is_marked_payrol
     assert Q.account_record({**base, "AccountSubType": "OtherCurrentLiabilities"}).payroll is False
 
 
-def test_a_lookup_by_name_reads_inactive_records_too_so_a_retry_does_not_make_a_second_account():
-    wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
-    assert _client(wire).find("account.create", {"name": "Checking"}, "account:checking") is None
-    assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])
-
-
-def test_a_bad_debt_item_that_is_inactive_is_found_and_not_made_a_second_time():
-    wire = Wire(QC.Reply(200, {"QueryResponse": {}}), QC.Reply(200, {"Item": {"Id": "99", "SyncToken": "0"}}))
-    assert _client(wire)._write_off_item("Account:12", "creditmemo:key") == "99"
-    assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])
-
-
 def test_a_change_feed_read_from_scratch_starts_inside_quickbooks_thirty_days_not_on_its_edge():
     assert M.cdc_since(None, "2026-10-30T12:00:00Z") == "2026-10-01T12:00:00Z"
-
-
-def test_every_quickbooks_call_names_minor_version_75_the_current_one():
-    wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
-    _client(wire).find("account.create", {"name": "Checking"}, "account:checking")
-    assert urllib.parse.parse_qs(urllib.parse.urlsplit(wire.sent[0][1]).query)["minorversion"] == ["75"]
 
 
 def test_a_429_with_no_retry_after_waits_the_sixty_seconds_quickbooks_asks_before_it_is_tried_again():

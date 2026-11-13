@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS attempts(
  settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
  trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
  did_nothing INTEGER, rotated TEXT, session_kind TEXT, session_why TEXT,
- input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER,
+ input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER, cache_write_tokens INTEGER,
  usage_model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT, usage_reason TEXT,
  CHECK (job_id IS NULL OR (runner_id IS NOT NULL AND generation IS NOT NULL AND token_hash IS NOT NULL
         AND state IS NOT NULL AND lease_until IS NOT NULL)));
@@ -2265,6 +2265,12 @@ class Store:
                         "messages_refs_task",
                         "messages(json_extract(refs, '$.task')) WHERE json_extract(refs, '$.task') IS NOT NULL",
                     ),
+                    # The replies to an update (updates.thread) and the feed's reply counts (updates.listing):
+                    # both scanned every message. Partial, so chat without refs.update adds no entry.
+                    (
+                        "messages_refs_update",
+                        "messages(json_extract(refs,'$.update')) WHERE json_extract(refs,'$.update') IS NOT NULL",
+                    ),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
                     # A bot's last settled run (the team list's latest run): one seek.
@@ -2294,6 +2300,12 @@ class Store:
                     ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, readers)"),
                     ("tasks_owner_status_cover", "tasks(owner_id, status, id, requester_id, private, readers)"),
                     ("tasks_requester_status_cover", "tasks(requester_id, status, id, owner_id, private, readers)"),
+                    # One person's Needs you (waiting_on.candidates; migration 20261112080000), for the same reason.
+                    (
+                        "tasks_open_pipeline",
+                        "tasks(id, owner_id, requester_id, private, readers, pipeline_id, stage_id) "
+                        "WHERE pipeline_id IS NOT NULL AND status='open'",
+                    ),
                     # A person's view of a bot's settings changes (settings_admin.history): the manager
                     # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                     # column, added above.

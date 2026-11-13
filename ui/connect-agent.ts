@@ -260,7 +260,7 @@ interface Window {
         // Each revoke button was rendered from a row of live, so its row is there.
         const row = live.find(r => r.id === button.dataset.revoke)!;
         button.onclick = async () => {
-          if (!confirm(`Revoke ${row.label}? The external agent loses access at once.`)) return;
+          if (!(await askConfirm(`Revoke ${row.label}? The external agent loses access at once.`, button))) return;
           button.disabled = true;
           try { await post(`/v2/me/tokens/${encodeURIComponent(row.id)}/revoke`, {}); toast(`${row.label} revoked`); }
           catch (error) { toast(errorMessage(error, ''), true); }

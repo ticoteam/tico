@@ -146,10 +146,20 @@ def _views(c, v, rows, *, summaries=None):
     followers = T._followers_of(c, v, ids)
     dms = T.dm_with(c, v, rows)
     pins = T.pin_rows(c, v.actor, ids)
+    calls = T.live_calls(c, ids)
     out = {}
     for r in rows:
         summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
-        item = T.view(c, v, r, summary=summary, dm=dms.get(r["id"]), follower=followers.get(r["id"], {}), pins=pins)
+        item = T.view(
+            c,
+            v,
+            r,
+            summary=summary,
+            dm=dms.get(r["id"]),
+            follower=followers.get(r["id"], {}),
+            pins=pins,
+            calls=calls,
+        )
         if summary.get("last_message_at"):
             item["last_message_at"] = summary["last_message_at"]
         item["activity_seq"] = int(summary.get("activity_seq") or r.get("last_seq") or 0)

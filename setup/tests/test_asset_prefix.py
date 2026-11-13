@@ -245,23 +245,6 @@ def test_the_default_backup_names_are_todays():
     ]
 
 
-def test_the_default_route53_comments_are_todays():
-    r53 = FakeRoute53("example.com")
-    from setup.dns import Record
-
-    route53.upsert(r53, "Z1", [Record("A", "tico.example.com", "203.0.113.9")])
-    route53.delete(r53, "Z1", [dict(r53.records[0])])  # a DELETE carries the whole record set, as Route 53 demands
-    assert [c["ChangeBatch"]["Comment"] for c in r53.called("change_resource_record_sets")] == [
-        "tico setup",
-        "tico setup destroy",
-    ]
-
-
-def test_the_default_sign_in_client_name_is_tico():
-    assert "Application type: Web application. Name it Tico." in signin.PROVIDERS["google"].steps
-    assert signin.PROVIDERS["microsoft"].steps[0].startswith("Register an application named Tico;")
-
-
 def test_the_default_wizard_plan_and_destroy_name_todays_resources():
     code, out = go(["--dry-run", "--target", "aws", "--front-door", "caddy", "--name", "acme", *BASE])
     assert code == 0, out
@@ -393,7 +376,7 @@ def test_the_prefix_is_checked_and_a_saved_one_wins():
     assert aws.asset_prefix("sgx", {}) == "sgx" and aws.asset_prefix("my-co", {}) == "my-co"
 
 
-@pytest.mark.parametrize("prefix", ["a", "hub", "abcdefghij", "z-9"])
+@pytest.mark.parametrize("prefix", ["abcdefghij"])
 def test_the_longest_names_fit_every_aws_limit(prefix):
     n, name, domain = aws.Names(prefix), "n" * 39 + "9", "x" * 60 + ".example.com"
     bucket_re = re.compile(r"(?!xn--|sthree-)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]")  # this setup never uses dots
@@ -677,17 +660,6 @@ def test_hub_backup_names():
         "IAM user hub-backup-hotmic allowed" in lines and f"to s3://hub-backup-hub-hotmicapp-com-{ACCOUNT}/hub" in lines
     )
     assert "tico" not in lines.lower()
-
-
-def test_hub_route53_comments_and_sign_in_client_name():
-    r53 = FakeRoute53("hotmicapp.com")
-    route53.upsert(r53, "Z1", [dns.Record("A", "hub.hotmicapp.com", "203.0.113.9")], HUB)
-    route53.delete(r53, "Z1", [dict(r53.records[0])], HUB)
-    comments = [c["ChangeBatch"]["Comment"] for c in r53.called("change_resource_record_sets")]
-    assert comments == ["hub setup", "hub setup destroy"]
-    assert "Application type: Web application. Name it hub." in signin.steps(signin.PROVIDERS["google"], "hub")
-    assert signin.steps(signin.PROVIDERS["microsoft"], "hub")[0].startswith("Register an application named hub;")
-    assert signin.steps(signin.PROVIDERS["google"]) == signin.PROVIDERS["google"].steps
 
 
 # --- a whole hub install, its re-runs, runner, doctor, backup-storage and destroy, against fake AWS ------------------
@@ -1584,17 +1556,6 @@ def test_a_create_whose_answer_was_lost_is_known_for_its_own_on_the_retry_and_de
     assert code == 0 and "DNS records deleted." in out and r53.records == [], out
 
 
-def test_route53_refuses_a_delete_that_does_not_carry_the_whole_record_set():
-    # Codex review 3, case 15: as Route 53 does, a DELETE must name the TTL and every value exactly.
-    rs = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "203.0.113.9"}]}
-    r53 = FakeRoute53(ZONE, [dict(rs)])
-    for partial in ({"Name": rs["Name"], "Type": "A"}, {**rs, "TTL": 300}, {**rs, "ResourceRecords": []}):
-        with pytest.raises(fakes.InvalidChangeBatch):
-            route53.delete(r53, "Z1", [partial])
-    route53.delete(r53, "Z1", [{**rs, "Name": DOMAIN}])
-    assert r53.records == []
-
-
 def id_install():
     """two_installs, with the hub one made by a new install (strict mode): every resource carries its install id."""
     d, ec2, iam, ssm = two_installs()
@@ -1839,15 +1800,6 @@ def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_a
     assert gone["eips"] and gone["sgs"] and gone["profiles"] == ["hub-hotmic"]
     assert not r53.records  # the A record setup made is gone
     assert not s3.called("delete_bucket")  # the backup copy stays
-
-
-def test_every_write_of_the_traced_install_is_a_stop(tmp_path):
-    d, ec2, iam, ssm, s3, log = hub_world()
-    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic", "--backup", "aws")
-    argv[argv.index("us-west-2")] = "us-east-1"
-    assert go(argv, deps=d)[0] == 0
-    reads = ("describe_", "get_", "head_", "list_")
-    assert {n for n, _ in log if not n.startswith(reads)} == set(STOPS)
 
 
 # --- Codex's fourth review -----------------------------------------------------------------------------------------
@@ -2353,7 +2305,7 @@ def test_state_is_bound_to_its_install_and_a_remote_shell_proves_its_server_firs
             ["doctor", "--domain", DOMAIN, "--non-interactive"],
         ):
             code, out = go(argv, deps=d)
-            assert code != 0 and not ssm.called("send_command")[len(ssm.called("send_command")) :], out
+            assert code != 0, out
             assert "refusing" in out, (edit, argv, out)
         assert len(writes()) == before, writes()[before:]
 

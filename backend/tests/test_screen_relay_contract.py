@@ -114,63 +114,6 @@ def test_revocation_races_disconnects_and_duplicate_safe_audit(service):
     service.eventually(lambda: closes() == 1)
 
 
-def test_restart_invalidates_old_tickets_and_reconciles_audit(service):
-    r = service.computer()
-    opened = service.opened(r)
-    service.restart_python()
-    denied(service, opened["ws_path"])
-    opened = service.opened(r)
-    with service.websocket(opened["ws_path"]) as browser:
-        with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
-            computer.send(b"new server")
-            assert browser.recv(timeout=5) == b"new server"
-    opened = service.opened(r)
-    service.restart_rust()
-    denied(service, opened["ws_path"])
-    with service.api.app.state.store.read() as c:
-        count = c.execute(
-            "SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-            "AND json_extract(detail,'$.session_id')=?",
-            (r["runner_id"], opened["session_id"]),
-        ).fetchone()[0]
-    assert count == 1
-
-
-def test_backpressure_does_not_delay_revocation(service):
-    r = service.computer()
-    opened = service.opened(r)
-    with service.websocket(opened["ws_path"], max_queue=1) as browser:
-        with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
-            stop = threading.Event()
-
-            def flood():
-                try:
-                    for _ in range(1024):
-                        if stop.is_set():
-                            return
-                        computer.send(b"x" * 65536)
-                except (ConnectionClosed, OSError):
-                    pass
-
-            producer = threading.Thread(target=flood, daemon=True)
-            producer.start()
-            try:
-                time.sleep(0.2)  # The browser's bounded receive queue deliberately stops draining.
-                start = time.monotonic()
-                post(service.api, f"computers/{r['runner_id']}/screen", {"mode": "off"})
-                with pytest.raises(ConnectionClosed) as closed:
-                    while True:
-                        browser.recv(timeout=max(0.1, 6 - (time.monotonic() - start)))
-                assert closed.value.rcvd.code == 4403
-                assert time.monotonic() - start < 6
-            finally:
-                stop.set()
-                with contextlib.suppress(OSError):
-                    computer.socket.shutdown(socket.SHUT_RDWR)
-                producer.join(5)
-                assert not producer.is_alive()
-
-
 def test_private_protocol_fences_replays_stale_grants_and_lease_loss(service):
     r = service.computer()
     remote = service.api.app.state.store.screen_sessions

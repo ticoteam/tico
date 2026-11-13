@@ -22,7 +22,8 @@ from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import app_delivery, login_holds, providers, runner_versions, runs
+from . import app_delivery, login_holds, needs_lane, providers, runner_versions, runs
+from .runs import LIVE as LIVE_RUN_STATES
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, bot_stops, run_triggers
@@ -415,6 +416,28 @@ def human_only(who):
         raise Problem("identity", "This frontend endpoint requires a person", 403)
 
 
+def person_or_view(who):
+    """The page's own start-up reads: a person, or a bot's read-only view of the app (backend/app_view.py), which reads
+    them as that bot."""
+    if not who.view:
+        human_only(who)
+
+
+# What a bot's read-only view is never offered in /api/me, whatever the bot may do elsewhere.
+VIEW_OFF = (
+    "can_create_bots",
+    "can_add_people",
+    "bot_admin",
+    "credential_admin",
+    "can_see_sql",
+    "can_create_tokens",
+    "has_tokens",
+    "credential_access",
+    "mail_access",
+    "mover",
+)
+
+
 def may_chat(c, auth, who, bot):
     """Whether the caller may send this bot messages: Write on it (backend/bot_access.py). Who a
     bot "works for" (Can use) no longer decides it."""
@@ -695,6 +718,7 @@ def operation_issues(c, who, auth):
     Every issue says whether a person has to act (`needs_person`); only those light the account's status dot.
     Stopped runs and quarantined bots are BotOps's to review, so they say no, and Settings > Health lists them.
     """
+    from . import cloud_machines
     from .agents import still_reporting
 
     issues, seen = [], set()
@@ -1073,6 +1097,19 @@ def operation_issues(c, who, auth):
             )
         elif agent:
             pass  # an external agent that reported in lately: no computer to check
+        elif bot["state"] == "active" and not location["machine"] and (cloud := cloud_machines.coming(c, slug)):
+            # A Tico Cloud bot goes on its cloud machine's computer once it enrolls: nothing to assign. Only a
+            # machine that failed needs a person; out of credit is the company's strip.
+            failed = cloud["status"] == "failed"
+            add(
+                "machine",
+                f"{bot['display_name']} is waiting for {cloud['label']} to start",
+                cloud["words"] + (f". {queued} saved request{'s' if queued != 1 else ''} waiting." if queued else "."),
+                bot=slug,
+                needs_person=failed,
+                severity="error" if failed else "warning",
+                action="Replace it in Settings → Computers." if failed else None,
+            )
         elif bot["state"] == "active" and not location["machine"]:
             # Nothing waiting means nothing urgent: a bot nobody has placed yet is setup, not a fault.
             add(
@@ -2117,8 +2154,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             }
         )
     if not count_only:
-        # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do.
-        views = {}
+        # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
+        # that entry alone (task_calls.ask_entry), not the whole view of its task.
         from . import task_calls
 
         # Every ask's task read together: the list costs what one task's view does.
@@ -2126,16 +2163,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
         for item in items:
             if item["kind"] != "ask":
                 continue
-            if item["task_id"] not in views:
-                views[item["task_id"]] = H.task_view(c, item["task_id"], who.actor) or {}
-            item["ask"] = next(
-                (
-                    r
-                    for r in views[item["task_id"]].get("to_leave") or ()
-                    if r["requirement_id"] == item["requirement_id"]
-                ),
-                None,
-            )
+            item["ask"] = task_calls.ask_entry(c, item["task_id"], item["requirement_id"], who.actor)
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.
             if item["ask"] and item["ask"]["kind"] == "ok":
@@ -2195,6 +2223,29 @@ def needs_bots(items, me):
         actor = needs_actor(it, me)
         if H.is_bot(actor):
             counts[actor] = counts.get(actor, 0) + 1
+    return counts
+
+
+# The items a stage's review walks (the ▶ on a stage): asks, tasks and @s on a task in that stage. A Paused cause is the
+# person's to fix in settings, whatever stage its first task is in.
+NEEDS_STAGE_KINDS = ("ask", "task", "mention")
+
+
+def needs_stage(it):
+    """The stage one Needs-you item is in, for a stage's review: its task's stage, or None."""
+    if it.get("kind") not in NEEDS_STAGE_KINDS:
+        return None
+    return (it.get("task") or {}).get("stage_id") or None
+
+
+def needs_stages(items):
+    """How many Needs-you items wait in each stage ({"<stage id>": n}, needs_stage) over the whole list, so a stage's ▶
+    shows its count before every page is read."""
+    counts = {}
+    for it in items:
+        stage = needs_stage(it)
+        if stage:
+            counts[stage] = counts.get(stage, 0) + 1
     return counts
 
 
@@ -2438,6 +2489,8 @@ def install_views(app, store, auth, mutate, task_view):
         started, finished = H.parse_ts(turn.get("started_at")), H.parse_ts(turn.get("finished_at"))
         duration = max(0, round((finished - started).total_seconds())) if started and finished else None
         success = turn.get("exit") == "completed"
+        # A live run (runs.LIVE) has no result yet: no exit code and no finished time, not a failure ending at its start.
+        live = turn.get("state") in LIVE_RUN_STATES
         if made is None and c is not None:
             made = ran_on(c, [turn["id"]])[turn["id"]]
         return {
@@ -2452,8 +2505,8 @@ def install_views(app, store, auth, mutate, task_view):
                 k: turn.get(k)
                 for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")
             },
-            "finished_at": turn.get("finished_at") or turn.get("started_at"),
-            "exit": 0 if success else 1,
+            "finished_at": None if live else turn.get("finished_at") or turn.get("started_at"),
+            "exit": None if live else 0 if success else 1,
             "duration_s": duration,
             "output_tokens": turn.get("output_tokens"),
             "cost_usd": turn.get("est_cost_usd"),
@@ -2689,7 +2742,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/me")
     def me(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         with store.read() as c:
             r = roster(c)
             person = P.person(H.actor_id(who.actor), r) or {}
@@ -2739,11 +2792,15 @@ def install_views(app, store, auth, mutate, task_view):
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),
-            }
+            } | (
+                {key: False for key in VIEW_OFF} | {"read_only_view": True, "name": H.actor_name(c, who.actor)}
+                if who.view
+                else {}
+            )
 
     @app.get("/api/employees")
     def employees(request: Request):
-        human_only(request.state.identity)
+        person_or_view(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
             from . import teammate_access
@@ -2756,7 +2813,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/people")
     def people(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         with store.read() as c:
             r, configs = roster(c), entries(c)
             from . import people_photos
@@ -3080,6 +3137,12 @@ def install_views(app, store, auth, mutate, task_view):
                 "cloud": True,
                 "computers": machines,
                 "machines": machines,
+                # Cloud machines not enrolled yet (being made, starting, failed): listed before they are computers.
+                "cloud_coming": [
+                    row
+                    for row in (cloud_machines.coming_rows(c) if cloud_machines.offered(c, store.settings) else [])
+                    if row["bot"] not in unseen
+                ],
                 "runnable": runnable_choices(c, who, auth, store.settings),
                 "agents": agent_listing(c, who, auth),
                 "services": health,
@@ -3091,7 +3154,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/status")
     def status(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
@@ -3450,7 +3513,7 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/v2/needs-you")
-    def needs(
+    async def needs(
         request: Request,
         count: bool = False,
         ids: str | None = None,
@@ -3466,7 +3529,10 @@ def install_views(app, store, auth, mutate, task_view):
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list. A cursor from an older version starts again from the top (`restart`)."""
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
+        return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
+
+    def needs_answer(who, count, ids, version, limit, cursor):
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
@@ -3498,18 +3564,22 @@ def install_views(app, store, auth, mutate, task_view):
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
                 out["bots"] = needs_bots(items, who.actor)
+                out["stages"] = needs_stages(items)
                 if restarted:
                     out["restart"] = True
             return out
 
     @app.get("/api/v2/needs-you/summary")
-    def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
+    async def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
         most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
         who = request.state.identity
         human_only(who)
+        return await needs_lane.run(request.app, summary_answer, who, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
+
+    def summary_answer(who, limit):
         with store.read_transaction() as c:
-            return needs_summary(c, auth, who, task_view, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
+            return needs_summary(c, auth, who, task_view, limit)
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):

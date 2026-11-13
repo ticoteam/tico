@@ -650,6 +650,61 @@ def test_a_released_worktree_refused_for_unpushed_commits_is_tried_again_after_a
     assert 'cleanup_gave_up' not in detail() and detail()['cleanup_attempts'] == 1
 
 
+def test_a_released_worktree_that_gave_up_is_removed_once_its_task_ends(prepared):
+    # Release refuses unpushed-looking commits; a finished task's removal saves them to wip/ instead, so it gets its own tries.
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    report = {
+        'link_id': link['link_id'],
+        'state': 'present',
+        'checkout_state': 'ready',
+        'branch': link['branch'],
+        'last_commit': 'abc',
+        'ahead': 2,
+    }
+    body = {
+        'version': '0.3.2',
+        'platform': 'linux',
+        'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+        'worktrees': [report],
+    }
+
+    def detail():
+        with api.app_state.store.read() as c:
+            return json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+
+    with api.app_state.store.transaction() as c:
+        H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['release'] is True
+    report['error'] = 'Worktree action failed; history kept. kept: unpushed commits; push them to free this worktree'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    with api.app_state.store.transaction() as c:
+        c.execute(
+            'UPDATE task_links SET detail=? WHERE id=?',
+            (json.dumps({**detail(), 'cleanup_attempts': W.CLEANUP_TRIES, 'cleanup_retry_at': None}), link['link_id']),
+        )
+    # While the task stays open (waiting on its release), the give-up holds.
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    assert detail()['cleanup_gave_up'] and detail()['release_requested']
+    with api.app_state.store.transaction() as c:
+        end(c, tid, 'done')
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['task_closed'] is True
+    assert 'release' not in actions[0]
+    assert 'cleanup_gave_up' not in detail() and 'release_requested' not in detail()
+    assert detail()['cleanup_attempts'] == 1
+    # The computer saves the commits to wip/ and removes the tree: the error and the Health finding go.
+    report.pop('error')
+    report['state'] = 'removed'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    with api.app_state.store.read() as c:
+        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'removed'
+    assert 'error' not in detail()
+
+
 def test_initializing_checkout_stays_pending_until_checkout_and_setup_complete(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()

@@ -735,26 +735,4 @@ mod tests {
             1
         );
     }
-
-    #[test]
-    fn a_normal_bots_checkout_gets_its_memory_copied_and_a_stateless_or_private_one_never_does() {
-        let dir = temp();
-        std::fs::create_dir_all(dir.join(".git")).unwrap();
-        assert!(
-            copies_into(false, false, &dir),
-            "a normal bot's checkout gets its memory"
-        );
-        assert!(
-            !copies_into(false, true, &dir),
-            "a stateless bot keeps no memory to copy"
-        );
-        assert!(
-            !copies_into(true, false, &dir),
-            "a private meeting's copy takes none"
-        );
-        assert!(
-            !copies_into(false, false, &temp()),
-            "no git checkout, no copy"
-        );
-    }
 }

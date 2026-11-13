@@ -309,7 +309,7 @@ async function perfSwitch(state: ComputerPerfState, button: HTMLButtonElement): 
 }
 
 async function perfErase(state: ComputerPerfState, button: HTMLButtonElement): Promise<void> {
-  if (!confirm('Delete this computer\'s recorded performance history? This cannot be undone.')) return;
+  if (!(await askConfirm('Delete this computer\'s recorded performance history? This cannot be undone.', button))) return;
   button.disabled = true;
   try {
     await writeRequest('DELETE', `/v2/computers/${encodeURIComponent(state.id)}/performance`, undefined);

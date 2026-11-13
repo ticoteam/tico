@@ -1,5 +1,5 @@
 /* ui/styles/threads.css — Threads: the sidebar rows, the Threads page, one thread's flat timeline and its bots' status, the
-   composer under it, and the New thread / Members dialogs. Markup: ui/app/threads.ts, thread-view.js, threads-page.js. */
+   composer under it, and the Members and settings dialogs. Markup: ui/app/threads.ts, thread-view.js, threads-page.js. */
 
 /* a thread's mark where it has no avatar (a Home or a DM shows a face) */
 .th-mark{width:18px;height:18px;font-size:17px}
@@ -165,6 +165,8 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 /* the bot chat's pill (meetings.css .p-pill): one frame, no margin under it; the goal's bar sits above the thread */
 .thv-composer .ask{margin:0}
 .thv-composer .p-chips:empty{display:none}
+/* files waiting to be sent sit above the box (#138) */
+.thv-composer .p-chips:not(:empty){padding:0 4px 8px}
 .thv-goal{flex:none}
 /* "Message <bot>" stays on its one line, cut short */
 .thv-ask .p-text::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -220,8 +222,7 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .thv-blank .thv-scroll{display:none}
 .th-earlier-open{margin-top:6px}
 
-/* New thread and Members */
-.thd-members{display:flex;flex-direction:column;gap:6px}
+/* Members and settings */
 .thd-lbl{color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .thd-picks{display:flex;flex-direction:column;max-height:240px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:4px}
 .thd-pick{display:flex;align-items:center;gap:var(--s2);padding:5px 8px;border-radius:6px;cursor:pointer}
@@ -278,8 +279,6 @@ button.ths-link:hover .ths-val{color:var(--ink)}
 
 @media (max-width:760px){
   .thread-page{max-width:none}
-  /* the title needs the room: the mark before it says private or public, and the phone icon says call */
-  .thv-call-word{display:none}
   /* no room beside the title and actions, so the audience takes a line of its own under them */
   .thv-titleline{flex-wrap:wrap}
   .thv-aud{order:1;flex:0 0 100%;font-size:var(--t-xs)}
@@ -308,9 +307,7 @@ button.ths-link:hover .ths-val{color:var(--ink)}
   .ths-acts button{min-height:44px}
 }
 
-/* calls: Start call / Join in the header, and the bar while in a call */
-.thv-call{display:inline-flex;align-items:center;gap:4px;flex:none}
-.thv-call .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
+/* calls: the bar while in a Tico Meet call (the header's phone and the call card are styles/calls.css) */
 .thv-call-note{flex:none;font-size:var(--t-sm)}
 .thv-call-on{color:var(--ok)}
 .call-bar{position:fixed;z-index:30;left:calc(var(--rail-left) + 16px);right:16px;bottom:16px;max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.14)}

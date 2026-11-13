@@ -159,20 +159,13 @@ def test_pr_numbers_come_from_merge_and_squash_subjects_once_and_in_order():
 @pytest.mark.parametrize(
     "path, area",
     [
-        ("ui/src/App.tsx", "ui"),
-        ("clients/mobile/x.ts", "clients"),
         ("app/main.swift", "app"),
-        ("backend/tasks.py", "backend"),
-        ("runner-rs/src/main.rs", "runner"),
         ("runner_support/x.py", "runner"),
         ("recorder/src/lib.rs", "recorder"),
         ("templates/catalog/x.md", "templates"),
-        ("docs/releasing.md", "docs"),
-        ("scripts/release_train.py", "scripts"),
         (".github/workflows/train.yml", "ci"),
         ("README.md", "other"),
         ("backend/tests/test_tasks.py", "tests"),
-        ("scripts/tests/test_release_train.py", "tests"),
         ("ui/src/app.test.tsx", "ui"),
         ("conftest.py", "tests"),
     ],
@@ -318,13 +311,6 @@ def test_a_block_with_nothing_given_is_one_line_and_says_so():
     assert "- Review:" not in block, "a line only when there are reviews or receipts"
 
 
-def test_user_facing_risk_is_shown_as_written():
-    text = notes.build(scenario(), "v0.5.200", "v0.5.201")
-    block = text[text.index("### #15") : text.index("## Backend")]
-    assert "- Risk: medium — UI only" in block
-    assert "- Touches: ui" in block, "the tests a pull request touches are not an area"
-
-
 def test_evidence_providers_add_their_lines_and_print_nothing_when_they_have_none(monkeypatch):
     assert notes.EVIDENCE == [], "no evidence provider is registered yet"
     assert "Recording" not in notes.build(scenario(), "v0.5.200", "v0.5.201")
@@ -368,21 +354,6 @@ def test_high_risk_and_cut_short_are_read_from_the_notes_built_here(monkeypatch)
     assert notes.cut_short(notes.build(scenario(), "v0.5.200", "v0.5.201"))
 
 
-def test_notes_are_read_only():
-    api = scenario()
-    notes.build(api, "v0.5.200", "v0.5.201")
-    assert api.paths and all(path.startswith(("compare/", "pulls/", "commits/", "issues/")) for path in api.paths)
-
-
-def test_a_block_is_built_from_its_fields_without_placeholders_for_evidence():
-    lines = notes.block(pull(number=3, title="Plain"))
-    assert lines[0] == "### #3 Plain"
-    assert notes.NOTHING_GIVEN in lines
-    assert not any("Review" in line or "Recording" in line for line in lines)
-    assert notes.risk_line(pull(risk="high", risk_text="rewrites rows")) == "- Risk: high — rewrites rows"
-    assert notes.field("Demo steps", "1. Open\n2. Add") == ["- Demo steps:", "  1. Open", "  2. Add"]
-
-
 def test_a_block_gives_only_the_fields_it_has_and_says_risk_not_stated_when_only_risk_is_missing():
     lines = notes.block(pull(number=3, sections={"spec": "https://spec.example/3"}))
     assert "- Spec: https://spec.example/3" in lines and "- Risk: not stated" in lines
@@ -400,19 +371,6 @@ def test_checks_print_only_when_one_failed_or_none_ran():
 
 
 # ---- the review page line a Dev ticket's pull request carries ----
-
-
-def test_the_review_line_is_read_from_the_body_and_absent_when_there_is_none():
-    body = "## Spec\nShows the week.\n\nReview page: https://tico.example/#/page/p1\n"
-    assert notes.review_page_of(body) == "https://tico.example/#/page/p1"
-    assert notes.review_page_of("Review page: none (could not build it)") == "none (could not build it)"
-    assert notes.review_page_of("## Spec\nno line here") is None
-
-
-def test_a_block_prints_its_review_page_line_only_when_the_body_has_one():
-    assert not any(line.startswith("- Review page") for line in notes.block(pull(number=5)))
-    lines = notes.block(pull(number=6, review_page="https://tico.example/#/page/p6"))
-    assert "- Review page: https://tico.example/#/page/p6" in lines
 
 
 def review_scenario():

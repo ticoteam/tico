@@ -869,7 +869,7 @@ async function auBoardDelete(ed: AuBoardEd, button: HTMLButtonElement) {
   else if (ed.part === 'q') b.questions.splice(ed.i, 1);
   else if (ed.part === 'dest') {
     const d = b.dests[ed.i];
-    if (!d || b.dests.length < 2 || !confirm(`Delete ${d.name || d.id}?`)) return;
+    if (!d || b.dests.length < 2 || !(await askConfirm(`Delete ${d.name || d.id}?`))) return;
     b.dests.splice(ed.i, 1);
     for (const r of [...b.rules, ...b.questions]) if (r.to === d.id) Object.assign(r, {to: '', next: 'end'});
     b.llm.to = b.llm.to.filter(x => x !== d.id);

@@ -297,10 +297,11 @@ def task_reassign(
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
+    set_anyway: bool = False,
 ) -> Row:
     """Give the task to another owner for this stage. Checked as any hand-over is: the actor reaches the new owner,
     the new owner takes tasks, the General Manager stays in the department, and a bot's hand-over to a person passes the
-    strategy rules."""
+    strategy rules. `set_anyway`: a person overturns the stage rule that blocks this owner (E.reassign)."""
     from . import task_engine as E
 
     H = _h()
@@ -326,15 +327,16 @@ def task_reassign(
         if is_human(target):
             from . import strategy_acts
 
+            H.review_finding_route(conn, actor, task_id, target)
             acts: Any = strategy_acts
             acts.gate(conn, actor, "person_task", f"give {acts.TASK} to {H.person_name(conn, target)}", task_id=task_id)
         from . import task_relations
 
         relations: Any = task_relations
-        H._takes_tasks(conn, actor, target, row.get("title"), relations.parent_of(conn, task_id))
+        H._takes_tasks(conn, actor, target, row.get("title"), relations.parent_of(conn, task_id), task=task_id)
         H._learner(conn, actor)
         H._learning(conn, actor, target)
-    return E.reassign(conn, task_id, target, actor, why, seen_version)
+    return E.reassign(conn, task_id, target, actor, why, seen_version, set_anyway=set_anyway)
 
 
 # ----------------------------------------------------------------------------- asks and answers
@@ -362,6 +364,7 @@ def task_ask(
     shows: object = None,
     seen_version: int | str | None = None,
     mover: bool | None = None,
+    for_action: bool = False,
 ) -> Row:
     """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
     "ok"). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
@@ -385,7 +388,16 @@ def task_ask(
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
         H.require_person_ask(conn, actor, target, line, "ask")
     return E.add_requirement(
-        conn, task_id, actor, kind, target, line, choices=choices, shows=shows, seen_version=seen_version
+        conn,
+        task_id,
+        actor,
+        kind,
+        target,
+        line,
+        choices=choices,
+        shows=shows,
+        seen_version=seen_version,
+        for_action=for_action,
     )
 
 
@@ -619,8 +631,8 @@ def _may(
         if answer and answer["answer"] == "no":
             if viewer in (owner, holder):
                 out.append("again")
-        elif asked:
-            out += ["ok", "no"]
+        elif asked and standing.state == R.WAITING and not R.outside(standing.on):
+            out += ["ok", "no"]  # not while it is held on Jev or back with the owner (validate_gate.held)
     owners = R.owners_answer(requirement)
     if kind == "answer" and not standing.met and (works if owners else asked):
         out.append("answer")
@@ -869,6 +881,77 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
     return out
 
 
+def _leave_entry(
+    conn: "sqlite3.Connection",
+    row: Row,
+    standing: Any,
+    answers: dict[str, Row],
+    viewer: str | None,
+    hidden: Any,
+    holder: Any,
+    works: bool,
+) -> Row:
+    """One entry of a task's `to_leave` (task_view): a requirement of its open visit, where it stands, and what `viewer`
+    may do about it. `hidden` is what `hidden_filed` keeps from them; `holder` and `works` are the task's."""
+    from . import task_asks
+    from . import task_requirements as R
+
+    task_id = row["id"]
+    requirement: Row = standing.requirement
+    answer = answers.get(requirement["id"])
+    # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
+    # reads the task learns only that it waits on a person.
+    private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
+    # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
+    page = _page_of(conn, row["visit"]["id"], requirement) if requirement["kind"] == "page" else None
+    shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
+    typed = _typed_view(requirement)
+    return {
+        "requirement_id": requirement["id"],
+        "kind": requirement["kind"],
+        "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
+        "met": standing.met,
+        "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
+        "who": None if standing.met or standing.on in hidden else standing.on,
+        "asked_by": None if private else requirement.get("added_by_id") if requirement.get("visit_id") else None,
+        "choices": None if private else requirement.get("choices"),
+        **({"typed": typed} if typed else {}),
+        "shows": shows,
+        # What it shows is where its words come from: a reader who may not open one of those pages reads
+        # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
+        **({"source": shows} if shows else {}),
+        **({"page": page} if page else {}),
+        "answer": _answer_view(conn, task_id, answer, private) if answer else None,
+        "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
+    }
+
+
+def ask_entry(conn: "sqlite3.Connection", task_id: str, requirement_id: str, viewer: str) -> Row | None:
+    """The `to_leave` entry of one requirement of a task, as `task_view(conn, task_id, viewer)` gives it, without the
+    rest of the view (its waits, next stage, filed tasks and values): Needs you shows each ask with this alone. None
+    when the view has no such entry."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import waiting_on as W
+
+    row = E.task(conn, task_id)
+    if not row:
+        return None
+    visit: Row = row.get("visit") or {}
+    if not (row["status"] == "open" and visit):
+        return None
+    standings = R.standings(conn, row)
+    found = next((s for s in standings if s.requirement["id"] == requirement_id), None)
+    if found is None:
+        # Not a live requirement: the view lists what was decided after the live ones.
+        return next(
+            (r for r in _decided(conn, task_id, visit["id"], viewer) if r["requirement_id"] == requirement_id), None
+        )
+    hidden = hidden_filed(conn, row, viewer, None)
+    answers = R.newest_answers(conn, visit["id"])
+    return _leave_entry(conn, row, found, answers, viewer, hidden, W.holder(conn, row), can_work(conn, viewer, row))
+
+
 def task_view(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -902,43 +985,7 @@ def task_view(
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
-    to_leave: list[Row] = []
-    from . import task_asks
-
-    for standing in standings:
-        requirement: Row = standing.requirement
-        answer = answers.get(requirement["id"])
-        # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
-        # reads the task learns only that it waits on a person.
-        private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
-        # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
-        page = _page_of(conn, visit["id"], requirement) if requirement["kind"] == "page" else None
-        shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
-        typed = _typed_view(requirement)
-        to_leave.append(
-            {
-                "requirement_id": requirement["id"],
-                "kind": requirement["kind"],
-                "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
-                "met": standing.met,
-                "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
-                "who": None if standing.met or standing.on in hidden else standing.on,
-                "asked_by": None
-                if private
-                else requirement.get("added_by_id")
-                if requirement.get("visit_id")
-                else None,
-                "choices": None if private else requirement.get("choices"),
-                **({"typed": typed} if typed else {}),
-                "shows": shows,
-                # What it shows is where its words come from: a reader who may not open one of those pages reads
-                # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
-                **({"source": shows} if shows else {}),
-                **({"page": page} if page else {}),
-                "answer": _answer_view(conn, task_id, answer, private) if answer else None,
-                "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
-            }
-        )
+    to_leave = [_leave_entry(conn, row, standing, answers, viewer, hidden, holder, works) for standing in standings]
     if live:
         to_leave.extend(_decided(conn, task_id, visit["id"], viewer))
     following = E.next_stage(conn, row) if live else None

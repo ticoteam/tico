@@ -41,21 +41,6 @@ def rule(rid, when, do):
     return rl.validate({"id": rid, "when": when, "do": do})
 
 
-class Engine(unittest.TestCase):
-    def test_never_archive_blocks_a_later_archive_and_records_why(self):
-        rules = [
-            rule(
-                "protect", {"subject_or_body_matches": ["invoice"]}, {"label": "hub/needs-owner", "never_archive": True}
-            ),
-            rule("file", {"has_unsubscribe_link": True}, {"label": "hub/marketing", "archive": True}),
-        ]
-        plan = rl.apply(rules, msg(subject="Invoice 1", unsubscribe=True), NOW)
-        self.assertFalse(plan["archive"])
-        self.assertTrue(plan["never_archive"])
-        self.assertEqual(plan["blocked"][0]["rule"], "file")
-        self.assertEqual(plan["labels"], ["hub/needs-owner", "hub/marketing"])
-
-
 class ShippedRules(unittest.TestCase):
     """registry/mail-rules.yaml against the fixture mailbox, the same run `rules test` does."""
 

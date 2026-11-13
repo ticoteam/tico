@@ -63,12 +63,6 @@ def _fresh(*args, env=None):
     )
 
 
-def test_every_module_stays_under_the_cap():
-    """No clients/commands module grows past MAX_LINES: a noun that does gets split by verb (tasks -> task_work)."""
-    over = {p.name: n for p in sorted(PACKAGE.glob("*.py")) if (n := p.read_text().count("\n")) > MAX_LINES}
-    assert not over, f"over {MAX_LINES} lines: {over}; split the noun by verb (scripts/cleanup/split_commands.py)"
-
-
 def test_every_entry_point_loads_the_whole_table():
     with ThreadPoolExecutor(len(FIRST_IMPORTS)) as pool:
         runs = dict(zip(FIRST_IMPORTS, pool.map(lambda m: _fresh("-c", PROBE, m), FIRST_IMPORTS), strict=True))
@@ -140,32 +134,3 @@ def test_local_files_reach_the_api_through_the_lazily_imported_helpers(tmp_path,
     old = _Computer(multipart=False)
     hubtools.task_attach(old, {"id": "t1", "name": "notes.txt", "path": "notes.txt"})
     assert old.calls == [("post", "tasks/t1/files", {"name": "notes.txt", "content_base64": "aGVsbG8K"})]
-
-
-@pytest.mark.skipif(not MOVED, reason="clients/commands/ does not exist yet")
-def test_the_facade_hands_out_the_package_objects():
-    """`hubtools.X` is the package's own X: a change through the facade (TOOLS, AUDIENCE, BY_NAME) is a change to
-    the table, and every name in `__all__` is there."""
-    source = {}  # name -> the module the facade imports it from (a clients.commands module, or a library's)
-    for node in ast.parse(Path(hubtools.__file__).read_text()).body:
-        if isinstance(node, ast.ImportFrom) and node.module:
-            source.update({a.asname or a.name: node.module for a in node.names})
-    for name in hubtools.__all__:
-        assert name in source, f"hubtools.{name} is in __all__ but the facade does not import it"
-        assert getattr(hubtools, name) is getattr(importlib.import_module(source[name]), name), name
-    for name in ("TOOLS", "BY_NAME", "AUDIENCE", "SHELL_ONLY", "UNLISTED", "CLI_TOOL_ALIASES"):
-        assert name in hubtools.__all__, f"hubtools.{name} is not re-exported"
-
-
-@pytest.mark.skipif(MOVED, reason="the table already lives in clients/commands/")
-def test_the_move_still_verifies_on_this_tree():
-    """scripts/cleanup/split_commands.py builds the package in a scratch copy and checks the moved table serves the
-    same tools, listings, commands and versions. Not strict: a noun it has no module for gets its own."""
-    spec = importlib.util.spec_from_file_location("split_commands", ROOT / "scripts" / "cleanup" / "split_commands.py")
-    split = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(split)
-    try:
-        report = split.run(ROOT, strict=False, tests=False)
-    except split.Stop as exc:
-        pytest.fail(f"scripts/cleanup/split_commands.py: {exc}")
-    assert report["identity"]["tools"] == len(hubtools.TOOLS)

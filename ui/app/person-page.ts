@@ -15,6 +15,59 @@ interface HumanSlackThread {
   messages?: HumanSlackMessage[] | null;
 }
 
+// ----------------------------------------------------------------- Web Push for this browser
+// On with Browser notifications, so a call rings while Tico is hidden or closed (backend/web_push.py, docs/push.md).
+// A browser without push, or a page that cannot reach its service worker (ui/app/boot.ts registers it), skips it.
+async function pushRegistration(): Promise<ServiceWorkerRegistration | null> {
+  const sw = serviceWorkerContainer();
+  if (!sw || !('PushManager' in window)) return null;
+  return Promise.race([sw.ready, new Promise<null>(done => setTimeout(() => done(null), 5000))]);
+}
+function pushKeyBytes(key: string): Uint8Array<ArrayBuffer> {
+  const text = atob(key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4));
+  return Uint8Array.from(text, ch => ch.charCodeAt(0));
+}
+function samePushKey(held: ArrayBuffer | null, key: Uint8Array): boolean {
+  const bytes = held ? new Uint8Array(held) : null;
+  return !!bytes && bytes.length === key.length && bytes.every((b, i) => b === key[i]);
+}
+// This browser's subscription, made or kept, sent to the server. One made for another key (a copy of the install, a
+// new key) is replaced.
+async function pushSubscribe(): Promise<void> {
+  const reg = await pushRegistration();
+  if (!reg) return;
+  const key = pushKeyBytes((await get<{key: string}>('/v2/push/key')).key);
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && !samePushKey(sub.options.applicationServerKey, key)) { await sub.unsubscribe(); sub = null; }
+  sub = sub || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
+  await post('/v2/push/subscriptions', sub.toJSON());
+}
+async function pushUnsubscribe(opts?: ApiWriteOptions): Promise<void> {
+  const reg = await pushRegistration();
+  const sub = reg && await reg.pushManager.getSubscription();
+  if (!sub) return;
+  await writeRequest('DELETE', '/v2/push/subscriptions', {endpoint: sub.endpoint}, undefined, opts);
+  await sub.unsubscribe();
+}
+// Signing out ends this browser's push, so whoever uses it next is not rung for the person who left. The same links
+// decide.ts and boot-snap.ts clear on. Sign-out waits for it at most PUSH_SIGN_OUT_MS, then goes on whatever happened.
+const PUSH_SIGN_OUT_MS = 1500;
+document.addEventListener('click', e => {
+  const link = eventElement(e)?.closest<HTMLAnchorElement>('a[href]');
+  if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(String(link.getAttribute('href')))) return;
+  // Without notification permission this browser holds no push subscription: nothing to wait for.
+  if (!('PushManager' in window) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  e.preventDefault();
+  const href = link.href;
+  void Promise.race([pushUnsubscribe({keepalive: true, timeout: PUSH_SIGN_OUT_MS}).catch(() => {}),
+    new Promise(done => setTimeout(done, PUSH_SIGN_OUT_MS))]).then(() => { location.href = href; });
+}, true);
+// Each browser the person opens Tico in with Browser notifications on and allowed takes push too.
+function pushKeep(on: boolean | undefined) {
+  if (on && 'Notification' in window && Notification.permission === 'granted') void pushSubscribe().catch(() => {});
+}
+
 // ----------------------------------------------------------------- human page (team tree)
 const PERSON_TABS = ['profile', 'slack'];
 // The Assistant tab is first, and only on your own page: it opens your private chat with the assistant, the
@@ -136,7 +189,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   void headGoalsLoad('human:' + p.id);
   void personAccessLoad(p);
   const dmButton = $('#person-dm');
-  if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
+  if (dmButton) dmButton.onclick = () => { location.hash = THREADS_NEW + '?to=' + encodeURIComponent('human:' + p.id); };
   $('#ptabs').onclick = (ev: Event) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-pt]'); if (!b) return;
     location.hash = b.dataset.pt === 'assistant' ? ASSISTANT : `#/person/${encodeURIComponent(p.id)}${b.dataset.pt === 'profile' ? '' : '/' + b.dataset.pt}`;
@@ -166,6 +219,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   notifySwitch('#person-update-draft', 'update_draft');
   notifySwitch('#person-email-digest', 'email_digest');
   const browser = $('#person-notify-browser');
+  if (browser) pushKeep(p.notify_browser === true);
   if (browser) browser.onchange = async () => {
     const value = browser.checked, status = $('#person-notify-status');
     status.textContent = '';
@@ -177,6 +231,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     try {
       const row = await post(`/v2/humans/${encodeURIComponent(p.id)}`, {notify_browser: value});
       p.notify_browser = row.notify_browser === true; S.notifyBrowser = p.notify_browser; browser.checked = p.notify_browser;
+      if (p.notify_browser) pushKeep(true); else void pushUnsubscribe().catch(() => {});
     } catch (e) {
       browser.checked = !value; status.textContent = errorMessage(e, 'Could not save.');
     } finally { browser.disabled = false; }
@@ -303,8 +358,8 @@ async function personAccessLoad(p: RosterPerson) {
 let PERSON_LIST: ({id: string; rows: TaskBriefV3[]; cursor: string; paging: Promise<unknown> | null} & TaskPaging<TaskBriefV3>) | null = null;
 // Its reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event.
 let PERSON_FEED = taskFeedNew();
-// What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
-const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id && !t.snoozed;
+// What the list holds: every task the person owns, open, snoozed or finished (status=all).
+const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id;
 async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;

@@ -41,7 +41,7 @@ const SHARED: string[] = [
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
   'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css',
-  'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.ts', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
+  'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.ts', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts', 'ui/app/confirm.ts',
   'ui/app/session.ts', 'ui/app/notices.ts', 'ui/app/sidebar.ts', 'ui/app/drawer.ts', 'ui/app/viewport.ts',
   'ui/app/refresh.ts', 'ui/app/boot.ts', 'ui/app/boot-snap.ts', 'ui/app/boot-timing.ts', 'ui/app/nav-events.ts',
   'ui/app/markdown.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.ts', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',

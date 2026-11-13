@@ -68,15 +68,13 @@ def repository_present(c, bot):
     return bool(report.get("repository_present"))
 
 
-# Where a bot's conversation compacts, in tokens (runner-rs/src/hosts/mod.rs DEFAULT_COMPACT_AT): the choices offered,
-# and what a bot that never chose one gets.
-COMPACT_AT = (100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000)
-DEFAULT_COMPACT_AT = 250_000
-
-
-def compact_at(config):
+def compact_at(config, model=None):
+    """Where the bot's conversation compacts, in tokens: its saved size, else the default for `model`, or for the model
+    its config names (backend/providers.py compact_default)."""
     value = (config or {}).get("compact_at")
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else DEFAULT_COMPACT_AT
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return providers.compact_default(model or (config or {}).get("model"))
 
 
 # The fields a manager bot changes on its report (report_managers.SCOPES). Anyone who manages the bot may undo them.
@@ -322,7 +320,7 @@ class SettingsAdmin:
             "model": effective.get("model") or "",
             "runtime": effective.get("runtime") or "",
             "effort": effective.get("reasoning_effort") or row["effort"],
-            "compact_at": compact_at(effective),
+            "compact_at": compact_at(effective, providers.bot_choice(c, self.settings, effective)[1]),
             # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
             "wake": wake_presets.effective(_json(config["config"], {}) or {}),
             "profile": profiles.effective(_json(config["config"], {}) or {}),
@@ -1227,7 +1225,8 @@ class SettingsAdmin:
         if field == "task_model":
             return task_models.stored(_json(config["config"], {}) or {})
         if field == "compact_at":
-            return compact_at(_json(config["config"], {}))
+            declared = _json(config["config"], {}) or {}
+            return compact_at(declared, providers.bot_choice(c, self.settings, declared)[1])
         if field == start_places.BOT_KEY:
             return start_places.bot_limit(_json(config["config"], {}) or {})
         if field == "wake_preset":

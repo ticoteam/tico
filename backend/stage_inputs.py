@@ -125,6 +125,7 @@ def _prs(conn: "sqlite3.Connection", task_id: str, filed: bool) -> list[Row]:
         line = _pr_line(link)
         meta: Row = link.get("metadata") or {}
         entry: Row = {"kind": "pr", "url": link.get("url"), "repo": link["repo"], "number": link["number"]}
+        entry["open"] = meta.get("state") not in ("merged", "closed")
         if filed:
             entry["filed"] = True
             line += " (work this task filed)"
@@ -337,6 +338,20 @@ def lines(conn: "sqlite3.Connection", entries: list[Row]) -> list[str]:
 
 # Said once under the handed-on PRs: a bot made from an older template learns it here, not only from its playbook.
 READ_CHECKS = "Read a PR's checks with `gh pr checks <its link>`: the link names the repository wherever you run it."
+
+
+def one_pr(entries: list[Row]) -> str:
+    """The line that keeps a task to one PR, or "" when it has no open one of its own: whoever changes code on it pushes
+    to that PR's branch, never a second PR beside it (#171: a Builder handed the task mid-turn opened its own)."""
+    url = next((str(e["url"]) for e in entries if e["kind"] == "pr" and e.get("open") and not e.get("filed")), "")
+    if not url:
+        return ""
+    return (
+        f"This task already has an open PR, {url}: push any change to its branch (`gh pr checkout {url}`) and update "
+        "it. Never open a second PR for this task."
+    )
+
+
 IF_MISSING = (
     "If something you need from an earlier stage is missing or wrong, do not say done: send the task back to the "
     'stage it comes from, `tico task move <id> "<stage>" -m "<what is missing>" --version N`.'

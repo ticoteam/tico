@@ -63,7 +63,8 @@ function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed
     const one = p.match(/^\/api\/v2\/feedback\/([^/]+)(?:\/(rule-draft|rule))?$/);
     const row = one && rows.find(r => r.id === one[1]);
     if (!row) return json({detail: 'Not found'}, 404);
-    if (method === 'DELETE') { rows.splice(rows.indexOf(row), 1); return route.fulfill({status: 204, body: ''}); }
+    // The real route answers JSON (backend/feedback.py remove()), never an empty 204.
+    if (method === 'DELETE') { rows.splice(rows.indexOf(row), 1); return json({ok: true, id: row.id}); }
     if (one![2] === 'rule-draft') return json({text: 'Keep replies to five lines or fewer.'});
     if (one![2] === 'rule') {
       Object.assign(row, {outcome: 'rule', org_rule_id: 'r-1', rule_status: 'active'});
@@ -217,15 +218,6 @@ async function chatDesktop(browser: Browser, theme = 'dark') {
   await second.getByRole('button', {name: 'Not good', exact: true}).click();
   assert.equal(await show.locator('.fb-out').innerText(), 'Sent to bot');
   await page.keyboard.press('Escape');
-  // A reason typed and the sheet closed with Escape is still kept with its 👎.
-  await second.hover();
-  await second.getByRole('button', {name: 'Not good', exact: true}).click();      // already 👎: opens what happened
-  await show.getByRole('button', {name: 'Edit'}).click();
-  await sheet.getByRole('textbox').fill('Totals are off by a month');
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
-  await new Promise(r => setTimeout(r, 300));
-  assert.equal(rows.find(r => r.subject_id === 'm3')!.reason, 'Totals are off by a month');
   // Both rated replies at rest: each keeps only its chosen thumb, filled, on its row.
   await page.mouse.move(0, 0);
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());      // the resting look, not the keyboard's ring

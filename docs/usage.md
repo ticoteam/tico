@@ -12,6 +12,12 @@ from the old `turns` table by migration 0072) and prices them
 from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
 regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
 
+Cache writes are counted apart: the cache writes a run's harness reports (Claude's `cache_creation_input_tokens`, Cursor's
+`cacheWriteTokens`, pi's `cacheWrite`) go to `cache_write_tokens` (on `attempts` and `usage_facts`) and are left out of
+`input_tokens`, which is then the uncached input only. They are still priced as input. A runtime that reports no cache
+writes (Codex, Gemini, Antigravity, Muse Code) records 0. A run recorded
+before they were counted apart, or by a runner too old to send them, has NULL there and its `input_tokens` include them.
+
 Some models charge more for a request with a long prompt (`providers.LONG_PROMPT`, dated by `LONG_PROMPT_AS_OF`; today Claude Haiku
 5.5 over 100,000 tokens, counting cache reads and writes). For those, the Claude runner sends each model request's tokens as `requests`
 and the server prices each request at its own rate. A Decide judge call is one request too, so its prompt pays the long tier for Claude Haiku 5.5 (approved 2026-11-06) and gpt-6.1-terra. Tokens no request accounts for (an older runner, another runtime, a run of more
@@ -59,6 +65,9 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
   pauses no bot (a run need not make images); at its limit new images are refused for whoever it covers. A new team's budgets start with no amount,
   so nothing is cut off until a person sets one; the team's monthly limit here is separate and does not set a budget.
   Its hold log identifies the budget and its period end (or that it must be raised), without amounts.
+  At the cutoff Finance also sets the Gateway key's own spending cap, and clears it when the budget is raised. The cap
+  follows the key in use: a new, rotated or environment key, or a new Gateway URL, is capped or cleared within a few
+  minutes. A key that is no longer in use keeps the cap it had; if it comes back, Finance sets its cap again.
 - Separate from these cost limits, each bot has a run budget (runs per hour and per day, default 300 and 2500) that stops a runaway loop; see [Run budgets](how-it-works.md).
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
 
@@ -84,7 +93,7 @@ Usage > Limits; the hub decides who may change which, and a row it says is not y
 ## API
 
 `GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
-`totals` with `runs`, `input_tokens`, `cached_tokens`, `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
+`totals` with `runs`, `input_tokens`, `cached_tokens`, `cache_write_tokens` (NULL runs sum as 0), `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
 model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `bots` (slugs, comma separated) narrows to those bots; `group` selects how rows are aggregated (`task`: the top 25 tasks by spend, a private one named only as one, one the reader cannot open only as that, runs with no task together). A group lead also sees the bots in the groups they lead, as `/usage/limits` lists them. See `GET /api/v2/openapi.json`.
 

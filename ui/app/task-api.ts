@@ -98,6 +98,11 @@ const taskGet = (id: string): Promise<TaskV3> => get<TaskV3>(taskPath(id), {fres
 interface TaskBriefQuery {
   owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string; pipeline?: string;
   sort?: 'queue' | 'finished'; limit?: number; offset?: number;
+  /** The Tasks page's search and filters, with taskFilterMatch's meaning (backend/task_match.py). */
+  search?: string; owners?: string[]; stages?: string[]; requesters?: string[]; labels?: string[]; turn?: string[];
+  due?: string; late?: boolean; pushed_past?: boolean;
+  /** A keyset page's start: the `next` the page before it gave. */
+  after?: string;
 }
 const taskBriefParams = (query: TaskBriefQuery): URLSearchParams => {
   const p = new URLSearchParams({brief: '1'});
@@ -107,11 +112,12 @@ const taskBriefParams = (query: TaskBriefQuery): URLSearchParams => {
   }
   return p;
 };
-/** One page of list rows, the cursor a later `taskChanges` resumes from, and whether the server holds more (`more`). */
-async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskBriefV3[]; cursor: string; more: boolean}> {
-  const res = await get<{tasks?: TaskBriefV3[]; cursor?: string; next_offset?: number | null} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
-  return Array.isArray(res) ? {tasks: res, cursor: '', more: false}
-    : {tasks: res.tasks || [], cursor: res.cursor || '', more: res.next_offset != null};
+/** One page of list rows, the cursor a later `taskChanges` resumes from, whether the server holds more (`more`) and
+ * where its next keyset page starts (`next`, the `after` of that page). */
+async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskBriefV3[]; cursor: string; more: boolean; next: string}> {
+  const res = await get<{tasks?: TaskBriefV3[]; cursor?: string; next_offset?: number | null; next_after?: string | null} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
+  return Array.isArray(res) ? {tasks: res, cursor: '', more: false, next: ''}
+    : {tasks: res.tasks || [], cursor: res.cursor || '', more: res.next_offset != null || !!res.next_after, next: res.next_after || ''};
 }
 async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
   return (await taskBriefsPage(query)).tasks;
@@ -119,7 +125,7 @@ async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
 /** What changed since `cursor` under the same filters (GET /v2/tasks?changed_after): the changed rows that still match,
  * the ids that left the filters or became unreadable (`gone`), the next cursor; `reset` when only a full read will do. */
 interface TaskChanges { tasks: TaskBriefV3[]; gone: string[]; cursor: string; reset?: boolean }
-async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort'>, cursor: string): Promise<TaskChanges> {
+async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort' | 'after'>, cursor: string): Promise<TaskChanges> {
   const p = taskBriefParams(query);
   p.set('changed_after', cursor);
   const res = await get<Partial<TaskChanges>>(`/v2/tasks?${p}`, {fresh: true});
@@ -218,8 +224,10 @@ function taskFeedFailed(feed: TaskFeed, ticket: number): void {
 }
 /** A list row as a list of its own kind holds it: the server's rows are those rows (TaskBrief), read untyped. */
 const taskAsRow = <T extends TaskLiveRow>(t: TaskBriefV3): T => t as unknown as T;
-/** A list read page by page (GET /v2/tasks `offset`): whether the server holds more, and the last row it gave. */
-interface TaskPaging<T extends TaskLiveRow> { more: boolean; edge: T | null }
+/** A list read page by page: whether the server holds more, and the last row it gave. With `after` (keyset paging, the
+ * Tasks page) the next page starts after that row's sort key, as the server gave it; else at an `offset` counted from
+ * the rows held. */
+interface TaskPaging<T extends TaskLiveRow> { more: boolean; edge: T | null; after?: string }
 /** The next page of a list held in `rows` (kept by `has`, in `order`, the order its `query` asks the server for). It
  * reads on from the held rows that sort at or before the last row the server gave, so a task that came or left while
  * the list was open shifts nothing; the page goes in by `has` and `order`, and `paging` moves on. Answers the events
@@ -229,9 +237,10 @@ async function taskPageNext<T extends TaskLiveRow>(paging: TaskPaging<T>, rows: 
   has: (t: T) => boolean, order: TaskRowOrder, still: () => boolean): Promise<LiveTaskEvent[] | 'left' | null> {
   const edge = paging.edge;
   if (!paging.more || !edge) return [];
-  const offset = rows.filter(t => order(t, edge) <= 0).length, ticket = taskFeedRead(feed);
+  const start = paging.after !== undefined ? {after: paging.after} : {offset: rows.filter(t => order(t, edge) <= 0).length};
+  const ticket = taskFeedRead(feed);
   let page: Awaited<ReturnType<typeof taskBriefsPage>>;
-  try { page = await taskBriefsPage({...query, offset}); } catch (e) { taskFeedFailed(feed, ticket); throw e; }
+  try { page = await taskBriefsPage({...query, ...start}); } catch (e) { taskFeedFailed(feed, ticket); throw e; }
   if (!still()) { taskFeedFailed(feed, ticket); return 'left'; }
   const held = taskFeedLanded(feed, ticket, page.cursor);
   if (!held) return null;
@@ -239,13 +248,14 @@ async function taskPageNext<T extends TaskLiveRow>(paging: TaskPaging<T>, rows: 
   const last = page.tasks.at(-1);
   paging.more = page.more && !!page.tasks.length;
   paging.edge = last ? taskAsRow<T>(last) : null;
+  if (paging.after !== undefined) paging.after = page.next;
   return held;
 }
 /** Catches `rows` up from `cursor` (taskChanges under the list's own `query`): the rows that changed go through
  * taskRowsPut, the ones `gone` come out, then the events that came meanwhile go over them again (`feed`). `still()` is
  * asked once the answer is in: false drops it (the page was left). Answers the next cursor (`again` when a held event
  * was a bulk change: catch up once more), 'reset' when only a full read will do (no cursor, or too old), or null. */
-async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string, query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort'>,
+async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string, query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort' | 'after'>,
   has: (t: T) => boolean, still: () => boolean, feed: TaskFeed, order?: TaskRowOrder): Promise<{cursor: string; moved: boolean; again?: boolean} | 'reset' | null> {
   if (!cursor) return 'reset';
   const ticket = taskFeedRead(feed);
@@ -276,8 +286,9 @@ const taskDone = (id: string, version: number | null, note?: string): Promise<Ta
 /** `to`: next, done, closed, reopen, or a stage's id or name. `why` pushes past what is missing. */
 const taskMove = (id: string, to: string, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/move`, withVersion(version, why ? {to, why} : {to}), newRequestId());
-const taskReassign = (id: string, owner: string, version: number | null, why?: string): Promise<TaskMoved> =>
-  post(`${taskPath(id)}/owner`, withVersion(version, why ? {owner, why} : {owner}), newRequestId());
+/** `setAnyway`: a person gives it past a stage rule that refused this owner (409 task_stage_rule). */
+const taskReassign = (id: string, owner: string, version: number | null, why?: string, setAnyway?: boolean): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/owner`, withVersion(version, {owner, ...(why ? {why} : {}), ...(setAnyway ? {set_anyway: true} : {})}), newRequestId());
 /** `until`: an ISO date or date-time; null snoozes with no end. */
 const taskSnooze = (id: string, until: string | null, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/snooze`, withVersion(version, {...(until ? {until} : {}), ...(why ? {why} : {})}), newRequestId());

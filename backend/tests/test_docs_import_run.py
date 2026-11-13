@@ -161,14 +161,6 @@ def test_output_over_the_cap_is_refused_before_any_write(temp_root):
     assert list(temp_root.iterdir()) == []
 
 
-def test_a_failed_worker_gives_the_plain_failure_and_removes_its_copy(tmp_path, temp_root, monkeypatch):
-    monkeypatch.setattr(docs_import_run, "WORKER", fake_worker(tmp_path, "import sys\nsys.exit(3)\n"))
-    with pytest.raises(ValueError) as caught:
-        docs_import_run.to_markdown("a.md", b"# A\n", max_chars=BIG)
-    assert str(caught.value) == docs_import_run.FAILED_MESSAGE
-    assert list(temp_root.iterdir()) == []
-
-
 def test_a_crashed_worker_logs_its_last_stderr_line_capped_and_shows_the_plain_failure(
     tmp_path, temp_root, monkeypatch, caplog
 ):

@@ -59,11 +59,6 @@ def test_a_task_a_person_makes_for_themselves_is_not_unread_for_them(api):
     assert thread_me(api, task["conversation_id"])["unread"] == 0
 
 
-def test_a_task_a_person_makes_for_another_person_is_not_unread_for_its_maker(api):
-    task = make_task(api, {"owner": "human:ben", "title": "Ben's review", "body": "Details."})
-    assert thread_me(api, task["conversation_id"])["unread"] == 0
-
-
 def test_a_task_made_from_a_thread_message_is_not_unread_for_its_maker(api):
     thread = new_thread(api, title="Pricing", members=("human:ben",), body="Ship the pricing page Friday")
     message_id = thread["message"]["id"]

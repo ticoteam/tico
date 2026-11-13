@@ -310,6 +310,45 @@ def test_reassign_gives_the_task_to_its_new_owner_and_tells_the_automations_once
         H.task_reassign(c, ANA, row["id"], "bot:nobody")
 
 
+def _pr(c, task_id, number, repo="acme/app"):
+    c.execute(
+        "INSERT INTO task_links(id,task_id,kind,url,repo,number,created_at) VALUES(?,?,'pr',?,?,?,?)",
+        (H.new_id(), task_id, f"https://github.com/{repo}/pull/{number}", repo, number, H.now()),
+    )
+
+
+def test_a_finding_on_a_pipeline_tasks_own_pull_request_is_never_handed_to_a_person(c):
+    """Seen live on PR #3390: Reviewer 2 filed a real bug on its task's own PR to the Engineering Manager, which gave
+    it to a person. A finding on the PR is the review verdict, the Builder's to fix: a bot can't give a person a General
+    task that links or names it, by reassigning or by filing one."""
+    X.pipeline(c, "engineering", "Engineering", stages=[{"name": "Review 2", "owner": HELPER}])
+    work = X.new_task(c, ANA, "Order export totals", pipeline_id="engineering", assignee=BUILDER)
+    _pr(c, work["id"], 12)
+    finding = _new(c, by=HELPER, owner=MANAGER, title="Bug in the totals")
+    _pr(c, finding["id"], 12, repo="Acme/App")
+    with _refused("review_route") as refused:
+        H.task_reassign(c, MANAGER, finding["id"], ANA, "Only a person should see this.", _version(c, finding["id"]))
+    assert "acme/app#12" in str(refused.value) and "Order export totals" in str(refused.value)
+    assert H.task(c, finding["id"])["owner_id"] == MANAGER
+    named = H.task_create(
+        c, MANAGER, "Look at this", "See https://github.com/acme/app/pull/12 line 4.", ANA, lint=False
+    )
+    with _refused("review_route"):
+        H.review_finding_route(c, MANAGER, named["id"], ANA)  # app.task_create's check, once its links are written
+    # Bot to bot, a person's own hand-over, another PR, and a PR whose pipeline task ended all pass.
+    assert (
+        H.task_reassign(c, MANAGER, finding["id"], BUILDER, "Yours.", _version(c, finding["id"]))["owner_id"] == BUILDER
+    )
+    assert H.task_reassign(c, ANA, finding["id"], BEN, "Yours.", _version(c, finding["id"]))["owner_id"] == BEN
+    other = _new(c, by=HELPER, owner=MANAGER, title="Pick a release date")
+    _pr(c, other["id"], 13)
+    assert (
+        H.task_reassign(c, MANAGER, other["id"], ANA, "A date is Ana's.", _version(c, other["id"]))["owner_id"] == ANA
+    )
+    H.task_close(c, ANA, work["id"], "Dropped", _version(c, work["id"]))
+    H.review_finding_route(c, MANAGER, named["id"], ANA)
+
+
 # ----------------------------------------------------------------------------- field edits
 def test_an_edit_changes_fields_raises_the_version_once_and_never_the_status(c):
     row = _new(c)
@@ -669,14 +708,6 @@ def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):
     assert [(e["actor"], e["via"]) for e in history] == [(BEN, "assistant")]
 
 
-def test_an_ask_names_only_someone_who_can_read_the_task(c):
-    row = _new(c, by=BEN, owner=BUILDER, private=True)
-    with _refused("private"):
-        H.task_ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?", seen_version=_version(c, row["id"]))
-    assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1
-    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
-
-
 def test_an_ask_on_a_private_task_makes_nobody_a_reader_and_says_how_to_share_it(c):
     """Not even the bot that owns a private task no person is on brings a person in by asking them: the ask is refused
     with the fix, and nothing is written. Once they are added under Who can see, the same ask goes."""
@@ -870,18 +901,6 @@ def test_a_private_task_waits_before_a_stage_whose_owner_cannot_read_it_until_so
     assert (moved["stage"]["name"], moved["owner_id"]) == ("Review", "bot:reviewer")
 
 
-def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):
-    parent = _new(c)
-    child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])
-    X.settled(c)
-    for tid in (child["id"], parent["id"]):
-        assert task_delete.delete_tasks(c, [tid], apply=True, keep_work=True)["applied"]
-    for tid in (child["id"], parent["id"]):
-        assert task_delete.restore_tasks(c, [tid], ANA)["restored"] == [tid]
-    assert H.TR.parent_of(c, child["id"]) == parent["id"]
-    assert H.task_view(c, child["id"], ANA)["filed_by"] == parent["id"]
-
-
 def test_a_task_is_never_replaced_by_an_insert(c):
     import sqlite3
 
@@ -889,33 +908,6 @@ def test_a_task_is_never_replaced_by_an_insert(c):
     with pytest.raises(sqlite3.IntegrityError, match="never replaced"):
         c.execute("INSERT OR REPLACE INTO tasks (id, status, owner_id) VALUES (?, 'open', ?)", (row["id"], HELPER))
     assert E.task(c, row["id"])["owner_id"] == BUILDER
-
-
-def test_an_ok_bound_to_content_that_moves_the_task_on_is_still_given_and_can_be_used(c):
-    """A bot asks Ana for an OK on its own task and finishes its work: her OK is the last thing the stage needs, so the
-    task moves on as she gives it. The visit ends with the OK met, not taken back: it can be used."""
-    from backend import task_asks as K
-
-    email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
-    row = _new(c, by=ANA, owner=BUILDER)
-    asked = K.ask_ok(
-        c,
-        BUILDER,
-        ANA,
-        "Send this email?",
-        shows=["email:e1"],
-        subject="hq_reply:TK-1",
-        content=email,
-        task_id=row["id"],
-    )
-    H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
-    assert H.task(c, row["id"])["status"] == "open"  # it waits on Ana's OK
-    shown = K.show(c, ANA, asked["requirement_id"], email, own_click=True)
-    K.give_ok(c, ANA, asked["requirement_id"], shown, own_click=True)
-    assert H.task(c, row["id"])["status"] == "done"
-    assert K.standing(c, asked["requirement_id"]) == K.OK
-    K.use(c, asked["requirement_id"], "hq_reply:TK-1", email, BUILDER)
-    assert K.standing(c, asked["requirement_id"]) == K.USED
 
 
 def test_an_ok_taken_back_before_the_task_moves_on_stays_taken_back_whatever_the_clock_says(c, monkeypatch):

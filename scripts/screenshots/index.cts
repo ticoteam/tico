@@ -218,7 +218,8 @@ const PAGES: PageSpec[] = [
   {name: 'threads', route: '#/threads', ready: 'Threads',
     ui: ['ui/app/threads*.ts', 'ui/app/thread-*.ts', 'ui/app/catch-up.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts', 'ui/app/visual-*.ts',
       'ui/app/slash-commands.ts', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
-      'ui/styles/visual-*.css']},
+      'ui/styles/visual-*.css', 'ui/app/call-ring.ts', 'ui/app/new-message.ts', 'ui/styles/calls.css']},
+  {name: 'calendar', route: '#/calendar', ready: 'Calendar', ui: ['ui/app/calendar*.ts', 'ui/styles/calendar.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
     ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0]!.id)), ready: 'Job post',
     ui: ['ui/app/recruit.ts', 'ui/app/team-build.ts', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},

@@ -1174,7 +1174,9 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
 
 
 def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
-    """Reverses the last merge of `drop_id` as logged: its rows go back, its status and counts are restored."""
+    """Reverses the last merge of `drop_id` as logged: its rows go back, its status is restored and the counts of both
+    are recounted. A row that left the kept entity since the merge stays where it is now. While the kept entity is itself
+    merged into another, this is refused: that later merge carried these rows on and is undone first."""
     _writer(c, actor)
     reader = V.reader(c, actor)
     log = _one(
@@ -1185,23 +1187,51 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
     if log is None or not (V.visible(c, reader, drop_id) and V.visible(c, reader, log["into_entity_id"])):
         _refuse(c, actor, "not_found", f"{drop_id} has no merge to undo")
     keep_id = log["into_entity_id"]
+    keep = _one(c, "SELECT status, merged_into_id FROM entities WHERE id = ?", (keep_id,))
+    if keep is not None and keep["status"] == "merged":
+        _refuse(c, actor, "merged", f"{keep_id} is merged into {keep['merged_into_id']} since; unmerge {keep_id} first")
     moved, prior = json.loads(log["moved"]), json.loads(log["prior"])
     now = H.now()
+    back = {"drop": drop_id, "keep": keep_id}
     for table, ids in moved["tables"].items():
-        c.executemany(f"UPDATE {table} SET entity_id = :drop WHERE id = :id", [{"drop": drop_id, "id": i} for i in ids])
+        c.executemany(
+            f"UPDATE {table} SET entity_id = :drop WHERE id = :id AND entity_id = :keep",
+            [{**back, "id": i} for i in ids],
+        )
     if moved["values"]:
         c.executemany(
-            "UPDATE entity_values SET entity_id = :drop WHERE id = :id",
-            [{"drop": drop_id, "id": i} for i in moved["values"]],
+            "UPDATE entity_values SET entity_id = :drop WHERE id = :id AND entity_id = :keep",
+            [{**back, "id": i} for i in moved["values"]],
         )
+    # A link goes back only while its ends are still the ones the merge gave it.
     c.executemany(
-        "UPDATE entity_links SET from_entity_id = :from_id, to_entity_id = :to_id, updated_at = :now WHERE id = :id",
-        [{"from_id": f, "to_id": t, "now": now, "id": i} for i, f, t in moved["links"]],
+        "UPDATE entity_links SET from_entity_id = :from_id, to_entity_id = :to_id, updated_at = :now "
+        "WHERE id = :id AND from_entity_id = :from_now AND to_entity_id = :to_now",
+        [
+            {
+                "from_id": f,
+                "to_id": t,
+                "from_now": keep_id if f == drop_id else f,
+                "to_now": keep_id if t == drop_id else t,
+                "now": now,
+                "id": i,
+            }
+            for i, f, t in moved["links"]
+        ],
     )
+    # Counts come from the rows each entity holds now. The kept entity's last activity is its own from before the
+    # merge, moved forward to the newest linked mention it holds now (one it gained since, or through a later merge);
+    # the merge's snapshot alone would lose that.
     c.execute(
-        "UPDATE entities SET mentions_count = mentions_count - ?, last_activity_at = ?, updated_at = ? WHERE id = ?",
-        (prior["drop"]["mentions_count"], prior["keep"]["last_activity_at"], now, keep_id),
+        "UPDATE entities SET mentions_count = (SELECT COUNT(*) FROM entity_mentions m WHERE m.entity_id = entities.id "
+        "AND m.status = 'linked'), updated_at = ? WHERE id IN (?, ?)",
+        (now, keep_id, drop_id),
     )
+    held: str | None = c.execute(
+        "SELECT MAX(created_at) FROM entity_mentions WHERE entity_id = ? AND status = 'linked'", (keep_id,)
+    ).fetchone()[0]
+    activity = [v for v in (prior["keep"]["last_activity_at"], held) if v]
+    c.execute("UPDATE entities SET last_activity_at = ? WHERE id = ?", (max(activity) if activity else None, keep_id))
     c.execute(
         "UPDATE entities SET status = ?, merged_into_id = ?, updated_at = ? WHERE id = ?",
         (prior["drop"]["status"], prior["drop"]["merged_into_id"], now, drop_id),

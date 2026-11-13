@@ -16,6 +16,8 @@ MAIL_BATCH = 100
 KNOWN_SENDER_RECHECK = 600  # seconds: a hub that refused known_sender is sent the field again after this
 MAIL_ROUNDS = 20  # claim rounds one pass makes for a mailbox while each round's actions succeed (chains)
 CALENDAR_FIELDS = ("occurrence_id", "event_id", "title", "start", "end", "attendees", "meeting_url")
+CALENDAR_EVENTS = 500  # a hub that names `days` takes this many events per person
+CALENDAR_EVENTS_OLD = 200  # an older hub, which asks for 24 hours
 MAIL_FIELDS = (
     "thread_id",
     "epoch",
@@ -233,9 +235,11 @@ class ConnectorPublisher:
             detail = getattr(exc, "stderr", None) or exc
             print("Tico connectors: could not prepare the mail environment: " + str(detail)[-300:], flush=True)
 
-    def calendar(self, email, hours):
+    def calendar(self, email, hours, days=None):
+        # A hub that names `days` wants the start of today plus that many days; an older one, the next `hours`.
+        window = ["--days", str(days)] if days else ["--hours", str(hours)]
         result = subprocess.run(
-            [str(self.script), "upcoming", "--as", MAIL_PRINCIPAL, "--for", email, "--hours", str(hours), "--json"],
+            [str(self.script), "upcoming", "--as", MAIL_PRINCIPAL, "--for", email, *window, "--json"],
             cwd=self.script.parents[1],
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -257,9 +261,10 @@ class ConnectorPublisher:
         # The local CLI also gives bots Google's own fields (id, iCalUID, summary, htmlLink,
         # status; 5b11f99). The hub's snapshot takes exactly these, and one extra key refused the
         # whole publish with a 422 for everyone.
+        # The hub takes at most CALENDAR_EVENTS per person; one more refused the whole publish, so keep the nearest.
         return [
             {key: event[key] for key in CALENDAR_FIELDS if key in event} for event in events if isinstance(event, dict)
-        ]
+        ][: CALENDAR_EVENTS if days else CALENDAR_EVENTS_OLD]
 
     def calendar_event(self, action):
         env = self.mail_env()
@@ -359,7 +364,15 @@ class ConnectorPublisher:
                 }
             except Exception as exc:
                 body = {"status": "failed", "kind": "error", "message": type(exc).__name__, "hint": "Connect again."}
-            self.client.post(f"connectors/mail/google/{request['id']}/result", body)
+            try:
+                # `id` is this connect or disconnect, not the person (backend/google_connect.py).
+                self.client.post(f"connectors/mail/google/{request['id']}/result", body)
+            except APIError as exc:
+                if exc.code != "stale":
+                    raise
+                # The person connected again or disconnected meanwhile: this answer is for nothing current, and the
+                # next claim takes the one that replaced it.
+                log(f"Connect Google {request['id']} was replaced before its result was sent; nothing changed")
             done += 1
         return done
 
@@ -554,7 +567,9 @@ class ConnectorPublisher:
                 ),
             )
             try:
-                snapshots.append({"email": email, "events": self.fetch(email, request["hours"])})
+                days = request.get("days")
+                window = (email, request["hours"]) + ((days,) if days else ())
+                snapshots.append({"email": email, "events": self.fetch(*window)})
                 read.append(email)
                 account.recovered()
                 self.delegated(email)

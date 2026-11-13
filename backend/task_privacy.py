@@ -113,11 +113,15 @@ def references(c, value):
 def prime_references(c, values):
     """Look up every task id the given payloads could name in one pass, so the per-row checks that follow
     (content_readable, message_readable) read them from this snapshot instead of one query each."""
+    from .files import prime_page_references
+
+    values = list(values)
     names = set()
     for value in values:
         _candidates(value, names)
     names.discard("")
     _task_rows(c, names)
+    prime_page_references(c, values)  # and the pages they name (files.page_ref_denials)
 
 
 def message_tasks(c, message, seen=None, include_run=True, current=False):
@@ -402,6 +406,10 @@ def prime_messages(c, messages):
     stored = H.prime_messages(c, parents | {m.get("id") for m in messages})
     ancestry_rows = [dict(row) for row in H.prime_message_rows(c, stored.values())]
     ancestry = [H._json(row["refs"], {}) or {} for row in ancestry_rows]
+    from .files import prime_page_references
+
+    # The pages their words name too; their refs' are among them, so prime_references finds them looked up.
+    prime_page_references(c, messages + ancestry_rows)
     prime_references(c, refs + ancestry)
     rooms = {m.get("conversation_id") for m in messages + ancestry_rows}
     H.prime_conversations(c, rooms)
@@ -1392,11 +1400,14 @@ def page_content_readable(c, actor, payload):
     )
 
 
-def content_readable(c, actor, payload):
+def content_readable(c, actor, payload, decoded=None):
+    """`decoded`: `payload` with its JSON text columns already decoded, which the page and task checks read without
+    decoding them again. The meeting check reads `payload` as stored: it never looks inside a text column of a row."""
+    inner = payload if decoded is None else decoded
     return (
-        page_content_readable(c, actor, payload)
+        page_content_readable(c, actor, inner)
         and meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
-        and readable(c, actor, references(c, payload))
+        and readable(c, actor, references(c, inner))
     )
 
 

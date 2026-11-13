@@ -666,6 +666,48 @@ def test_the_feed_counts_replies_in_one_read_and_homes_card_shows_the_same_updat
     ]
 
 
+def test_an_updates_replies_are_found_by_index_not_by_scanning_every_message(api, monkeypatch):
+    """Perf I02: the thread and the feed's reply count read messages by `refs.update`. Without an index on that
+    expression both scan every message in the company, so their cost grew with all chat, not with Updates. Both must
+    search `messages_refs_update` and still find the same replies."""
+    import contextlib
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        uid = updates.post(c, bot_id(c, "ops"), "- Shipped the index", kind="daily", day="2026-10-01")["id"]
+    for k in range(2):
+        post(api, f"updates/{uid}/reply", {"text": f"Thanks {k}"})
+    seen = []
+
+    def traced(opened):
+        @contextlib.contextmanager
+        def opening():
+            with opened() as c:
+                c.set_trace_callback(seen.append)
+                try:
+                    yield c
+                finally:
+                    c.set_trace_callback(None)
+
+        return opening
+
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+            patched.setattr(store, name, traced(getattr(store, name)))
+        feed = get(api, "updates?limit=40&include_archive=true")
+        with store.read() as c:
+            thread = updates.thread(c, uid)
+    assert {u["id"]: u["replies"] for u in feed["updates"]}[uid] == 2
+    assert [m["body"].endswith(f"Thanks {k}") for k, m in enumerate(thread)] == [True, True]
+    reads = {s for s in seen if "FROM messages" in s and "$.update" in s}
+    assert len(reads) == 2, reads  # the feed's count and the thread
+    with store.read() as c:
+        for sql in reads:
+            plan = [str(r[-1]) for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+            assert any("messages_refs_update" in step for step in plan), (sql, plan)
+            assert not any(step.startswith("SCAN messages") for step in plan), (sql, plan)
+
+
 def test_a_bot_with_nothing_new_skips_and_its_request_is_neither_asked_again_nor_missed(api, monkeypatch):
     """`skip` posts nothing and finishes the day's request skipped with its reason; a run that then ends without a
     post does not send the request again."""
@@ -717,10 +759,3 @@ def test_a_persons_draft_with_nothing_real_to_say_posts_nothing(api):
             updates.NOTHING_NEW,
         )
         assert not c.execute("SELECT 1 FROM updates WHERE bot='human:ana'").fetchone(), "no draft was posted"
-
-
-def test_the_cli_says_skip_as_a_flag_with_no_body():
-    from clients import hubcli
-
-    args = hubcli.parse(hubcli.parser(), ["update", "create", "--skip"])
-    assert args.skip is True and args.body is None

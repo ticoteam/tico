@@ -274,6 +274,8 @@ NEVER = [
         (None, r"/api/v2/model-subscriptions(/.*)?"),
         (None, r"/api/v2/computer-subscriptions"),
         (None, r"/api/v2/runner-model-subscription-refresh"),
+        # A browser's push subscription is the person's own tap in that browser (backend/web_push.py).
+        (None, r"/api/v2/push/subscriptions"),
         ("POST", r"/api/v2/enrollments"),
         ("POST", r"/api/v2/runners/enroll"),
         ("POST", r"/api/v2/agents/pairings(/.*)?"),
@@ -679,6 +681,7 @@ _PROPOSABLE_BOTOPS = [
         ("POST", r"/api/v2/strategy-bot/(checks|level)"),
         ("POST", r"/api/v2/bots/[^/]+/cloud-machine(?:/replace)?"),
         ("POST", r"/api/v2/cloud-machines/shared"),
+        ("DELETE", r"/api/v2/cloud-machines/shared"),
         ("PUT", r"/api/v2/cloud-machines/support"),
         ("POST", r"/api/v2/postal/orders"),
         ("PUT", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
@@ -1120,7 +1123,14 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/bots/([^/]+)/cloud-machine/replace",
             lambda g: f"Replace bot {bot(g[0])}'s cloud machine and delete its disk. The next task starts a fresh one.",
         ),
-        (r"/api/v2/cloud-machines/shared", lambda g: "Change the shared cloud machine: " + values(body)),
+        (
+            r"/api/v2/cloud-machines/shared",
+            lambda g: (
+                "Replace the shared cloud machine and delete its disk. The next task starts a fresh one."
+                if method == "DELETE"
+                else "Change the shared cloud machine: " + values(body)
+            ),
+        ),
         (r"/api/v2/postal/orders", lambda g: "Order a postal address for the mailbox: " + values(body)),
         (r"/api/v2/bots/([^/]+)/budget", lambda g: f"Change bot {bot(g[0])}'s run budget: " + values(body)),
         (

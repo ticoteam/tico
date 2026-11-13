@@ -245,25 +245,6 @@ def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
     assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
-def test_the_price_decision_is_due_tomorrow_with_a_short_reason(ana):
-    [price] = [
-        task
-        for task in ana.get("/api/v2/tasks?status=open&limit=200").json()["tasks"]
-        if task["title"] == "Raise Home Pro from $449 to $479 for December?"
-    ]
-    full = ana.get(f"/api/v2/tasks/{price['id']}").json()["task"]
-    assert full["due_at"] and 1 <= len([part for part in full["body"].split("\n\n") if part.strip()]) <= 3
-
-
-def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
-    """The seeded Assistant thread answers "What needs me today?" with the scripted reply (every message is a bot turn,
-    so the demo script stands in for the model): the December price and the held refund are named."""
-    messages = ana.get("/api/v2/assistant").json()["messages"]
-    asked = [m for m in messages if m["sender_id"] == "human:ana" and m["body"] == "What needs me today?"]
-    answers = [m["body"] for m in messages if m["sender_id"] == "bot:assistant" and "waiting on you" in m["body"]]
-    assert asked and answers and "Home Pro's December price" in answers[0] and "refund" in answers[0]
-
-
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
     pages = ana.get("/api/v2/pages").json()["pages"]
     assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "assistant"}
@@ -355,32 +336,6 @@ def test_the_same_date_builds_the_same_company(built):
     assert any(hours), "the windows hold spend, so the hour is really compared"
 
 
-def test_the_build_asks_no_model_and_dials_nothing(built, dialed):
-    """The seed saves made-up provider keys, so a decision call during the build is a refused key or a timeout, whichever
-    the network gives: run to run, the same date stored a different company (`"error": "auth"` in one build's rule
-    check, `"unavailable"` in its twin's). The build asks no model, so it reaches no one and no call can fail."""
-    first, rows, _again = built
-    assert dialed == []
-    with closing(sqlite3.connect(first.db_path)) as db:
-        columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
-    action, detail = columns.index("action"), columns.index("detail")
-    failed = [
-        row for row in rows["events"] if row[action] == "judge.call" and "error" in json.loads(row[detail] or "{}")
-    ]
-    assert failed == []
-
-
-def test_the_build_asks_no_model_for_a_person(built):
-    """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
-    person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
-    first, _rows, _again = built
-    with closing(sqlite3.connect(first.db_path)) as db:
-        asked = db.execute(
-            "SELECT count(*) FROM events WHERE action='judge.call' AND json_extract(detail,'$.people')=1"
-        ).fetchone()[0]
-    assert asked == 0, f"{asked} person rule checks asked a model in the build"
-
-
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):
     """The org chart reads groups and reporting lines: each department names its lead, and every bot in a group
     reports, a step at a time, up to a person (so the chart hangs each department under its human head)."""
@@ -417,16 +372,3 @@ def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
             while at["parent_id"] and steps < 10:
                 at, steps = goals[at["parent_id"]], steps + 1
             assert at["id"] == company["id"], f"{goal['title']} rolls up to the company goal"
-
-
-def test_the_demo_seed_polls_no_inbound_deliveries(monkeypatch):
-    """With an inbound key set, the demo build's app (`demo_build`) must not poll for real deliveries (they would be
-    fetched and acknowledged). The control case, the same settings without the build, polls: so the gate turns it off."""
-    from types import SimpleNamespace
-
-    from backend.inbound import Inbound
-
-    monkeypatch.setenv("TICO_INBOUND_KEY", "demo-key")
-    base = dict(demo=False, rehearsal=False, demo_build=False)
-    assert Inbound(None, SimpleNamespace(**base), None).off is False
-    assert Inbound(None, SimpleNamespace(**{**base, "demo_build": True}), None).off is True

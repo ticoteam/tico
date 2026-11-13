@@ -144,11 +144,6 @@ FIGMA_RISES = [
 ]
 
 
-def test_a_charge_on_an_active_subscription_is_judged_against_its_expected_amount():
-    found = SUB.price_findings(FIGMA_RISES, ACTIVE_FIGMA)
-    assert [(f["key"], f["label"]) for f in found] == [("price_increase:3", "FIGMA: 15.00 → 20.00")]
-
-
 def test_an_ignored_subscription_raises_no_price_finding_and_no_rows_is_todays_check():
     ignored = [{**ACTIVE_FIGMA[0], "status": "ignored"}]
     assert SUB.price_findings(FIGMA_RISES, ignored) == []

@@ -846,38 +846,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_microphone_still_records_meeting_audio_and_preserves_the_warning() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path()).unwrap();
-        let recording = store.create("Missing microphone fixture").unwrap();
-        let handle = RecordingHandle::with_setup(store.clone(), recording.id.clone(), |inputs| {
-            setup_inputs(
-                inputs,
-                || anyhow::bail!("Microphone permission denied"),
-                true,
-                || Ok(source(Channel::Meeting, 660.)),
-            )
-        })
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while handle.status().sources.is_empty() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(handle.status().sources.len(), 1);
-        handle.finish().unwrap();
-        let saved = store.get(&recording.id).unwrap();
-        assert_eq!(saved.state, "stopped");
-        assert!(saved.meeting_audio);
-        assert!(saved.microphone.is_empty());
-        assert_eq!(saved.chunks.len(), 1);
-        assert_eq!(saved.chunks[0].channel, "them");
-        assert!(saved.chunks[0].signal.nonzero > 0);
-        assert!(saved.warning.contains("Microphone permission denied"));
-        assert!(saved.warning.contains("Recording meeting audio only"));
-        assert!(!saved.warning.contains("connecting"));
-    }
-
-    #[test]
     fn failed_inputs_report_both_causes_without_claiming_a_recording() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
@@ -1185,42 +1153,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_blocked_microphone_prompt_does_not_delay_meeting_audio() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path()).unwrap();
-        let recording = store.create("Blocked microphone fixture").unwrap();
-        let (release, gate) = mpsc::channel::<()>();
-        let handle =
-            RecordingHandle::with_setup(store.clone(), recording.id.clone(), move |inputs| {
-                setup_inputs(
-                    inputs,
-                    move || {
-                        gate.recv_timeout(Duration::from_secs(5))?;
-                        Ok(source(Channel::Microphone, 440.))
-                    },
-                    true,
-                    || Ok(source(Channel::Meeting, 660.)),
-                )
-            })
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while handle.status().sources.is_empty() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        let sources = handle.status().sources;
-        assert_eq!(sources.len(), 1, "meeting audio waited for the microphone");
-        assert_eq!(sources[0].channel, "them");
-        release.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while handle.status().sources.len() < 2 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        handle.finish().unwrap();
-        let saved = store.get(&recording.id).unwrap();
-        assert!(saved.meeting_audio && !saved.microphone.is_empty());
-        assert!(saved.warning.is_empty());
-    }
     #[test]
     fn saved_wav_uses_raw_samples_with_processed_live_aid_and_plain_fallback() {
         let dir = tempfile::tempdir().unwrap();

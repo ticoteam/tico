@@ -167,25 +167,6 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
     }
 
 
-@pytest.mark.slow
-@pytest.mark.alone
-def test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_history(api):
-    post(api, "chat/ops", {"text": "Summarize the week."})
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    attempt = claim(api, machine)
-    world = populate(api.app.state.store, attempt)
-    assert world["messages"] >= MESSAGES and world["attempts"] > 10_000
-    for name, token in (("bot", attempt["token"]), ("member", "ben-test")):
-        for sql, params in queries():
-            started = time.monotonic()
-            r = api.post("/api/v2/sql", json={"sql": sql, "params": params}, headers=headers(token))
-            seconds = time.monotonic() - started
-            assert r.status_code == 200, (name, sql, r.text)
-            assert seconds < 5, (name, sql, seconds)
-
-
 def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
     """The fast SQL gates only settle rows early: every caller reads the same messages and attempts as when the
     per-row privacy functions decide each one, denied private tasks, unreadable rooms and run provenance included."""

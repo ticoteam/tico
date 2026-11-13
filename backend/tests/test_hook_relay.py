@@ -303,12 +303,13 @@ def test_receipt_time_reaches_receive_in_the_servers_own_format_or_is_replaced(a
     ):
         hq.deliver(made["relay_id"], delivery)
         hq.queue[-1]["received_at"] = at
+    before = H.now()
     service(api).tick()
     by = {s["delivery"]: s["received_at"] for s in seen}
     assert by["plus"] == "2026-10-25T10:00:00.000000Z"
     now = H.now()
-    for name in ("junk", "future", "none"):
-        assert by[name][:10] == now[:10] and by[name].endswith("Z") and len(by[name]) == len(now)
+    for name in ("junk", "future", "none"):  # replaced by the time of the pull, whichever side of midnight it ran
+        assert before <= by[name] <= now and by[name].endswith("Z") and len(by[name]) == len(now)
 
 
 def test_the_owner_sets_and_clears_the_wake_address_and_the_secret_is_shown_once(api, hq):

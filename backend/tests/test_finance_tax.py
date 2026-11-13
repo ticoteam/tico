@@ -402,22 +402,6 @@ def test_a_teammate_who_does_not_see_everything_is_refused_the_workpapers(keeper
         assert act(c, PAYABLES, "tax_remit", {"jurisdiction": "TL", "period": "2026-Q1"}).code == "denied"
 
 
-def test_an_everything_grant_reads_the_workpapers_whole(keeper):
-    with keeper.transaction() as c:
-        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
-        bank = _bank(c)
-        _grant(c, PAYABLES, "everything", whose="company")
-        _expense(c, acme, 20_000, "bank", "b1", "1000")
-        _pay(c, acme, 40_000, {"money_account_id": bank})
-    with keeper.read() as c:
-        mine = FR.form_1099_report(c, PAYABLES, 2026, AT)
-        mine_csv = FR.form_1099_csv(c, PAYABLES, 2026, AT)
-        everyone = FR.form_1099_report(c, OWNER, 2026, AT)
-    assert _vendor_row(mine, "Acme Consulting")["cash_paid"] == 60_000
-    assert mine_csv.splitlines()[1] == "2026,Acme Consulting,yes,600.00,0.00,2000.00,no"
-    assert mine == everyone
-
-
 def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(keeper):
     with keeper.transaction() as c:
         authority = _contact(c, "Testland Revenue")

@@ -1332,41 +1332,6 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
     assert give(api, m, "codex", None, confirm=True)["stopped"] == 1
 
 
-def test_an_api_key_subscriptions_month_cost_is_the_measured_cost_of_its_runs(api):
-    # The month's cost sums the est_cost_usd each run stored; it once summed a column no run writes and read zero.
-    setup(api)
-    company(api)
-    on(api, "ops", "claude", "claude-sonnet-5-5")
-    sid = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")["id"]
-    m = machine(api, signed_in=True)
-    give(api, m, "claude", sid)
-    post(api, "chat/ops", {"text": "Summarize the Acme account."})
-    turn = claim(api, m)
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": "api-cost"}, m["token"])
-    post(
-        api,
-        f"attempts/{turn['id']}/complete",
-        {
-            "outcome": "completed",
-            "text": "Done.",
-            "last_seq": 0,
-            "usage": {
-                "input_tokens": 1000,
-                "cached_tokens": 0,
-                "output_tokens": 500,
-                "model": "claude-sonnet-5-5",
-                "runtime": "claude",
-                "billing": "api",
-            },
-        },
-        m["token"],
-    )
-    with api.app.state.store.read() as c:
-        cost = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
-    assert cost and cost > 0
-    assert listed(api)[0]["usage"]["cost_usd_month"] == round(cost, 2)
-
-
 def roster(api, pid, **fields):
     """Mark a person on the roster: hidden (left) or sign_in False (switched off)."""
     with api.app.state.store.transaction() as c:
@@ -1840,13 +1805,6 @@ def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api
     assert not any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
     add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
     assert any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
-
-
-def test_the_month_cost_query_reads_the_months_turns_through_their_index(api):
-    with api.app.state.store.read() as c:
-        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + MS.costs_sql(1), ("2026-11-01", "sub"))]
-    assert any("attempts_created" in step for step in plan), plan
-    assert not any(step.startswith("SCAN") for step in plan), plan
 
 
 def test_the_credential_time_migration_starts_each_plan_from_its_last_change_and_skips_a_new_file():

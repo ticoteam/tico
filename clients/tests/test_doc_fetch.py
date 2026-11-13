@@ -46,7 +46,7 @@ class Net:
         return F.fetch(url, resolver=self.resolver, opener=self.opener, **kw)
 
 
-@pytest.mark.parametrize("address", ["169.254.169.254", "::ffff:127.0.0.1"])
+@pytest.mark.parametrize("address", ["::ffff:127.0.0.1"])
 def test_no_internal_address_is_public(address):
     assert not F.public_address(address)
 

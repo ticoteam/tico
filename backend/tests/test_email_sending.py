@@ -624,3 +624,30 @@ def test_a_retired_registry_mail_policy_carries_its_safeguards_over_once(inbox):
         assert S.effective(c, BOX, "ops")["mode"] == "ask_first"
     blocked = queue(inbox, actor="bot:ops", raw=mime(to=["spam@vendor.example"]))
     assert blocked["state"] == "blocked" and "blocked_recipient" in blocked["decision"]["reasons"]
+
+
+def test_a_drain_leases_no_new_email_once_its_budget_is_spent(inbox, monkeypatch):
+    """The drain worker's budget (backend/drains.py): a slow Gmail ends the pass early; the rest go next pass, once."""
+    import time
+
+    from backend import drains, gmail_live
+
+    autonomous(inbox)
+    calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
+    answer = gmail_live.send_call
+
+    def slow(*args, **kwargs):
+        time.sleep(0.5)
+        return answer(*args, **kwargs)
+
+    monkeypatch.setattr(gmail_live, "send_call", slow)
+    ids = [queue(inbox, raw=mime(body=f"Update {n}.", subject=f"Update {n}"))["id"] for n in range(3)]
+    assert len(set(ids)) == 3
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    budget = drains.Budget(0.75)
+    assert S.drain(store, auth, budget=budget) == 2 and budget.spent  # leased at 0 s and 0.5 s, none at 1 s
+    with store.read() as c:
+        states = [c.execute("SELECT state FROM email_sends WHERE id=?", (i,)).fetchone()[0] for i in ids]
+    assert states == ["sent", "sent", "pending"]
+    assert S.drain(store, auth, budget=drains.Budget(5)) == 1
+    assert S.drain(store, auth, budget=drains.Budget(5)) == 0 and len(calls) == 3  # each once, never twice

@@ -22,7 +22,11 @@ interface BotDream {
   questions: DreamQuestions | null;
 }
 interface DreamCard { n: string; text: string; suggested: string; intro?: string; }
-interface LearnSource { task?: string | null; title?: string | null; bot?: string; message?: string; excerpt?: string | null; }
+/** Where an update was learned (backend/memory_history.py source): the bot's run, and its task or chat message. */
+interface LearnSource {
+  bot_id: string; task?: string | null; title?: string | null;
+  conversation?: string; message?: string; excerpt?: string | null;
+}
 interface LearnUpdate {
   subject: string;
   author: string;
@@ -239,7 +243,7 @@ function learnSource(u: LearnUpdate) {
   const s = u.source;
   if (!s) return '';
   if (s.task) return `<a href="#/task/${encodeURIComponent(s.task)}">${esc(s.title || 'Task')}</a>`;
-  return `<a href="#/bot/${encodeURIComponent(String(s.bot))}" data-learn-jump="${esc(s.message)}" data-learn-bot="${esc(s.bot)}">${esc(s.excerpt || 'Chat')}</a>`;
+  return `<a href="#/bot/${encodeURIComponent(s.bot_id)}" data-learn-jump="${esc(s.message)}" data-learn-bot="${esc(s.bot_id)}">${esc(s.excerpt || 'Chat')}</a>`;
 }
 
 function learnRow(u: LearnUpdate) {
@@ -372,7 +376,7 @@ function learnOpen(slug: string, data: LearnPage, dream: BotDream | null = null)
       t.disabled = true;
       try {
         const task = (await get(`/v2/tasks/${encodeURIComponent(shown.task)}`, {fresh: true})).task;
-        await post(`/v2/tasks/${encodeURIComponent(shown.task)}`, {version: task.version, close: true});
+        await taskMove(shown.task, 'closed', task.version);     // the edit route takes no close (task-api.ts)
         await dreamRefresh();
       } catch (e) { t.disabled = false; toast(errorMessage(e, '')); }
     } else if (t.matches('[data-dream-wake]')) {

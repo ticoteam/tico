@@ -33,6 +33,12 @@ const METRICS: [string, string, string, string | null][] = [['new_customers', 'N
   ['spend', 'Spend', 'usd', null]];
 const SERIES: Record<string, (number | null)[]> = {new_customers: [30, 36, 41, 48], cac: [52, 48, 45, 41], kept_d30: [62, 66, 71, null], spend: [1560, 1730, 1845, 1970]};
 const CHANNELS = [{slug: 'search', name: 'Search'}, {slug: 'referrals', name: 'Referrals'}];
+// GET /api/v2/pipelines: General, then the Growth factory's Lead and the Growth Experiments a growth pack files ideas into.
+const pipe = (id: string, name: string, factory_id: string | null, preset: string | null, retired_at: string | null = null) => ({id, name, goal: '', prefix: null,
+  manager_id: null, owner_id: null, private: false, factory_id, preset, settings_version: 1, retired_at, stages: [], done: null, closed: null});
+const GENERAL = pipe('general', 'General', null, 'general');
+const PIPELINES = [GENERAL, pipe('lead', 'Lead', 'growth', 'lead'), pipe('growth-experiments', 'Growth Experiments', 'growth', 'growth-experiments')];
+const BOARD = '#/tasks?pipeline=growth-experiments&who=all';
 const upTo = (month: string) => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
 const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
   growth_number: (s, month) => {
@@ -73,7 +79,7 @@ const DEFAULTS: [string, string, CardSettings][] = [['growth_funnel', 'large', {
   ['growth_number', 'small', {metric: 'kept_d30'}], ['growth_channels', 'large', {count: 10}], ['growth_retention', 'medium', {months: 6}],
   ['growth_board', 'medium', {count: 3}]];
 
-function server(me: Person) {
+function server(me: Person, pipelines: unknown[] = PIPELINES) {
   let n = 0, saved = false;
   let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
   const reads: unknown[] = [], writes: Write[] = [];
@@ -100,6 +106,7 @@ function server(me: Person) {
       if (!MONTHS.includes(month) && month !== '2026-11') return [422, {error: {code: 'invalid', detail: 'A month as YYYY-MM'}}];
       return [200, view(month)];
     }
+    if (p === '/api/v2/pipelines' && method === 'GET') return [200, {pipelines}];
     if (p === '/api/v2/cards/choices') return query.get('place') === 'growth' ? [200, CHOICES] : [200, {...CHOICES, templates: []}];
     if (p === '/api/v2/cards' && method === 'POST') {
       if (me.company_role === 'member') return [403, {error: {code: 'forbidden', detail: 'The owner, admins and bots arrange the Growth page'}}];
@@ -117,9 +124,9 @@ function server(me: Person) {
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark'} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors: string[] = [], fake = server(me);
+  const errors: string[] = [], fake = server(me, pipelines);
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
   const config = {company_name: 'Acme'};
@@ -147,6 +154,11 @@ async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me
   return {page, errors, fake};
 }
 const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+// The board links once the page knows the company's pipelines: [href, shown] for the head's, then each "+N more".
+const boardLinks = async (page: Page) => {
+  await page.waitForFunction('typeof GR_BOARD_PIPE !== "undefined" && GR_BOARD_PIPE !== undefined', null, {timeout: 5000}).catch(() => { /* the links as they stand */ });
+  return page.locator('.dash-head [data-gr-board], #dash-grid a.grc-more').evaluateAll(els => els.map(el => [el.getAttribute('href') || '', (el as HTMLElement).checkVisibility()]));
+};
 const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
 // WCAG contrast of an element's text on its own background.
 const contrast = (loc: Locator) => loc.evaluate((el: Element) => {
@@ -178,7 +190,7 @@ async function shot(page: Page, name: string) {
       assert.equal(await ns.getAttribute('href'), '#/strategy/goals?kpi=k2');
       assert.equal(await page.locator('[data-gr-month]').inputValue(), '2026-10');
       assert.deepEqual(await page.locator('[data-gr-month] option').allInnerTexts(), ['Oct 2026', 'Sep 2026', 'Aug 2026', 'Jul 2026'], 'newest first');
-      assert.equal(await page.locator('[data-gr-board]').getAttribute('href'), '#/tasks?pipeline=general&who=all');
+      assert.deepEqual((await boardLinks(page))[0], [BOARD, true], 'the Growth board opens Growth Experiments');
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
       assert.equal(await page.locator('.dash-actions').isVisible(), true);
       assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
@@ -225,7 +237,7 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.getAttribute('href'))), ['#/task/t1', '#/task/t2', '#/task/t3']);
       assert.deepEqual(await chips.locator('.grc-sq').evaluateAll(els => els.map(el => el.dataset.stage)), ['scaling', 'testing', 'idea']);
       assert.equal(await rows.nth(0).locator('a.grc-more').innerText(), '+2 more');
-      assert.equal(await rows.nth(0).locator('a.grc-more').getAttribute('href'), '#/tasks?pipeline=general&who=all&tag=channel%3Asearch');
+      assert.equal(await rows.nth(0).locator('a.grc-more').getAttribute('href'), BOARD + '&tag=channel%3Asearch');
       assert.equal(await rows.locator('img, svg.nav-icon, .grc-kind').count(), 0, 'no icons or kinds');
 
       // Retention: a cell per share, empty where none yet, the text readable on every shade.
@@ -240,6 +252,7 @@ async function shot(page: Page, name: string) {
       assert.match(await lanes.nth(0).locator('a.grc-card').first().innerText(), /Search/);
       assert.equal(await lanes.nth(0).locator('.grc-face').first().getAttribute('title'), 'Ana Silva');
       assert.equal(await lanes.nth(0).locator('a.grc-more').innerText(), '+2 more');
+      assert.equal(await lanes.nth(0).locator('a.grc-more').getAttribute('href'), BOARD);
       await shot(page, 'desktop-growth');
 
       // A month picked reads every card again for it, and the address keeps it.
@@ -340,6 +353,43 @@ async function shot(page: Page, name: string) {
         assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width + 1, 'the head fits');
       }
       await shot(page, `phone-growth-${theme}`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const viewport of [{width: 1280, height: 800}, PHONE]) {
+      // The board links go to the company's Growth pipeline at 1280 and on a phone: the head's, each channel's with its
+      // tag, the board card's; never General. A retired one is passed over; with none, no link at all.
+      const w = viewport.width, cases: [string, unknown[], string][] = [
+        ['growth', PIPELINES, BOARD],
+        ['a retired one first', [GENERAL, pipe('gx-old', 'Old experiments', 'growth', 'growth-experiments', '2026-01-01T00:00:00Z'), ...PIPELINES.slice(1)], BOARD],
+        ['none', [GENERAL, pipe('lead', 'Lead', 'growth', 'lead')], '']];
+      for (const [what, pipelines, board] of cases) {
+        const {page, errors} = await open(browser, {viewport, pipelines});
+        await page.locator('#dash-grid .grc-funnel').waitFor();
+        const links = await boardLinks(page);
+        if (board) assert.deepEqual(links, [[board, true], [board + '&tag=channel%3Asearch', true], [board, true]], `${w} ${what}: the board links`);
+        else assert.deepEqual(links.filter(([, shown]) => shown), [], `${w} ${what}: no board link`);
+        assert.ok(links.every(([href]) => !String(href).includes('pipeline=general')), `${w} ${what}: never General`);
+        if (board && w === PHONE.width) {
+          await page.locator('.dash-head [data-gr-board]').click();
+          await page.waitForFunction((b: string) => location.hash === b, board);
+        }
+        assert.deepEqual(errors, []);
+        await page.close();
+      }
+    }
+    {
+      // Back on Growth, the pipelines already read draw the board link at once, before the fresh read answers.
+      const {page, errors} = await open(browser);
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      assert.deepEqual((await boardLinks(page))[0], [BOARD, true]);
+      await page.route('**/api/v2/pipelines', () => { /* never answers */ });
+      await page.evaluate(() => { location.hash = '#/growth/sources'; });
+      await page.locator('[data-gr-back]').waitFor();
+      await page.evaluate(() => { location.hash = '#/growth'; });
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      const head = page.locator('.dash-head [data-gr-board]');
+      assert.deepEqual([await head.getAttribute('href'), await head.isVisible()], [BOARD, true], 'the link from the pipelines already read');
       assert.deepEqual(errors, []);
       await page.close();
     }

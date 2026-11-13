@@ -69,18 +69,26 @@ interface CorePatchSource {
 }
 const PATCH_SRC = new WeakMap<Element, CorePatchSource>();
 function patchHTML(root: Element, html: string, full: (el: Element, h: string) => void = (el, h) => { el.innerHTML = h; }): boolean {
-  const was = PATCH_SRC.get(root), kids = root.childNodes;
-  const same = was && was.nodes.length === kids.length && was.nodes.every((n, i) => n === kids[i]);
-  if (same && was.html === html) return false;
+  const was = patchDrawn(root);
+  if (was && was.html === html) return false;
   const t = document.createElement('template');
   t.innerHTML = html;
-  const fresh = [...t.content.childNodes], src = fresh.map(n => n instanceof Element ? n.outerHTML : n.nodeValue);
+  const fresh = [...t.content.childNodes];
+  return patchNodes(root, was, html, fresh, fresh.map(patchSrcOf), full);
+}
+const patchSrcOf = (n: ChildNode): string | null => n instanceof Element ? n.outerHTML : n.nodeValue;
+// What patchHTML last drew into `root`, while its children are still the ones it drew.
+function patchDrawn(root: Element): CorePatchSource | null {
+  const was = PATCH_SRC.get(root), kids = root.childNodes;
+  return was && was.nodes.length === kids.length && was.nodes.every((n, i) => n === kids[i]) ? was : null;
+}
+function patchNodes(root: Element, was: CorePatchSource | null, html: string, fresh: ChildNode[], src: (string | null)[], full: (el: Element, h: string) => void): boolean {
   const draw = (): boolean => {
     full(root, html);
     PATCH_SRC.set(root, {html, src, nodes: [...root.childNodes].length === src.length ? [...root.childNodes] : []});
     return true;
   };
-  if (!same) return draw();
+  if (!was) return draw();
   let a = 0, b = 0;
   while (a < was.src.length && a < src.length && was.src[a] === src[a]) a++;
   while (b < was.src.length - a && b < src.length - a && was.src[was.src.length - 1 - b] === src[src.length - 1 - b]) b++;
@@ -91,6 +99,23 @@ function patchHTML(root: Element, html: string, full: (el: Element, h: string) =
   for (const n of added) root.insertBefore(document.adoptNode(n), after);
   PATCH_SRC.set(root, {html, src, nodes: [...was.nodes.slice(0, a), ...added, ...was.nodes.slice(was.nodes.length - b)]});
   return true;
+}
+// patchHTML when only the end of the markup changed: `head` is what the box was last drawn from up to its last rows, and
+// `tail` the new markup for those rows. Only the tail is read and compared, so a long list whose last rows change (a
+// thread's status rows) is not built or parsed again. Same result as patchHTML(root, head + tail); null when the box was
+// not drawn from `head` (the caller draws it whole). `head` must end between top-level elements.
+function patchHTMLTail(root: Element, head: string, tail: string, full: (el: Element, h: string) => void = (el, h) => { el.innerHTML = h; }): boolean | null {
+  const was = patchDrawn(root);
+  if (!was || !was.html.startsWith(head)) return null;
+  const html = head + tail;
+  if (was.html === html) return false;
+  const old = document.createElement('template'), t = document.createElement('template');
+  old.innerHTML = was.html.slice(head.length);
+  t.innerHTML = tail;
+  const keep = was.src.length - old.content.childNodes.length;
+  if (keep < 0) return null;
+  const added = [...t.content.childNodes];
+  return patchNodes(root, was, html, [...was.nodes.slice(0, keep), ...added], [...was.src.slice(0, keep), ...added.map(patchSrcOf)], full);
 }
 // patchHTML for a box every poll redraws. Unchanged markup is kept only while the controls still match it: a button a
 // click left disabled ("Resuming…") or a box ticked by hand is drawn fresh, as before.

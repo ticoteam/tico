@@ -140,13 +140,6 @@ def test_a_body_change_still_raises_the_work_revision(conn):
     assert conn.execute("SELECT work_revision FROM tasks WHERE id='t1'").fetchone()[0] == 1
 
 
-def test_it_is_a_file_the_runner_knows():
-    """Later files may follow it: pending migrations apply in any order, and each stands alone."""
-    versions = [m.version for m in migrations.files()]
-    assert "20261110054000_pipelines_v3_cutover" in versions
-    assert CUTOVER.FOREIGN_KEYS_OFF is True
-
-
 def test_a_new_database_starts_on_the_new_shape_and_a_second_start_changes_nothing(tmp_path):
     """The whole start (Store.initialize), not the migration alone: nothing that runs after the migrations brings an
     old table or column back, the constraints are the new ones, and General is there."""

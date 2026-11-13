@@ -156,9 +156,10 @@ async function replayLoad(state: ReplayState) {
 }
 
 // Real names throughout, the viewer's own too: a replay is watched and recorded, so "You" would read wrong.
+// A bot no longer on the roster keeps its history: the server's name for it ("Deleted bot"), never its id.
 const replayName = (data: { names?: Record<string, string> | undefined }) => (a: ReplayActor): string => {
   const slug = actorSlug(a), pid = actorPerson(a);
-  if (slug) return botDisplayName(slug);
+  if (slug) return botRow(slug) ? botDisplayName(slug) : data.names?.[String(a)] || 'Deleted bot';
   if (pid) return data.names?.[String(a)] || (S.people || []).find(p => p.id === pid)?.name || personDisplay(pid);
   return a === 'keeper' ? AUTOMATIC_LABEL : String(a || '');     // the server itself, never the Assistant or the app
 };
@@ -167,7 +168,8 @@ const replayName = (data: { names?: Record<string, string> | undefined }) => (a:
 function replayFace(actor: ReplayActor, size: number, state?: string) {
   const slug = actorSlug(actor), pid = actorPerson(actor);
   if (slug) {
-    const html = botAvatar(slug, size, state === 'running' ? 'running' : '');
+    const bot = botRow(slug) ? slug : {id: slug, display_name: replayName(REPLAY?.data || {})(actor)};
+    const html = botAvatar(bot, size, state === 'running' ? 'running' : '');
     return state === 'running' ? html : html.replace(/ morph"/, '"').replace(/ data-breathe/, '').replace(/ style="animation-delay:[^"]*"/, '');
   }
   if (pid) return personAvatar((S.people || []).find(p => p.id === pid) || {id: pid, name: personDisplay(pid)}, size);

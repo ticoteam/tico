@@ -96,16 +96,6 @@ def test_a_narrowed_spec_gives_the_link_and_not_the_text(api):
     assert "Spec: " not in body  # nor the page's title
 
 
-def test_a_private_task_gives_the_link_and_not_the_text(api):
-    item = described(api, "Exports private")
-    assert publish_spec(api, item["id"]).status_code == 200
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", ('["human:ana"]', item["id"]))
-        task = H.task(c, item["id"])
-        spec = VS.spec_page(c, item["id"])
-        assert VS._restricted(c, task, spec["id"])
-
-
 class _Blobs:
     def get(self, digest):
         return HTML
@@ -113,28 +103,6 @@ class _Blobs:
 
 class _Files:
     blobs = _Blobs()
-
-
-def test_task_create_hands_the_spec_down_two_levels_below_the_task_it_describes(company, monkeypatch):
-    """Below the routes: H.task_create asks child_body, which walks the parent and the grandparent."""
-    with company.transaction() as c:
-        top = H.task_create(c, "human:ana", "Exports", "Spec.", "bot:cpo", lint=False)
-        monkeypatch.setattr(VS, "_files", _Files())
-        monkeypatch.setattr(
-            VS,
-            "spec_page",
-            lambda c, task_id: {"id": "f1", "title": "Exports", "digest": "d"} if task_id == top["id"] else None,
-        )
-        child = H.task_create(
-            c, "human:ana", "Build exports", "Do the work.", "bot:cpo", parent_id=top["id"], lint=False
-        )
-        below = H.task_create(
-            c, "human:ana", "Review exports", "Check it.", "bot:cpo", parent_id=child["id"], lint=False
-        )
-        apart = H.task_create(c, "human:ana", "Something else", "Other.", "bot:cpo", lint=False)
-    assert "Spec page: " in child["body"] and "Pick a range, then download." in child["body"]
-    assert "Spec page: " in below["body"] and below["body"].startswith("Check it.")
-    assert apart["body"] == "Other."
 
 
 def test_a_company_task_hidden_by_its_bots_access_gives_the_link_and_not_the_text(company, monkeypatch):

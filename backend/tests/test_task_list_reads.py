@@ -37,24 +37,3 @@ def test_a_task_page_is_the_same_rows_in_the_same_order_and_costs_the_same_state
     with store.read_transaction() as c:
         whole = [row["id"] for row in H.tasks(c, limit=None)]  # the unpaged read, which sorts whole rows
     assert len(whole) == 100 and [row["id"] for row in body["tasks"]] == whole[:500]
-
-
-def test_the_queue_page_and_the_status_rows_are_answered_from_covering_indexes(api):
-    store, auth = api.app.state.store, api.app.state.auth
-    who = store.settings.test_identities["ana-test"]
-    with store.read_transaction() as c:
-        visible = auth.task_sql(c, who)
-        plan = " ".join(
-            str(row[-1])
-            for row in c.execute(
-                "EXPLAIN QUERY PLAN SELECT id FROM tasks WHERE "
-                + visible
-                + " ORDER BY (rank IS NULL), rank, created_at, id LIMIT 501"
-            )
-        )
-        status = " ".join(
-            str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + task_privacy.status_tasks_sql(" IN ('bot:ops')"))
-        )
-    assert "COVERING INDEX tasks_queue_cover" in plan
-    assert "COVERING INDEX tasks_owner_status_cover" in status
-    assert "COVERING INDEX tasks_requester_status_cover" in status

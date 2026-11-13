@@ -183,6 +183,9 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
         c.execute('DROP INDEX IF EXISTS tasks_owner_status_cover')
         c.execute('DROP INDEX IF EXISTS tasks_requester_status_cover')
+        # Needs you's open-task index (I39) names private too, and came later: the upgrade makes it again.
+        c.execute('DROP INDEX IF EXISTS tasks_open_pipeline')
+        c.execute("DELETE FROM schema_migrations WHERE version='20261112080000_needs_you_per_person'")
         c.execute('ALTER TABLE tasks DROP COLUMN private')
         c.execute('DELETE FROM cloud_migrations WHERE version=57')
     api.app.state.store.initialize(seed_market=False)
@@ -193,6 +196,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         assert H.task(c, ordinary['id'])['private'] == 0
         assert H.task(c, routine['id'])['private'] == 0
         assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=57').fetchone()
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='tasks_open_pipeline'").fetchone()
         assert all(c.execute('SELECT count(*) FROM ' + name).fetchone()[0] == count for name, count in counts.items())
         assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=53').fetchone()
     # Task reads name tasks_private_status: the upgrade's first start makes it, not only the next restart.
@@ -269,6 +273,9 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
     c.execute('DROP INDEX IF EXISTS tasks_owner_status_cover')
     c.execute('DROP INDEX IF EXISTS tasks_requester_status_cover')
+    # Needs you's open-task index (I39) names private too, and came later: the upgrade makes it again.
+    c.execute('DROP INDEX IF EXISTS tasks_open_pipeline')
+    c.execute("DELETE FROM schema_migrations WHERE version='20261112080000_needs_you_per_person'")
     c.execute('ALTER TABLE tasks DROP COLUMN private')
     c.execute('PRAGMA user_version=23')
     ids = {row[0] for row in c.execute('SELECT id FROM messages')}

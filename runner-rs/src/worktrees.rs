@@ -1592,6 +1592,10 @@ async fn inspect_inner(
         }
         verify_ready_registration(workspace, &merged, &d, &repo).await?;
     }
+    if !not_ready {
+        *step = "catch up its moved branch";
+        catch_up_moved_branch(&path, &text_of(&row["id"]), env).await?;
+    }
     *step = "read its changes";
     result["state"] = json!(if not_ready { "pending" } else { "present" });
     result["dirty_files"] = json!(git(&path, env, &["status", "--porcelain"], true)
@@ -1953,6 +1957,60 @@ async fn fast_forward(path: &Path, branch: &str, target: &str, env: &Env) -> R<(
     Ok(())
 }
 
+/// Bring the index and files up to HEAD when another worktree moved this one's branch under it (a rebase or
+/// `checkout -B` there; Git before 2.44 lets `checkout -B` take a branch another worktree has). HEAD then names the
+/// new commit while the index and files keep the old one, which reads as staged changes that would undo the move.
+/// Only the provable case is touched: this worktree's own HEAD log ends at a commit the branch held before, the index
+/// is exactly that commit's tree and the files match the index. Then `read-tree -m -u` switches from that commit to
+/// HEAD as a checkout would, refusing to overwrite an untracked file. Anything else, a real edit included, stays.
+/// True when it caught up; each catch-up is a `worktree_caught_up` flight record naming the link and both commits.
+pub async fn catch_up_moved_branch(path: &Path, link: &str, env: &Env) -> R<bool> {
+    let branch = git(path, env, &["symbolic-ref", "-q", "HEAD"], false).await?;
+    let head = git(path, env, &["rev-parse", "--verify", "-q", "HEAD"], false).await?;
+    if !branch.ok() || !head.ok() {
+        return Ok(false);
+    }
+    let (branch, head) = (branch.stdout.trim(), head.stdout.trim());
+    // The newest entry of this worktree's own HEAD log: where this worktree last put HEAD itself.
+    let last = git(
+        path,
+        env,
+        &["reflog", "-n", "1", "--format=%H", "HEAD"],
+        false,
+    )
+    .await?;
+    let last = last.stdout.trim();
+    if !is_sha(last) || last == head {
+        return Ok(false);
+    }
+    let held = git(path, env, &["reflog", "--format=%H", branch], false).await?;
+    if !held.ok()
+        || !held.stdout.lines().any(|l| l.trim() == last)
+        || !git(
+            path,
+            env,
+            &["diff", "--cached", "--quiet", last, "--"],
+            false,
+        )
+        .await?
+        .ok()
+        || !git(path, env, &["diff", "--quiet", "--"], false)
+            .await?
+            .ok()
+        || !git(path, env, &["read-tree", "-m", "-u", last, head], false)
+            .await?
+            .ok()
+    {
+        return Ok(false);
+    }
+    let mut record = Map::new();
+    record.insert("link".into(), json!(link));
+    record.insert("from".into(), json!(last));
+    record.insert("to".into(), json!(head));
+    crate::flight::emit("worktree_caught_up", record);
+    Ok(true)
+}
+
 async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
     Ok(git(path, env, args, true)
         .await?
@@ -1960,6 +2018,80 @@ async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
         .trim()
         .parse::<i64>()
         .unwrap_or(0))
+}
+
+/// Commits on HEAD that no origin branch has, less each whose patch one of `against` already carries: the
+/// pre-rebase copy of a commit that was rebased and pushed from another worktree, or merged, is not unpushed work.
+/// Only a patch-id match counts (`rev-list --cherry-pick`); a merge commit has no patch id and always counts.
+async fn unpushed(path: &Path, env: &Env, against: &[String]) -> R<i64> {
+    let lines = |o: Out| -> HashSet<String> {
+        o.stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    let mut left = lines(
+        git(
+            path,
+            env,
+            &["rev-list", "HEAD", "--not", "--remotes=origin"],
+            true,
+        )
+        .await?,
+    );
+    let merges = lines(
+        git(
+            path,
+            env,
+            &["rev-list", "--merges", "HEAD", "--not", "--remotes=origin"],
+            true,
+        )
+        .await?,
+    );
+    for target in against {
+        if left.len() == merges.len() {
+            break;
+        }
+        let target = git(path, env, &["rev-parse", "--verify", "-q", target], false).await?;
+        if !target.ok() {
+            continue;
+        }
+        let range = format!("{}...HEAD", target.stdout.trim());
+        let own = lines(
+            git(
+                path,
+                env,
+                &["rev-list", "--right-only", "--cherry-pick", &range],
+                true,
+            )
+            .await?,
+        );
+        left.retain(|c| merges.contains(c) || own.contains(c));
+    }
+    Ok(left.len() as i64)
+}
+
+/// What `unpushed` compares with: the worktree's branch and HEAD's upstream on origin, and the default branches.
+async fn upstreams(
+    path: &Path,
+    env: &Env,
+    branch: &str,
+    defaults: &HashSet<String>,
+) -> R<Vec<String>> {
+    let mut against = vec![format!("refs/remotes/origin/{branch}")];
+    let upstream = git(
+        path,
+        env,
+        &["rev-parse", "--symbolic-full-name", "@{upstream}"],
+        false,
+    )
+    .await?;
+    if upstream.ok() && upstream.stdout.trim().starts_with("refs/remotes/origin/") {
+        against.push(upstream.stdout.trim().to_string());
+    }
+    against.extend(defaults.iter().map(|d| format!("refs/remotes/origin/{d}")));
+    Ok(against)
 }
 
 /// A folder a tool can rebuild on its own: a Python virtual environment (`pyvenv.cfg`), a cache that declares
@@ -2580,6 +2712,7 @@ where
         if ignored.split('\0').any(|n| !n.is_empty() && !build_file(n)) {
             return Err(WtErr::msg("kept: ignored files"));
         }
+        catch_up_moved_branch(&path, &own(row, "id"), env).await?;
         let dirty = !git(&path, env, &["status", "--porcelain"], true)
             .await?
             .stdout
@@ -2596,13 +2729,13 @@ where
             .stdout
             .trim()
             .to_string();
-        let unpushed = ["rev-list", "--count", "HEAD", "--not", "--remotes=origin"];
+        let against = upstreams(&path, env, &branch, &defaults).await?;
         if crate::util::truthy(row.get("release")) {
             // Released while its task is open: the bot may still use it, so nothing is saved on its behalf.
             if dirty {
                 return Err(WtErr::msg("kept: unsaved changes; commit and push them, or discard them, to free this worktree"));
             }
-            if count(&path, env, &unpushed).await? > 0 {
+            if unpushed(&path, env, &against).await? > 0 {
                 return Err(WtErr::msg(
                     "kept: unpushed commits; push them to free this worktree",
                 ));
@@ -2791,7 +2924,7 @@ where
                 git(&path, env, &["switch", &branch], true).await?;
                 moved?;
             }
-        } else if count(&path, env, &unpushed).await? > 0 {
+        } else if unpushed(&path, env, &against).await? > 0 {
             // Its task is closed or its pull requests are finished: the branch is not pushed to again, so the commits
             // go to the snapshot branch.
             if crate::util::truthy(row.get("prs_finished"))

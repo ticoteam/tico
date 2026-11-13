@@ -84,6 +84,10 @@ pub struct ReadyFrame {
 #[derive(Debug, Default, Deserialize)]
 pub struct RunnerFrame {
     pub kind: Option<String>,
+    /// The bots the change concerns; empty when it names none. A `work` notice naming a bot is also what tells a
+    /// running turn of that bot to ask for its inputs and goal (drive.rs).
+    #[serde(default)]
+    pub bots: Vec<String>,
 }
 
 #[cfg(test)]
@@ -193,6 +197,11 @@ mod tests {
         assert!(ready.seq.is_some() && ready.release.is_some());
         let work: RunnerFrame = decode(get("runner_events.work")).unwrap();
         assert_eq!(work.kind.as_deref(), Some("work"));
+        assert_eq!(
+            work.bots,
+            ["ops"],
+            "a running turn of the bot it names asks for its inputs"
+        );
     }
 
     #[test]

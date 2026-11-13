@@ -39,31 +39,14 @@ interface Hub { url: string; state: string; token: string; facts: Record<string,
 
 // "rule | element" (a prefix is enough) -> the states it happens in and what it is.
 const ALL = ['no-computer', 'no-credit', 'setup-halfway', 'sign-off', 'bot-waiting'];
-const SET_UP = ALL.filter(state => state !== 'setup-halfway');
 const KNOWN: Record<string, {states: string[]; what: string}> = {
   // Dead ends, reported to the lead on Nov 11 (rc.8 issue hunt, track F).
-  '3 | span "BotOps has no computer"': {states: ['no-computer', 'no-credit'],
-    what: 'a task held up by a bot with no computer says so in plain text, with no link to Settings > Computers, and the cloud computer that is starting is named nowhere (ui/app/task-modal.ts, backend/task_wakes.py NO_COMPUTER)'},
-  '3 | p.muted.task-wait "Out of credit': {states: ['no-credit'],
-    what: 'the task says it is out of credit with no Add credit link beside it (the top strip has one)'},
   '3 | span "Not connected"': {states: ALL,
     what: 'Settings > Models: a plan row says Not connected and names nothing (ui/app/subscriptions.ts, chris/signin-ui)'},
   '5 | dialog onb': {states: ['setup-halfway'],
     what: 'setup cannot be closed until it is finished (ui/app/welcome.ts reopens it): by design today'},
-  '5 | dialog task-modal input "Describe the page"': {states: SET_UP,
-    what: 'the Make page prompt on a task is emptied by closing the task'},
   // Small tap targets that are the only control of their row or card.
-  '6 | a "BotOps has no computer"': {states: SET_UP, what: 'Home, Needs attention: a 19 px text link'},
-  '6 | a "OK to give': {states: ['sign-off'], what: 'Home, Needs attention: the sign-off is a 19 px text link'},
-  '6 | a "Which GitHub': {states: ['bot-waiting'], what: 'Home, Needs attention: the question is a 19 px text link'},
-  '6 | a.dash-big': {states: ALL, what: 'Home cards: the count is 31 px'},
-  '6 | button#account': {states: ALL, what: 'the account row in the drawer is 29 px'},
-  '6 | a "Tools"': {states: ALL, what: 'Tools > GitHub: the Tools crumb is 17 px'},
-  '6 | a.ghost.asst-learned': {states: ALL, what: 'Assistant: What it has learned is 17 px'},
-  '6 | button.prop-add': {states: SET_UP, what: 'a task: the + of Links, Sessions, Related, Files and Ask someone is 16 to 20 px'},
-  '6 | button.linkish "Edit details"': {states: SET_UP, what: 'a task: Edit details is 19 px'},
   '6 | a "BotOps"': {states: ['sign-off', 'bot-waiting'], what: 'Settings > Computers: an agent row\'s bot link is 16 px'},
-  '6 | button.pv-tab.on': {states: ['setup-halfway'], what: 'a pipeline with one stage: its tab is 29 px'},
 };
 
 function startHub(state: string): Promise<Hub> {
@@ -107,7 +90,8 @@ function audit(where: string): {rule: number; element: string; why: string}[] {
     for (let p = el.parentElement; p; p = p.parentElement) if (p.hasAttribute('inert') || p.hasAttribute('hidden')) return false;
     return r.right > 0 && r.left < innerWidth;   // a closed drawer waits off screen
   };
-  const dialogs = [...document.querySelectorAll('dialog[open]')].filter(shown);
+  // A native modal makes the page inert even at opacity zero, the first frame of its opening fade.
+  const dialogs = [...document.querySelectorAll('dialog[open]')].filter(d => d.matches(':modal') || shown(d));
   const top = dialogs[dialogs.length - 1] || null;
   // What a person can act on now: the top modal when one is open, else the page.
   const scope: Element = top || document.body;
@@ -482,6 +466,6 @@ async function run(state: string) {
   console.log(`phone-dead-ends ${state}: ok`);
 }
 
-const api = {run: (state: string) => run(state).catch(error => { console.error(error); process.exit(1); })};
+const api = {audit, run: (state: string) => run(state).catch(error => { console.error(error); process.exit(1); })};
 export type Api = typeof api;
 module.exports = api;

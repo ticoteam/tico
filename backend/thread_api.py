@@ -298,9 +298,10 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     rows = [r for r in rows if threads.thread_readable(c, v, r["id"])]
     summaries = threads.subtree_summaries(c, v, [r["id"] for r in rows[: limit + 1]])
     dms_with = threads.dm_with(c, v, rows[: limit + 1])
+    calls = threads.live_calls(c, [r["id"] for r in rows[: limit + 1]])
     found, budget = [], threads.MAX_PAGE_BYTES
     for r in rows:
-        item = threads.view(c, v, r, summary=summaries.get(r["id"]), dm=dms_with.get(r["id"]))
+        item = threads.view(c, v, r, summary=summaries.get(r["id"]), dm=dms_with.get(r["id"]), calls=calls)
         item["activity_seq"] = r["activity"] or 0
         budget -= len(json.dumps(item, default=str))
         if budget < 0 or len(found) >= limit:
@@ -316,6 +317,70 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
         "dms": dms,
         "next_cursor": f"{tail['activity_seq']}:{tail['id']}" if more and tail else None,
     }
+
+
+MATCH_LIMIT = 5  # threads New message offers for one set of teammates
+MATCH_ACTORS = 50  # teammates one match names, at most (a DM takes as many)
+
+
+def _match_target(c, actor):
+    """The `thread_members.actor` value a teammate named by the app stands for (a bot by its slug or id), or None."""
+    actor = str(actor or "").strip()
+    if actor.startswith("group:"):
+        return actor if actor[6:] in threads._group_ids(c) else None
+    return H.resolve_actor(c, actor) if actor.startswith(("human:", "bot:")) else None
+
+
+def _match(c, v, actors):
+    """New message's matches for these teammates: {"threads", "dm"}. `threads` holds the open roots the viewer may read
+    whose members, the viewer left out, are exactly `actors`, newest activity first, at most MATCH_LIMIT; `dm` is the id
+    of the viewer's open DM with the one person or bot named, when there is one (it is never in `threads`). A teammate
+    the server does not know matches nothing. The candidates are one query driven by the first teammate's membership
+    rows (`thread_members_actor`), then each passes the same read check as the rail."""
+    if not actors:
+        raise Problem("actor", "Name at least one teammate", 422)
+    if len(actors) > MATCH_ACTORS:
+        raise Problem("actor", f"At most {MATCH_ACTORS} teammates", 422)
+    wanted = []
+    for actor in actors:
+        target = _match_target(c, actor)
+        if target is None:
+            return {"threads": [], "dm": None}
+        if target != v.actor and target not in wanted:
+            wanted.append(target)
+    if not wanted:
+        return {"threads": [], "dm": None}
+    dm = None
+    if len(wanted) == 1 and not wanted[0].startswith("group:"):
+        found = threads._open_dm(c, v.actor, wanted)
+        if found and threads.denial(c, v, threads.thread_row(c, found)) is None:
+            dm = found
+    names = {f"a{i}": a for i, a in enumerate(wanted)}
+    others = "m.thread_id=r.id AND m.actor<>:me"
+    sql = (
+        f"SELECT r.*, {thread_rail.ACTIVITY} AS activity FROM conversations r "
+        "WHERE r.id IN (SELECT m.thread_id FROM thread_members m WHERE m.actor=:a0) "
+        f"AND {thread_rail.root_open(c, v)} AND r.deleted_at IS NULL "
+        f"AND COALESCE(r.audience,{threads._derived_audience('r')}) IN "
+        "('company','team','members','personal','participants') "
+        f"AND (SELECT COUNT(*) FROM thread_members m WHERE {others})=:n "
+        f"AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE {others} AND m.actor NOT IN "
+        f"({','.join(':' + k for k in names)})) "
+        f"AND {threads.readable_sql(c, v, 'r')} ORDER BY activity DESC, r.id DESC LIMIT :fetch"
+    )
+    found = c.execute(sql, {**names, "me": v.actor, "n": len(wanted), "fetch": MATCH_LIMIT + 20})
+    rows = []
+    for r in (threads.thread_row(c, dict(r)) for r in found):
+        if r and r["id"] != dm and threads.thread_readable(c, v, r):
+            rows.append(r)
+        if len(rows) >= MATCH_LIMIT:
+            break
+    v._members = {}
+    try:
+        shown = thread_rail._views(c, v, rows)
+    finally:
+        v._members = None
+    return {"threads": [shown[r["id"]] for r in rows], "dm": dm}
 
 
 def install(app, store, auth, mutate, rule_check):
@@ -438,6 +503,15 @@ def install(app, store, auth, mutate, rule_check):
         with store.read_transaction() as c:
             return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
 
+    @app.get("/api/v2/threads/match")
+    def match(request: Request, actor: Annotated[list[str], Query()] = []):  # noqa: B006 (FastAPI reads the default)
+        """New message: the open threads the viewer may read whose members, the viewer left out, are exactly these
+        teammates (`actor` once each: human:<id>, bot:<slug>, group:<id>), newest activity first, at most 5; and `dm`,
+        the viewer's open DM with the one person or bot named, or null."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return _match(c, v, actor)
+
     @app.get("/api/v2/threads/archived")
     def archived(request: Request, cursor: str | None = None, limit: int | None = None):
         """The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is
@@ -459,6 +533,17 @@ def install(app, store, auth, mutate, rule_check):
         """A teammate's Home (`actor` = bot:<slug>, human:<id> or group:<id>, in the path), made on first use. The viewer
         needs Read on that teammate; without it, or when the teammate does not exist, the answer is the same 404."""
         v = threads.viewer(auth, request.state.identity)
+        # An existing Home is read under a snapshot: the writer is taken only to make a missing one, and access and
+        # existence are checked again under it (another request may have made it meanwhile).
+        with store.read_transaction() as c:
+            _read_or_404(c, v, actor)
+            row = threads.home(c, _home_owner(actor), create=False)
+            if row is not None:
+                return threads.get(c, v, row["id"])
+        if getattr(
+            request.state.identity, "view", ""
+        ):  # a bot's read-only view of the app makes nothing (backend/app_view.py)
+            raise Problem("no_home", "This teammate has no Home yet", 404)
         with store.transaction() as c:
             _read_or_404(c, v, actor)
             row = threads.home(c, _home_owner(actor))
@@ -470,7 +555,9 @@ def install(app, store, auth, mutate, rule_check):
         reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
         them. `create=false` makes nothing: 404 `no_dm` when there is none yet."""
         v = threads.viewer(auth, request.state.identity)
-        if not create:
+        if not create or getattr(
+            request.state.identity, "view", ""
+        ):  # a read-only view never starts a DM (backend/app_view.py)
             with store.read() as c:
                 return threads.dm(c, v, [peer], make=False)
         with store.transaction() as c:

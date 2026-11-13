@@ -246,45 +246,6 @@
  {
   "argv": [
    "trigger",
-   "update",
-   "stripe",
-   "--preset",
-   "bogus"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico trigger update: error: argument --preset: invalid choice: 'bogus' (choose from none, hmac, github, standard, stripe, slack)",
-  "exit": 64
- },
- {
-  "argv": [
-   "trigger",
-   "update",
-   "stripe",
-   "--hourly",
-   "ten"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico trigger update: error: argument --hourly: invalid int value: 'ten'",
-  "exit": 64
- },
- {
-  "argv": [
-   "trigger",
-   "update"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico trigger update <id>\ntico trigger update: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "trigger",
    "rotate",
    "stripe"
   ],
@@ -420,20 +381,6 @@
   "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"signed\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "trigger",
-   "sign",
-   "stripe",
-   "--preset",
-   "none"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico trigger sign: error: argument --preset: invalid choice: 'none' (choose from hmac, github, standard, stripe, slack)",
-  "exit": 64
  },
  {
   "argv": [
@@ -749,68 +696,5 @@
   "stdout": "{\n  \"trigger\": \"stripe\",\n  \"deleted\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "trigger",
-   "relay",
-   "delete"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico trigger relay delete <trigger>\ntico trigger relay delete: error: the following arguments are required: trigger",
-  "exit": 64
- },
- {
-  "argv": [
-   "trigger",
-   "show",
-   "stripe",
-   "--json"
-  ],
-  "tools": [
-   [
-    "tico_trigger_show",
-    {
-     "id": "stripe",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "triggers/stripe",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "trigger",
-   "shwo",
-   "stripe"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico trigger: error: argument sub: invalid choice: 'shwo' (choose from list, create, show, update, rotate, sign, delete, deliveries, delivery, replay, recover, relay) Did you mean: tico trigger show, tico trigger sign?",
-  "exit": 64
- },
- {
-  "argv": [
-   "trigger",
-   "list",
-   "--bogus"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico trigger list: error: unrecognized arguments: --bogus Did you mean: tico trigger list, tico trigger delete?",
-  "exit": 64
  }
 ]

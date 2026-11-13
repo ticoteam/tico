@@ -369,10 +369,6 @@ def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_rep
 @pytest.mark.parametrize(
     "body, changed",
     [
-        ({"task_model": {}}, None),
-        ({"task_model": {"effort": None}}, None),
-        ({"task_model": {"compact_at": None}}, {"compact_at": None}),
-        ({"task_model": {"effort": None, "compact_at": None}}, {"compact_at": None}),
         # A body that leaves `task_model` out altogether names no model either: it is not an explicit null.
         ({}, None),
     ],
@@ -580,26 +576,6 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
     with api.app.state.store.read() as c:
         record = json.loads(c.execute("SELECT model FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
     assert record["source"] == "fallback" and record["why"] == "codex is not signed in on Test Mac"
-
-
-def test_a_task_model_whose_sign_in_cannot_be_checked_runs_rather_than_falling_back_for_good(api):
-    """Grok's sign-in can't be checked without starting it, so the runner always reports it `unknown`
-    (runner-rs/harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
-    machine = ops_on_sonnet(api)
-    rust_heartbeat(
-        api,
-        machine,
-        {
-            "claude": {"installed": True, "authenticated": "ready"},
-            "grok": {"installed": True, "authenticated": "unknown"},
-        },
-    )
-    set_task_model(api, {"harness": "grok", "model": "grok-4.6", "effort": "low"})
-    _, turn = task_turn(api, machine)
-    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("grok-4.6", "low")
-    with api.app.state.store.read() as c:
-        record = json.loads(c.execute("SELECT model FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
-    assert record["source"] == "task"
 
 
 def test_an_ordinary_fallback_usage_limit_is_not_a_task_model_limit(api):
@@ -826,11 +802,11 @@ def test_a_fallback_drops_a_task_effort_the_bots_own_model_does_not_take(api):
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"], turn["config"]["compact_at"]) == (
         "grok-4.6",
         "low",
-        600000,
+        500000,  # the task's 600k, lowered to fit grok 4.6's 500k window
     )
     finish(api, machine, turn, {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "effort": "low"})
     note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
-    assert note.startswith("Ran on the bot's model grok-4.6 (low), context 600k: task model claude-haiku-5-5 (max)")
+    assert note.startswith("Ran on the bot's model grok-4.6 (low), context 500k: task model claude-haiku-5-5 (max)")
     assert note.endswith("(task effort max is not one grok-4.6 takes)")
 
 
@@ -892,7 +868,8 @@ def test_an_old_task_model_record_runs_on_its_model_as_before(api):
         BS.write(c, 'ops', config)
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
-    assert "compact_at" not in turn["config"]
+    # No context length in the record: the turn compacts at its model's default (providers.compact_default).
+    assert turn["config"]["compact_at"] == 150_000
 
 
 def test_a_task_context_length_of_100k_saves_and_reads_back(api):

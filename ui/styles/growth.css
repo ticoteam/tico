@@ -14,6 +14,7 @@
 .gr-crumbs .spacer,.gr-bar .spacer,.br-strip .spacer{flex:1}
 .gr-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 a.gr-btn{display:inline-flex;align-items:center;box-sizing:border-box;min-height:var(--ctl);border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 12px;line-height:20px;color:var(--ink);background:transparent;text-decoration:none;font-size:var(--t-base);font-weight:600;white-space:nowrap}
+a.gr-btn[hidden]{display:none}
 a.gr-btn:hover{background:var(--surface2);text-decoration:none}
 .gr-seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
 .gr-seg button{white-space:nowrap}

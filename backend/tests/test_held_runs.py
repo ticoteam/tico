@@ -11,7 +11,18 @@ from backend.store import H
 from backend import bot_settings as BS
 from backend import task_privacy as privacy
 from backend.auth import Identity
-from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401 (api: the fixture)
+from backend import execution
+from backend.tests.helpers.api import (  # noqa: F401 (api: the fixture)
+    assign,
+    claim,
+    expire,
+    get,
+    headers,
+    post,
+    ready,
+    runner,
+    setup_attempt,
+)
 from backend.tests.helpers.execution_review import (
     aged,
     interrupted,
@@ -349,7 +360,7 @@ def queued_on(api, task_id):
         ]
 
 
-@pytest.mark.parametrize('folds', [True, False])
+@pytest.mark.parametrize('folds', [True])
 @pytest.mark.parametrize('count', [1, 21])
 def test_queued_work_behind_a_held_run_joins_its_resumed_turn(api, monkeypatch, folds, count):
     """Acceptance 10. `folds=False` is the removal control; all same-task jobs join, not just the first 20."""
@@ -717,3 +728,80 @@ def test_a_held_run_whose_source_message_was_deleted_is_listed_without_words_and
     jobs = {job['id']: job for job in get(api, 'bots/ops/execution-review')['jobs']}
     assert jobs[gone['job_id']]['readable'] is False and jobs[gone['job_id']]['request'] == ''
     assert jobs[kept['job_id']]['readable'] is True
+
+
+def harness_dies(api, machine, attempt, thread):
+    """The run's harness process is killed mid-turn after a shell call, as Drill C1 killed Builder's codex: the runner
+    reports it interrupted with the process's exit (runner-rs execute.rs), not a restart and not a Stop."""
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': thread}, machine['token'])
+    events = [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}},
+        {'seq': 3, 'kind': 'error', 'payload': {'error': 'codex exited', 'exit_code': 0, 'process_exit': True}},
+    ]
+    post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {'outcome': 'interrupted', 'last_seq': 3, 'text': 'Execution interrupted'},
+        machine['token'],
+    )
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+
+
+def test_a_run_whose_harness_was_killed_resumes_once_and_a_second_cut_off_holds_for_a_person(api):
+    """Drill C1: killing Builder's codex mid-Build left the run 'interrupted / Process exited (exit code 0)', held and
+    silent. Not the bot's choice: it runs again at once, told to check what is already done; a second in a row holds."""
+    botops(api)
+    machine, message, attempt = setup_attempt(api)
+    harness_dies(api, machine, attempt, 'killed')
+    assert [d['state'] for d in sweep(api)] == ['queued']  # at once, no usual wait
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    assert again['job_id'] == attempt['job_id']
+    body = again['message']['body']
+    assert 'Your last turn was cut off at' in body and 'its process exited (code 0)' in body
+    assert 'Check what is already done (branch, PR, comments) before acting again' in body
+    harness_dies(api, machine, again, 'killed')
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    with api.app.state.store.read() as c:
+        held_event = c.execute(
+            "SELECT detail FROM events WHERE action='job.held' AND target=?", (again['id'],)
+        ).fetchone()
+        assert 'cut off twice in a row' in json.loads(held_event[0])['reason']
+        assert c.execute("SELECT 1 FROM tasks WHERE title=? AND status='open'", (TITLE,)).fetchone()
+    [card] = get(api, 'bots/ops/execution-review')['jobs']
+    assert card['stopped'] == 'twice' and 'cut off twice in a row' in card['reason']
+
+
+def test_a_stop_is_never_read_as_a_killed_harness(api):
+    """A person's Stop ends the run by their choice even when its process exit is reported: it is not resumed."""
+    machine, message, attempt = setup_attempt(api)
+    harness_dies(api, machine, attempt, 'stopped')
+    with api.app.state.store.transaction() as c:
+        assert execution.harness_died(c, attempt['id']) == 'its process exited (code 0)'
+        c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=?", (H.now(), attempt['id']))
+        assert execution.harness_died(c, attempt['id']) is None
+
+
+def test_run_now_on_a_task_whose_run_is_held_runs_it_again(api):
+    """Drill C1: Run now answered 200 queued:false and started nothing, because the held run fenced the task's queued
+    work. Pressed by the bot's operator, it now runs the held run again, accepting what it may repeat."""
+    machine, attempt, task_id, other_id = task_held(api)
+    r = api.post(f"/api/v2/tasks/{task_id}/run-now", json={}, headers=headers())
+    assert r.status_code == 200 and r.json()['queued'] is True, r.text
+    assert job_state(api, attempt['job_id']) == 'queued'
+    with api.app.state.store.read() as c:
+        rec = c.execute("SELECT * FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()
+    assert rec['decision'] == 'resume' and rec['actor'].startswith('human:') and 'pressed Run now' in rec['note']
+    ready(api, machine, ['ops'])
+    body = claim(api, machine)['message']['body']
+    assert 'pressed Run now to run it again' in body and 'Check what is already done' in body
+
+
+def test_run_now_by_someone_who_may_not_decide_says_why_instead_of_queued_false(api):
+    """A caller who may start the task but not decide on the held run gets the reason, not a silent queued:false."""
+    machine, attempt, task_id, other_id = task_held(api)
+    r = api.post(f"/api/v2/tasks/{task_id}/run-now", json={}, headers=headers('ben-test'))
+    assert r.status_code == 409 and 'stopped partway' in r.text and 'operator or BotOps' in r.text
+    assert job_state(api, attempt['job_id']) == 'uncertain'

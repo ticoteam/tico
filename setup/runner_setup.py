@@ -10,7 +10,7 @@ import urllib.parse
 import uuid
 import urllib.request
 
-from . import aws as awsmod, contract, envfile, owned, remote, settings as st, state, verify
+from . import aws as awsmod, cloudinit, contract, envfile, owned, remote, settings as st, state, verify
 from .remote import Host, Step, StepFailed
 from .settings import Asker, Settings
 from .ui import IO, MissingInput
@@ -129,6 +129,18 @@ def mint_code(url: str, token: str, opener=urllib.request.urlopen) -> str:
             ) from None
     except (OSError, ValueError, KeyError) as e:
         raise MissingInput(f"Could not get a join code from {url} ({type(e).__name__})") from None
+
+
+def server_tag(url: str, deps: Deps) -> str:
+    """The release the server runs (its /healthz), so the runner matches it rather than GitHub's latest stable."""
+    release = (deps.server_release(url) or "").strip()
+    release = release if not release or release.startswith("v") else "v" + release
+    if not cloudinit.VERSION_RE.match(release):
+        raise MissingInput(
+            f"Could not read which release {url} runs (its /healthz names none); pass --runner-tag vX.Y.Z, "
+            "the server's release, or --runner-tag latest"
+        )
+    return release
 
 
 def plan_lines(s: Settings, label: str) -> list[str]:
@@ -279,7 +291,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         default=(host_of(args.ssh_host or "linux").replace(".", "-")),
     )
     label = s.runner_label
-    s.runner_tag = args.runner_tag
+    s.runner_tag = args.runner_tag or server_tag(s.server_url, deps)
     screen = bool(getattr(args, "screen", True))
     if s.target == "ssh":
         a.get("ssh_host", "SSH destination (user@host)", flag="--ssh")

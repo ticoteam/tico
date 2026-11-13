@@ -9,8 +9,10 @@ import re
 import sys
 import time
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -233,6 +235,170 @@ def canonical_names(args):
     return args
 
 
+# The Calendar commands that read events, times or bookings (tico_calendar_*). `list` is one of them only with a Calendar
+# flag: without one it is the company calendar's appointments, as it has always been, and `schedule` and `status` are too.
+CALENDAR_SUBS = ("list", "free", "add", "move", "cancel", "search")
+CALENDAR_EVENT_FLAGS = ("who", "from_", "to", "kinds", "json")
+
+
+def calendar_on_events(args):
+    return args.sub != "list" or any(getattr(args, flag, None) for flag in CALENDAR_EVENT_FLAGS)
+
+
+def calendar_text_mode(args):
+    """Whether a Calendar command prints lines a person reads; --json asks for the response as it came."""
+    return (
+        args.cmd == "calendar"
+        and args.sub in CALENDAR_SUBS
+        and calendar_on_events(args)
+        and not getattr(args, "json", False)
+    )
+
+
+def _names(value, *, text=False):
+    """A comma-separated flag as its names, spaces dropped: a list, or the text the API reads; None when it is empty."""
+    names = [part.strip() for part in (value or "").split(",") if part.strip()]
+    if not names:
+        return None
+    return ",".join(names) if text else names
+
+
+def calendar_command(client, args):
+    """The Calendar tools (tico_calendar_*) with the command's flags as they take them."""
+    from clients import hubtools
+
+    def call(name, fields):
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        return hubtools.BY_NAME[name]["fn"](client, fields)
+
+    if args.sub == "list":
+        return call(
+            "tico_calendar_events",
+            {
+                "who": _names(args.who, text=True) or args.calendar or None,
+                "from": args.from_,
+                "to": args.to,
+                "kinds": args.kinds,
+            },
+        )
+    if args.sub == "free":
+        return call(
+            "tico_calendar_free",
+            {"who": _names(args.who, text=True), "minutes": args.minutes, "within": args.within},
+        )
+    if args.sub == "add":
+        return call(
+            "tico_calendar_add",
+            {
+                "calendar": args.calendar,
+                "title": args.title,
+                "start": args.start,
+                "end": args.end,
+                "all_day": args.all_day or None,
+                "attendees": _names(args.who),
+                "repeat": args.repeat,
+                "notes": args.notes,
+                "add_meet": not args.no_meet,
+            },
+        )
+    if args.sub == "move":
+        return call(
+            "tico_calendar_move",
+            {"occurrence": args.occurrence, "start": args.start, "end": args.end, "scope": args.scope},
+        )
+    if args.sub == "cancel":
+        return call("tico_calendar_cancel", {"occurrence": args.occurrence, "scope": args.scope})
+    return call("tico_calendar_search", {"q": args.q, "who": _names(args.who, text=True)})
+
+
+def _zone(name):
+    """The IANA zone a time is shown in, or None when there is none to use."""
+    try:
+        return ZoneInfo(name) if name else None
+    except (KeyError, ValueError):
+        return None
+
+
+def _answer_zone(result):
+    """The zone an answer's times show in: the first calendar the server gives a time zone for, else a single event's
+    own zone. None keeps the offsets the server sent (UTC for Z)."""
+    if not isinstance(result, dict):
+        return None
+    for calendar in result.get("calendars") or []:
+        if calendar.get("time_zone"):
+            return _zone(calendar["time_zone"])
+    return _zone(result.get("time_zone"))
+
+
+def _instant(iso, zone):
+    moment = datetime.fromisoformat(iso)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone) if zone else moment
+
+
+def _day(day):
+    return f"{day:%a} {day.day} {day:%b}"
+
+
+def _when(start, end, all_day, zone):
+    """`Wed 11 Nov 09:30–10:00`, or `Wed 11 Nov all day`: where a line says when, in the zone its answer names."""
+    if all_day:
+        first = date.fromisoformat(start)
+        last = date.fromisoformat(end or start) - timedelta(days=1)  # the end is exclusive
+        if last <= first:
+            return f"{_day(first)} all day"
+        return f"{_day(first)}–{_day(last)} all day"
+    begin, finish = _instant(start, zone), _instant(end or start, zone)
+    if begin.date() == finish.date():
+        return f"{_day(begin)} {begin:%H:%M}–{finish:%H:%M}"
+    return f"{_day(begin)} {begin:%H:%M}–{_day(finish)} {finish:%H:%M}"
+
+
+def _occurrence_line(occ, zone):
+    """`Wed 11 Nov 09:30–10:00  Standup  (Ana)  [occurrence id]`: one occurrence, its calendar named."""
+    parts = [_when(occ.get("start"), occ.get("end"), occ.get("all_day"), zone), occ.get("title") or "(no title)"]
+    if occ.get("planned"):
+        parts.append("(planned)")
+    if occ.get("count"):
+        parts.append(f"({occ['count']} runs)")
+    name = (occ.get("calendar") or {}).get("name")
+    if name:
+        parts.append(f"({name})")
+    parts.append(f"[{occ.get('occurrence_id')}]")
+    return "  ".join(parts)
+
+
+def calendar_text(args, result):
+    """The Calendar command's answer as lines a person reads."""
+    if args.sub == "cancel":
+        return f"cancelled {args.occurrence}" + (f" ({args.scope})" if args.scope else "")
+    if args.sub in ("add", "move"):
+        if not isinstance(result, dict) or "start" not in result:
+            return json.dumps(result, indent=2)
+        return _occurrence_line(result, _answer_zone(result))
+    zone = _answer_zone(result)
+    if args.sub == "free":
+        slots = (result or {}).get("slots") or []
+        return (
+            "\n".join(_when(slot["start"], slot["end"], False, zone) for slot in slots)
+            or "No free time in that window."
+        )
+    occurrences = (result or {}).get("occurrences") or []
+    empty = "No matches." if args.sub == "search" else "Nothing in that window."
+    return "\n".join(_occurrence_line(occ, zone) for occ in occurrences) or empty
+
+
+def calendar_notes(result):
+    """What a Calendar answer could not give: a calendar that did not answer, a search that ran out of time."""
+    if not isinstance(result, dict):
+        return []
+    lines = [f"tico: could not read {err.get('ref')}: {err.get('reason')}" for err in result.get("errors") or []]
+    if result.get("partial"):
+        lines.append("tico: some results are missing: the search ran out of time")
+    return lines
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
@@ -258,6 +424,8 @@ def run(args, who=None):
         **({"retries": 0} if browsing else {}),
     )
     fn = args.fn
+    if args.cmd == "calendar" and args.sub in CALENDAR_SUBS and calendar_on_events(args):
+        return calendar_command(client, args)
     if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
         return spec.call(client, args)
     from clients.commands.org import COMMANDS as ORG_COMMANDS
@@ -637,6 +805,7 @@ def run(args, who=None):
                 "visibility",
                 "public_title",
                 "public_summary",
+                "after",
             ):
                 fields[field] = getattr(args, field, None)
             return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))
@@ -1483,6 +1652,10 @@ def main(args, who=None, fields=None):
 
             print(dbquery.render(result, args))
             return 0 if result.get("ok", True) else 2
+        elif calendar_text_mode(args):
+            print(calendar_text(args, result))
+            for line in calendar_notes(result):
+                print(line, file=sys.stderr)
         elif args.cmd == "contacts" and getattr(args, "as_text", False):
             print(contacts_text(args.fn, result))
         elif args.fn == "tool list" and not args.bot and not args.json:
@@ -1533,6 +1706,10 @@ def main(args, who=None, fields=None):
             # Nothing to retry and nothing for the caller to build: the owner's Needs you task holds the fix.
             print(f"{exc.detail}.")
             return 2
+        if calendar_text_mode(args):
+            # The server's own words for the refusal (a rule that stops a booking names itself), as a line, not JSON.
+            print(f"tico: {exc.detail or exc.code}", file=sys.stderr)
+            return 1 if exc.retryable else 2
         if args.cmd == "task" and any(k in exc.extra for k in hubtools.REFUSAL_FIELDS):
             # A task refusal: the line, what is missing and the commands allowed next, so the bot acts instead of
             # retrying the same command.

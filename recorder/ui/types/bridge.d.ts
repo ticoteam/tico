@@ -96,6 +96,8 @@ export interface Status {
   message: string;
   signing_in: boolean;
   connect: string | null;
+  /** A call or calendar event from an org just signed in to, waiting for Record. */
+  record_prompt?: { title: string } | null;
   first_run: boolean;
   suggested: string;
   recording: RecordingStatus | null;
@@ -132,6 +134,8 @@ export interface LibraryRow {
   org: { id: string; name: string; url: string } | null;
   live_org: string | null;
   targets: Target[];
+  /** A Tico call's recording: Tico files it when the call ends, so it is never saved from here. */
+  call?: boolean;
 }
 export interface Library {
   rows: LibraryRow[];
@@ -374,6 +378,8 @@ export interface Meeting {
   discarded: boolean;
   discard_pending: boolean;
   can_finish: boolean;
+  /** A Tico call's recording: Tico files it when the call ends, so Stop has no Finish. */
+  call?: boolean;
   place: string;
   sync_error: string;
   setup: string[];
@@ -510,6 +516,8 @@ export interface Commands {
   import_legacy: { args: { directory: string }; reply: unknown };
   confirm_connect: { args: None; reply: unknown };
   dismiss_connect: { args: None; reply: unknown };
+  confirm_record: { args: None; reply: unknown };
+  dismiss_record: { args: None; reply: unknown };
   dismiss_error: { args: None; reply: unknown };
   open_url: { args: { url: string }; reply: unknown };
   dismiss_notice: { args: None; reply: unknown };

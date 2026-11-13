@@ -6,6 +6,28 @@
 /** Needs you as the shared refresh holds it (S.v2.needs, read from GET /v2/needs-you: the new items). */
 const needsAsEntries = (items: readonly NeedsItem[] | readonly NeedsEntry[] | null | undefined) => (items || []) as unknown as NeedsEntry[];
 const needsHeld = () => needsAsEntries(S.v2?.needs);
+/** The stage an item is in for a stage's review (the ▶ on a stage, decide.ts): its task's stage; a Paused cause is
+    in none (backend/views.py needs_stage). */
+const needsStageOf = (it: NeedsEntry): string => it.kind === 'paused' ? '' : it.task?.stage_id || '';
+/** How many items wait on the person in each stage: the server's count over the whole list while only some pages are
+    held (`stages`), else counted from the list. */
+function needsStageCounts(): Map<string, number> {
+  const whole = S.v2?.needsNext && S.v2.needsStages ? S.v2.needsStages : null;
+  if (whole) return new Map(Object.entries(whole));
+  const counts = new Map<string, number>();
+  for (const it of needsHeld()) { const st = needsStageOf(it); if (st) counts.set(st, (counts.get(st) || 0) + 1); }
+  return counts;
+}
+const needsStageCount = (stage: string): number => needsStageCounts().get(stage) || 0;
+/** Every page of Needs you, read before a stage's review walks it (a stage's items can be past the first page). */
+async function needsReadAll(): Promise<void> {
+  // A page refused because a whole re-read started meanwhile (a live event) is read again from that re-read, twice at
+  // most, so a walk does not start on part of the list.
+  for (let i = 0, missed = 0; i < 40 && !needsAll(); i++) {
+    if (await v2NeedsMore() || needsAll()) continue;
+    if (++missed > 2 || !await v2NeedsRead()) break;
+  }
+}
 /** One item of Needs you by id, or null. */
 const needsItem = (id: unknown): NeedsEntry | null => needsHeld().find(it => String(it.id) === String(id)) || null;
 
@@ -40,6 +62,7 @@ async function notifyThreadNeedsOnce(items: NeedsEntry[]) {
     // The person's own row in the people list carries the setting (there is no one-person read).
     try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find((p: {id?: string; notify_browser?: boolean}) => p.id === id)?.notify_browser === true; }
     catch { S.notifyBrowser = false; }
+    pushKeep(S.notifyBrowser);         // this browser takes Web Push too (person-page.ts)
   }
   const key = 'tico.notified.' + id;
   const asks = items.filter(it => THREAD_NEED_KINDS[it.kind]);

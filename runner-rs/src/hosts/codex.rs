@@ -309,7 +309,7 @@ impl CodexHost {
         if self.running() {
             self.stop_and_reap().await;
         }
-        let mut command = crate::isolation::command("codex");
+        let mut command = super::harness_command(None, "codex");
         command
             .arg("app-server")
             .stdin(Stdio::piped())
@@ -1114,10 +1114,14 @@ impl CodexHost {
         Ok(turn)
     }
 
+    /// Write `text` into the running turn. Codex's replies for a turn that already ended (or one that is now
+    /// another turn, or a compaction) wrote nothing, so they are refusals: the runner gives the input a turn of its own.
     pub async fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
-        self.request("turn/steer", json!({"threadId": thread_id, "expectedTurnId": turn_id, "input": [{"type": "text", "text": text}]}), REQUEST_TIMEOUT)
-            .await
-            .map(|_| ())
+        match self.request("turn/steer", json!({"threadId": thread_id, "expectedTurnId": turn_id, "input": [{"type": "text", "text": text}]}), REQUEST_TIMEOUT).await {
+            Ok(_) => Ok(()),
+            Err(HostError::Failed(m)) if steer_turn_over(&m) => Err(HostError::SteerRefused(m)),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn start_goal(
@@ -1351,6 +1355,17 @@ fn with_kind(err: &Value, msg: String) -> String {
     } else {
         format!("{msg} ({tag})")
     }
+}
+
+/// Codex's `turn/steer` errors that mean the expected turn is no longer one input can be written into.
+fn steer_turn_over(message: &str) -> bool {
+    [
+        "no active turn to steer",
+        "expected active turn id",
+        "cannot steer a compact turn",
+    ]
+    .iter()
+    .any(|m| message.contains(m))
 }
 
 #[cfg(test)]
@@ -1639,9 +1654,62 @@ for line in sys.stdin:
         say({"id": msg["id"], "result": {"thread": {"id": "th-%d" % threads}}})
     elif method == "thread/resume":
         say({"id": msg["id"], "result": {"thread": {"id": p["threadId"]}}})
+    elif method == "turn/steer" and os.environ.get("FAKE_STEER_ERROR"):
+        say({"id": msg["id"], "error": {"code": -32600, "message": os.environ["FAKE_STEER_ERROR"]}})
     else:
         say({"id": msg["id"], "result": {}})
 "#;
+
+    /// A message steered just as the Codex turn ended is refused, so the runner carries it into a new turn instead of
+    /// stopping the attempt partway (Nov 12: `turn/steer: no active turn to steer` left a review waiting on a person).
+    #[tokio::test]
+    async fn a_steer_into_a_turn_that_just_ended_is_refused_not_failed() {
+        let dir =
+            std::env::temp_dir().join(format!("codex-steer-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::util::write_script(&dir.join("codex"), FAKE_APP_SERVER);
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let steer = |reply: &str| {
+            let env: Env = [
+                ("PATH".to_string(), path.clone()),
+                (
+                    "FAKE_CALLS".to_string(),
+                    dir.join("calls.jsonl").display().to_string(),
+                ),
+                ("FAKE_STEER_ERROR".to_string(), reply.to_string()),
+            ]
+            .into_iter()
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+            async move {
+                let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+                host.start().await.unwrap();
+                let got = host.steer("th-1", "turn-1", "Judge: unsure").await;
+                host.stop().await;
+                got
+            }
+        };
+        for reply in [
+            "no active turn to steer",
+            "expected active turn id `turn-1` but found `turn-2`",
+            "cannot steer a compact turn",
+        ] {
+            assert!(
+                matches!(steer(reply).await, Err(HostError::SteerRefused(m)) if m == format!("turn/steer: {reply}")),
+                "{reply}"
+            );
+        }
+        assert!(matches!(
+            steer("input must not be empty").await,
+            Err(HostError::Failed(_))
+        ));
+        assert!(steer("").await.is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[tokio::test]
     async fn the_app_server_gets_the_turns_skill_root_once_and_a_refusal_still_runs_the_turn() {

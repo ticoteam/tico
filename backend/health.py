@@ -53,10 +53,12 @@ QUEUE_WAITS = (
     "updating",
     "restarting",
     "draining",
+    "moving",
     "maintaining",
     "lane_held",
     "cooling_off",
     "task_wait",
+    "task_turn_out",
     "handed_back",
     "scoped",
     "task_quarantine",
@@ -746,7 +748,7 @@ def _rejected_summary(rows):
     )
     return (
         f"Sign-in rejected for {first}"
-        + (f" at {when}" if when else "")
+        + (f" at {_clock(when)}" if when else "")
         + (f": {why}" if why else ".")
         + fix
         + " It takes no work that needs it until then."
@@ -1109,10 +1111,14 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                 if where[0] in restarting
                 else refused or "slow"
             )
+            # A job its task's snooze holds waits on purpose: it starts when the snooze ends (Run now and Wake end it).
+            # It is Work queueing, as on a sleeping cloud machine, never a stuck bot.
+            resting = idle and reason == "task_wait"
             slow.append(
                 {**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"}
+                | ({"resting": True, "runner_id": where[0], "runtime": report.get("runtime") or ""} if resting else {})
             )
-            if idle:
+            if idle and not resting:
                 stuck.append(
                     {**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
                     | (
@@ -1248,11 +1254,14 @@ HELD = {
     "cloud_locked": ("Pay to continue: bots run again once the plan is paid", BILLING),
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
     "task_wait": ("Its task is snoozed: its work starts when the snooze ends", RUNS),
+    # The task was given to this bot while another bot's turn on it was out (execution.turn_moved_on).
+    "task_turn_out": ("Its task was handed to it mid-turn: it starts when the earlier owner's turn ends", RUNS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
+    "moving": ("Moving to its own cloud machine: its next turn starts there once its running turns end", COMPUTERS),
     "restarting": ("{computer} is restarting: it starts new work once its running turns end", COMPUTERS),
     "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),
     "lane_held": (
@@ -1571,7 +1580,8 @@ _TOKEN_CACHE = {}  # (database, threshold) -> (monotonic time, answer)
 
 def _token_heavy(c, threshold):
     """(bot, tokens) for bots whose uncached input tokens passed `threshold` in the last day. A run records
-    `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count.
+    `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count;
+    cache writes (`cache_write_tokens`, apart from input since they were counted apart) do.
     It reads the measured segments (usage_facts, indexed on `started_at`); the sum still visits every segment of the day,
     so one answer serves every tab's Health poll for five minutes."""
     if not threshold or threshold <= 0:
@@ -1586,8 +1596,8 @@ def _token_heavy(c, threshold):
     answer = [
         (r["bot"], r["n"])
         for r in c.execute(
-            "SELECT bot_id AS bot, sum(input_tokens) AS n FROM usage_facts WHERE source='estimate' AND started_at>=? "
-            "GROUP BY bot_id HAVING sum(input_tokens)>? ORDER BY sum(input_tokens) DESC",
+            "SELECT bot_id AS bot, sum(input_tokens + coalesce(cache_write_tokens, 0)) AS n FROM usage_facts "
+            "WHERE source='estimate' AND started_at>=? GROUP BY bot_id HAVING n>? ORDER BY n DESC",
             (since, threshold),
         )
     ]
@@ -1596,9 +1606,14 @@ def _token_heavy(c, threshold):
     return answer
 
 
-def _bot_name(c, bot):
+# A bot removed since its record was written: a person reads this, never the bot's id.
+DELETED_BOT = "Deleted bot"
+
+
+def _bot_name(c, bot, missing=None):
+    """Its display name or slug; for a bot with no row, `missing`, else the id as given."""
     row = c.execute("SELECT display_name,slug FROM bots WHERE id=?", (bot,)).fetchone()
-    return (row["display_name"] or row["slug"]) if row else bot
+    return (row["display_name"] or row["slug"]) if row else bot if missing is None else missing
 
 
 def _bot_names(c, bots):
@@ -1616,6 +1631,17 @@ def _bot_names(c, bots):
     return {bot: found.get(bot, bot) for bot in bots}
 
 
+def _clock(at):
+    """A stored time as Health's rows say one: "07:52 UTC" today, "Nov 11 07:52 UTC" on an earlier day, never the
+    ISO stamp. Text that is not a stamp is returned as it is."""
+    try:
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return str(at or "")
+    day = "" if when.date() == datetime.now(timezone.utc).date() else f"{when:%b} {when.day} "
+    return f"{day}{when:%H:%M} UTC"
+
+
 def _tokens_words(n):
     return f"{n / 1e9:.1f}B" if n >= 1e9 else f"{n / 1e6:.0f}M" if n >= 1e6 else f"{n:,}"
 
@@ -1627,17 +1653,15 @@ def token_failure(c):
     health = c.execute(
         "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?", (GITHUB_HEALTH,)
     ).fetchone()
-    recent = H.shift(H.now(), hours=-RECENT_HOURS)
-    if not (
-        health
-        and health["last_error"]
-        and health["last_error"] > recent
-        and health["last_error"] > (health["last_succeeded_at"] or "")
-    ):
+    if not (health and health["last_error"]):
         return None
     try:
         detail = json.loads(health["detail"] or "{}")
     except ValueError:
+        return None
+    # last_error holds the message; when it failed is detail's failed_at (a row without one predates it).
+    failed_at = str(detail.get("failed_at") or "")
+    if not (failed_at > H.shift(H.now(), hours=-RECENT_HOURS) and failed_at > (health["last_succeeded_at"] or "")):
         return None
     return (
         {"message": str(detail.get("message") or ""), "action": str(detail["action"])} if detail.get("action") else None
@@ -1983,7 +2007,7 @@ def _backups(config, settings):
             "backups",
             "Backups",
             checked,
-            f"Backup status not checked since {backup.get('checked_at')}; the backup location may be unreachable.",
+            f"Backup status not checked since {_clock(backup.get('checked_at'))}; the backup location may be unreachable.",
             [fix],
         )
     behind = _age_status(since) if mode == "remote" else "ok"
@@ -2031,8 +2055,8 @@ def _backups(config, settings):
             "backups",
             "Backups",
             behind,
-            f"Copies to {target or 'the remote'} have been behind the database since {since}. The newest copy is from "
-            f"{last}.",
+            f"Copies to {target or 'the remote'} have been behind the database since {_clock(since)}. The newest copy is "
+            f"from {_clock(last)}.",
             [fix],
         )
     if key_here and not key_copied:
@@ -2356,8 +2380,8 @@ def _named_lines(lines, most=5):
 def _fallback_lines(c, settings, on, carrying):
     """One plain line per bot in `on` (from `_fallbacks`) saying what it is set to and what it runs on instead, set on
     each row as `line`; and the summary for Health: those lines, or one line when every bot whose turns carry
-    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, with a line for
-    any other bot in `on`."""
+    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, naming those
+    bots (at most five), with a line for any other bot in `on`."""
     from .shared_bots import follow
 
     if not on:
@@ -2396,8 +2420,16 @@ def _fallback_lines(c, settings, on, carrying):
         models = sorted({_ran_on_words(row) for row in group})
         unsigned = sorted({row["waiting_for_sign_in"] for row in group})
         names = " or ".join(SUBSCRIPTION_NAMES.get(r, _harness_name(r)) for r in unsigned)
+        # Name the bots counted: a bot whose turns ran on what it is set to carries no `waiting_for_sign_in`, so the
+        # group is not every bot on the team.
+        who, more = [_bot_name(c, row["bot"]) for row in group[:5]], len(group) - 5
+        who = (
+            ", ".join(who[:-1]) + " and " + who[-1]
+            if more <= 0
+            else ", ".join(who) + f" and {more} more bot{'s' if more != 1 else ''}"
+        )
         summary = (
-            f"Every bot runs on {' or '.join(models)}, not the model it is set to: its computer has no {names} "
+            f"{who} run on {' or '.join(models)}, not the models they are set to: their computers have no {names} "
             "subscription."
         )
         rest = _named_lines([row["line"] for row in on if row["bot"] not in carrying])
@@ -2651,10 +2683,10 @@ def _plate_check(c, who, auth, full):
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
             for item in items:
+                if not item.get("task_id"):
+                    continue  # a Paused cause (a held run, a login) stands for tasks no bot asked this person for
                 # The row Needs you's pass already read for this snapshot (waiting_on.prime): no read of its own.
-                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item.get("task_id") or "",)) or {}).get(
-                    "requester_id"
-                )
+                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item["task_id"],)) or {}).get("requester_id")
                 if H.is_bot(asker):
                     bots[asker] = bots.get(asker, 0) + 1
             over.append((len(items), person.actor, bots))
@@ -2950,9 +2982,9 @@ def view(c, who, settings, auth, github, config):
                 )
                 + ' '
                 + (
-                    'Incident opened ' + incident['opened_at']
+                    'Incident opened ' + _clock(incident['opened_at'])
                     if incident.get('active')
-                    else 'Incident resolved ' + incident.get('resolved_at', '')
+                    else 'Incident resolved ' + _clock(incident.get('resolved_at', ''))
                 )
             )
             fixes = [_fix(*COMPUTERS)]
@@ -3466,7 +3498,7 @@ def view(c, who, settings, auth, github, config):
                         "Load",
                         "warn",
                         f"{computer['label']}: {'overloaded now' if not overload['ended_at'] else 'was overloaded'}"
-                        f" ({describe(overload)}).",
+                        f" ({describe(overload, lambda bot: _bot_name(c, bot, DELETED_BOT))}).",
                         [_fix("Open Performance", "#/computers/" + computer["id"] + "/performance")],
                     )
                 )
@@ -3823,7 +3855,7 @@ def view(c, who, settings, auth, github, config):
                 "warn",
                 "; ".join(
                     f"{name}: {_tokens_words(n)} uncached input tokens in 24 h"
-                    for name, n in ((_bot_name(c, bot), n) for bot, n in heavy[:5])
+                    for name, n in ((_bot_name(c, bot, DELETED_BOT), n) for bot, n in heavy[:5])
                 )
                 + ("." if len(heavy) <= 5 else f"; and {len(heavy) - 5} more."),
                 [_fix("Open Usage", "#/usage")],
@@ -3975,13 +4007,18 @@ def note_github_token(store, error=None, action=""):
     App itself belongs here (its key, installation or permissions), with what to do about it; a bot whose
     repository is not on GitHub yet is that bot's readiness problem."""
     now = H.now()
-    detail = json.dumps({"message": error, "action": action}) if error else None
+    detail = json.dumps({"message": error, "action": action, "failed_at": now}) if error else None
     with store.read() as c:
         current = c.execute("SELECT last_error,detail FROM service_health WHERE service=?", (GITHUB_HEALTH,)).fetchone()
-        if error:
-            if current and current["last_error"] == error and current["detail"] == detail:
+        if error and current and current["last_error"] == error:
+            try:
+                seen = json.loads(current["detail"] or "{}")
+            except ValueError:
+                seen = {}
+            # The same failure is rewritten at most hourly, so one that keeps happening stays recent.
+            if seen.get("action") == action and str(seen.get("failed_at") or "") > H.shift(now, hours=-1):
                 return
-        elif not current or not current["last_error"] and (current["detail"] or "{}") in ("{}", ""):
+        elif not error and (not current or not current["last_error"] and (current["detail"] or "{}") in ("{}", "")):
             return
     with store.transaction() as c:
         if error:

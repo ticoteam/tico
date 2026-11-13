@@ -8,7 +8,9 @@ person gets a link rather than a URI nothing opens. Pure stdlib: the server, the
 
 import logging
 import re
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote
+
+from clients import urlparts
 
 # S3's own rule for bucket names: 3-63 lower-case letters, digits, dots and hyphens, starting and ending alphanumeric.
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
@@ -46,12 +48,13 @@ def parse(value, private_bucket=""):
             continue
         bucket, _, base = part.partition("=")
         bucket, base = bucket.strip(), base.strip().rstrip("/")
-        url = urlsplit(base)
+        url = urlparts.split(base)
         # The log names the bucket, never the base: a mistyped base may carry credentials.
         if not BUCKET.fullmatch(bucket) or ".." in bucket:
             log.warning("TICO_S3_VIEW_URLS: ignored the entry for %r: not a plain bucket name", bucket[:70])
         elif (
-            url.scheme != "https"
+            url is None
+            or url.scheme != "https"
             or not url.hostname
             or url.username
             or url.password

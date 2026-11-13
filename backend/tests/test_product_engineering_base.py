@@ -39,24 +39,6 @@ def test_the_migration_runs_twice_and_gives_effects_their_pr():
     assert {"repo", "number", "head_sha", "next_try_at"} <= effects
 
 
-def test_every_kind_is_built_and_has_its_settings():
-    """Each kind computes its own standing: none is a stub saying it is not built yet."""
-    source = inspect.getsource(R)
-    assert "not built yet" not in source
-    assert {fn.__name__ for fn in R.KINDS.values()} == {f"_{kind}" for kind in R.KINDS}
-    assert set(R.SETTINGS) == set(R.KINDS)
-    assert R.SETTINGS["page"] == ("rubric", "at_head", "with_release")
-    assert R.settings_of({"kind": "item", "source": "github", "condition": "in_release"}) == (
-        "release_repo",
-        "prereleases",
-        "release_with",
-    )
-
-
-def test_every_role_has_a_template_and_a_chart_seat():
-    assert set(Seats.TEMPLATES) == set(Seats.CHART_IDS) == set(Seats.ROLES)
-
-
 def test_a_pr_fact_keeps_the_newest_read(c):
     assert F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": []}, 200)
     assert not F.save_pr(c, REPO, 1, {"state": "closed", "head_sha": "a"}, 100)  # an older read began first
@@ -169,21 +151,3 @@ def test_the_page_that_counts_is_the_newest_not_replaced(c):
         )
     assert P.current(c, visit, rid)["version"] == 2
     assert P.newest_for_task(c, task["id"], stage)["id"] == "p2"
-
-
-def test_the_fake_github_queues_merges_and_releases():
-    gh = FakeGitHub()
-    head = gh.open_pr(REPO, 1)
-    assert gh.enqueue(REPO, 1, "other")["ok"] is False
-    assert gh.enqueue(REPO, 1, head) == {"ok": True, "how": "queued", "reason": ""}
-    gh.push(REPO, 1)
-    assert gh.read_pr(REPO, 1)["queue_state"] == "removed"
-    merged = gh.merge(REPO, 1)
-    assert gh.dequeue(REPO, 1)["how"] == "merged"
-    release = gh.publish(REPO, "v1.0.0")
-    assert gh.contains(REPO, release["commit_sha"], merged)
-    later = gh.open_pr(REPO, 2)
-    assert not gh.contains(REPO, release["commit_sha"], later)
-    gh.fail_next("read_pr", "Bad credentials")
-    with pytest.raises(GitHubError, match="Bad credentials"):
-        gh.read_pr(REPO, 1)

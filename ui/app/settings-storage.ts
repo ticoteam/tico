@@ -85,7 +85,7 @@ async function renderStorageMove(host: HTMLElement, t: SettingsStorageTico): Pro
   button.textContent = t.state === 'on' ? 'Move existing files' : 'Move files back';
   button.onclick = async () => {
     const cost = t.state === 'on' ? ' Tico file hosting bills what it stores in Gateway credits.' : '';
-    if (!window.confirm(`Copy ${e.files} files (${gb(e.bytes)}), every version, to ${t.state === 'on' ? 'Tico file hosting' : "the company's own storage"}?${cost} Each copy is checked before it is used, and nothing is deleted where it is now.`)) return;
+    if (!(await askConfirm(`Copy ${e.files} files (${gb(e.bytes)}), every version, to ${t.state === 'on' ? 'Tico file hosting' : "the company's own storage"}?${cost} Each copy is checked before it is used, and nothing is deleted where it is now.`, button))) return;
     try { await post('/v2/system/storage/move', {expect_bytes: e.bytes}); toast('Moving files'); } catch (err) { toast(errorMessage(err, ''), true); }
     void renderStorageMove(host, t);
   };
@@ -142,7 +142,7 @@ async function renderSettingsStorage(): Promise<void> {
   };
   const off = host.querySelector<HTMLButtonElement>('[data-storage-off]');
   if (off) off.onclick = async () => {
-    if (!window.confirm("Store new files on the server's storage again? Files already in the bucket keep opening from it.")) return;
+    if (!(await askConfirm("Store new files on the server's storage again? Files already in the bucket keep opening from it.", off))) return;
     try { await writeRequest('DELETE', '/v2/system/storage', undefined); toast("New files now go to the server's storage"); } catch (e) { toast(errorMessage(e, ''), true); }
     void renderSettingsStorage();
   };

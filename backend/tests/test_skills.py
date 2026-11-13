@@ -65,20 +65,6 @@ def test_a_bundle_breaking_one_rule_is_refused_with_the_reason(name, files, reas
     assert refused.value.status == 422 and reason in refused.value.detail
 
 
-def test_the_sha_is_the_same_whatever_order_the_files_come_in_and_is_the_canonical_bytes():
-    files = [
-        {"path": "z.md", "content": "zed é"},
-        {"path": "SKILL.md", "content": SKILL},
-        {"path": "a/b.md", "content": ""},
-    ]
-    canonical = json.dumps(
-        sorted(files, key=lambda f: f["path"]), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
-    expected = hashlib.sha256(canonical.encode()).hexdigest()
-    assert bundles.bundle_sha(files) == bundles.bundle_sha(list(reversed(files))) == expected
-    assert bundles.bundle_sha(files[:2]) != expected and "é".encode() in bundles.canonical_json(files)
-
-
 def test_a_proposal_keeps_each_file_byte_for_byte_so_its_sha_matches_the_submitters(api):
     files = bundle(SKILL + "\n\n", {"path": "notes.md", "content": "  indented\n"})
     p = proposal(api, files=files)

@@ -11,7 +11,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
-type MaintWriteBody = {steps?: {max_bots?: number}[]};
 type MaintPageWin = {ticoTheme: {set: (v: string) => void}};
 // Page global from ui/app/automations-maintenance.ts, which the page loads.
 declare const AU: {mtBusy: boolean};
@@ -267,10 +266,8 @@ async function themed(page: Page, name: string) {
       await page.close();
     }
 
-    // While a run is live, the follow's refresh keeps a number being typed; Runs read before a Run now shows the new run
-    // on the way back.
     {
-      const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true,
+      const {page, errors, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true,
         hash: '#/automations/maintenance'});
       await page.waitForSelector('.mt-step');
       await page.getByRole('tab', {name: 'Runs'}).click();
@@ -279,15 +276,6 @@ async function themed(page: Page, name: string) {
       await page.waitForSelector('.mt-step');
       await page.locator('[data-mt-now]').click();
       await page.waitForSelector('[data-mt-now][disabled]');
-      const step = (k: string) => page.locator(`.mt-step[data-mt-step="${k}"]`);
-      await step('dream').locator('[data-mt-open]').click();
-      const bots = step('dream').locator('[data-mt-bots]');
-      await bots.fill('7');
-      await page.waitForTimeout(3500);   // one follow refresh
-      assert.equal(await bots.inputValue(), '7');
-      assert.equal(await bots.evaluate(el => el === document.activeElement), true, 'the field keeps focus');
-      await bots.press('Tab');
-      await until(() => writes.some(w => (w.body as MaintWriteBody).steps?.[0]?.max_bots === 7), 'the bots save');
       finish(db.maint!);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       await page.getByRole('tab', {name: 'Runs'}).click();

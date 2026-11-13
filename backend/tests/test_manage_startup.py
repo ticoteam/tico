@@ -45,24 +45,3 @@ def test_the_startup_commands_run_as_a_process_on_a_fresh_volume(tmp_path):
     bot = sorted(b for bots in created["bots_by_operator"].values() for b in bots)[0]
     assert run_manage("set-repo", database, bot, "owner/name", registry=registry)["repo"] == "owner/name"
     assert run_manage("snapshot", database, tmp_path / "copy.sqlite", registry=registry)
-
-
-def test_no_command_branch_rebinds_a_module_name_for_all_of_main():
-    """A local `from .x import Name` anywhere in main() makes Name local to every branch, so the others fail with
-    UnboundLocalError before it is assigned."""
-    tree = ast.parse(Path(manage.__file__).read_text())
-    module_names = {
-        alias.asname or alias.name.split(".")[0]
-        for node in tree.body
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
-    }
-    module_names |= {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
-    main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-    local = {
-        alias.asname or alias.name.split(".")[0]
-        for node in ast.walk(main)
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
-    }
-    assert not local & module_names

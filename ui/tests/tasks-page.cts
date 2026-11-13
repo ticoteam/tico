@@ -5,7 +5,7 @@
 //  - You: Needs you under Answer, Review and Do, each row the sentence asked; a question with two choices answers in
 //    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
-//    the address and reads its open tasks, snoozed ones left out;
+//    the address and reads its open tasks, snoozed ones too, drawn last in their stage and dimmed;
 //  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
 //    pipeline's archive reads and keeps that pipeline's tasks only, a live task of another pipeline left out;
 //  - a pipeline over one page (500 open tasks) or an archive over 200: More reads the next page from where the rows held
@@ -260,16 +260,26 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       const q = url.searchParams, status = q.get('status'), snoozed = q.get('snoozed') || 'hide', ids = q.get('ids')?.split(',');
       // `q` as backend/hubdb.py tasks reads it: every word in the title.
       const words = (q.get('q') || '').toLowerCase().split(/\s+/).filter(Boolean), owner = q.get('owner');
+      // `search` and `owners` as backend/task_match.py reads them: each word in the title, the number or a label.
+      const said = (q.get('search') || '').toLowerCase().split(/\s+/).filter(Boolean).map(w => w.replace(/^#/, ''));
+      const owners = q.get('owners')?.split(',');
       const rows = tasks.filter(x => (!status || status === 'all' || x.status === status) && (!ids || ids.includes(x.id))
         && (ids || snoozed === 'all' || (snoozed === 'only' ? !!x.snoozed : !x.snoozed)) && (!q.get('pipeline') || x.pipeline_id === q.get('pipeline'))
-        && (!owner || x.owner_id === owner) && words.every(w => x.title.toLowerCase().includes(w)));
+        && (!owner || x.owner_id === owner) && words.every(w => x.title.toLowerCase().includes(w))
+        && (!owners || owners.includes(String(x.owner_id))) && said.every(w => `${x.title} ${x.number ?? ''}`.toLowerCase().includes(w)));
       // In the server's order (backend/hubdb.py visible_tasks), then a page as backend/task_list_routes.py cuts it:
-      // `limit` rows from `offset`, and where the next page starts.
+      // `limit` rows from `offset`, or after the sort key `after` names, and where the next page starts.
       const finished = (t: Task) => String(t['done_at'] ?? t['closed_at'] ?? t.updated_at ?? t.created_at ?? '');
-      rows.sort(q.get('sort') === 'finished' ? (a, b) => finished(b).localeCompare(finished(a)) || b.id.localeCompare(a.id)
-        : (a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || a.id.localeCompare(b.id));
-      const limit = Number(q.get('limit') || 500), offset = Number(q.get('offset') || 0), page = rows.slice(offset, offset + limit);
-      return json({tasks: q.get('brief') ? page.map(brief) : page, next_offset: offset + limit < rows.length ? offset + limit : null, cursor: 'c1'});
+      const byFinished = q.get('sort') === 'finished';
+      const key = (t: Task) => byFinished ? [finished(t), t.id] : [String(t.created_at ?? ''), t.id];
+      const cmp = (a: string[], b: string[]) => (byFinished ? -1 : 1) * (a[0]!.localeCompare(b[0]!) || a[1]!.localeCompare(b[1]!));
+      rows.sort((a, b) => cmp(key(a), key(b)));
+      const after = q.get('after'), from = after ? JSON.parse(Buffer.from(after, 'base64url').toString()) as string[] : null;
+      const limit = Number(q.get('limit') || 500), offset = Number(q.get('offset') || 0);
+      const rest = from ? rows.filter(t => cmp(key(t), from) > 0) : rows.slice(offset), page = rest.slice(0, limit);
+      const more = rest.length > limit;
+      return json({tasks: q.get('brief') ? page.map(brief) : page, next_offset: more ? offset + limit : null,
+        next_after: more ? Buffer.from(JSON.stringify(key(page.at(-1)!))).toString('base64url') : null, cursor: 'c1'});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON() as Posted['body']; posts.push({p, body});
@@ -376,10 +386,13 @@ async function views(browser: Browser) {
   await page.locator('#task-filter-pop [data-scope="ops"]').click();
   await page.waitForFunction(() => /pipeline=ops/.test(location.hash) && !TASKS_ST.loading);
   const read = reads.at(-1)!.searchParams;
-  assert.deepEqual([read.get('status'), read.get('snoozed')], ['open', 'hide'], 'a pipeline reads its open tasks, snoozed ones left out');
+  assert.deepEqual([read.get('status'), read.get('snoozed')], ['open', 'all'], 'a pipeline reads its open tasks, snoozed ones too');
   assert.equal((await page.locator('#task-scope').innerText()).trim(), 'Operations');
   await page.locator('#task-body', {hasText: 'Book the team offsite'}).waitFor();
-  assert.equal(await page.locator('#task-body', {hasText: 'Renew the domain'}).count(), 0);
+  // The snoozed task stays in its stage, last there and dimmed (task-pipelines.ts; pipeline-snoozed.cts checks the rest).
+  const asleep = page.locator('#task-body .pv-snoozed[data-task="t-5"]');
+  await asleep.waitFor();
+  assert.ok(await asleep.evaluate(el => !el.nextElementSibling), 'the snoozed task is last in its stage');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('the view button: You and the pipelines in use; a pipeline in the address: ok');
@@ -446,24 +459,49 @@ async function pages(browser: Browser) {
     await page.waitForFunction(() => !TASKS_ST.loading);
     assert.equal(await held(page), 500, 'one page');
     await more(page).waitFor();
-    // A task taken out live: the next page starts one earlier, so nothing is skipped.
+    // A task taken out live: the next page starts after the last row given (its sort key), so nothing is skipped.
     await page.evaluate(() => tasksLiveApply([{id: 'p-001', gone: true}]));
     await more(page).click();
     await more(page).waitFor({state: 'hidden'});
-    assert.equal(reads.at(-1)!.searchParams.get('offset'), '499');
-    assert.equal(await held(page), 519, 'every open task but the one taken out');
-    assert.equal(new Set(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id))).size, 519, 'none twice');
+    assert.equal(reads.at(-1)!.searchParams.get('offset'), null);
+    assert.deepEqual(JSON.parse(Buffer.from(reads.at(-1)!.searchParams.get('after')!, 'base64url').toString()).at(-1), 'p-499');
+    // 519 errands and the snoozed fixture (t-5): a pipeline holds its snoozed tasks too.
+    assert.equal(await held(page), 520, 'every open task but the one taken out');
+    assert.equal(new Set(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id))).size, 520, 'none twice');
     assert.deepEqual(errors, []);
     await page.close();
   }
   {
-    // A search finds a task past the first page: the rest is read first.
-    const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=ops'});
+    // A search is the server's: one request answers the task past the first page, the rest of the view is not read.
+    const {page, errors, reads} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=ops'});
     await page.waitForFunction(() => !TASKS_ST.loading);
+    const before = reads.length;
     await page.locator('#task-q').fill('Errand 515');
+    await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.tasks.length === 1);
     await page.locator('#task-body [data-task="p-515"]').waitFor();
-    assert.equal(await held(page), 520);
+    assert.deepEqual(reads.slice(before).map(u => [u.searchParams.get('search'), u.searchParams.get('limit'), u.searchParams.get('offset')]),
+      [['Errand 515', '100', null]], 'one request of at most 100 rows');
     assert.equal(await more(page).isVisible(), false);
+    // A search that matches nothing: one request, no rows, no More.
+    const mid = reads.length;
+    await page.locator('#task-q').fill('zzqx');
+    await page.locator('#task-body .pv-empty', {hasText: 'Nothing found'}).waitFor();
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    assert.equal(reads.length - mid, 1);
+    assert.equal(await more(page).isVisible(), false);
+    // A search over many: its first 100, then More until it goes away gives every match once, in queue order.
+    await page.locator('#task-q').fill('errand');
+    await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.tasks.length === 100);
+    for (let i = 0; i < 5; i++) { await more(page).click(); await page.waitForFunction(n => TASKS_ST.tasks.length === n && !TASKS_ST.paging, Math.min(520, 200 + i * 100)); }
+    await more(page).waitFor({state: 'hidden'});
+    const ids = await page.evaluate(() => TASKS_ST.tasks.map(t => t.id));
+    assert.deepEqual(ids, Array.from({length: 520}, (_, i) => `p-${n(i)}`), 'each once, in queue order');
+    // A task open over the page stays open through a change of search.
+    await page.locator('#task-body [data-task="p-007"]').click();
+    await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Errand 007'}).waitFor();
+    await page.evaluate(() => { const q = document.querySelector<HTMLInputElement>('#task-q')!; q.value = 'Errand 007'; q.dispatchEvent(new Event('input')); });
+    await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.tasks.length === 1);
+    assert.equal(await page.locator('#task-modal[open]').count(), 1, 'the task stays open');
     assert.deepEqual(errors, []);
     await page.close();
   }
@@ -473,12 +511,12 @@ async function pages(browser: Browser) {
     assert.equal(await held(page), 200);
     await more(page).click();
     await more(page).waitFor({state: 'hidden'});
-    assert.equal(reads.at(-1)!.searchParams.get('offset'), '200');
+    assert.ok(reads.at(-1)!.searchParams.get('after'), 'the next page starts after the last row given');
     assert.equal(await held(page), 206, 'the archive in full');
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('a list over one page: More reads the next from where the rows end; search reads the rest first: ok');
+  console.log('a list over one page: More reads the next after the last row; a search reads one bounded page: ok');
 }
 
 const api = {open, fixtures, task, brief, needsOf, PIPELINES};

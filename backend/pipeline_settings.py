@@ -151,10 +151,27 @@ REVIEW_RUBRIC = (
 # (Acme, Nov 11: a good page unsure, p 0.34); pages missing the reviews or the checks stay not met (p under 0.1).
 # "On the commit they reviewed" (and the newest commits, now in the context) let a page that says the reviews were of an
 # earlier commit than the checks be read as honest, not as missing reviews (rc.4, Nov 11: good pages 0.53 to 0.80).
+# Four things and "only these four count" (stress run, Nov 12: six complete pages a person OK'd scored 0.13 to 0.70 on the
+# line before, evals/pipeline_judge nov12-*). Jev sank a page for what is the person's or Tico's to handle, not a gap in
+# it: CI still running or re-running when the page was written (the stage's own Checks pass holds it until they pass), a
+# decision left to the person (keep the change, a target missed), a commit made after the reviews that Reviewer 2 reads
+# before the person is asked, and no line restating the work its title and spec already name. Naming each brought those
+# pages to 0.73 to 0.93 (the lowest, I08, says nothing of the change but its PR). "A line that only says it passed is
+# not output" and "leaves any of them out" keep a page with no check output or without one reviewer under 0.3. Running
+# is fine but "not failed", said both in the checks part and in the does-not-meet sentence: with the running clause
+# alone a page reporting a red check scored 0.85 to 0.88; said once, either the red pages stayed unsure (about 0.55) or
+# a good page with CI running fell to 0.55 to 0.75. Said twice, red pages 0.03 to 0.13, good pages 0.73 to 0.93.
 FIXES_2_RUBRIC = (
-    "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
-    "Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person "
-    "to OK it without opening the code."
+    "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR "
+    "is enough); output from how it was checked (test counts or command output; a line that only says it passed is "
+    "not output); the checks at the newest commit: passing, or still running or re-running when the page was written "
+    "(fine, Tico waits for them), but not failed; and what Reviewer 1 and Reviewer 2 each found on the commit they "
+    "reviewed, or that they found nothing to fix. Only these four count. A page that leaves any of them out, such as "
+    "one reviewer's findings, or that reports a check failed at the newest commit, does not meet it. A page with all "
+    "four meets it even when it reports a target missed, asks the person to decide something (whether to keep the "
+    "change, a spec question), lists what was not checked, or says commits were made after the reviews and a "
+    "reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since the "
+    "reviews when it names the work or its PR."
 )
 # A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
 # and checkable criteria are what a builder builds from. "Only these three count" (rc.5, Nov 11): good specs of the
@@ -271,7 +288,7 @@ PRESETS["product"] = {
             "A spec a builder can build from.",
             2880,
             [_people_only(_page("Spec page", SPEC_RUBRIC))],
-            task_limit=2,
+            task_limit=20,  # room for every owner; a spec waiting only on a person's OK holds no slot (has_room)
         ),
         _stage(
             "product-in-development",
@@ -315,6 +332,9 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
         "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
         "the code.",
+        "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
+        "Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person "
+        "to OK it without opening the code.",
     ),
     "product-spec/page/rubric": (
         "Covers goal, scope, what done looks like",
@@ -1158,7 +1178,7 @@ def _release_way(settings: object) -> tuple[str, bool, str]:
     found = _as_dict(_loads(settings)) or {}
     return (
         str(found.get("release_with") or "").strip(),
-        bool(found.get("prereleases")),
+        found.get("prereleases", True) is not False,
         str(found.get("release_repo") or "").strip().lower(),
     )
 
@@ -1575,6 +1595,11 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
         if check(conn, record):
             continue
         made.append(save(conn, SYSTEM, record)["id"])
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    stage_rules.ensure_defaults(conn)  # each default stage rule once, on the pipelines the company has
     return made
 
 

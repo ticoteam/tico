@@ -22,7 +22,7 @@ interface Person { id: string; name: string; email: string; role: string; compan
 type Settings = {team: string; weeks?: number};
 // App global: the signed-in person, and the employee list the page loads before it draws.
 declare const S: {me: Person | null; emps?: unknown[]};
-const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
+const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900}, LAPTOP = {width: 1280, height: 800};
 const OWNER: Person = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
 const MEMBER: Person = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
@@ -31,7 +31,8 @@ const NAMES: Record<string, string> = {tasks_by_status: 'Tasks by status', done_
   my_tasks: 'My tasks', updates: 'Updates'};
 const weeks = (n: number) => Array.from({length: n}, (_, i) => ({week: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + i % 4 * 7).padStart(2, '0')}`, done: [3, 5, 2, 8, 6, 4, 9, 7][i % 8]!}));
 const DATA: Record<string, (s?: Settings) => unknown> = {
-  tasks_by_status: () => ({counts: {open: 4, doing: 2, waiting: 1, done: 7}}),
+  // The server counts open and done only (backend/cards.py tasks_by_status).
+  tasks_by_status: () => ({counts: {open: 4, done: 7}}),
   done_per_week: s => ({weeks: weeks(s!.weeks || 8)}),
   needs_you: () => ({count: 2, items: [{id: 't1', kind: 'task', title: 'Approve the Acme launch plan', task_id: 't1'},
     {id: 'q1', kind: 'question', title: 'Pick a pricing page layout', task_id: 'q1'}]}),
@@ -156,6 +157,10 @@ const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').al
 // How many of `sel` are on screen; the edit controls are in the page while viewing, just not shown.
 const shown = (page: Page, sel: string) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
 const EDIT_CONTROLS = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
+// Every control on the dashboard shown now that is under 40 px tall: on a phone each is the only way to what it does.
+const smallTaps = (page: Page) => page.locator('#dash-root :is(a[href], button, [role="button"], [role="menuitem"], [role="menuitemradio"])')
+  .evaluateAll(els => els.filter(el => el.checkVisibility() && el.getBoundingClientRect().height < 40)
+    .map(el => `${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30)}: ${Math.round(el.getBoundingClientRect().height)} px`));
 async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
@@ -309,9 +314,19 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.locator('.dash-tabs a.cur').getAttribute('href'), '#/home');
       assert.equal(await page.locator('.dash-actions').isVisible(), true, 'a member arranges their own');
       assert.equal(await shown(page, EDIT_CONTROLS), 0);
+      if (viewport === PHONE) assert.deepEqual(await smallTaps(page), [], 'every Home control is at least 40 px tall on a phone');
       await page.locator('[data-dash-mode="edit"]').click();
       assert.equal(await shown(page, '[data-dash-grip]'), 5);
       assert.equal(await sideways(page), false, 'edit mode fits');
+      if (viewport === PHONE) {
+        assert.deepEqual(await smallTaps(page), [], 'every Home edit control is at least 40 px tall on a phone');
+        await page.locator('#dash-grid .dash-pin').first().locator('[data-dash-menu]').click();
+        await page.locator('.dash-menu [data-dash-remove]').waitFor();
+        assert.deepEqual(await smallTaps(page), [], 'every card menu item is at least 40 px tall on a phone');
+        assert.equal(await sideways(page), false, 'the card menu fits');
+        await page.keyboard.press('Escape');
+        await page.locator('.dash-menu').waitFor({state: 'detached'});
+      }
       await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-my-dashboard-editing');
       await page.locator('[data-dash-mode="done"]').click();
       assert.equal(await page.locator('#dash-grid a[href="#/task/t7"]').count(), 1, 'My tasks links each task');
@@ -361,6 +376,25 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone');
+    // Tasks by status shows only what the server counts: Open and Done this week, never a dash, on Dashboard and a team page.
+    for (const viewport of [LAPTOP, PHONE]) {
+      const {page, errors} = await open(browser, {viewport});
+      for (const [hash, h1] of [['#/overview', 'Company'], ['#/team/eng', 'Engineering']] as const) {
+        await page.evaluate(to => { location.hash = to; }, hash);
+        await page.waitForFunction(want => document.querySelector('#main h1')?.textContent === want, h1);
+        const statsGrid = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Tasks by status'})}).locator('.dash-stats');
+        const stats = statsGrid.locator('.dash-stat');
+        await stats.first().waitFor();
+        const where = `${hash} at ${viewport.width}`;
+        assert.deepEqual(await stats.locator('span').allInnerTexts(), ['Open', 'Done this week'], 'no Doing or Waiting column, ' + where);
+        assert.deepEqual(await stats.locator('strong').allInnerTexts(), ['4', '7'], 'no dash, ' + where);
+        const [grid, ...cells] = await statsGrid.evaluate(el => [el, ...el.children].map(c => c.getBoundingClientRect().width));
+        assert.ok(cells.every(w => w > grid! * 0.4), `the two numbers share the card's width, not half of it, ${where}: ${cells} of ${grid}`);
+        assert.equal(await sideways(page), false, 'no sideways scroll, ' + where);
+      }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

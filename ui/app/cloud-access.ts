@@ -59,6 +59,11 @@ document.querySelectorAll<HTMLButtonElement>('[data-cloud-refresh]').forEach(but
 function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
 }
+// The strip's Add credit link, for a line elsewhere that says the company is out of credit; '' unless it is.
+function cloudCreditLinkHTML(): string {
+  if (CLOUD_ACCESS?.access !== 'frozen') return '';
+  return ` <a data-cloud-pay href="${esc(cloudPayUrl(CLOUD_ACCESS.billing_url) || 'https://app.tico.dev/billing')}" target="_blank" rel="noopener noreferrer">Add credit</a>`;
+}
 // The status poll (refresh.js, boot.js) carries it on every page.
 function cloudAccessFromStatus() {
   if (S.status && 'cloud_access' in S.status) cloudAccessApply(S.status.cloud_access);

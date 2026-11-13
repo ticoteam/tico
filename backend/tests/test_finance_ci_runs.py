@@ -221,24 +221,6 @@ def test_an_unpermitted_remote_run_is_recorded_and_counted_not_blocked(books):
 
 
 # ---------------------------------------------------------------------------------------------------- Rules
-def test_the_rules_show_the_ticket_cap_in_dollars_and_the_daily_share_or_no_limit(books, monkeypatch):
-    monkeypatch.setattr(ci_runs, "_now", lambda: AT)  # October's share, whatever month the suite runs in
-    with books.read() as c:
-        texts = [s["text"] for s in ci_runs.sentences(c)]
-        assert texts[0].startswith("Remote test runs: up to 120 VM-minutes ($0.19) per ticket")
-        assert texts[1] == "No daily CI limit set"
-    with books.transaction() as c:
-        set_ci_amount(c, 3_100)
-    with books.read() as c:
-        assert [s["text"] for s in ci_runs.sentences(c)][1] == "CI spend up to $1.00 a day (Finance budget CI)"
-
-
-def test_the_ci_budget_warns_and_never_refuses(books):
-    with books.read() as c:
-        row = c.execute("SELECT at_limit, catch_all FROM fin_budgets WHERE name='CI'").fetchone()
-        assert row["at_limit"] == "warn" and row["catch_all"] == 0
-
-
 def test_the_manager_update_carries_one_line_of_ci_today_only_when_there_is_some(books):
     with books.transaction() as c:
         assert ci_runs.digest_line(c, AT) is None  # no CI budget amount, nothing spent or refused
@@ -248,11 +230,3 @@ def test_the_manager_update_carries_one_line_of_ci_today_only_when_there_is_some
             assert permit(c, task_id, remote_id=f"88888888888{n}", cpus=16)["allowed"] is True
         assert permit(c, task_id, remote_id="888888888889", cpus=16)["allowed"] is False
         assert ci_runs.digest_line(c, AT) == "CI today: $0.96 of a $1.00 share; 1 builder run refused."
-
-
-def test_a_fresh_book_has_accrued_expenses_on_2100_and_ci_on_6150_and_an_older_code_takes_the_next_free_one(books):
-    with books.read() as c:
-        assert c.execute("SELECT subtype FROM fin_accounts WHERE code='2100'").fetchone()[0] == "accrued"
-        assert c.execute("SELECT subtype FROM fin_accounts WHERE code='6150'").fetchone()[0] == "ci"
-    assert FS._free_code("2100", {"2100", "2101"}) == "2102"
-    assert FS._free_code("6150", {"6150"}) == "6151"

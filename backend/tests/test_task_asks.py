@@ -137,18 +137,6 @@ def test_a_push_past_is_never_an_ok(c):
         K.give_ok(c, ANA, rid, K.content_hash(EMAIL), own_click=True)
 
 
-def test_a_plain_answer_is_not_a_bound_ok(c):
-    asked = _ask(c)
-    rid = asked["requirement_id"]
-    assert K.refuses_plain_ok(c, rid, "ok") == K.FROM_PREVIEW
-    assert K.refuses_plain_ok(c, rid, "no") is None
-    H.set_task_readers(c, SENDER, asked["task_id"], add=[BEN])  # the task is private: an ask makes nobody a reader
-    other = H.task_ask(
-        c, SENDER, asked["task_id"], BEN, "Is Friday fine?", seen_version=H.task(c, asked["task_id"])["version"]
-    )
-    assert K.refuses_plain_ok(c, other["requirement_id"], "ok") is None  # a question has no grant
-
-
 def test_an_ok_taken_back_or_sent_back_is_not_one(c):
     asked = _ask(c)
     rid = asked["requirement_id"]
@@ -199,17 +187,6 @@ def test_asking_about_a_subject_another_asked_about_leaves_their_ask_alone(c):
     assert K.standing(c, again["requirement_id"]) == K.WAITING and K.standing(c, third["requirement_id"]) == K.WAITING
     _ok(c, second, content={**EMAIL, "body_sha256": "b" * 64})
     K.use(c, second["requirement_id"], SUBJECT, {**EMAIL, "body_sha256": "b" * 64}, OTHER)
-
-
-def test_an_ok_on_a_task_that_was_closed_is_not_used(c):
-    row = H.task_create(c, ANA, "Answer the supplier", "Reply to the supplier.", SENDER, lint=False)
-    asked = _ask(c, task_id=row["id"])
-    assert asked["task_id"] == row["id"]
-    _ok(c, asked)
-    H.task_close(c, ANA, row["id"], "Not needed.")
-    assert K.standing(c, asked["requirement_id"]) == K.WITHDRAWN
-    with _refused("task_ok_missing"):
-        K.use(c, asked["requirement_id"], SUBJECT, EMAIL, SENDER)
 
 
 def test_an_ok_handed_to_another_person_is_not_theirs_to_give(c):

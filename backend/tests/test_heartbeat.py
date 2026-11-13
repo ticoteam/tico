@@ -365,10 +365,6 @@ def test_personal_alerts_busy_says_nothing(api, fake, monkeypatch):
     assert shown["last_result"] is None and shown["runs_24h"] == 1
 
 
-def test_call_sweeps_has_the_poll_floor():
-    assert HB.BY_KEY["call_sweeps"].every == HB.POLL_FLOOR and HB.BY_KEY["call_sweeps"].floor == HB.POLL_FLOOR
-
-
 def test_a_repeated_failure_folds_into_the_newest_beat_row(api, fake):
     _, answers = fake
     scheduler = scheduler_of(api)

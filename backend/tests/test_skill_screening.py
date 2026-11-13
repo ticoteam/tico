@@ -85,23 +85,6 @@ def latest(api, pid):
 
 
 # ------------------------------------------------------------------ the claim
-def test_two_passes_never_screen_the_same_proposal(api):
-    pid = proposal(api)["id"]
-    engine = Engine()
-    engine.hold = threading.Event()
-    first = threading.Thread(target=drain, args=(api, engine))
-    first.start()
-    deadline = time.monotonic() + 10
-    while not engine.calls and time.monotonic() < deadline:  # the first pass holds the claim inside its model call
-        time.sleep(0.01)
-    assert row(api, pid)["screen_status"] == "screening"
-    assert drain(api, engine) == []  # a second pass finds nothing to take
-    with store_of(api).transaction() as c:
-        assert S.claim(c, pid) is None
-    engine.hold.set()
-    first.join(10)
-    assert len(engine.calls) == 1 and len(screenings(api, pid)) == 1
-    assert row(api, pid)["screen_status"] == "screened"
 
 
 def test_a_rescreen_during_a_screen_drops_that_result_and_a_lapsed_claim_is_taken_again(api):

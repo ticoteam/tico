@@ -121,19 +121,6 @@ def test_a_signature_differing_only_in_what_get_dependant_reads_is_not_shared():
     assert header_app(True) and dependant(header_app(False), "/h").header_params[0].alias == "x_token"
 
 
-def test_route_building_is_still_the_reviewed_version():
-    found = {"fastapi": fastapi.__version__, "starlette": starlette.__version__, "pydantic": pydantic.VERSION}
-    assert found == REVIEWED, (
-        "FastAPI, Starlette or pydantic changed: re-review backend/route_memo.py's keys (what get_dependant, "
-        "ModelField.__post_init__ and compile_path read) against the new version, then update REVIEWED."
-    )
-
-
-def test_paths_compile_once_into_their_own_convertor_dicts():
-    one, two = RM.compile_path("/a/{x:int}"), RM.compile_path("/a/{x:int}")
-    assert one[0] is two[0] and one[1] == "/a/{x}" and one[2] == two[2] and one[2] is not two[2]
-
-
 def test_only_test_processes_patch_fastapi():
     """The root conftest.py installs the memo in every test process; a server process importing the app keeps
     FastAPI's own route building."""

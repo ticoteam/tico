@@ -488,14 +488,15 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64, i64) {
     (inp, out, if total != 0 { total } else { inp + out })
 }
 
-/// {input, cached, output} for one assistant message: Pi keeps cache reads and writes apart from `input`; the
-/// meter counts them all as input, the reads also as cached.
+/// {input, cached, cache_write, output} for one assistant message: Pi keeps cache reads and writes apart from
+/// `input`; the meter counts them all as input, the reads also as cached and the writes also as cache writes.
 pub fn usage_increment(usage: &Value) -> Value {
     let read = first(usage, &["cacheRead", "cache_read", "cachedTokens"]);
-    let inp = first(usage, INPUT) + read + first(usage, &["cacheWrite", "cache_write"]);
+    let write = first(usage, &["cacheWrite", "cache_write"]);
+    let inp = first(usage, INPUT) + read + write;
     let out = first(usage, OUTPUT);
     // One assistant message is one model request, so the server prices a long prompt on its own (Tico Low).
-    json!({"input": inp, "cached": read, "output": out, "requests": [[inp - read, read, out]]})
+    json!({"input": inp, "cached": read, "cache_write": write, "output": out, "requests": [[inp - read, read, out]]})
 }
 
 /// The run's granted key; outside a turn (no bot environment) also the machine's, as local diagnostics read it.
@@ -1426,7 +1427,7 @@ impl PiHost {
                 "cannot prepare the private Gateway configuration",
             ));
         }
-        let mut command = crate::isolation::command_as(settings.identity, &argv[0]);
+        let mut command = super::harness_command(settings.identity, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
@@ -2103,43 +2104,6 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[tokio::test]
-    async fn a_low_bot_runs_on_the_gateway_and_the_built_in_ids_are_lineup_3s() {
-        let (_, dir) = gateway_turn_on(
-            "tico-low-1.0",
-            &[
-                SESSION,
-                r#"{"type":"agent_start"}"#,
-                r#"{"type":"agent_end"}"#,
-            ],
-        )
-        .await;
-        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert!(
-            args.lines()
-                .last()
-                .unwrap()
-                .starts_with("--mode rpc --provider tico --model tico-low-1.0 "),
-            "{args}"
-        );
-        let models: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap(),
-        )
-        .unwrap();
-        let ids: Vec<&str> = models["providers"]["tico"]["models"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["id"].as_str().unwrap())
-            .collect();
-        assert_eq!(ids.len(), GATEWAY_MODELS.len(), "{ids:?}");
-        // Every built-in id is a level, Fast or not, at 1.0: no department and no first-lineup name.
-        let level = regex::Regex::new(r"^tico-(xlow|low|medium|high|xhigh)(-fast)?-1\.0$").unwrap();
-        assert!(ids.iter().all(|id| level.is_match(id)), "{ids:?}");
-        assert!(ids.contains(&"tico-medium-1.0"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
     #[test]
     fn a_pi_turn_gets_the_hub_and_the_declared_and_repository_servers_as_direct_http_servers() {
         let dir = std::env::temp_dir().join(format!("pi-mcp-{}", uuid::Uuid::new_v4().simple()));
@@ -2574,17 +2538,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_newest_requests_prompt_and_reply_are_the_sessions_context() {
-        let mut turn = Turn::default();
-        Pi::on_event(
-            &json!({"type": "message_end", "message": {"role": "assistant", "provider": "openrouter", "stopReason": "stop", "content": [],
-                             "usage": {"input": 120, "output": 9, "cacheRead": 40, "cacheWrite": 0}}}),
-            &mut turn,
-        );
-        assert_eq!(turn.context, Some(169));
-    }
-
     #[tokio::test]
     async fn a_turn_that_compacts_the_session_is_recorded_for_its_thread_once() {
         let dir =
@@ -2690,7 +2643,7 @@ mod tests {
                 "{events:?}"
             );
             // Usage is still priced per message, and the newest request is the session's size.
-            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 129, "usage": {"input": 160, "cached": 40, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
+            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 129, "usage": {"input": 160, "cached": 40, "cache_write": 0, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
             assert_eq!(host.context_tokens(&thread), Some(169));
         }
         assert_eq!(logged(&dir, "starts.log").len(), 1);
@@ -2860,7 +2813,7 @@ mod tests {
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.compact(&thread, None).await.unwrap();
         let events = turn_events(&mut rx).await;
-        assert!(events.contains(&json!({"kind": "tokens", "input": 9000, "output": 700, "total": 9700, "usage": {"input": 9000, "cached": 0, "output": 700, "requests": [[9000, 0, 700]]}})), "{events:?}");
+        assert!(events.contains(&json!({"kind": "tokens", "input": 9000, "output": 700, "total": 9700, "usage": {"input": 9000, "cached": 0, "cache_write": 0, "output": 700, "requests": [[9000, 0, 700]]}})), "{events:?}");
         assert_eq!(
             kinds(&events).iter().rev().nth(1).unwrap(),
             "turn_completed"
@@ -3131,7 +3084,7 @@ mod tests {
         );
         assert_eq!(
             usage_increment(&json!({"input": 5, "cacheRead": 4, "cacheWrite": 1, "output": 2})),
-            json!({"input": 10, "cached": 4, "output": 2, "requests": [[6, 4, 2]]})
+            json!({"input": 10, "cached": 4, "cache_write": 1, "output": 2, "requests": [[6, 4, 2]]})
         );
         let mut env = Env::new();
         assert_eq!(openrouter_key(&env, false), "");

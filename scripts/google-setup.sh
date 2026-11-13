@@ -146,9 +146,10 @@ choose_project() {
 }
 
 enable_apis() {
-  gcloud services enable gmail.googleapis.com calendar-json.googleapis.com orgpolicy.googleapis.com iam.googleapis.com \
-    --project="$PROJECT" </dev/null >/dev/null 2>"$TMP/apis.err" || die "Could not turn on the Google APIs. $(first_line "$TMP/apis.err")"
-  say "Turned on Gmail, Calendar, Organization Policy and IAM"
+  gcloud services enable gmail.googleapis.com calendar-json.googleapis.com meet.googleapis.com orgpolicy.googleapis.com \
+    iam.googleapis.com --project="$PROJECT" </dev/null >/dev/null 2>"$TMP/apis.err" ||
+    die "Could not turn on the Google APIs. $(first_line "$TMP/apis.err")"
+  say "Turned on Gmail, Calendar, Meet, Organization Policy and IAM"
 }
 
 ensure_service_account() {

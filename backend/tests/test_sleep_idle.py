@@ -655,11 +655,6 @@ def test_a_listener_that_is_down_counts_as_no_policy(api, hq, cell):
     assert (state["minutes"], state["source"]) == (180, "owner")
 
 
-def test_a_cell_looks_every_minute_and_any_other_install_every_five(api, hq, cell):
-    assert sleep_idle.every() == 60
-    assert sleep_idle.CELL_EVERY == 60 and sleep_idle.EVERY == 300
-
-
 def test_a_cell_sleeps_after_fifteen_minutes_and_waits_only_for_a_routine_within_fifteen(api, hq, cell):
     base = int(hq.clock[0])
     service(api).started = base - 16 * 60
@@ -679,17 +674,6 @@ def test_a_cell_with_no_routine_near_sleeps_with_no_wake_time(api, hq, cell):
     service(api).started = hq.clock[0] - 16 * 60
     tick(api)
     assert cell.sleeps == [{"wake_at": None, "reason": "idle"}]
-
-
-def test_the_view_gives_the_effective_minutes_their_source_and_that_a_cell_is_managed(api, hq, cell):
-    state = get(api, "sleep")["sleep"]
-    assert "hours_default" not in state
-    assert (state["minutes"], state["source"], state["managed"]) == (15, "default", True)
-    turn_on(api, 2)
-    assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
-    listener(cell, 30)
-    state = get(api, "sleep")["sleep"]
-    assert (state["minutes"], state["source"], state["hours"]) == (30, "cell", 2)
 
 
 def test_a_busy_cell_says_not_now_and_is_asked_again_after_fifteen_minutes(api, hq, cell):

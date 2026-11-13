@@ -18,7 +18,8 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
     Machine {id, key, size, state: starting|running|stopping|stopped|deleted|failed, started_at, stopped_at,
              cost_month_usd, starts_month, last_error, pending: delete|stop|start|null}
     Size    {name, cpu, memory_gb, usd_per_hour (the customer's price), start_usd, idle_stop_s (HQ's break-even; the
-             server pauses by a machine's Pause after, not by this)}
+             server pauses by a machine's Pause after, not by this), available? (false: this company's plan cannot
+             start it; missing is true), reason? (why not, for a person: "Needs a higher plan")}
 
 `key` is a bot's id for its own machine and SHARED (`_shared`, never a bot id: ids are [a-z0-9-]) for the company's
 shared one, so each is made once. HQ counts the shared machine as one machine against its caps.
@@ -105,7 +106,7 @@ import secrets
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
@@ -130,7 +131,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
  start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
- grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL);
+ grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL, move_drain REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
 """
@@ -178,6 +179,7 @@ SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked,
 SIGNIN_ASK = 45  # the page asks every few seconds: a want not asked for again this long is over
 SIGNIN_START = 5 * 60  # a machine not up this long after the first ask is not coming: the page stops waiting
 UPDATE_WANT = "update:"  # a stopped machine's want to update, keyed "update:" and this server's release
+DRAINED_WANT = "drained-job:"  # a drained bot's waiting turn (`bot_want`): wakes its machine, never runs there yet
 UPDATE_STALE = 15 * 60  # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
 UPDATE_RETRY = 6 * 3600  # a runner tries a failed update again this long after it failed (runner-rs follow.rs)
 UPDATE_AGAIN = ":again"  # ends the want of a stopped machine's one more start to try a failed update again
@@ -191,6 +193,11 @@ STOP_REFUSED = "Stop refused"  # grow_note while a resize's stop is refused (Hea
 # HQ's refusals of a start that are about the size it asked for: the next start goes at the size the machine has.
 SIZE_REFUSALS = ("cpu_cap", "plan_required", "too_small", "invalid_size")
 SIZE_RETRIES = ("cpu_cap",)  # of those, the ones that may pass later (GROW_RETRY); the rest hold until a person acts
+# Of those, the ones that say the company's plan cannot run the size at all: a machine with no smaller size to keep (a
+# new or replaced one) falls back to the largest the plan allows (`fallback_size`), and the person who chose is told.
+# HQ may pass the provider's own word ("machine_class_plan_required"), so a code or last_error is matched by its end.
+PLAN_REFUSALS = {"plan_required": "needs a higher plan", "invalid_size": "isn't available on this plan"}
+FALLBACK_NOTICE_S = 24 * 3600  # one notice per machine and refused size this often (`fall_back`)
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -266,7 +273,54 @@ def parse_size(value):
         "start_usd": float(_number(value.get("start_usd") or 0)),
         "idle_stop_s": idle,
         **({"disk_gb": disk} if type(disk) in (int, float) and disk > 0 else {}),
+        # A size HQ says the plan cannot start; a missing mark (an older HQ) is available, as before.
+        **(
+            {"available": False, "reason": _text(value.get("reason"), 60) or "Needs a higher plan"}
+            if value.get("available") is False
+            else {}
+        ),
     }
+
+
+def plan_refusal(code):
+    """The PLAN_REFUSALS code that refusal code or HQ's `last_error` ends with, or None."""
+    text = (code or "").strip().lower()
+    return next((known for known in PLAN_REFUSALS if text == known or text.endswith("_" + known)), None)
+
+
+def unavailable(offered, name):
+    """Why HQ says the company's plan cannot start size `name` (its `reason`), or None when it can or has not said."""
+    found = next((s for s in offered if s["name"] == name), None)
+    if not found or found.get("available") is not False:
+        return None
+    return found.get("reason") or "Needs a higher plan"
+
+
+def fallback_size(offered, name):
+    """The size to start at once HQ refused `name` for the plan: the largest the plan can start that is smaller than
+    it (fewer CPUs, else earlier in HQ's list). Where HQ marks no size unavailable, the next smaller listed one: each
+    refusal steps down one. None at the smallest, or for a size HQ did not list."""
+    order = {s["name"]: (s.get("cpu") or 0, i) for i, s in enumerate(offered)}
+    if name not in order:
+        return None
+    smaller = [s for s in offered if order[s["name"]] < order[name] and s.get("available") is not False]
+    return max(smaller, key=lambda s: order[s["name"]])["name"] if smaller else None
+
+
+def fallback_words(offered, name, code):
+    """Why size `name` could not start, in a person's words: HQ's reason for it when it marked it, else the code's."""
+    why = unavailable(offered, name)
+    return why[:1].lower() + why[1:] if why else PLAN_REFUSALS.get(code or "", "refused by the provider")
+
+
+def fallback_note(offered, name, code):
+    """The machine's status note after a fallback, until a person changes its size: "XLarge needs a higher plan"."""
+    return f"{cloud_size_name(name)} {fallback_words(offered, name, code)}"
+
+
+def bot_name(c, key):
+    found = H.bot(c, key) or {}
+    return found.get("display_name") or found.get("slug") or key
 
 
 class HQ:
@@ -435,8 +489,15 @@ def intend_delete(c, current, reason="manual"):
     )
 
 
-def count_enrollment_failure(c, key, machine_id):
-    """Spend one try per id under the write lock, before any HTTP or adoption can lose this attempt."""
+def count_enrollment_failure(c, key, machine_id, last_error=None):
+    """Spend one try per id under the write lock, before any HTTP or adoption can lose this attempt. A machine HQ says
+    failed because the plan cannot run its size (`last_error`, else the row's for this id) spends none: its computer
+    never had a chance to connect, and `Manager.fall_back` starts the next one smaller instead."""
+    if last_error is None:
+        current = row(c, key)
+        last_error = current["last_error"] if current and current["machine_id"] == machine_id else ""
+    if plan_refusal(last_error):
+        return row(c, key)
     added = c.execute(
         "INSERT OR IGNORE INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES(?,?)", (machine_id, key)
     ).rowcount
@@ -791,6 +852,8 @@ def grow_plan(current, disk, offered, caps, others_cpu, at=0):
 
 
 def cloud_size_name(name):
+    if name == "xlarge":
+        return "XLarge"
     return (name or "")[:1].upper() + (name or "")[1:]
 
 
@@ -903,15 +966,19 @@ TEMPORARY_REFUSALS = ("busy", "removing", "version_conflict")
 
 def bind(c, execution, bot, lasting=False):
     """Assign a cloud-mode bot to its machine's computer if it is not on it. False while it can't be (a turn still out
-    on the old computer): asked again at the next look. With `lasting` (a person's choice of a machine), any other
-    refusal raises its Problem; the looks keep it to False. With no machine made yet, a lasting choice is refused
-    before one is made (and billed) when the bot's history exists only on its computer now (`stranded`)."""
+    on the old computer): asked again at the next look, and meanwhile the bot takes no new turn on the old computer
+    (`move_drain`), so a bot that is never idle there still moves once its running turns end. With `lasting` (a
+    person's choice of a machine), any other refusal raises its Problem; the looks keep it to False. With no machine
+    made yet, a lasting choice is refused before one is made (and billed) when the bot's history exists only on its
+    computer now (`stranded`)."""
     machine = home(c, bot) or {}
     if machine.get("deleting"):
+        moving(c, bot, False)
         return False
     target = machine.get("runner_id")
     placed_on = c.execute("SELECT runner_id,generation FROM assignments WHERE bot=?", (bot,)).fetchone()
     if not target:
+        moving(c, bot, False)
         if lasting and placed_on:
             from .execution import stranded
 
@@ -919,6 +986,7 @@ def bind(c, execution, bot, lasting=False):
                 raise Problem("repository_unpublished", blocked, 409)
         return False
     if placed_on and placed_on["runner_id"] == target:
+        moving(c, bot, False)
         return True
     from types import SimpleNamespace
 
@@ -933,11 +1001,23 @@ def bind(c, execution, bot, lasting=False):
     except Problem as exc:
         c.execute("ROLLBACK TO cloud_bind")
         c.execute("RELEASE cloud_bind")
+        # Only a turn still out holds the move: any other refusal is not lifted by the bot taking no turns, so it goes
+        # on taking them where it is.
+        moving(c, bot, exc.code == "busy")
         if lasting and exc.code not in TEMPORARY_REFUSALS:
             raise
         return False
     c.execute("RELEASE cloud_bind")
     return True
+
+
+def moving(c, bot, on):
+    """Set or lift a bot's drain for its move (`move_drain`, when it began): while set, the claim gives it no new turn
+    on the computer it is leaving (execution.DRAINING_SQL, reason "moving"). Set only when its running turns hold the
+    move up; lifted the moment it moves (`placed`) or the move is not waiting on them any more. Writes only a change."""
+    found = c.execute("SELECT move_drain FROM cloud_machines WHERE bot=?", (bot,)).fetchone()
+    if found and bool(found["move_drain"]) != on:
+        save(c, bot, move_drain=now() if on else None)
 
 
 def check_host(c, bot, runner_id):
@@ -998,7 +1078,9 @@ def lend_plans(c, execution, bot, runner_id, chooser, new=False):
 def placed(c, bot, runner_id, actor):
     """Execution.assign put the bot on a computer: its own machine's keeps cloud mode on its own, the shared one's on
     the shared one, and any other is the person's choice of computer; a machine left without its bot stops at the next
-    look. A bot with no row yet that is put on the shared machine's computer gets one there."""
+    look. A bot with no row yet that is put on the shared machine's computer gets one there. Any move lifts the bot's
+    drain for a move (`moving`): it has moved."""
+    moving(c, bot, False)
     current = row(c, bot)
     if not current:
         shared = row(c, SHARED)
@@ -1093,7 +1175,7 @@ def facts(c, settings, current, at):
         )
     ranked = []
     for bot in bots:
-        active, want, rank, since = bot_want(c, settings, bot, runner_id, at)
+        active, want, rank, since = bot_want(c, settings, bot, runner_id, at, bool(current["always_on"]))
         out["active"] = out["active"] or active
         out["want_at"] = max(out["want_at"], since)
         if want:
@@ -1263,7 +1345,8 @@ def wake_for(current, found):
             return rest(want), False
     if update and not spent(update):
         return rest(update), False
-    return None, bool(wants)
+    # A drained bot's turn is not expected to run where it was woken for: it is waiting, not stuck.
+    return None, any(not w.startswith(DRAINED_WANT) for w in wants)
 
 
 def runner_updating(c, runner_id, at):
@@ -1275,17 +1358,15 @@ def runner_updating(c, runner_id, at):
     return bool(found) and at - (epoch(found["reported_at"]) or 0) < UPDATE_STALE
 
 
-def bot_want(c, settings, bot, runner_id, at):
+def bot_want(c, settings, bot, runner_id, at, always_on=False):
     """(active, want, rank, since) for one bot of a machine whose computer is `runner_id` (None before its first
     enroll). `rank` orders wants across the shared machine's bots: newer work first, then a move, then a watcher.
-    `since` is when the want arose (the job's queueing, the watcher's due time; 0 for a move or none), epoch seconds."""
+    `since` is when the want arose (the job's queueing, the watcher's due time; 0 for a move or none), epoch seconds.
+    `always_on`: the machine is Always on, which a drained bot (not a paused one) keeps it."""
     from .execution import bot_claimable
 
     found = H.bot(c, bot)
-    if (
-        not (found and found["state"] == "active")
-        or c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
-    ):
+    if not (found and found["state"] == "active"):
         return False, None, None, 0
     placed_on = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     if placed_on and placed_on["runner_id"] != runner_id:
@@ -1296,6 +1377,13 @@ def bot_want(c, settings, bot, runner_id, at):
         "ORDER BY created_at DESC,id DESC LIMIT 1",
         (bot,),
     ).fetchone()
+    if c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone():
+        # Drained, it takes no work now, but a move (above) and a waiting turn still start its machine: the machine
+        # reports the bot's repository then, and is up for the resume. Else only Always on keeps the machine on.
+        # Its key is its own (DRAINED_WANT): the wake spent on it is never the one the resume needs for `job:<id>`.
+        if newest:
+            return True, DRAINED_WANT + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
+        return always_on, None, None, 0
     if newest and runner_id:
         # Performance holds belong to start admission, not this wake: only a running machine can refresh its samples.
         why, _, _, job = bot_claimable(c, settings, runner_id, bot, with_job=True)
@@ -1639,8 +1727,11 @@ class Manager:
                     if machine["state"] == "failed" or machine["state"] == "deleted" and not current["runner_id"]:
                         # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
                         # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
-                        # Only HQ's list says so: a refused or unanswered create may be a passing outage.
-                        count_enrollment_failure(c, key, machine["id"])
+                        # Only HQ's list says so: a refused or unanswered create may be a passing outage. One HQ made
+                        # and then failed because the plan cannot run its size is that refusal, not a stall.
+                        count_enrollment_failure(c, key, machine["id"], machine["last_error"])
+                        if machine["state"] == "failed" and current["state"] != "failed":
+                            self.plan_failed(c, current, machine, at)
                         gone.update(enroll_by=None, wake_key=None, start_asked_at=None)
                     elif machine["state"] in ON and current["start_asked_at"] is not None:
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
@@ -1811,7 +1902,9 @@ class Manager:
         )
         adopted = row(c, key)
         if machine["state"] == "failed" or not fresh_runner and (dead or at >= adopted["enroll_by"]):
-            count_enrollment_failure(c, key, machine["id"])
+            count_enrollment_failure(c, key, machine["id"], machine["last_error"])
+            if machine["state"] == "failed":
+                self.plan_failed(c, adopted, machine, at)
         elif adopted["enroll_fails"] >= ENROLL_TRIES:
             save(c, key, problem="no_enroll", problem_at=H.now())
 
@@ -1819,7 +1912,9 @@ class Manager:
         """One machine's look. A bot's own row also binds that bot to its machine, own or shared, once it has one."""
         if key != SHARED:
             with self.store.read() as c:
-                unbound = unplaced(c, key)
+                # `bind` lifts a drain for a move on every path but a turn still out ("busy"), so a row with one is
+                # bound again here, including one with nothing left to move to (its machine's computer is gone).
+                unbound = unplaced(c, key) or bool((row(c, key) or {}).get("move_drain"))
             if unbound:  # a write only when there is one to make
                 with self.store.transaction() as c:
                     bind(c, self.execution, key)
@@ -2155,6 +2250,7 @@ class Manager:
                 grow_blocked_until=at + GROW_RETRY if refused.code in SIZE_RETRIES else None,
                 grow_note=f"Couldn't change to {cloud_size_name(current['size'])}",
             )
+        plan = plan_refusal(refused.code) if action in ("create", "start") else None
         if action == "stop" and resizing(current) and "failures" in fields:
             if fields["failures"] >= STOP_TRIES:
                 # HQ keeps refusing the stop: run on at the size it has, its runner takes work again, and the size
@@ -2171,7 +2267,15 @@ class Manager:
             else:
                 fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
-            save(c, key, **fields)
+            if plan and "grow_refused_size" in fields:
+                # A resize the plan cannot run: it starts at the size it has (above), and whoever chose is told.
+                fields["grow_note"] = fallback_note(sizes(c), current["size"], plan)
+                save(c, key, **fields)
+                self.tell(c, current, current["machine_size"], plan, at)
+            elif plan and self.fall_back(c, current, current["size"], plan, at, action, fields):
+                return  # a new or replaced machine: the next look asks again, one size down (`fall_back`)
+            else:
+                save(c, key, **fields)
             if restarting and refused.code in ("starts_full", "cpu_cap"):
                 from .cloud_machine_health import file_card as file_health_card
 
@@ -2194,6 +2298,98 @@ class Manager:
                         **({"size": current["size"]} if "grow_refused_size" in fields else {}),
                     },
                 )
+
+    def plan_failed(self, c, current, machine, at):
+        """HQ made machine `machine` and then failed it because the plan cannot run its size (its `last_error`): fall
+        back as for a refused create, or, at the smallest size, say so and back off as an ordinary refusal does."""
+        code = plan_refusal(machine["last_error"])
+        if not code:
+            return
+        tried = machine["size"] or current["size"]
+        if tried != current["size"]:
+            return  # a person chose another size meanwhile: the next machine is made at theirs
+        if not self.fall_back(c, current, tried, code, at, "made"):
+            failures = current["failures"] + 1
+            save(
+                c,
+                current["bot"],
+                problem="hq:" + code,
+                problem_at=H.now(),
+                failures=failures,
+                next_try_at=at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1)),
+            )
+
+    def fall_back(self, c, current, refused_size, code, at, action="create", fields=None):
+        """HQ refused size `refused_size` for machine row `current` because the plan cannot run it (`code`, one of
+        PLAN_REFUSALS) and there is no smaller size it already has: set it to the largest size the plan can start
+        (`fallback_size`), ask again at once with no failure counted, keep the note until a person changes the size, and
+        tell whoever chose (`tell`). `fields` are the refusal's own (create_asked_at, start_asked_at). False at the
+        smallest size: the refusal is then an ordinary one."""
+        key = current["bot"]
+        target = fallback_size(sizes(c), refused_size)
+        if target is None:
+            return False
+        fields = dict(fields or {})
+        fields.update(
+            size=target,
+            grow_refused_size=refused_size,
+            grow_blocked_until=None,
+            grow_note=fallback_note(sizes(c), refused_size, code),
+            failures=0,
+            next_try_at=None,
+            problem="",
+            problem_at=None,
+        )
+        save(c, key, **fields)
+        H.event(
+            c,
+            H.KEEPER,
+            "cloud_machine.refused",
+            key,
+            {"action": action, "code": code, "size": refused_size, "fallback": target},
+        )
+        self.tell(c, {**current, "size": refused_size}, target, code, at)
+        return True
+
+    def tell(self, c, current, runs_at, code, at):
+        """One notice that machine row `current` could not start at its size and runs at `runs_at`, to the person who
+        last chose for it (else the company owner), and a `cloud_machine.size_fallback` event. A second one for the same
+        machine and refused size within FALLBACK_NOTICE_S sends no second notice."""
+        key, refused_size = current["bot"], current["size"]
+        H.event(
+            c,
+            H.KEEPER,
+            "cloud_machine.size_fallback",
+            key,
+            {"from": refused_size, "to": runs_at, "code": code, "at": at},
+        )
+        for earlier in c.execute(
+            "SELECT detail FROM events WHERE action='cloud_machine.size_fallback' AND target=? "
+            "ORDER BY created_at DESC LIMIT 20 OFFSET 1",
+            (key,),
+        ):
+            try:
+                seen = json.loads(earlier["detail"] or "{}")
+            except ValueError:
+                continue
+            if seen.get("from") == refused_size and at - (seen.get("at") or 0) < FALLBACK_NOTICE_S:
+                return
+        chooser = current.get("changed_by") or ""
+        if not str(chooser).startswith("human:"):
+            owner = self.execution.auth.owner_id(c)
+            chooser = H.human_actor(owner) if owner else ""
+        if not chooser:
+            return
+        name = "The shared cloud machine" if key == SHARED else f"{bot_name(c, key)}'s cloud machine"
+        H.notice(
+            c,
+            H.KEEPER,
+            chooser,
+            f"{name} couldn't start at {cloud_size_name(refused_size)} ({fallback_words(sizes(c), refused_size, code)}), "
+            f"so it runs at {cloud_size_name(runs_at)}. Its work isn't waiting. To change it, pick another size in "
+            "its Computer settings.",
+            refs={"cloud_machine": key},
+        )
 
     async def loop(self, stop):
         import asyncio
@@ -2255,6 +2451,80 @@ def waiting(c, bot):
     if machine["state"] in GOING:
         return "its cloud machine is " + ASLEEP
     return "starting its cloud machine"
+
+
+# A machine whose computer has not enrolled yet, as `coming` says it: on its way by itself, or held until a person acts.
+COMING_ON_ITS_WAY = ("making", "starting", "stopped")
+COMING_HELD = ("out_of_credit", "failed")
+
+
+def coming_status(c: Any, machine: Any) -> tuple[str, str]:
+    """(status, words) for a machine whose computer has not enrolled: `making` (HQ has not made it yet), `starting`,
+    `stopped`, `out_of_credit` (nothing starts while the company is frozen) or `failed` (it was not made, did not
+    start or never connected: its problem's words)."""
+    problem = machine["problem"] or ""
+    if problem == "out_of_credit" or cloud_access.frozen(c):
+        return "out_of_credit", PROBLEMS["out_of_credit"]
+    if problem.startswith(("hq:", "error:")) or problem in ("stuck", "no_enroll"):
+        return "failed", problem_words(problem) or problem
+    if machine["state"] in GOING:
+        return "stopped", "Stopped"
+    if not machine["machine_id"] or machine["state"] in ("none", *DEAD):
+        return "making", "Being made"
+    return "starting", "Starting"
+
+
+def coming_key(c: Any, bot: str, current: Any = None) -> str | None:
+    """The key of the machine a cloud-mode bot with no computer goes on first (`first_home`'s order): its own when that
+    has a computer, else the shared one, else its own. None in computer mode."""
+    current = current or row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return None
+    own = current if current["placement"] == "own" else None
+    if own and own["runner_id"]:
+        return bot
+    return SHARED if row(c, SHARED) else (bot if own else None)
+
+
+def coming(c: Any, bot: str) -> dict[str, str] | None:
+    """The cloud machine a cloud-mode bot with no computer waits for, or None for a bot in computer mode:
+    {key, label, status, words} (`coming_status`). The bot is assigned to its computer when it enrolls (`enrolled`)."""
+    key = coming_key(c, bot)
+    machine = row(c, key) if key else None
+    if not machine:
+        return None
+    status, words = coming_status(c, machine)
+    return {"key": str(key), "label": str(label_for(c, key)), "status": status, "words": words}
+
+
+def coming_rows(c: Any) -> list[dict[str, Any]]:
+    """Settings > Computers' rows for the cloud machines whose computer has not enrolled yet, so a machine being made
+    or started is listed before it is a computer: the shared one while any bot is set to run there, and a bot's own
+    once HQ has been asked for it. Each {key, label, shared, bot, status, words, replace}: `replace` when deleting it
+    and making a fresh one is the way forward (it failed, and HQ has a machine to delete)."""
+    found = rows(c)
+    out: list[dict[str, Any]] = []
+    for key, current in sorted(found.items(), key=lambda item: (item[0] != SHARED, item[0])):
+        if current["runner_id"] or current["deleting"] or current["mode"] != "cloud":
+            continue
+        if key == SHARED:
+            if not members(c):
+                continue
+        elif current["placement"] != "own" or not (current["machine_id"] or current["problem"]):
+            continue
+        status, words = coming_status(c, current)
+        out.append(
+            {
+                "key": key,
+                "label": label_for(c, key),
+                "shared": key == SHARED,
+                "bot": None if key == SHARED else key,
+                "status": status,
+                "words": words,
+                "replace": status == "failed" and present(current),
+            }
+        )
+    return out
 
 
 def homes(c):
@@ -2419,11 +2689,23 @@ def change(
 
 def size_fields(c, before, size, grow_storage):
     """A person's size and Grow storage choice as row fields. A real change of either clears a refused size (it may be
-    asked again); the same value again changes nothing. A size with less disk than the machine has is refused: a disk
+    asked again) and a fallback's note; the same value again changes nothing. A size HQ says the plan cannot start is
+    refused (`size_unavailable`, with the sizes it can), and so is one with less disk than the machine has: a disk
     cannot shrink, so HQ would refuse the restart."""
     fields = {}
     if size is not None and size != before["size"]:
-        disk = {s["name"]: s.get("disk_gb") for s in sizes(c)}
+        offered_now = sizes(c)
+        why = unavailable(offered_now, size)
+        if why:
+            # The same answer a person gets in Settings, where the size is greyed out: an agent learns it here.
+            can = [s["name"] for s in offered_now if s.get("available") is not False]
+            raise Problem(
+                "size_unavailable",
+                f"{cloud_size_name(size)}: {why}. Choose one of: " + ", ".join(can),
+                422,
+                extra={"size": size, "reason": why, "available": can},
+            )
+        disk = {s["name"]: s.get("disk_gb") for s in offered_now}
         have = before["machine_size"] if before["machine_size"] and before["state"] not in DEAD else None
         if have and disk.get(size) and disk.get(have) and disk[size] < disk[have]:
             raise Problem(

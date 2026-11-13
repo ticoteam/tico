@@ -35,7 +35,7 @@ async function renderSettingsCompany(): Promise<void> {
     const status = host.querySelector<HTMLElement>('[data-company-status]')!;
     const button = host.querySelector<HTMLButtonElement>('[data-company-disconnect]')!;
     button.onclick = async () => {
-      if (!window.confirm(`Disconnect from ${company.name}?`)) return;
+      if (!(await askConfirm(`Disconnect from ${company.name}?`, button))) return;
       button.disabled = true; status.textContent = 'Disconnecting…';
       try { await writeRequest('DELETE', '/v2/company/server-connection', undefined); await refreshConfig(); await renderSettingsCompany(); }
       catch (e) { status.textContent = errorMessage(e, ''); button.disabled = false; }

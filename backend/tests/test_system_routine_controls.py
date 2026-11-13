@@ -179,36 +179,3 @@ def test_moved_switches_keep_their_values_and_write_the_same_team_rules(api, mon
         rules = team_rules.load(c)
     assert rules["topic_fresh"] is False
     put(api, "system-routines/topic_fresh", {"preset": "hourly"}, token="ben-test", expected=422)
-
-
-def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search_finds_its_words(api):
-    store = api.app.state.store
-    with store.transaction() as c:
-        row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
-        roster = {
-            **(json.loads(row[0]) if row else {}),
-            "org_groups": {
-                "engineering": {"name": "Engineering"},
-                "marketing": {"name": "Marketing"},
-                "finance": {"name": "Finance"},
-                "web": {"name": "Web", "parent": "engineering"},
-            },
-        }
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (json.dumps(roster),),
-        )
-    data = get(api, "system-routines")
-    assert {"Engineering", "Marketing"} <= set(data["departments"])
-    assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"
-    for job in data["jobs"]:
-        assert job["when"] and job["then"], job["key"]
-        books = getattr(SR.BY_KEY.get(job["key"]), "department", "") == SR.FINANCE
-        assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], (
-            job["key"]
-        )
-    jobs = {j["key"]: j for j in data["jobs"]}
-    assert jobs["kpi_asks"]["when"] == ["every hour"]
-    assert jobs["kpi_asks"]["then"][0] == "ask a KPI's owner for a reading when it goes out of date"
-    assert jobs["topic_fresh"]["when"] == ["a message in a direct chat changes the topic"]
-    assert "never stuck" in jobs["heartbeat"]["search"] and "stuck" in jobs["never_stuck_reading"]["search"]

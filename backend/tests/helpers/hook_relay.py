@@ -2,7 +2,6 @@
 
 import base64
 import json
-import time
 import httpx
 import pytest
 from backend import hook_relay
@@ -144,9 +143,14 @@ def hq(api, monkeypatch):
     fake = HQ()
     monkeypatch.setattr(hook_relay, "TRANSPORT", httpx.MockTransport(fake))
     # The app's own loop must not pull in the middle of a test; the tests tick by hand.
-    monkeypatch.setattr(api.app.state.hook_relay, "tick", lambda: None)
-    time.sleep(0.3)  # the loop's first tick, already handed to its thread, has run
-    fake.calls.clear()  # ... and, with a key and no relay, asked for notices: not part of the test
+    svc = api.app.state.hook_relay
+    monkeypatch.setattr(svc, "tick", lambda: None)
+    # The loop's first tick may already be handed to its thread. One that has not begun its pass finds this
+    # empty pass; one that is inside its pass holds the lock, so taking the lock waits for it to finish.
+    monkeypatch.setattr(svc, "_tick", lambda: None)
+    with svc.lock:
+        pass
+    fake.calls.clear()  # ... and, with a key and no relay, it asked for notices: not part of the test
     api.app.state.hook_relay.listed = 0.0
     return fake
 
@@ -169,7 +173,7 @@ class Pulls:
     def tick(self):
         with self.svc.lock:
             if not self.svc.off:
-                self.svc._tick()
+                type(self.svc)._tick(self.svc)  # the real pass: the fixture emptied the instance's own
 
 
 def service(api):

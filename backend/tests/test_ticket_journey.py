@@ -382,15 +382,18 @@ def to_sign_off(co, engineering):
 
 
 def test_the_merge_queue_drops_the_pr_and_the_release_owner_queues_it_again(co):
-    """GitHub takes the signed-off PR out of the merge queue: the Release Owner is woken with why, puts it back with
-    `tico task queue`, and it merges."""
+    """GitHub takes the signed-off PR out of the merge queue because its run was cancelled from outside: the Release Owner
+    is woken with why, puts it back with `tico task queue`, and it merges. A removal that names a failed check is not
+    queued again as it is (test_github_facts_merge_queue)."""
     before = co.needs_you()
     _, engineering = to_build(co)
     to_sign_off(co, engineering)
     co.sign_off(engineering, "Ship it.")
     co.beat()
     assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "Tico did not put the signed-off PR in the merge queue"
-    co.github.drop(REPO, 1, "Checks failed in the merge queue", check="tests")
+    co.github.drop(
+        REPO, 1, "Checks failed in the merge queue", check="no step failed: the run was cancelled from outside"
+    )
     co.heard(1)
     assert co.task(engineering)["stage"]["name"] == "Merge", f"a dropped PR's task left Merge. {co.line(engineering)}"
     woken = [bot for bot, task in co.queued() if task == engineering]
@@ -410,6 +413,67 @@ def test_the_merge_queue_drops_the_pr_and_the_release_owner_queues_it_again(co):
     )
     assert co.new_in_list(before) == [], "a PR dropped from the queue and queued again reached the person's list"
     co.clean()
+
+
+def test_after_the_sign_off_a_rebase_is_queued_again_and_a_conflict_fix_is_read_by_reviewer_2_not_the_person(co):
+    """Velocity (~100 PRs a day, Nov 12): main moves under a signed-off PR. A rebase changes the same lines, so the
+    Release Owner queues it again. A conflict fix that changes the PR's lines goes back to Fixes 2, where Reviewer 2
+    reads it; its OK keeps the person's, and the PR merges. The person is asked once, at the sign-off."""
+    before = co.needs_you()
+    _, engineering = to_build(co)
+    to_sign_off(co, engineering)
+    co.sign_off(engineering, "Ship it.")
+    co.beat()
+    assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "Tico did not put the signed-off PR in the merge queue"
+
+    rebased = co.github.rebase(REPO, 1, head=co.commit())
+    co.github.set_checks(REPO, rebased, "success")
+    co.heard(1)
+    releaser = co.turn_on("release-owner", engineering, "after the rebase took the PR out of the queue")
+    releaser.cli("task", "queue", engineering, "--version", releaser.version())
+    releaser.end()
+    co.beat()
+    assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "the rebase was not queued again"
+
+    fixed = co.github.push(REPO, 1, head=co.commit())
+    co.github.set_checks(REPO, fixed, "success")
+    co.heard(1)
+    releaser = co.turn_on("release-owner", engineering, "after the conflict fix took the PR out of the queue")
+    code, out, err = releaser.cli("task", "queue", engineering, "--version", releaser.version(), ok=False)
+    assert code != 0 and "Move the task back to Fixes 2" in out + err, f"a bot queued a changed PR: {out}{err}"
+    releaser.cli(
+        "task", "move", engineering, "Fixes 2", "-m", "Fixed the conflict in negate.", "--version", releaser.version()
+    )
+    releaser.end()
+    co.beat()
+    assert co.new_in_list(before) == [], "the person was asked about the conflict fix before Reviewer 2 read it"
+    reviewer = co.turn_on("reviewer-2", engineering, "to read the conflict fix")
+    assert fixed[:7] in reviewer.wake + reviewer.show(), "Reviewer 2 is not told the commit to read"
+    page = [r for r in co.task(engineering)["to_leave"] if r["kind"] == "page"]
+    reviewer.cli(
+        "task",
+        "answer",
+        engineering,
+        page[0]["requirement_id"],
+        "ok",
+        "-m",
+        f"Read {fixed[:7]}: both changes kept.",
+        "--version",
+        reviewer.version(),
+    )
+    reviewer.end()
+    co.beat()
+    assert co.task(engineering)["stage"]["name"] == "Merge", (
+        f"Reviewer 2's OK did not take it back to Merge. {co.line(engineering)}"
+    )
+    assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "the read conflict fix was not queued"
+    co.github.merge(REPO, 1)
+    co.heard(1)
+    assert co.task(engineering)["stage"]["name"] == "Release", (
+        f"the merged PR's task is not in Release. {co.line(engineering)}"
+    )
+    assert co.new_in_list(before) == [], "the person was asked again after the sign-off"
+    co.clean(expected=("Move the task back to Fixes 2",))
 
 
 def test_the_person_says_no_before_release_and_the_second_round_is_signed_off_once_more(co):
@@ -432,6 +496,23 @@ def test_the_person_says_no_before_release_and_the_second_round_is_signed_off_on
     built, _ = builder.page("built.html", "What was built: negate", f"Built at {head}; negate(None) raises.")
     builder.attach("Review page", built)
     builder.end()
+    co.beat()
+    assert co.new_in_list(before) == [], "the person was asked before Reviewer 2 read the new commit"
+    reviewer = co.turn_on("reviewer-2", engineering, "to review the commit pushed after Review 2")
+    assert head[:7] in reviewer.wake + reviewer.show(), "Reviewer 2 is not told the new commit to read"
+    page = [r for r in co.task(engineering)["to_leave"] if r["kind"] == "page"]
+    reviewer.cli(
+        "task",
+        "answer",
+        engineering,
+        page[0]["requirement_id"],
+        "ok",
+        "-m",
+        f"Read {head[:7]}: negate(None) raises.",
+        "--version",
+        reviewer.version(),
+    )
+    reviewer.end()
     co.beat()
     assert co.new_in_list(before) == [("ask", engineering)], "the second round did not reach the person once"
     co.sign_off(engineering, "Ship it.")

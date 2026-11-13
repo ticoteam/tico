@@ -593,7 +593,7 @@ pub fn command(
 pub fn claude_token_cold(profile: Option<&Profile>) -> bool {
     let home = profile
         .and_then(|p| p.home("claude"))
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()));
+        .unwrap_or_else(crate::env::operator_home);
     let Ok(text) = std::fs::read_to_string(home.join(".claude").join(".credentials.json")) else {
         return false;
     };

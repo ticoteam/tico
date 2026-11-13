@@ -445,21 +445,33 @@ def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave
         story(api, msg["conversation_id"] and msg)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A brief row's turn.line is the snooze's why, whole (task_reads.brief via waiting_on, SNOOZED wait), and"
-    " E.snooze takes a why of any length: 500 snoozed rows with 2 KB notes send 1 MB. Clip the line in a brief row.",
-)
-def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
+def test_a_brief_row_clips_the_snooze_note_and_the_task_keeps_it_whole(api):
+    from backend import task_reads
+
     store = api.app.state.store
-    note = "🔔" * 500  # 500 characters, 2,000 bytes each
+    note = "🔔" * 500  # 500 characters, 2,000 bytes
     with store.transaction() as c:
         ids = [H.task_create(c, "human:ana", f"Snoozed {i}", "x", "human:ana", lint=False)["id"] for i in range(20)]
         for tid in ids:
             H.task_snooze(c, "human:ana", tid, note, H.shift(H.now(), days=5))
     board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
     rows = board.json()["tasks"]
-    assert len(rows) == 20 and all(r["snoozed"] for r in rows)
-    assert note[:10] not in board.text, "a list row carries no snooze note"
+    assert len(rows) == 20 and all(r["snoozed"] and r["turn"]["state"] == "snoozed" for r in rows)
+    for r in rows:
+        line = r["turn"]["line"]
+        assert len(line.encode()) <= task_reads.SNOOZE_LINE_BYTES and line.endswith("…"), line
+        assert line[:-1] and note.startswith(line[:-1]), "the row keeps the note's start, cut on a character"
+    assert note not in board.text, "a list row never carries the whole note"
+    # 20 rows used to carry 40 KB of notes; now each row's line is capped.
+    assert len(board.content) < 20 * (task_reads.SNOOZE_LINE_BYTES + 2048), len(board.content)
     whole = get(api, "tasks/" + ids[0])["task"]
     assert whole["snooze"]["why"] == note, "the task's own view keeps the note whole"
+
+
+def test_a_short_snooze_note_reaches_the_brief_row_unchanged(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Snoozed", "x", "human:ana", lint=False)["id"]
+        H.task_snooze(c, "human:ana", tid, "Back after the release", H.shift(H.now(), days=5))
+    rows = api.get("/api/v2/tasks?brief=1&snoozed=only", headers=headers()).json()["tasks"]
+    assert [r["turn"]["line"] for r in rows if r["id"] == tid] == ["Back after the release"]

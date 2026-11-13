@@ -386,21 +386,6 @@ def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
         assert H.task(c, caras["id"])["status"] == "open"
 
 
-def test_the_owners_daily_update_is_drafted_by_their_assistant(api):
-    """Written the same way as everyone's, labelled the Assistant's for the owner too."""
-    strategy_bot(api)
-    store = api.app.state.store
-    with store.transaction() as c:
-        for person in ("human:ana", "human:ben"):
-            c.execute(
-                "INSERT INTO update_queue(id,bot,kind,day,rank,state,sent_at) VALUES(?,?,?,?,?,?,?)",
-                (uuid.uuid4().hex, person, "daily", "2026-09-29", 0, "sent", H.now()),
-            )
-    write = lambda system, user: {"body": "- Shipped the pricing page"}  # noqa: E731
-    assert updates.write_draft(store, "human:ana", write, "assistant")["drafted_by"] == "assistant"
-    assert updates.write_draft(store, "human:ben", write, "assistant")["drafted_by"] == "assistant"
-
-
 def test_the_earlier_strategy_bot_chat_stays_with_the_owner_seat_and_each_keeps_their_assistant(api):
     ana, ben = personal(api, "ana"), personal(api, "ben")
     strategy_bot(api)

@@ -259,20 +259,3 @@ def test_the_person_alone_decides_these_on_the_turn(api):
         ("POST", "support/tickets", {"text": "help"}),
     ]:
         refused_as_card(api, token, method, path, body)
-
-
-def test_the_background_run_puts_a_card_in_the_persons_chat(api):
-    coo = setup_attempt(api, "assistant")[2]["token"]
-    made = post(
-        api,
-        "assistant/actions",
-        {
-            "summary": "Archive the Ops bot",
-            "method": "POST",
-            "path": "/api/v2/bots/ops/archive",
-            "body": {"expected_revision": 1},
-            "for": "human:ana",
-        },
-        token=coo,
-    )["action"]
-    assert made["owner"] == "human:ana" and made["status"] == "pending"

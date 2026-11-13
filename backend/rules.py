@@ -329,7 +329,8 @@ def _pr_decision(conn, event, target, refs, conv):
 
 def _waits_on_checks(conn, task):
     """Whether the owner is the one to act on the task now: it is open, and what it waits on first is not a person or
-    a snooze (backend/waiting_on.py)."""
+    a snooze (backend/waiting_on.py). A snooze the owner bot set itself was already ended by the result
+    (`github.end_own_snooze`), unless the task waits on a person."""
     if task.get("status") != "open":
         return False
     waits = H.task_waits(conn, [task["id"]]).get(task["id"]) or []

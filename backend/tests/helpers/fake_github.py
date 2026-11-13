@@ -31,6 +31,7 @@ class FakeGitHub:
         self.cuts = []  # the releases asked for: (repo, kind, name, sha)
         self.withheld = set()  # permissions Tico's App lacks here ("actions", "contents"): cut_release answers no
         self.release_on_cut = None  # a tag: asking for a release publishes it at once, as a release workflow does
+        self.diffs = {}  # (repo, sha) -> what the PR changes at that commit (pr_diff); each commit its own unless set
         self._fail = {}
         self._shas = (f"{n:040x}" for n in itertools.count(1))
         self._run_ids = itertools.count(1)  # check run ids only grow, as GitHub's do
@@ -62,6 +63,14 @@ class FakeGitHub:
         if pr["queue_state"] in ("queued", "auto_merge"):
             self._remove(pr, "A new commit was pushed")
         return pr["head_sha"]
+
+    def rebase(self, repo, number, head=None):
+        """A new commit on the PR that changes the same lines as the one before (a rebase, or a conflict fixed without
+        changing the PR's own lines): `pr_diff` gives both the same id."""
+        before = self.prs[(repo, number)]["head_sha"]
+        head = self.push(repo, number, head)
+        self.diffs[(repo, head)] = self.diffs.get((repo, before), f"diff-{before}")
+        return head
 
     def set_checks(self, repo, sha, *states, tico=False):
         """The checks on a commit, one per state given: pending, success or failure."""
@@ -114,6 +123,11 @@ class FakeGitHub:
         """The base branch's rules refuse the PR (a required review or check is missing): enqueue answers no with
         `reason` until `rule(repo, number, None)` lifts it."""
         self.prs[(repo, number)]["rule"] = reason
+
+    def mergeable(self, repo, number, state):
+        """What GitHub says of merging the PR into its base branch: MERGEABLE, CONFLICTING or UNKNOWN (still working it
+        out). `enqueue` refuses a conflicting PR and raises while it is unknown."""
+        self.prs[(repo, number)]["mergeable"] = state
 
     def require_merge_ok(self, repo):
         """The repo's ruleset requires `tico/merge-ok` from the company's App."""
@@ -171,6 +185,10 @@ class FakeGitHub:
             return False
         return line.index(commit_sha) <= line.index(release_sha)
 
+    def pr_diff(self, repo, number, sha):
+        self._call("pr_diff", repo, number, sha)
+        return self.diffs.get((repo, sha), f"diff-{sha}")
+
     def ready(self, repo, number):
         self._call("ready", repo, number)
         pr = self.prs.get((repo, number))
@@ -188,6 +206,12 @@ class FakeGitHub:
             return {"ok": False, "how": None, "reason": "Pull request is in draft state"}
         if pr.get("rule"):
             return {"ok": False, "how": None, "reason": pr["rule"]}
+        from backend.item_sources import github as GS
+
+        if pr.get("mergeable") == "CONFLICTING":
+            return {"ok": False, "how": None, "reason": GS.CONFLICTS}
+        if pr.get("mergeable") == "UNKNOWN":
+            raise GitHubError(GS.MERGEABLE_UNKNOWN)
         if repo in self.merge_ok_required and not self.merge_ok_on(repo, head_sha):
             return {"ok": False, "how": None, "reason": 'Required status check "tico/merge-ok" is expected.'}
         pr["queue_state"] = "queued" if self.queue else "auto_merge"

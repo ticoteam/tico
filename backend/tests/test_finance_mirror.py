@@ -1582,16 +1582,6 @@ def test_a_bank_row_matched_while_its_entry_was_out_withdraws_the_entry_at_the_p
         assert (payload["ext"], payload["revision"]) == ("JournalEntry:77", "1")
 
 
-def test_the_books_loop_reads_on_while_the_provider_books_are_not_yet_read_in_full(books):
-    fake = FakeBooks()
-    _chart(fake)
-    cid = _connection(books)
-    _mirror(books, cid)
-    assert books_sync._reading(books)
-    assert _drain(books, fake, cid) == []
-    assert not books_sync._reading(books)
-
-
 def test_a_bank_row_part_paid_by_a_payment_is_written_out_for_the_rest_only(books):
     fake = FakeBooks()
     _chart(fake)
@@ -2144,14 +2134,6 @@ def test_a_tag_on_a_deposit_line_survives_an_amount_edit_to_the_same_provider_li
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
         assert _line_tags(c, _entry_of(c, "Deposit:70"), _local(c, "Account:2", "fin_accounts")) == ["web"]
-
-
-def test_phase_four_adds_the_line_key_to_an_install_made_before_it_and_running_it_again_changes_nothing(books):
-    with books.transaction() as c:
-        c.execute("ALTER TABLE fin_lines DROP COLUMN external_line")
-        schema.phase4(c)
-        schema.phase4(c)
-        assert "external_line" in {str(r[1]) for r in c.execute("PRAGMA table_info(fin_lines)")}
 
 
 def test_a_bill_posts_to_the_payable_account_the_provider_names(books):

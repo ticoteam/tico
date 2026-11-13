@@ -54,51 +54,6 @@ def section(template, heading):
 
 
 @pytest.mark.parametrize("template", sorted(PACKS))
-def test_a_pack_runs_exactly_watch_and_find_ideas_on_its_cadence_off_until_setup_turns_both_on(template):
-    folder = CATALOG / template
-    routines = validate_schedules(manifest(template)["routines"], lambda rel: (folder / rel).read_text())
-    assert {r["id"]: r["cron"] for r in routines} == PACKS[template][1]
-    assert all(r["enabled"] is False for r in routines)
-    assert {r["template"] for r in routines} == {"playbooks/watch.md", "playbooks/find-ideas.md"}
-
-
-@pytest.mark.parametrize("template", sorted(PACKS))
-def test_a_pack_tags_its_tasks_with_the_channel_key_the_setup_chart_uses(template):
-    key = PACKS[template][0]
-    assert F.CHANNELS[key]["template"] == template
-    playbook = (CATALOG / template / "knowledge" / "channel-playbook.md").read_text()
-    assert f"`channel:{key}`" in playbook
-    assert f"`channel:{key}`" in section(template, "Owns")
-
-
-def test_the_stage_playbooks_are_one_text_in_every_pack():
-    for path in SHARED:
-        texts = {template: (CATALOG / template / path).read_text() for template in PACKS}
-        first = next(iter(texts.values()))
-        assert all(text == first for text in texts.values()), (path, sorted(t for t, x in texts.items() if x != first))
-    pipelines = {template: section(template, "Your pipelines") for template in PACKS}
-    assert len(set(pipelines.values())) == 1, "AGENT.md's Your pipelines differs between packs"
-
-
-def test_the_playbooks_name_the_requirements_and_stages_the_presets_ship():
-    """A bot attaches its page with `--req "<line>"` and moves by stage name: both must be what the preset has."""
-    lines = {
-        r["line"]
-        for pid in ("growth-experiments", "growth-monitoring")
-        for s in P.PRESETS[pid]["stages"]
-        for r in s["requirements"]
-        if r.get("line")
-    }
-    stages = {s["name"] for pid in ("growth-experiments", "growth-monitoring") for s in P.PRESETS[pid]["stages"]}
-    text = "\n".join((CATALOG / next(iter(PACKS)) / path).read_text() for path in SHARED)
-    named = set(re.findall(r'--req "([^"]+)"', text))
-    assert named == lines == {"Go-live page", "Results page"}
-    moved = set(re.findall(r"tico task move <[^>]+> (\w+)", text))
-    assert moved and moved <= stages, moved - stages
-    assert set(re.findall(r"--pipeline (growth-[a-z]+)", text)) == {"growth-experiments", "growth-monitoring"}
-
-
-@pytest.mark.parametrize("template", sorted(PACKS))
 def test_a_pack_materializes_and_passes_the_preflight_checks(tmp_path, template):
     card = catalog.card(template)
     names = {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Tico"}

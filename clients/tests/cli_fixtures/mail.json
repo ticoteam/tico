@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "mail"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "mail",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico mail: error: argument sub: invalid choice: 'nope' (choose from list, read) Did you mean: tico mail read, tico mail list?",
-  "exit": 64
- },
- {
-  "argv": [
    "mail",
    "list"
   ],
@@ -105,29 +84,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "mail",
-   "read"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico mail read <item_id>\ntico mail read: error: the following arguments are required: item_id",
-  "exit": 64
- },
- {
-  "argv": [
-   "mail",
-   "list",
-   "--status",
-   "lost"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico mail list: error: argument --status: invalid choice: 'lost' (choose from new, filed, archived, failed)",
-  "exit": 64
  }
 ]

@@ -90,8 +90,14 @@ def register(
             ),
         )
         H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer, "github_asked": github_asked})
+        # A cloud machine still on its way (place_now `waiting`) gets the bot when it enrolls, then the repository.
+        first = (
+            f"{computer} to start and get the repository"
+            if placed.get("waiting")
+            else f"{computer} to get the repository"
+        )
         message = (
-            f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
+            f"Waiting for {first}. Tico finishes going live by itself "
             f"when {computer} has it; nothing needs to run again"
         )
         if not github_asked:
@@ -267,20 +273,21 @@ def register(
                             409,
                         )
             done = finish_go_live(c, who, bot, body.setup)
+            note = "The computer is building its repository; queued work starts when it is ready" if building else ""
+            if placed.get("waiting"):
+                # Its cloud machine is on its way: the bot is live, and its work starts once that computer is up.
+                note = f"{placed['computer']} is starting; its work starts once it is up" + (
+                    " and has built its repository" if building else ""
+                )
             return {
                 "bot": bot,
                 "state": H.bot(c, bot)["state"],
                 "computer": placed["computer"],
                 "placed": placed["placed"],
                 **done,
-                **(
-                    {
-                        "building": True,
-                        "note": "The computer is building its repository; queued work starts when it is ready",
-                    }
-                    if building
-                    else {}
-                ),
+                **({"building": True} if building else {}),
+                **({"waiting_for_computer": True} if placed.get("waiting") else {}),
+                **({"note": note} if note else {}),
             }
 
         result = mutate(request, body, work)

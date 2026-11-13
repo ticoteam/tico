@@ -155,8 +155,8 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
-      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'rd-co', 'welcome', 'updates', 'tasks', 'automations', 'listening', 'tools',
-        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'threads',
+      assert.deepEqual(await railKeys(page), ['side-update', 'welcome', 'tasks', 'calendar', 'threads', 'updates',
+        'overview', 'rd-co', 'library', 'rd-lib', 'nav-pins',
         'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
       for (const helper of ['b:mail-sorter', 'b:botops', 'b:librarian'])
@@ -170,6 +170,8 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
         assert.ok(await hashSoon(page, to), `${tag}: ${from} lands on ${to}`);
       }
       await page.locator('#au-root.au-lst').waitFor({state: 'attached'});
+      // #au-root can still be the one #/automations drew a step before: wait for the row, not just the page.
+      await page.locator('#side a[data-nav="listening"].cur').waitFor({state: 'attached', timeout: 5000}).catch(() => {});
       assert.equal(await page.locator('#side a[data-nav="listening"].cur').count(), 1, tag + ': Listening is current');
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 0, tag + ': and Automations is not');
       await page.evaluate(() => { location.hash = '#/strategy/market'; });
@@ -211,7 +213,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Listening', 'Tools', 'Library', 'Docs', 'Files', 'Skills', 'Meetings', 'Contacts', 'Rules'], tag + ': the rail, with no Strategy Owner entry');
+      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Updates', 'Company', 'Strategy', 'Growth', 'Automations', 'Listening', 'Rules', 'Library', 'Docs', 'Files', 'Skills', 'Tools', 'Meetings'], tag + ': the rail, with no Strategy Owner entry');
       assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');

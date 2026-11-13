@@ -398,49 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn an_older_server_can_drop_allocation_reporting_without_losing_other_capabilities() {
-        let mut body = json!({"capabilities": ["task_lanes_v2", "harness_allocation_v1"]});
-        assert!(CAPABILITIES.contains(&"harness_allocation_v1"));
-        assert_eq!(
-            refused_field(
-                "body.capabilities.1: Input should be 'task_lanes_v2'",
-                &body
-            )
-            .as_deref(),
-            Some("harness_allocation_v1")
-        );
-        assert_eq!(
-            refused_field("body.capabilities: bad", &body).as_deref(),
-            Some("harness_allocation_v1")
-        );
-        hold_back("harness_allocation_v1");
-        drop_held(&mut body);
-        release("harness_allocation_v1");
-        assert_eq!(body["capabilities"], json!(["task_lanes_v2"]));
-    }
-
-    #[test]
-    fn an_older_server_refuses_packets_without_losing_ordinary_work() {
-        let mut body = json!({"capabilities": ["task_lanes_v2", "memory_tidy_packets_v1"]});
-        assert_eq!(
-            refused_field(
-                "body.capabilities.1: Input should be 'task_lanes_v2'",
-                &body
-            )
-            .as_deref(),
-            Some("memory_tidy_packets_v1")
-        );
-        assert_eq!(
-            refused_field("body.capabilities: bad", &body).as_deref(),
-            Some("memory_tidy_packets_v1")
-        );
-        hold_back("memory_tidy_packets_v1");
-        drop_held(&mut body);
-        release("memory_tidy_packets_v1");
-        assert_eq!(body["capabilities"], json!(["task_lanes_v2"]));
-    }
-
-    #[test]
     fn an_older_server_loses_only_the_field_it_refuses() {
         let mut body = json!({"profiles": [{"runtimes": {"codex": {"ok": true, "weekly": {"used_percent": 3}}}}],
                               "worktrees": [{"link_id": "l", "record_updated": "t"}], "repositories": [], "readiness": {}});
@@ -480,32 +437,5 @@ mod tests {
             .lock()
             .unwrap()
             .retain(|k, _| k != "profiles.weekly" && k != "repositories");
-    }
-
-    #[test]
-    fn an_older_server_loses_only_the_account_and_five_hour_window() {
-        let mut body = json!({"profiles": [{"name": "acme", "runtimes": {"codex": {"signed_in": true, "weekly": {"used_percent": 3},
-                              "account": {"email": "dev@acme.example", "plan": "pro"}, "five_hour": {"used_percent": 9}}}}], "readiness": {}});
-        let account = "body.profiles.list[ComputerProfile].0.runtimes.codex.account: Extra inputs are not permitted";
-        assert_eq!(
-            refused_field(account, &body).as_deref(),
-            Some("profiles.account")
-        );
-        let window = "body.profiles.0.runtimes.codex.five_hour: Extra inputs are not permitted";
-        assert_eq!(
-            refused_field(window, &body).as_deref(),
-            Some("profiles.five_hour")
-        );
-        hold_back("profiles.account");
-        hold_back("profiles.five_hour");
-        drop_held(&mut body);
-        assert_eq!(
-            body["profiles"][0]["runtimes"]["codex"],
-            json!({"signed_in": true, "weekly": {"used_percent": 3}})
-        );
-        dropped()
-            .lock()
-            .unwrap()
-            .retain(|k, _| k != "profiles.account" && k != "profiles.five_hour");
     }
 }

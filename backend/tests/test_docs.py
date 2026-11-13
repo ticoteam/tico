@@ -43,6 +43,28 @@ def test_create_edit_conflict_history_and_restore(api):
         call(api, "POST", "docs", {"title": "x", "path": bad}, expected=422)
 
 
+def every_page(api, **params):
+    seen, cursor = [], ""
+    while True:
+        page = call(api, "GET", "docs", params={**params, "limit": 1, "cursor": cursor})
+        seen += [d["id"] for d in page["docs"]]
+        cursor = page["next_cursor"]
+        if not cursor or len(seen) > 10:
+            return seen
+
+
+def test_paging_docs_one_at_a_time_shows_each_doc_once(api):
+    live = [
+        make(api, "x", path=p)["id"] for p in ("straße.md", "Éclair.md", "éclair.md", "😀" * 300, "😁.md", "zeta.md")
+    ]
+    assert sorted(every_page(api)) == sorted(live)  # no repeat after ß or É, and a 300-emoji path's cursor is accepted
+    ties = []
+    for _ in range(2):  # archived docs may share a path
+        doc = make(api, "x", path="old.md")
+        ties.append(edit(api, doc, archived=True)["doc"]["id"])
+    assert sorted(every_page(api, archived=True)) == sorted(ties)
+
+
 def test_a_doc_body_reads_back_exactly_as_sent_while_its_title_and_path_trim(api):
     body = "    indented code on line 1\n\nText.\n\n"  # leading indentation, a final newline and a blank line
     doc = call(api, "POST", "docs", {"title": "  Runbook  ", "path": " ops/runbook.md ", "body": body})["doc"]

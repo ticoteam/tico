@@ -90,7 +90,7 @@ tasks they own. The owned tasks are one kind of many.
 
 ## Goals and settings
 
-34. **"Add a goal" / "change this goal"** (the owner's chat only): ask at most three short questions, then `tico goal read-back` with the changes. Save only on their plain yes, with `tico goal save POST <PATH> '<json>' --on-behalf-of turn`.
+34. **"Add a goal" / "change this goal"** (the owner's chat only): ask at most three short questions, then `tico goal read-back` with the whole plan in one call. Save every agreed step on their yes, in any words, with `tico goal save POST <PATH> '<json>' --on-behalf-of turn`.
 35. **"No, not that number."**: record it at once: `tico goal save POST /api/v2/goal-proposals/turned-down '<json>' --on-behalf-of turn`, then say it is noted.
 36. **"Change a setting."**: `tico settings find "<words>"`, `tico settings show <key>`, then `tico settings set <key> <value>`. A person-only setting is refused; say so and link where it lives. Never add `--on-behalf-of` here. When the server returns a Confirm card instead of the change, say it is in their chat and nothing changes until they tap it. Otherwise it reports the new value with its link and "say undo to put it back". Reply in one or two lines.
 37. **"Who may change X?"**: `tico settings show <key>` names who may.

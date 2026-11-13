@@ -1,11 +1,13 @@
-//! Read-only AX transport, scoped to a Meet document in an allowlisted browser. Never uses
-//! AX actions, screenshots, keyboard shortcuts or browser automation. The one write is
-//! Chromium's `AXManualAccessibility` switch on the browser app, which makes it build the
-//! page's AX tree (it stays empty for assistive clients otherwise). AXValue is read only for
+//! Read-only AX transport, scoped to a meeting document (Google Meet, or Microsoft Teams on the
+//! web) in an allowlisted browser, read by the adapter whose address it has. Never uses AX
+//! actions, screenshots, keyboard shortcuts or browser automation. The one write is Chromium's
+//! `AXManualAccessibility` switch on the browser app, which makes it build the page's AX tree
+//! (it stays empty for assistive clients otherwise; Chromium can answer the switch with an
+//! error yet build the tree, and the result is never relied on). AXValue is read only for
 //! static text inside a participant row or a video tile's name container.
 use super::{
-    Batch, MeetingAdapter, Observation, POLL_MS, Samples,
-    meet::{self, GoogleMeet, Node},
+    ADAPTERS, Batch, MeetingAdapter, Observation, POLL_MS, Samples,
+    meet::Node,
     watch_log::{PollInfo, WatchLog},
 };
 use crate::store::Store;
@@ -74,7 +76,7 @@ const CHROMIUM: &[&str] = &[
     "com.microsoft.edgemac",
     "com.brave.Browser",
 ];
-/// Until a Meet document is found, look this rarely; a found meeting is read every [`POLL_MS`].
+/// Until a meeting document shows a call, look this rarely; a call is read every [`POLL_MS`].
 const FIND_MS: u64 = 2000;
 /// Evidence is written in batches this far apart, and once more when the watch ends.
 const FLUSH_MS: u64 = 1000;
@@ -86,7 +88,7 @@ static PERMISSION: AtomicBool = AtomicBool::new(false);
 pub fn permission_pending() -> bool {
     PERMISSION.load(Ordering::Acquire)
 }
-/// Whether the recorder may read Meet's accessibility tree.
+/// Whether the recorder may read meeting pages' accessibility tree.
 pub fn access() -> Option<bool> {
     Some(unsafe { AXIsProcessTrusted() })
 }
@@ -245,7 +247,7 @@ fn browser_windows(bundles: &mut BTreeMap<i32, Option<String>>) -> Vec<(i32, boo
 }
 
 /// The budget bounds work even when a browser hangs or returns a very large accessibility
-/// tree. Discovery only reads roles/URLs; name/state labels are read inside the Meet document.
+/// tree. Discovery only reads roles/URLs; name/state labels are read inside the meeting document.
 struct Budget {
     until: Instant,
     left: usize,
@@ -260,15 +262,22 @@ impl Budget {
         true
     }
 }
-fn document(element: &CFType, depth: usize, budget: &mut Budget) -> Option<CFType> {
+/// The window's page and the meeting app it shows.
+fn document(
+    element: &CFType,
+    depth: usize,
+    budget: &mut Budget,
+) -> Option<(CFType, &'static dyn MeetingAdapter)> {
     if depth > 12 || !budget.take() {
         return None;
     }
     let role = text(element, "AXRole");
     if role == "AXWebArea" {
-        return GoogleMeet
-            .detect_window("", &url(element))
-            .then(|| element.clone());
+        let url = url(element);
+        return ADAPTERS
+            .iter()
+            .find(|meeting| meeting.detect_window("", &url))
+            .map(|meeting| (element.clone(), *meeting));
     }
     if matches!(role.as_str(), "AXTextArea" | "AXTextField") {
         return None;
@@ -281,6 +290,7 @@ fn document(element: &CFType, depth: usize, budget: &mut Budget) -> Option<CFTyp
     None
 }
 fn project(
+    app: &dyn MeetingAdapter,
     element: &CFType,
     depth: usize,
     name_container: bool,
@@ -318,19 +328,20 @@ fn project(
         .iter()
         .filter_map(|p| p.downcast::<CFString>())
         .map(|s| s.to_string())
-        .filter(|s| meet::kept_class(s))
+        .filter(|s| app.kept_class(s))
         .collect();
     let name_container = name_container
-        || meet::name_container(&Node {
+        || app.name_container(&Node {
+            role: role.clone(),
             classes: classes.clone(),
             ..Default::default()
         });
     let mut label = string(1);
-    if meet::private_branch(&role, &label) {
+    if app.private_branch(&role, &label) {
         return None;
     }
     let description = string(2);
-    if meet::private_branch(&role, &description) {
+    if app.private_branch(&role, &description) {
         return None;
     }
     if label.is_empty() {
@@ -342,7 +353,7 @@ fn project(
     } else {
         array(&values[4])
             .iter()
-            .filter_map(|child| project(child, depth + 1, name_container, budget))
+            .filter_map(|child| project(app, child, depth + 1, name_container, budget))
             .collect()
     };
     Some(Node {
@@ -366,8 +377,10 @@ struct Discovery {
 struct Poll {
     /// A supported browser is running but Accessibility is not allowed.
     denied: bool,
-    /// A Meet document was found, so the next poll comes at the full rate.
+    /// A meeting document was found.
     found: bool,
+    /// It shows a call, so the next poll comes at the full rate.
+    fast: bool,
     observed: Observation,
     info: PollInfo,
 }
@@ -453,6 +466,8 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
         canceled,
     };
     let mut found = vec![];
+    let mut seen = false;
+    let mut call = None;
     let mut info = PollInfo::default();
     for (pid, chromium) in browsers {
         let raw = unsafe { AXUIElementCreateApplication(pid) };
@@ -463,12 +478,15 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
         unsafe {
             AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.025);
         }
-        // Only a window titled like Meet is walked; other tabs and windows are never read.
+        // Only a window titled like a meeting app is walked; other windows are never read.
         let windows: Vec<_> = elements(&app, "AXWindows")
             .into_iter()
-            .filter(|w| meet::window_title(&text(w, "AXTitle")))
+            .filter(|w| {
+                let title = text(w, "AXTitle");
+                ADAPTERS.iter().any(|meeting| meeting.window_title(&title))
+            })
             .collect();
-        // Chromium page accessibility slows the browser, so only for a window showing Meet.
+        // Chromium page accessibility slows the browser, so only for a meeting app's window.
         let browser = discovery
             .bundles
             .get(&pid)
@@ -480,19 +498,23 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
         }
         info.windows += windows.len();
         for window in &windows {
-            let Some(document) = document(window, 0, &mut budget) else {
+            let Some((document, meeting)) = document(window, 0, &mut budget) else {
                 continue;
             };
             let nodes = children(&document)
                 .iter()
-                .filter_map(|e| project(e, 0, false, &mut budget))
+                .filter_map(|e| project(meeting, e, 0, false, &mut budget))
                 .collect();
             // An incomplete tree cannot safely say that a speaker stopped or a second speaker
             // was absent. Close the previous evidence rather than applying a partial result.
             info.browser.clone_from(&browser);
+            info.app = meeting.app();
+            seen = true;
             if budget.left == 0 || Instant::now() >= budget.until {
                 return Poll {
                     found: true,
+                    // Full rate only where the document itself is the call (Meet's address).
+                    fast: meeting.in_call(&Observation::default()),
                     info: PollInfo {
                         found: true,
                         nodes: 1800 - budget.left,
@@ -502,18 +524,25 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
                     ..Default::default()
                 };
             }
-            found.push(GoogleMeet.observe(&Node {
+            let observed = meeting.observe(&Node {
                 role: "AXGroup".into(),
                 children: nodes,
                 ..Default::default()
-            }));
+            });
+            // A Teams page without a call (chat, calendar) is no meeting to name.
+            if meeting.in_call(&observed) {
+                found.push(observed);
+                call = Some(meeting.app());
+            }
         }
     }
-    info.found = !found.is_empty();
+    info.found = seen;
+    info.app = call.unwrap_or(info.app);
     info.nodes = 1800 - budget.left;
     Poll {
         denied: false,
-        found: !found.is_empty(),
+        found: seen,
+        fast: !found.is_empty(),
         info,
         // Two meetings open at once have no safe audio-to-window association.
         observed: if found.len() == 1 {
@@ -594,6 +623,13 @@ impl Watch {
                     for line in log.poll(&polled.info, &polled.observed, &intervals, at) {
                         crate::diag!("{line}");
                     }
+                    // A truncated read has no names; the last full one stands until it is stale.
+                    if polled.found
+                        && !(polled.observed.participants.is_empty()
+                            && polled.observed.self_names.is_empty())
+                    {
+                        super::note_present(&id, &polled.observed);
+                    }
                     for name in &polled.observed.participants {
                         if participants.insert(name.clone()) {
                             batch.people.push((name.clone(), false));
@@ -609,7 +645,7 @@ impl Watch {
                         flush(&store, &id, &mut batch);
                         flushed = Instant::now();
                     }
-                    let every = if polled.found { POLL_MS } else { FIND_MS };
+                    let every = if polled.fast { POLL_MS } else { FIND_MS };
                     thread::park_timeout(
                         Duration::from_millis(every).saturating_sub(tick.elapsed()),
                     );

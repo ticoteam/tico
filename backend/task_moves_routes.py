@@ -25,6 +25,8 @@ from . import strategy_merge as _strategy_merge
 from . import task_asks as _task_asks
 from . import task_caps as _task_caps
 from . import task_rule_gate as _task_rule_gate
+from . import stage_rules as _stage_rules
+from . import task_engine as _task_engine
 from .store import H as _H
 from .store import Problem
 
@@ -38,6 +40,8 @@ strategy_merge: Any = _strategy_merge
 task_asks: Any = _task_asks
 task_caps: Any = _task_caps
 task_rule_gate: Any = _task_rule_gate
+stage_rules: Any = _stage_rules
+task_engine: Any = _task_engine
 
 # A snooze's bare date is the start of that day here, as the bot tools say ("the start of that day, Pacific").
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -291,7 +295,16 @@ def register(
                 return ask_ingest.reply(gate)  # the bot keeps the task: its ask joins one the person has
         elif ingest:
             ask_ingest.skipped(c, ingest, "not_applied")
-        H.task_reassign(c, who.actor, task_id, target, body.why, body.version, mover=mover(c, who) or None)
+        H.task_reassign(
+            c,
+            who.actor,
+            task_id,
+            target,
+            body.why,
+            body.version,
+            mover=mover(c, who) or None,
+            set_anyway=bool(getattr(body, "set_anyway", False)),
+        )
         task_caps.record(c, task_id, who.actor, target)
         return ask_ingest.reply(gate) if gate else None
 
@@ -347,8 +360,36 @@ def register(
     @app.post("/api/v2/tasks/{tid}/snooze")
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
         """Set a task aside in its stage until a date, or with none (On ice)."""
-        parse_until(body.until)  # a bad date is refused before anything is checked
+        until = parse_until(body.until)  # a bad date is refused before anything is checked
+        snooze_rules(request, tid, body, until)
         return checked(request, tid, body, "task_snooze")
+
+    def snooze_rules(request: Request, tid: str, body: Any, until: Any) -> None:
+        """The stage rules on a bot's snooze with a Jev question (Snooze only for a real wait), asked once for all of
+        them, outside the store's write (stage_rules.judge_snooze). A Block is written on the task's history, naming
+        the rule, and the snooze is refused with its reason. Jev off or failing lets the snooze go."""
+        caller = request.state.identity
+        if not H.is_bot(caller.actor) or getattr(body, "on_behalf_of", None):
+            return  # a person's snooze, or one made for a person, is not judged
+        with store.read() as c:
+            try:
+                task_id = auth.resolve_task(c, caller, tid)
+                row = auth.task(c, caller, task_id)
+            except Problem:
+                return  # the write itself says what is wrong
+            row = H.task(c, task_id) or row
+            if row.get("status") != "open":
+                return
+            found, asked = stage_rules.snooze_rules(c, row, caller.actor, body.why or "", until)
+        found = found or stage_rules.ask_snooze(row, body.why or "", until, asked, store=store)
+        if not found:
+            return
+        rule, line = found
+        with store.transaction() as c:
+            stage_rules.record(c, task_id, rule, line, caller.actor, data={"why": body.why or "", "until": until or ""})
+        # As the in-write refusal does: the bot is told what to do instead (an ask, or a sub-task), at this version.
+        extra = {"next": task_engine._then(row, "ask", "file"), "version": row.get("version")}
+        raise Problem("task_stage_rule", task_engine.refusal_line(rule, line), 409, extra=extra)
 
     def unsnooze_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         H.task_unsnooze(c, who.actor, task_id, task_rule_gate.warn_on(gate, body.why))

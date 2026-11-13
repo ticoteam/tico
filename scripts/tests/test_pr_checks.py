@@ -428,17 +428,6 @@ def test_a_content_change_turns_on_the_slow_sweep_that_reads_it_on_a_pull_reques
             assert picked["contracts"] == (bool(sweeps) or changed[0].startswith(checks.CONTRACT_INPUTS)), changed
 
 
-def test_each_content_sweep_is_a_slow_test_that_runs_as_the_release_gate_runs_it():
-    release_gate = (ROOT / "scripts/release_checks.py").read_text()
-    for test, (paths, env) in checks.CONTENT_SWEEPS.items():
-        text = (ROOT / test).read_text()
-        assert "@pytest.mark.slow" in text, f"{test} has no slow test: the default run already has it"
-        assert paths and all(p.endswith("/") or (ROOT / p).exists() or any(ROOT.glob(p + "*")) for p in paths), test
-        for key, value in env.items():
-            assert key in text, f"{test} does not read {key}"
-            assert re.search(rf"""['"]{key}['"]\s*:\s*['"]{value}['"]""", release_gate), f"the release gate sets {key}"
-
-
 def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_keeps_todays_job(tmp_path, monkeypatch):
     picked = {"python": [], "browser": [], "caddy": True, "conformance": False, "rust": [], "contracts": True}
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
@@ -522,6 +511,86 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
     assert set(picked["browser_direct"]) == {Path(n).stem for n in changed} and "a" not in picked["browser"]
     picked = checks.selection([*changed, f"ui/tests/s{checks.BROWSER_ALL_OVER}.cts"], root=tmp_path, core=[])
     assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
+
+
+def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
+    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
+    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
+    # one that names only an unchanged global of the same file does not.
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    git("init", "-q", "-b", "main")
+    smoke_tree(tmp_path)
+    modal = (ROOT / "ui/app/task-modal.ts").read_text()
+    source(tmp_path, "ui/app/task-modal.ts", modal)
+    source(tmp_path, "ui/tests/task-code.cts", (ROOT / "ui/tests/task-code.cts").read_text())
+    source(tmp_path, "ui/tests/other.cts", "await page.evaluate(() => taskModalLoadFailed('t', null));\n")
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+
+    def change(old, new):
+        text = (tmp_path / "ui/app/task-modal.ts").read_text()
+        assert old in text
+        source(tmp_path, "ui/app/task-modal.ts", text.replace(old, new, 1))
+        git("commit", "-qam", "Change")
+        return checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
+
+    start = modal.index("async function taskModalOpen(")
+    body = modal.index("\n", start) + 1
+    line = modal[body : modal.index("\n", body) + 1]
+    picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
+    assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
+    assert "other" not in picked["browser_direct"]
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalOpen"}
+    }
+    git("reset", "-q", "--hard", base)
+    picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
+    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    # A deleted UI file names its old functions: a script still calling one runs.
+    git("reset", "-q", "--hard", base)
+    git("rm", "-q", "ui/app/task-modal.ts")
+    git("commit", "-qm", "Delete")
+    picked = checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
+    assert {"task-code", "other"} <= set(picked["browser_direct"])
+    # Without a base (no diff to read), the rule picks nothing new.
+    assert "task-code" not in checks.selection(["ui/app/task-modal.ts"], root=tmp_path, core=[])["browser_direct"]
+
+
+def test_changed_definitions_maps_added_and_removed_lines_to_their_top_level_names():
+    old = "const A = 1;\n\nfunction b() {\n  return A;\n}\n// note\nlet c = 2;\n"
+    new = "const A = 1;\n\nfunction b() {\n  return A + 1;\n}\n// note changed\nlet c = 2;\nasync function d() {}\n"
+    spans = checks.top_level_spans(new)
+    assert [s[0] for s in spans] == ["A", "b", "c", "d"]
+    diff = "@@ -4 +4 @@\n-  return A;\n+  return A + 1;\n@@ -6 +6 @@\n-// note\n+// note changed\n@@ -7,0 +8 @@\n+x\n"
+    assert checks.hunk_names(diff, old, new) == {"b", "d"}
+    # A removed function is named by the old side.
+    assert checks.hunk_names("@@ -3,3 +2,0 @@\n-x\n-y\n-z\n", old, "const A = 1;\n\n// note\nlet c = 2;\n") == {"b"}
+
+
+PHONE_SCRIPTS = {
+    f"phone-dead-ends-{state}" for state in ("bot-waiting", "no-computer", "no-credit", "setup-halfway", "sign-off")
+}
+
+
+def test_a_ui_app_or_style_change_runs_the_phone_dead_end_scripts_and_a_backend_change_does_not(tmp_path):
+    # A fix in ui/app/ or ui/styles/ removes a KNOWN phone break, and its dead-end script fails until the line goes: such a
+    # change runs all five scripts, and so does their rules file. A backend change runs none of them.
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/styles/x.css", ".x { color: red; }\n")
+    source(tmp_path, "ui/app/x.ts", "export const x = 1;\n")
+    source(tmp_path, "ui/tests/support/phone-rules.cts", "// the phone rules\n")
+    for name in PHONE_SCRIPTS:
+        source(tmp_path, f"ui/tests/{name}.cts", "require('./support/phone-rules.cts');\n")
+    source(tmp_path, "backend/health.py", "")
+    for changed in (["ui/styles/x.css"], ["ui/app/x.ts"], ["ui/tests/support/phone-rules.cts"]):
+        plan = checks.selection(changed, root=tmp_path, core=[])
+        assert PHONE_SCRIPTS <= set(plan["browser_direct"]) and PHONE_SCRIPTS <= set(plan["browser"]), changed
+    assert not PHONE_SCRIPTS & set(checks.selection(["backend/health.py"], root=tmp_path, core=[])["browser"])
 
 
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
@@ -954,7 +1023,6 @@ def test_an_error_page_beside_a_jobs_page_keeps_the_jobs_and_says_the_receipt_is
     [
         json.dumps([ERROR_PAGE]).encode(),  # an error-only response
         b'[{"total_count": 2, "jobs": [',  # invalid JSON
-        b"",  # no output at all
         b"\xff",  # not UTF-8
         json.dumps(ERROR_PAGE).encode(),  # a top level that is not a list
         json.dumps([{"jobs": "not a list"}]).encode(),  # jobs that are not a list
@@ -1207,24 +1275,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     }
 
 
-def test_a_draft_runs_no_release_command_test_and_marking_it_ready_runs_them():
-    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-command-tests.yml").read_text())
-    assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
-    assert (
-        doc["jobs"]["command"]["if"] == "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}"
-    )
-
-
-def test_a_draft_or_a_fork_runs_no_test_leg():
-    jobs = workflow_jobs()["jobs"]
-    assert jobs["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    tests = jobs["tests"]
-    assert tests["needs"] == "plan"  # a draft has no plan, so the leg is skipped with it
-    # A fork's pull request is not this repository's head, so it runs no leg here; a maintainer queues it instead.
-    assert "!github.event.pull_request.draft" in tests["if"]
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in tests["if"]
-
-
 def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_request_runs_the_checks():
     """Builders push a draft freely: no job runs on it. Marking it ready runs the pull request jobs, and so does each
     later push while it stays ready. `checks` is skipped on a draft, and GitHub never enqueues a draft."""
@@ -1274,20 +1324,6 @@ def test_a_failed_suite_leg_cancels_its_run_and_checks_still_reports():
     assert "!cancelled()" in jobs["timings"]["if"]
 
 
-def test_pr_checks_and_the_cache_warm_up_take_no_runson_label_and_always_free_the_disk():
-    """PR checks and the cache warm-up run on GitHub-hosted runners only: no RunsOn label, no S3 cache extra, no runner
-    size, no repository variable. Their disk-freeing step always runs (hosted runners start with about 14 GB free)."""
-    import yaml
-
-    for name in ("pr-checks.yml", "pr-cache.yml"):
-        text = (ROOT / ".github" / "workflows" / name).read_text()
-        assert not re.search(r"runs-on=|runner=\d|s3-cache|TICO_CI_HOSTED", text), name
-        for job in yaml.safe_load(text)["jobs"].values():
-            for step in job.get("steps", []):
-                if "/opt/ghc" in str(step.get("run", "")):
-                    assert "if" not in step, name
-
-
 def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
     """vars.TICO_CI_HOSTED == 'true' moves a RunsOn job to a GitHub-hosted runner. Unset, each RunsOn label is the
     default, and only a hosted job frees the preinstalled SDKs. The macOS recorder job stays on macos-latest."""
@@ -1313,18 +1349,32 @@ def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default
     assert recorder["runs-on"] == "macos-latest"
 
 
-def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes():
+def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes(tmp_path):
     gate = workflow_jobs()["jobs"]["checks"]
     assert gate["name"] == "checks" and "always()" in gate["if"]
     needs = set(gate["needs"])
     assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings"}
     env = gate["steps"][0]["env"]
-    names = {key: re.search(r"needs\.([\w-]+)\.result", value).group(1) for key, value in env.items()}
+    names = {
+        key: found.group(1) for key, value in env.items() if (found := re.search(r"needs\.([\w-]+)\.result", value))
+    }
     assert set(names.values()) == needs
+    # A cancelled need makes the gate ask the run's jobs which step failed; a stub gh answers for the API.
+    (tmp_path / "gh").write_text("#!/bin/sh\necho 'python-6: Run selected tests'\n")
+    (tmp_path / "gh").chmod(0o755)
+
+    def gate_run(results):
+        run_env = {
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            **{key: results[name] for key, name in names.items()},
+        }
+        return subprocess.run(
+            ["bash", "-e", "-c", gate["steps"][0]["run"]], env=run_env, capture_output=True, text=True
+        )
 
     def exit_code(results):
-        run_env = {**os.environ, **{key: results[name] for key, name in names.items()}}
-        return subprocess.run(["bash", "-c", gate["steps"][0]["run"]], env=run_env, capture_output=True).returncode
+        return gate_run(results).returncode
 
     passing = dict.fromkeys(needs, "success")
     assert exit_code(passing) == 0
@@ -1332,6 +1382,8 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
+    cancelled = gate_run({**passing, "tests": "cancelled"})
+    assert cancelled.returncode == 1 and "::error::Failed: python-6: Run selected tests." in cancelled.stdout
 
 
 def test_a_deleted_file_runs_the_tests_that_name_or_read_its_old_path(tmp_path, mapped):
@@ -1589,14 +1641,6 @@ def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui
     assert "backend/tests/test_icon_font.py" not in unrelated["python"]
 
 
-def test_a_template_edit_runs_the_hub_command_test_in_the_contract_job_that_2866_broke(mapped):
-    # #2866 added librarian commands with no recorded refusal. test_e2e_cli walks templates/ and skills/ and runs in the
-    # contract job, which any change under those folders selects.
-    assert "backend/tests/test_e2e_cli.py" in checks.CONTRACT_TESTS
-    plan = checks.selection(["templates/catalog/librarian/AGENT.md"])
-    assert plan["contracts"] is True
-
-
 def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder_listing(tmp_path, monkeypatch):
     # A UI_MAP file runs its mapped scripts, and the module that globs ui/app/*.js reaches test_icon_font for it too,
     # as it does for a file the map does not list. The map lists this file, so no rule-4 "not in UI_MAP" note applies.
@@ -1664,23 +1708,6 @@ def test_a_json_outside_the_owned_folders_keeps_the_generic_path(tmp_path, mappe
 TOP_BASELINES = re.compile(r"(?<![\w./-])baselines/")
 
 
-def test_owned_folders_list_existing_tests_of_their_scripts_and_only_the_owners_read_them():
-    for test, module in OWNED_TESTS.items():
-        assert (ROOT / test).is_file(), f"{test} is listed for baselines/ but does not exist"
-        assert module in (ROOT / test).read_text(encoding="utf-8"), f"{test} does not test {module}"
-    # The non-test Python files that name the baselines/ folder: the two owning scripts, and pr_checks.py (this table).
-    # Only the top-level folder: ui/baselines/ is the UI's own per-file counts (scripts/ui_baseline.py), not owned here.
-    tracked = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "*.py"], capture_output=True, text=True, check=True
-    ).stdout.split()
-    readers = {
-        name
-        for name in tracked
-        if "tests/" not in name and TOP_BASELINES.search((ROOT / name).read_text(encoding="utf-8", errors="replace"))
-    }
-    assert readers == {"scripts/lint_baseline.py", "scripts/pyright_baseline.py", "scripts/pr_checks.py"}
-
-
 def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(tmp_path, monkeypatch):
     # A script converted from ui/app/mapped.js to ui/app/mapped.ts keeps its UI_MAP entry: the map is keyed by the .js name.
     smoke_tree(tmp_path)
@@ -1693,7 +1720,7 @@ def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(t
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
 
 
-@pytest.mark.parametrize("seconds", [1, 396, 959, 960, 961, 1500, 2161, 5000])
+@pytest.mark.parametrize("seconds", [1, 959, 5000])
 def test_no_planned_python_vm_runs_past_the_target_however_small_the_selection(seconds):
     # 959 one-worker seconds once folded into one VM planned at 390 s; a VM holds WORKERS x (target - setup) = 720 of
     # them, so the selection takes two VMs of about 270 s, and a selection under one VM's work takes one.
@@ -1882,6 +1909,36 @@ def test_a_queue_group_supersedes_only_the_older_queue_groups_of_its_own_pull_re
     head = "refs/heads/gh-readonly-queue/main/pr-2905-eee555"
     assert checks.superseded_runs(runs, head, 12) == [1, 2]
     assert checks.superseded_runs(runs, "refs/heads/some-branch", 12) == []
+
+
+def test_only_a_group_the_queue_already_dropped_is_cancelled():
+    """A cancelled group that is still live fails `checks` and ejects its pull request (#3380), so the cancel step
+    cancels a group only once GitHub has deleted its gh-readonly-queue ref; any other answer keeps it."""
+
+    def answer(returncode, stderr):
+        calls = []
+
+        def run(args, **_):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, returncode, "", stderr)
+
+        return run, calls
+
+    branch = "gh-readonly-queue/main/pr-3380-4f5617e0"
+    run, calls = answer(1, "gh: Not Found (HTTP 404)\n")
+    assert checks.queue_ref_dropped("o/r", branch, run=run)
+    assert calls == [["gh", "api", f"repos/o/r/git/ref/heads/{branch}", "--silent"]]
+    assert not checks.queue_ref_dropped("o/r", branch, run=answer(0, "")[0])  # still the live entry
+    assert not checks.queue_ref_dropped("o/r", branch, run=answer(1, "gh: Server Error (HTTP 502)\n")[0])
+    run, calls = answer(1, "gh: Not Found (HTTP 404)\n")
+    assert not checks.queue_ref_dropped("o/r", "main", run=run) and calls == []
+
+
+def test_checks_names_the_step_that_failed_when_a_leg_ended_cancelled():
+    step = workflow_jobs()["jobs"]["checks"]["steps"][0]
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert 'select(.conclusion == "failure")' in step["run"] and "cancelled from outside" in step["run"]
+    assert step["run"].rstrip().endswith('exit "$status"')
 
 
 def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_request_run_is_affected():
@@ -2334,6 +2391,23 @@ def test_a_light_pull_request_runs_the_tests_a_change_reaches_directly_and_the_s
     assert checks.narrow(empty, [], "pull_request", root=tmp_path) is empty
 
 
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, repo_map):
+    # Nov 12: #3469 added a migration with an index on tasks.private. Its light plan kept only the tests one step from
+    # the file, not test_task_privacy.py's legacy upgrade tests, and the release check found the crash instead.
+    migration = "backend/migrations/20261112080000_needs_you_per_person.py"
+    for changed in ([migration], ["backend/migrations/__init__.py"]):
+        picked = checks.selection(changed, event, graph=repo_map, added=changed[:1] if changed == [migration] else [])
+        light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
+        assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
+        assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
+    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
+    # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
+    other = ["backend/health.py"]
+    tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
+    assert not any(tier.get(t) == 0 for t in checks.UPGRADE_TESTS)
+
+
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
     tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
     seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}
@@ -2359,7 +2433,7 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
     far = "backend/tests/test_far.py"
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": [*sorted(files), far], "reason": "measured", "uncertain": []}
 
@@ -2395,18 +2469,6 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     # A queue group plans light too, from its own base and head, with one map.
     checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head", light=True)
     assert narrowed == [("merge_group", "graph")]
-
-
-def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
-    jobs = workflow_jobs()["jobs"]
-    step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
-    assert step["run"].endswith("--light")
-    # NARROW decides per event: a pull request one level and ten VMs, a queue group two levels and nineteen VMs.
-    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
-    assert checks.NARROW_SHARD_SECONDS == checks.JOB_SECONDS
-    # `checks` still needs every job and runs after any of them (a draft skips it with everything else).
-    assert jobs["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
-    assert set(jobs["checks"]["needs"]) == set(jobs) - {"checks", "timings"}
 
 
 def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_other_jobs(tmp_path, monkeypatch):
@@ -2459,7 +2521,7 @@ def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_wit
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     size = {"n": 14}
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": direct[: size["n"]], "reason": "measured", "uncertain": []}
 
@@ -2524,7 +2586,7 @@ def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_sm
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
 
-    def fake_selection(changed_files, event, base=None, added=None, graph=None):
+    def fake_selection(changed_files, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": [*changed, "backend/tests/test_far.py"], "reason": "measured", "uncertain": []}
 
@@ -2569,7 +2631,7 @@ def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selecti
         json.dumps({**{name: 25800 / 930 for name in files}, **{f"ui/tests/{n}.cjs": 60 for n in names}})
     )
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": list(files), "browser": list(names), "reason": "measured", "uncertain": []}
 

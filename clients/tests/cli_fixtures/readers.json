@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "readers"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "readers",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico readers: error: argument sub: invalid choice: 'nope' (choose from list) Did you mean: tico readers list?",
-  "exit": 64
- },
- {
-  "argv": [
    "readers",
    "list"
   ],

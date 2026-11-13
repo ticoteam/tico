@@ -44,6 +44,106 @@ class RecorderInstallRow(TypedDict):
     updated_at: str
 
 
+class PushSubscriptionRow(TypedDict):
+    id: str
+    actor: str
+    endpoint: str
+    p256dh: str
+    auth: str
+    created_at: str
+    last_ok_at: str | None
+    failed_at: str | None
+    failures: int
+    gone_at: str | None
+
+
+class CalendarRow(TypedDict):
+    id: str
+    owner_type: str
+    owner_id: str | None
+    name: str
+    home: str
+    google_calendar_id: str | None
+    time_zone: str | None
+    created_by: str | None
+    created_at: str
+    updated_at: str
+
+
+class CalendarEventRow(TypedDict):
+    id: str
+    calendar_id: str
+    uid: str
+    title: str
+    notes: str | None
+    location: str | None
+    meeting_url: str | None
+    all_day: int
+    starts_on: str | None
+    ends_on: str | None
+    starts_at_local: str | None
+    ends_at_local: str | None
+    time_zone: str | None
+    starts_at: str
+    ends_at: str
+    rrule: str | None
+    until_at: str | None
+    recurring_event_id: str | None
+    original_starts_at: str | None
+    status: str
+    visibility: str
+    sequence: int
+    created_by: str | None
+    task_id: str | None
+    thread_id: str | None
+    created_at: str
+    updated_at: str
+
+
+class CalendarEventAttendeeRow(TypedDict):
+    id: str
+    calendar_event_id: str
+    attendee_type: str
+    attendee_id: str | None
+    email: str | None
+    response: str
+    created_at: str
+    updated_at: str
+
+
+class AbsenceRow(TypedDict):
+    id: str
+    human_id: str
+    starts_on: str
+    ends_on: str
+    note: str | None
+    created_by: str | None
+    created_at: str
+    updated_at: str
+
+
+class CalendarAccessRow(TypedDict):
+    id: str
+    calendar_id: str
+    grantee_type: str
+    grantee_id: str
+    level: str
+    created_by: str | None
+    created_at: str
+    updated_at: str
+
+
+class CalendarEventLinkRow(TypedDict):
+    id: str
+    google_calendar_id: str | None
+    ical_uid: str | None
+    tico_event_id: str | None
+    original_starts_at: str | None
+    link_type: str
+    link_id: str
+    created_at: str
+
+
 class AlertCompanySettingRow(TypedDict):
     id: int
     monthly_cap: int
@@ -233,6 +333,7 @@ class AttemptRow(TypedDict):
     session_why: str | None
     input_tokens: int | None
     cached_tokens: int | None
+    cache_write_tokens: int | None
     output_tokens: int | None
     prompt_tokens: int | None
     usage_model: str | None
@@ -425,6 +526,7 @@ class UsageFactRow(TypedDict):
     billing: str | None
     input_tokens: int
     cached_tokens: int
+    cache_write_tokens: int | None
     output_tokens: int
     cost_nano: int | None
     low_estimate: int | None
@@ -1470,6 +1572,7 @@ class AnswerRow(TypedDict):
     undone_at: str | None
     name: str | None
     value_type: str | None
+    heads: str | None
 
 
 class SnoozeRow(TypedDict):
@@ -1602,6 +1705,15 @@ class GithubReleaseCommitRow(TypedDict):
     commit_sha: str
     included: int
     checked_at: str
+
+
+class GithubPrDiffRow(TypedDict):
+    """What a PR commit changes, as one id (item_sources.github.diff_id); None when GitHub could not give it all."""
+
+    repo: str
+    sha: str
+    diff_id: str | None
+    read_at: str
 
 
 class GithubDeliveryRow(TypedDict):

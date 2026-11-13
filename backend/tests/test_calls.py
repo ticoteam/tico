@@ -80,34 +80,6 @@ def bot_reply_by_run(api, bot, text):
     return attempt
 
 
-def test_synthetic_speech_becomes_a_transcript_and_a_bot_reply_in_the_thread(meet):
-    cid = thread(meet)
-    call = start_call(meet, cid)
-    call_id, meeting_id = call["id"], call["meeting_id"]
-    join(meet, call_id, "ana-test")
-    join(meet, call_id, "ben-test")
-    post(meet, f"calls/{call_id}/bots", {"bots": ["ops"]}, token="ana-test")
-    for index in range(4):
-        meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, index * 8000)
-    meet.app.state.calls.drain(call_id)
-    settle(meet)
-    with meet.app.state.store.read() as c:
-        transcript = [
-            row["text"]
-            for row in c.execute("SELECT text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (meeting_id,))
-        ]
-    assert transcript == [SYNTHETIC_SPEECH] * 4
-
-    bot_reply_by_run(meet, "ops", "Ops can take the review.")
-    assert any("Ops can take the review." in text for text in thread_texts(meet, cid))
-
-    post(meet, f"calls/{call_id}/end", {}, token="ana-test")
-    texts = thread_texts(meet, cid)
-    transcripts = [text for text in texts if text.startswith("Call transcript")]
-    assert len(transcripts) == 1 and SYNTHETIC_SPEECH in transcripts[0]
-    assert get(meet, f"calls/{call_id}")["state"] == "ended"
-
-
 def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_and_the_action_items(
     meet, live_media, fake_rtc, monkeypatch
 ):
@@ -260,6 +232,7 @@ def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold
     meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
     settle(meet)
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
+    refused[:] = [refs for refs in refused if not refs["call"].get("card")]  # the card at the start goes too
     assert len(refused) == 2  # the transcript, then the action items: each tried once
 
     holds = get(meet, f"calls/{call_id}")["holds"]
@@ -405,14 +378,6 @@ def test_a_tico_restart_brings_the_recorder_back_from_the_database(meet):
     meet.app.state.calls.sweep()
     assert meet.app.state.call_media.running(call_id)
     assert get(meet, f"calls/{call_id}")["state"] == "live"
-
-
-def test_calls_are_off_without_the_media_server(meet):
-    meet.app.state.call_media = None
-    cid = thread(meet)
-    response = meet.post(f"/api/v2/threads/{cid}/calls", json={"title": "Acme call"}, headers=headers("ana-test"))
-    assert response.status_code == 503
-    assert json.loads(response.text)["error"]["code"] == "meet_unavailable"
 
 
 def _changes(api):

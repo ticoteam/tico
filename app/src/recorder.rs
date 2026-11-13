@@ -1,6 +1,10 @@
 //! Tico Recorder (recorder/, bundle id team.tico.recorder.native) and this app.
 //!
 //! The page's Record opens the Recorder on the page's own org (`open_recorder`), when it is installed (`installed`).
+//! A call the page starts or joins opens it to record that call (`record_call`): the Recorder claims the call's
+//! recording source on that org and records into the call's live meeting when it is the source. A calendar event the
+//! page joins opens it to record that event (`record_event`): the Recorder reads the occurrence from that org and
+//! checks it can be joined now (recorder/src/app/record_link.rs).
 //!
 //! The Recorder signs in to an org with Tico's agent sign-in (backend/mcp_oauth.py). The approval page needs the
 //! person's Tico session, which this app already has for each of its orgs, so the Recorder asks this app to show it:
@@ -55,28 +59,113 @@ pub(crate) fn installed() -> bool {
     }
 }
 
+/// A live meeting's name in a `record` link is cut to this many characters (`TITLE_MAX` in record_link.rs).
+const TITLE_MAX: usize = 200;
+/// A calendar occurrence id longer than this is not one (`EVENT_MAX` in record_link.rs).
+const EVENT_MAX: usize = 300;
+
 /// The link that opens the Recorder on an org: `tico-recorder://open?server=<org address>`. It starts nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn recorder_link(hub: &Url) -> String {
     let mut link = Url::parse("tico-recorder://open").expect("a fixed link");
     link.query_pairs_mut().append_pair("server", hub.as_str());
     link.to_string()
 }
 
+/// The link that has the Recorder record a call on an org: `tico-recorder://record?server=<org address>&call=<id>`.
+/// Only a call id that is a uuid, in its canonical form; anything else is refused.
+pub(crate) fn call_link(hub: &Url, call: &str) -> Option<String> {
+    let call = uuid::Uuid::parse_str(call).ok()?;
+    let mut link = Url::parse("tico-recorder://record").expect("a fixed link");
+    link.query_pairs_mut()
+        .append_pair("server", hub.as_str())
+        .append_pair("call", &call.to_string());
+    Some(link.to_string())
+}
+
+/// The link that has the Recorder record a calendar event's occurrence on an org:
+/// `tico-recorder://record?server=<org address>&event=<occurrence id>[&title=<event title>]`. Checked as the Recorder
+/// checks it: the occurrence id is required and is printable ASCII without spaces, at most `EVENT_MAX` characters; the
+/// title is optional, and is left out when nothing is left of it after `event_title`. Anything else is refused.
+pub(crate) fn event_link(hub: &Url, event: &str, title: Option<&str>) -> Option<String> {
+    let fits = !event.is_empty()
+        && event.len() <= EVENT_MAX
+        && event.chars().all(|c| c.is_ascii_graphic());
+    if !fits {
+        return None;
+    }
+    let title = title.map(event_title).filter(|title| !title.is_empty());
+    let mut link = Url::parse("tico-recorder://record").expect("a fixed link");
+    {
+        let mut query = link.query_pairs_mut();
+        query
+            .append_pair("server", hub.as_str())
+            .append_pair("event", event);
+        if let Some(title) = &title {
+            query.append_pair("title", title);
+        }
+    }
+    Some(link.to_string())
+}
+
+/// A calendar event's title as a link keeps it, as the Recorder reads it: control characters become spaces, the ends
+/// are trimmed, and it is cut to `TITLE_MAX` characters.
+fn event_title(title: &str) -> String {
+    let title: String = title
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(TITLE_MAX)
+        .collect();
+    title.trim_end().to_owned()
+}
+
 /// Opens the Recorder on `hub`, in Tico Recorder itself rather than whatever else took its scheme.
 pub(crate) fn open_recorder(hub: &Url) {
     #[cfg(target_os = "macos")]
-    {
-        let link = recorder_link(hub);
-        if let Err(e) = std::process::Command::new("/usr/bin/open")
-            .args(["-b", RECORDER_ID, &link])
-            .spawn()
-        {
-            log::warn!("could not open Tico Recorder: {e}");
-        }
-    }
+    open_in_recorder(&recorder_link(hub));
     #[cfg(not(target_os = "macos"))]
     let _ = hub;
+}
+
+/// Has the Recorder record call `call` on `hub`, when it is installed and the id is a call id. Answers whether it
+/// was opened.
+pub(crate) fn record_call(hub: &Url, call: &str) -> bool {
+    open_recording(call_link(hub, call))
+}
+
+/// Has the Recorder record calendar event `event` (an occurrence id) on `hub`, named `title` when the link gives one,
+/// when it is installed and the id is one the link takes (`event_link`). Answers whether it was opened.
+pub(crate) fn record_event(hub: &Url, event: &str, title: Option<&str>) -> bool {
+    open_recording(event_link(hub, event, title))
+}
+
+/// Opens the Recorder on a `record` link, when there is one and Tico Recorder is installed. Answers whether it was
+/// opened.
+fn open_recording(link: Option<String>) -> bool {
+    let Some(link) = link else {
+        return false;
+    };
+    if !installed() {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    open_in_recorder(&link);
+    #[cfg(not(target_os = "macos"))]
+    let _ = link;
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn open_in_recorder(link: &str) {
+    if let Err(e) = std::process::Command::new("/usr/bin/open")
+        .args(["-b", RECORDER_ID, link])
+        .spawn()
+    {
+        log::warn!("could not open Tico Recorder: {e}");
+    }
 }
 
 /// The org and approval page a `tico://open` link names, when it is an org this app has and the page is that org's
@@ -419,20 +508,131 @@ mod tests {
     }
 
     #[test]
-    fn record_opens_the_recorder_on_the_pages_own_org() {
+    fn a_call_link_names_the_pages_org_and_only_a_call_id() {
         let hub = Url::parse("https://acme.example.com/").unwrap();
-        let link = Url::parse(&recorder_link(&hub)).unwrap();
+        let id = "6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10";
+        let link = Url::parse(&call_link(&hub, &id.to_uppercase()).unwrap()).unwrap();
         assert_eq!(
             (link.scheme(), link.host_str()),
-            ("tico-recorder", Some("open"))
+            ("tico-recorder", Some("record"))
         );
         let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
         assert_eq!(
             query,
-            [(
-                "server".to_string(),
-                "https://acme.example.com/".to_string()
-            )]
+            [
+                (
+                    "server".to_string(),
+                    "https://acme.example.com/".to_string()
+                ),
+                ("call".to_string(), id.to_string()),
+            ]
         );
+        for call in [
+            "",
+            "123",
+            "../../logout",
+            &format!("{id}&server=https://evil.example"),
+        ] {
+            assert_eq!(call_link(&hub, call), None, "{call}");
+            assert!(!record_call(&hub, call), "{call}");
+        }
+    }
+
+    #[test]
+    fn an_event_link_names_the_pages_org_and_one_checked_occurrence() {
+        let hub = Url::parse("https://acme.example.com/").unwrap();
+        let event = "g_9f2c#team@group.calendar.google.com_20261110T100000Z";
+        let link = Url::parse(&event_link(&hub, event, Some("Team sync")).unwrap()).unwrap();
+        assert_eq!(
+            (link.scheme(), link.host_str()),
+            ("tico-recorder", Some("record"))
+        );
+        let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            [
+                (
+                    "server".to_string(),
+                    "https://acme.example.com/".to_string()
+                ),
+                ("event".to_string(), event.to_string()),
+                ("title".to_string(), "Team sync".to_string()),
+            ]
+        );
+        // Without a title the link carries no title at all.
+        let link = Url::parse(&event_link(&hub, event, None).unwrap()).unwrap();
+        let keys: Vec<String> = link
+            .query_pairs()
+            .map(|(key, _)| key.into_owned())
+            .collect();
+        assert_eq!(keys, ["server", "event"]);
+        // An occurrence id is one value, whatever it looks like: it cannot name another server.
+        let hostile = "x&server=https://evil.example&event=y";
+        let link = Url::parse(&event_link(&hub, hostile, None).unwrap()).unwrap();
+        let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            [
+                (
+                    "server".to_string(),
+                    "https://acme.example.com/".to_string()
+                ),
+                ("event".to_string(), hostile.to_string()),
+            ]
+        );
+        // The longest id the Recorder takes, and no longer.
+        let longest = "e".repeat(EVENT_MAX);
+        assert!(event_link(&hub, &longest, None).is_some());
+        assert_eq!(event_link(&hub, &format!("{longest}e"), None), None);
+    }
+
+    #[test]
+    fn an_event_link_refuses_what_the_recorder_would_not_take() {
+        let hub = Url::parse("https://acme.example.com/").unwrap();
+        let long = "x".repeat(EVENT_MAX + 1);
+        for event in [
+            "",
+            "has space",
+            "tab\there",
+            "new\nline",
+            "caf\u{e9}",
+            "del\u{7f}ete",
+            long.as_str(),
+        ] {
+            assert_eq!(
+                event_link(&hub, event, Some("Team sync")),
+                None,
+                "{event:?}"
+            );
+            assert!(!record_event(&hub, event, Some("Team sync")), "{event:?}");
+        }
+    }
+
+    #[test]
+    fn an_event_title_is_cleaned_and_cut_as_the_recorder_reads_it() {
+        let hub = Url::parse("https://acme.example.com/").unwrap();
+        let title_of = |title: &str| -> Option<String> {
+            let link = Url::parse(&event_link(&hub, "e1", Some(title)).unwrap()).unwrap();
+            link.query_pairs()
+                .find(|(key, _)| key == "title")
+                .map(|(_, value)| value.into_owned())
+        };
+        assert_eq!(title_of("Weekly ops"), Some("Weekly ops".to_string()));
+        assert_eq!(
+            title_of("  Line one\nLine two\t "),
+            Some("Line one Line two".to_string())
+        );
+        assert_eq!(
+            title_of(&"a".repeat(TITLE_MAX + 50)),
+            Some("a".repeat(TITLE_MAX))
+        );
+        // The cut counts characters, not bytes.
+        let accents = title_of(&"\u{e9}".repeat(TITLE_MAX + 1)).unwrap();
+        assert_eq!(accents.chars().count(), TITLE_MAX);
+        // Nothing but spaces and control characters: no title, and the link is still made.
+        assert_eq!(title_of(" \t\n "), None);
+        assert!(event_link(&hub, "e1", Some(" \t\n ")).is_some());
+        // A title never refuses the link: the occurrence is what it names.
+        assert!(event_link(&hub, "e1", None).is_some());
     }
 }

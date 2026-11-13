@@ -2,11 +2,15 @@
 hourly limit becomes the half hour at the same rate; a bot over it takes no new turn until the window ends. A child
 group's limit may not exceed its parent's."""
 
+import pytest
+
 from datetime import datetime, timedelta, timezone
 
 from backend import usage_limits
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.helpers.usage_limits import finish, fleet, groups, paused, put, start
+
+pytestmark = pytest.mark.usefixtures("inside_one_half_hour")
 
 
 def test_an_hour_becomes_the_half_hour_at_the_same_rate(api):

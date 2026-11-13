@@ -29,6 +29,7 @@ LIMIT = 5000
 SCAN_MAX = 20000  # rows read per source, shown or not; past it the replay is cut short
 TEXT_MAX = 1200
 SNAPSHOT_MAX = 300
+DELETED_BOT = "Deleted bot"  # what a person reads for a bot no longer on the roster
 MESSAGE_KINDS = ("say", "ask", "answer")
 # The engine's history kinds a replay shows: a move (`task.status` or `task.stage`) and a reassignment (`task.owner`).
 TASK_FIELDS = ("move", "reassign")
@@ -434,8 +435,11 @@ def install(app, store, auth):
         names = {}
         for actor in sorted(a for a in shown if a):
             ident = H.actor_id(actor)
-            if actor.startswith("bot:") and ident in bots:
-                names[actor] = bots[ident].get("display_name") or bots[ident]["slug"]
+            if actor.startswith("bot:"):
+                # A bot removed since keeps its history; a person reads "Deleted bot", never its id.
+                names[actor] = (
+                    (bots[ident].get("display_name") or bots[ident]["slug"]) if ident in bots else DELETED_BOT
+                )
             elif actor.startswith("human:"):
                 names[actor] = (people.get(ident) or H.human(c, ident) or {}).get("name") or ident
         return {

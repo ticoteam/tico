@@ -5,6 +5,7 @@
       "human:ana": "Ana"
     },
     "cursor": "<volatile>",
+    "next_after": null,
     "next_offset": null,
     "tasks": [
       {
@@ -44,6 +45,7 @@
         "live_meeting_id": null,
         "note": "",
         "number": null,
+        "on_person": true,
         "organization": null,
         "origin_actor": null,
         "owner_id": "bot:ops",
@@ -125,6 +127,7 @@
         "live_meeting_id": null,
         "note": "",
         "number": null,
+        "on_person": false,
         "organization": null,
         "origin_actor": null,
         "owner_id": "bot:ops",

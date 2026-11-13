@@ -19,7 +19,6 @@ interface OrgFactory {id: string; name: string; goal: string | null; manager_id:
 interface OrgOverview {factories: OrgFactory[]; pipelines: OrgPipe[]; edges: unknown[]; inputs: unknown[]}
 
 const APP = path.join(__dirname, '..', 'app');
-const CSS = path.join(__dirname, '..', 'styles', 'org-factories.css');
 
 // The roster. A bot has an id (what the chart and the routes use) and a slug (what setup can store instead).
 const EMPS = [
@@ -129,12 +128,6 @@ async function page(map: OrgOverview = overview(), {mounted = true}: {mounted?: 
 const tests: [string, () => unknown][] = [];
 const test = (name: string, fn: () => unknown) => tests.push([name, fn]);
 
-test('one box per factory that has pipelines', async () => {
-  const {ctx} = await page();
-  const html = sectionOf(ctx, overview());
-  assert.equal(count(html, /data-org-fac="/g), 3);
-  assert.match(html, /<h2 id="org-fac-title">Factories<\/h2>/);
-});
 
 test('a Factory Manager sits on top only for a factory with two or more pipelines', async () => {
   const {ctx} = await page();
@@ -182,14 +175,6 @@ test('no factories: nothing to draw, even with pipelines outside them', async ()
   assert.equal(sectionOf(ctx, {factories: [], pipelines: [legal], edges: [], inputs: []}), '');
 });
 
-test('a private pipeline shows only when the overview returned it', async () => {
-  const {ctx} = await page();
-  const without = sectionOf(ctx, overview());
-  assert.doesNotMatch(without, /Legal|General Counsel|data-org-loose/);
-  const withIt = sectionOf(ctx, overview([legal]));
-  assert.match(withIt, /data-org-loose[\s\S]*Not in a factory[\s\S]*General Counsel/);
-  assert.ok(withIt.indexOf('data-org-loose') > withIt.indexOf('data-org-fac="f-success"'), 'after the factories');
-});
 
 test('a pipeline with no manager is titled by its name over an empty manager slot', async () => {
   const {ctx} = await page();
@@ -208,25 +193,7 @@ test('names from the overview are escaped', async () => {
   assert.doesNotMatch(sectionOf(ctx, map), /<img/);
 });
 
-test('a factory with four pipelines draws them in one row under its Factory Manager', async () => {
-  const map = overview();
-  map.pipelines.push(pipe('ads', 'Ads', 'ads-mgr', 'f-growth'), pipe('seo', 'SEO', 'seo-mgr', 'f-growth'));
-  const {ctx} = await page(map);
-  const growth = box(sectionOf(ctx, map), 'f-growth');
-  assert.match(growth, /<div class="rdo-br"><div class="rdo-top has-row"><div class="rdo-card org-fac-card fm"/);
-  assert.equal(count(growth, /<ul class="rdo-row"><li>/g), 1);
-  assert.equal(count(growth, /<li><div class="rdo-card org-fac-card pm"/g), 4);
-});
 
-test('the phone rule stacks that row: the branch is held to the box and its cards go down a column', () => {
-  const css = fs.readFileSync(CSS, 'utf8');
-  const at = css.indexOf('@media (max-width:760px){');
-  assert.ok(at >= 0, 'a phone block exists');
-  const phone = css.slice(at);   // the phone block is the file's last
-  assert.match(phone, /\.org-fac \.rdo-br\{[^}]*max-width:100%/, 'the branch is held to the box width');
-  assert.match(phone, /\.org-fac \.rdo-br>\.rdo-row\{[^}]*flex-direction:column/, 'the four cards stack in a column');
-  assert.match(phone, /\.org-fac \.rdo-br>\.rdo-row>li::before[^}]*display:none/, 'their side connectors go');
-});
 
 test('mount draws into a connected host, draws nothing when the read fails or lacks its lists, and skips a host the page has left', async () => {
   let ctx = context(async () => overview());

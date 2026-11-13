@@ -2250,6 +2250,52 @@ fn old_tico_refuses_private_connect_without_dropping_visibility() {
 }
 
 #[test]
+fn a_calendar_event_goes_with_the_new_live_meeting_and_an_older_tico_drops_it_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Weekly sync").unwrap();
+    store
+        .update_context(&record.id, |context| {
+            context.calendar_event = "tico:evt-1:2026-11-10T15:00:00Z".into();
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"status":422})),
+        Some(json!({"status":422})),
+        Some(json!({"status":422})),
+    ]);
+    tico.connect(&store, &record.id, Some("private"))
+        .unwrap_err();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    let bodies: Vec<&Value> = requests.iter().skip(1).map(|request| &request.1).collect();
+    assert_eq!(
+        bodies[0]["calendar_event"],
+        "tico:evt-1:2026-11-10T15:00:00Z"
+    );
+    assert_eq!(bodies[0]["client"], "tico-recorder");
+    assert!(bodies[1].get("calendar_event").is_none());
+    assert_eq!(bodies[1]["client"], "tico-recorder");
+    assert!(bodies[2].get("calendar_event").is_none() && bodies[2].get("client").is_none());
+    for body in bodies {
+        assert_eq!(body["title"], "Weekly sync");
+        assert_eq!(body["visibility"], "private");
+    }
+    let keys: Vec<&str> = requests
+        .iter()
+        .skip(1)
+        .map(|request| request.2.as_str())
+        .collect();
+    assert_eq!(
+        keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        3
+    );
+}
+
+#[test]
 fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -4163,7 +4209,7 @@ fn recorder_picker_reads_task_types_and_searches_a_bare_number() {
     assert!(
         calls[1]
             .0
-            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0&type=bug ")
+            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0 ")
     );
     assert!(
         calls[2]

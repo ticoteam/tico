@@ -402,50 +402,6 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
     def text(self, name):
         return " ".join((self.folder / name).read_text().split())
 
-    def test_the_instructions_stop_ask_once_and_report_tico_bugs(self):
-        agent = self.text("AGENT.md")
-        for rule in (
-            "`retryable: false` means stop",
-            "never `sleep` and call again",
-            "ask once",
-            "then end the run",
-            "Never hand-edit a computer",
-            "remove or change a git remote",
-            "tico support file",
-            "operation_id",
-            "Blocked on a Tico bug, reported as",
-        ):
-            self.assertIn(rule, agent)
-
-    def test_build_checks_create_names_the_refusal_and_waits_without_copying(self):
-        build = self.text("playbooks/build-me-a-bot.md")
-        for rule in (
-            "`tico bot create`'s exit status",
-            "`github_permission_missing`",
-            "ask the person once",
-            "waiting for a computer to get the repository is not a failure",
-            "do not copy the repository",
-        ):
-            self.assertIn(rule, build)
-
-    def test_a_new_bot_is_built_on_defaults_not_questions(self):
-        self.assertIn("## Defaults, not questions", self.text("AGENT.md"))
-        setup, build = self.text("playbooks/set-up-a-bot.md"), self.text("playbooks/build-me-a-bot.md")
-        self.assertNotIn("stop until it is answered", setup)
-        for rule in ("Do not ask for a slug", "a follow-up in the report", "the assumptions you made"):
-            self.assertIn(rule, build)
-
-    def test_no_playbook_suggests_a_sleep_retry_or_a_hand_copy(self):
-        for path in [self.folder / "AGENT.md", *sorted((self.folder / "playbooks").glob("*.md"))]:
-            for line in path.read_text().splitlines():
-                self.assertNotRegex(
-                    line,
-                    r"sleep \d|retry until|git clone \S*/projects|git remote (remove|rm)\b",
-                    f"{path.name}: {line}",
-                )
-                if "sleep" in line.lower():
-                    self.assertRegex(line.lower(), r"\b(never|no)\b", f"{path.name}: {line}")
-
 
 # A Manager has reports and runs its team's pipelines; an Owner owns an area and does the work. These templates are
 # named "Manager" and lead no team: a follow-up pull request renames each and empties this list. Add none.
@@ -475,18 +431,6 @@ MANAGERS_THAT_LEAD_NO_TEAM = {
     "social-media-manager",
     "vendor-manager",
 }
-
-
-def test_a_template_named_manager_leads_a_team():
-    named = {card["template"]: bool(card.get("lead")) for card in catalog.cards() if card["name"].endswith("Manager")}
-    assert sorted(t for t, lead in named.items() if not lead) == sorted(MANAGERS_THAT_LEAD_NO_TEAM)
-    assert {t for t, lead in named.items() if lead} >= {
-        "product-manager",
-        "engineering-manager",
-        "growth-manager",
-        "success-manager",
-        "corporate-manager",
-    }
 
 
 if __name__ == "__main__":

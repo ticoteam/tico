@@ -1,6 +1,7 @@
 """Health: every check is computed from live state, and people who are not administrators see counts only."""
 
 import json
+import re
 
 import pytest
 
@@ -1651,6 +1652,7 @@ def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(mo
     assert check_at(5)["status"] == "ok"
     stale = check_at(15)
     assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
+    assert re.search(r"since \d\d:\d\d UTC;", stale["summary"])  # a clock time, not the ISO stamp
     assert check_at(120)["status"] == "bad"
 
 
@@ -1805,3 +1807,52 @@ def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_cle
         )
         c.execute("UPDATE github_app SET installation_id=77")
     assert health_of(api)[1]["github"]["status"] == "ok"
+
+
+def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environment):
+    """Tico Team, Nov 11: Health warned that Reviewer 2's job had been queued 17 minutes when its task was snoozed. The
+    snooze holds it on purpose (task_wait) until it ends; on an awake computer, as on a sleeping cloud machine, that is
+    work waiting on purpose, never a stuck bot."""
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        claimable(c, runner, "ops")
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        task = H.task_create(c, owner, "Wait for a decision", "", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")
+        notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
+        H.task_snooze(c, owner, task["id"], "Approve the plan first.")
+        c.execute(
+            "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
+            (H.shift(H.now(), minutes=-30), notice["id"]),
+        )
+        online = {r["id"] for r in health._online_runners(c)}
+        _, slow, stuck = health._waiting(c, online)
+        assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
+            ("ops", "task_wait", True)
+        ]
+
+
+def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
+    from backend import health
+
+    text = health._rejected_summary([("Mac mini", "Claude Code", H.now(), "invalid key", "credentials")])
+    assert not re.search(r"\d{4}-\d\d-\d\dT", text), text
+    assert re.search(r" at \d\d:\d\d UTC: invalid key", text), text
+
+
+def test_token_use_names_a_deleted_bot_deleted_bot_never_its_id(environment):
+    api = environment()
+    gone = "01a1cdda-6f96-7593-be09-719b45a9df76"  # its usage stays after the bot's row is gone
+    api.app.state.store.settings.token_alert_input = 1000
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('t1',?,?)", (gone, H.now()))
+        segment(c, "t1", input_tokens=1100)
+    summary = health_of(api)[1]["tokens"]["summary"]
+    assert summary.startswith("Deleted bot: 1,100 uncached input tokens") and gone not in summary

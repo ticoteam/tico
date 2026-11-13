@@ -101,3 +101,44 @@ def test_a_review_that_is_not_a_persons_is_a_note(api):
             c.execute("SELECT id FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()[0],
         )
         assert msg["refs"]["quiet"] and jobs(c, "cpo") == 0
+
+
+def snoozed(c, task, by, why="wakes when its checks finish"):
+    """`by` sets the task aside until tomorrow, and nothing is queued."""
+    H.task_snooze(c, by, task["id"], why, H.shift(H.now(), hours=20), seen_version=task["version"], mover=True)
+    c.execute("DELETE FROM jobs")
+    return H.task(c, task["id"])
+
+
+def snooze_of(c, task):
+    return c.execute("SELECT by_id, ended_at, ended_by_id FROM snoozes WHERE task_id=?", (task["id"],)).fetchone()
+
+
+def test_finished_checks_end_the_owner_bots_own_snooze_and_wake_it(api):
+    """Stress run, Nov 12: the Builder re-ran a flaky job and snoozed its task until 08:00 next day, "wakes when its
+    checks finish". The checks passed 20 minutes later and it was only noted: the snooze held it 40 minutes, until a
+    person ended it. A snooze the owner bot set on its own task is how it waits for CI: the head's result ends it."""
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = snoozed(c, plain_task(c), "bot:cpo")
+        assert woke(c, sent(c, task, result="fail")) == (True, False)
+        by, ended, ended_by = snooze_of(c, task)
+        assert by == "bot:cpo" and ended and ended_by == H.KEEPER
+        assert H.task(c, task["id"]).get("snooze") is None
+
+
+def test_finished_checks_keep_a_snooze_someone_else_set(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        for who in ("human:ana", "bot:ops"):
+            task = snoozed(c, plain_task(c, title=f"Set aside by {who}"), who)
+            assert woke(c, sent(c, task)) == (False, True)
+            assert snooze_of(c, task)[1] is None
+
+
+def test_finished_checks_keep_the_owners_snooze_while_it_waits_on_a_person(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = snoozed(c, asked(c, plain_task(c)), "bot:cpo")
+        assert woke(c, sent(c, task)) == (False, True)
+        assert snooze_of(c, task)[1] is None

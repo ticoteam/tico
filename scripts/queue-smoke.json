@@ -180,7 +180,7 @@
     {
       "script": "threads",
       "seconds": 37.117,
-      "reason": "Threads per role at desktop and phone width: thread rail, Pinned, Catch up, New thread and timeline"
+      "reason": "Threads per role at desktop and phone width: thread rail, Pinned, Catch up, New message and timeline"
     },
     {
       "script": "visual-cards",

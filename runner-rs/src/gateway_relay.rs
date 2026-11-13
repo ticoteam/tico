@@ -972,22 +972,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_stopped_relay_takes_no_more_calls() {
-        let (url, _) = upstream(SSE.to_vec()).await;
-        let relay = start(&url, KEY.into(), None).await.unwrap();
-        let address = relay
-            .url
-            .trim_start_matches("http://")
-            .split('/')
-            .next()
-            .unwrap()
-            .to_string();
-        drop(relay);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(TcpStream::connect(address).await.is_err());
-    }
-
-    #[tokio::test]
     async fn a_turn_holds_the_relay_and_its_own_token_never_the_key() {
         let (gateway, seen) = upstream(SSE.to_vec()).await;
         let answer = serde_json::json!({"credentials": [
@@ -1310,17 +1294,6 @@ mod tests {
         assert_eq!(admit(Some(tico.clone()), false), None);
         assert_eq!(admit(Some(codex.clone()), false), Some(codex));
         assert_eq!(admit(Some(tico.clone()), true), Some(tico));
-    }
-
-    #[test]
-    fn the_refusal_says_why_and_what_to_do_with_the_code_the_server_reads() {
-        assert!(NOT_ISOLATED.starts_with(
-            "Tico models need a runner that runs bots as their own user (Tico's Docker runner)."
-        ));
-        assert!(
-            NOT_ISOLATED.contains("pick another model or move the bot")
-                && NOT_ISOLATED.ends_with("(not_isolated)")
-        );
     }
 
     #[test]

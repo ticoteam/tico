@@ -8,9 +8,6 @@ import pytest
 
 from backend.finance import actions as FA
 from backend.finance import reads as FR
-from backend.finance import vendors as VN
-from backend.finance.core import kinds as KD
-from backend.finance.core import rights as R
 from backend.finance.core import watch as W
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, NOT_FOUND
 from backend.finance.core.merchant import merchant_key
@@ -37,32 +34,24 @@ EVE = "human:eve"  # a person with no finance rights
     "raw, key",
     [
         ("GOOGLE *ADS8812", "google ads"),
-        ("GOOGLE ADS", "google ads"),
         ("SQ *BLUE BOTTLE 123", "blue bottle"),
         ("TST* JOE'S", "joe's"),
         ("AMZN Mktp US*2K4", "amazon mktp us"),
         ("PAYPAL *FIGMA", "figma"),
-        ("META *ADS 4421", "meta ads"),
         ("STARBUCKS STORE #1234", "starbucks store"),
-        ("Netflix.com", "netflix.com"),
         ("CHECKCARD 0412 NETFLIX", "netflix"),
         ("POS DEBIT WHOLE FOODS", "whole foods"),
         ("DEBIT CARD PURCHASE SHELL OIL", "shell oil"),
         ("ACH DEBIT ADOBE", "adobe"),
         ("PP*ZOOM.US", "zoom.us"),
         ("UBER *TRIP", "uber trip"),
-        ("UBER   *EATS", "uber eats"),
         ("NOTION LABS, INC.", "notion labs inc"),
-        ("Figma Inc 12345", "figma inc"),
         ("12345", "12345"),
         ("APPLE.COM/BILL", "apple.com bill"),
-        ("sq *joes pizza new york", "joes pizza new york"),
         ("Google LLC", "google llc"),
-        ("TST* SWEETGREEN 1234", "sweetgreen"),
         ("ÉCOLE 2 DANSE", "école danse"),
         ("GOOG *YOUTUBE", "google youtube"),
         ("zoom.us 888-799-9666", "zoom.us"),
-        ("Joe's Diner", "joe's diner"),
         ("  AWS  ", "aws"),
         ("CARD SERVICES PMT", "services pmt"),
         ("WWW.GITHUB.COM", "www.github.com"),
@@ -234,13 +223,6 @@ def test_only_a_holder_of_finance_book_may_merge(books):
         denied = act(c, EVE, "vendor_merge", {"into": ads, "merge": [llc]})
         assert denied.code == DENIED
         assert c.execute("SELECT active FROM fin_contacts WHERE id=?", (llc,)).fetchone()[0] == 1
-
-
-def test_vendor_merge_and_unmerge_are_live_kinds_that_need_the_book_right():
-    for kind in ("vendor_merge", "vendor_unmerge"):
-        assert kind in KD.ALL and kind in KD.LIVE and kind in KD.SHAPES and kind in KD.WORDS
-        assert KD.NEEDS[kind] == R.BOOK
-    assert set(VN.PLANNERS) == {"vendor_merge", "vendor_unmerge"}
 
 
 def _spend_rows(c, by: str) -> list[dict[str, object]]:

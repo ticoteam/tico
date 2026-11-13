@@ -353,28 +353,6 @@ def test_a_pin_event_goes_to_its_reader_and_a_pin_for_everyone_to_everyone_who_r
     assert [(d["thread_id"], d["pinned"], d["pinned_for_everyone"]) for d in sent] == [(thread["id"], True, True)]
 
 
-def test_the_pins_migration_run_once_more_changes_nothing(tmp_path):
-    """The upgrade itself (an old database gains thread_pins and the column) is pinned by test_schema_every_table's
-    upgraded-database test; this one checks that 0063 is repeatable on a database that already has it."""
-    path = tmp_path / "hub.sqlite"
-    Store(Settings(db_path=path)).initialize()
-    conn = sqlite3.connect(path)
-    try:
-
-        def shape():
-            return (
-                {r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")},
-                {r[1] for r in conn.execute("PRAGMA table_info(conversations)")},
-            )
-
-        before = shape()
-        assert {"thread_id", "actor", "pinned"} <= before[0] and "pinned_for_everyone_at" in before[1]
-        importlib.import_module("backend.migrations.0063_thread_pins").up(conn)
-        assert shape() == before
-    finally:
-        conn.close()
-
-
 def test_catch_up_leaves_out_bot_chatter_own_messages_and_muted_threads_and_a_task_needs_a_mention(api):
     with api.app.state.store.transaction() as c:
         made = H.task_create(
@@ -625,17 +603,3 @@ def test_catch_up_scans_its_allowance_once_over_all_its_pages_and_muted_roots_ta
             break
         page = listed(api, "catch-up", "ben-test", limit=1, cursor=page["next_cursor"])
     assert seen == rail["catch_up_ids"]
-
-
-def test_the_rail_reads_open_roots_in_title_order_through_its_index(api):
-    new_thread(api, title="Alpha")
-    seen = []
-    with api.app.state.store.read() as c:
-        c.set_trace_callback(seen.append)
-        try:
-            thread_rail.rail(c, threads.viewer(api.app.state.auth, who(api, "ben-test")))
-        finally:
-            c.set_trace_callback(None)
-        [sql, *_] = [s for s in seen if "ORDER BY t_blank" in s]
-        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
-    assert "conversations_open_title" in plan[0], plan

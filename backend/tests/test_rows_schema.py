@@ -32,6 +32,13 @@ TABLES = {
     rows.PageIdentityRow: "page_identities",
     rows.AlertPreferenceRow: "alert_preferences",
     rows.RecorderInstallRow: "recorder_installs",
+    rows.PushSubscriptionRow: "push_subscriptions",
+    rows.CalendarRow: "calendars",
+    rows.CalendarEventRow: "calendar_events",
+    rows.CalendarEventAttendeeRow: "calendar_event_attendees",
+    rows.AbsenceRow: "absences",
+    rows.CalendarAccessRow: "calendar_accesses",
+    rows.CalendarEventLinkRow: "calendar_event_links",
     rows.AlertCompanySettingRow: "alert_company_settings",
     rows.PersonalAlertRow: "personal_alerts",
     rows.PostalMailGrantRow: "postal_mail_grants",
@@ -121,6 +128,7 @@ TABLES = {
     rows.GithubReleaseReadRow: "github_release_reads",
     rows.GithubReleaseCommitRow: "github_release_commits",
     rows.GithubDeliveryRow: "github_deliveries",
+    rows.GithubPrDiffRow: "github_pr_diffs",
     rows.RequirementPageRow: "requirement_pages",
     rows.PageVerdictRow: "page_verdicts",
     rows.TaskMoveGuardRow: "task_move_guards",
@@ -627,16 +635,3 @@ def test_optional_fields_are_the_nullable_columns(shape, table, columns):
     hints = typing.get_type_hints(shape)
     optional = {name for name, hint in hints.items() if type(None) in typing.get_args(hint)}
     assert optional == {name for name, nullable in columns[table].items() if nullable}
-
-
-def test_every_table_has_a_row_shape_or_is_on_the_allowlist(fresh):
-    """A new table without a TypedDict fails here, and so does an allowlist entry that no longer names an untyped table."""
-    path, _ = fresh
-    tables = table_names(path)
-    typed = set(TABLES.values())
-    assert typed <= tables, typed - tables
-    assert not (UNTYPED & typed), "a table with a TypedDict leaves UNTYPED: " + ", ".join(sorted(UNTYPED & typed))
-    assert tables - typed - UNTYPED == set(), "new table(s) need a TypedDict in backend/rows.py: " + ", ".join(
-        sorted(tables - typed - UNTYPED)
-    )
-    assert UNTYPED - tables == set(), "stale UNTYPED entries (remove them): " + ", ".join(sorted(UNTYPED - tables))

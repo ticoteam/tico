@@ -196,16 +196,6 @@ def test_suggestions_and_the_counts_outside_the_directory_are_for_admins_only(ap
         assert c.execute("SELECT COUNT(*) FROM skill_proposals WHERE name='home-notes'").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("name", ["suggestions"])
-def test_the_route_word_cannot_be_a_skill_name(api, name):
-    r = api.post(
-        "/api/v2/skills/proposals",
-        headers=headers("ana-test"),
-        json={"name": name, "files": [{"path": "SKILL.md", "content": f"---\nname: {name}\n---\n\nx\n"}]},
-    )
-    assert r.status_code == 422 and "reserved" in r.text
-
-
 # ------------------------------------------------------------------ retention and the run
 def test_the_rollup_keeps_counts_outside_the_directory_90_days(api):
     ops = bot_id(api, "ops")

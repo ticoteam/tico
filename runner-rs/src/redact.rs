@@ -236,15 +236,6 @@ impl Redactor {
         kept.drain(..extra);
     }
 
-    /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread; `held` hears
-    /// once it is.
-    #[cfg(test)]
-    pub fn hold_for(&self, d: std::time::Duration, held: std::sync::mpsc::Sender<()>) {
-        let _held = self.inner.write().unwrap();
-        held.send(()).unwrap();
-        std::thread::sleep(d);
-    }
-
     pub fn is_empty(&self) -> bool {
         self.inner.read().unwrap().matcher.is_none() && self.codes.read().unwrap().is_empty()
     }
@@ -359,22 +350,42 @@ impl Redactor {
         }
         if !since.is_empty() {
             let range = format!("{since}..HEAD");
-            if let Some(patch) = git(
-                root,
-                &[
-                    "log",
-                    "-p",
-                    "--no-ext-diff",
-                    "--no-textconv",
-                    "--format=",
-                    &range,
-                ],
-            ) {
+            let mut args = vec![
+                "log",
+                "-p",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--format=",
+                range.as_str(),
+            ];
+            let shared = shared_branches(root);
+            args.extend(shared.iter().map(String::as_str));
+            if let Some(patch) = git(root, &args) {
                 result.committed = !patch.is_empty() && self.holds(&patch);
             }
         }
         result
     }
+}
+
+/// What `since..HEAD` leaves out besides: the commits already on a remote's other branches. A turn that rebases its
+/// branch onto `main`, or merges it in, brings in the base's commits; the turn made none of them, and pushing does not
+/// spread them, so a value of the turn's that happens to be in one (a token whose name says it is one, a path) is no
+/// committed secret. The checked-out branch's own remote copy stays in: a commit the bot pushed itself this turn is
+/// still found. On a detached HEAD nothing is left out.
+fn shared_branches(root: &Path) -> Vec<String> {
+    let branch = git(root, &["symbolic-ref", "-q", "--short", "HEAD"])
+        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
+        .unwrap_or_default();
+    if branch.is_empty() {
+        return vec![];
+    }
+    vec![
+        "--not".into(),
+        "--exclude=*/HEAD".into(),
+        format!("--exclude=*/{branch}"),
+        "--remotes".into(),
+    ]
 }
 
 enum Scrubbed {
@@ -974,6 +985,69 @@ mod tests {
     }
 
     #[test]
+    fn a_rebase_onto_the_base_is_not_a_committed_secret_and_the_bots_own_commit_still_is() {
+        let top =
+            std::env::temp_dir().join(format!("tico-rebase-{}", uuid::Uuid::new_v4().simple()));
+        let (origin, root) = (top.join("origin.git"), top.join("work"));
+        std::fs::create_dir_all(&top).unwrap();
+        let sh = |cmd: &str| {
+            let out = Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "git -c user.name=t -c user.email=t@t -c init.defaultBranch=main {cmd}"
+                ))
+                .current_dir(if root.exists() { &root } else { &top })
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{cmd}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        sh(&format!("init -q --bare {}", origin.display()));
+        sh(&format!("clone -q {} work", origin.display()));
+        sh("commit -q --allow-empty -m init");
+        sh("push -q origin main");
+        sh("switch -q -c tico/1234abcd-task");
+        std::fs::write(root.join("task.txt"), "the task's work\n").unwrap();
+        sh("add . && git -c user.name=t -c user.email=t@t commit -q -m task");
+        sh("push -q origin tico/1234abcd-task");
+        // Someone else's commit on main holds a value this turn treats as a secret.
+        sh("switch -q main");
+        std::fs::write(root.join("main.txt"), "path=granted-secret-value\n").unwrap();
+        sh("add . && git -c user.name=t -c user.email=t@t commit -q -m main && git push -q origin main");
+        sh("switch -q tico/1234abcd-task");
+        let since = head(&root);
+        let r = Redactor::new(&["granted-secret-value".into()]);
+        sh("rebase -q origin/main");
+        assert!(
+            !r.scrub_tree(&root, &since).committed,
+            "the base's commits are not this turn's"
+        );
+        std::fs::write(root.join("task.txt"), "key=granted-secret-value\n").unwrap();
+        sh("commit -q -am leak");
+        assert!(
+            r.scrub_tree(&root, &since).committed,
+            "the bot's own commit is found"
+        );
+        sh("push -q -f origin tico/1234abcd-task");
+        assert!(
+            r.scrub_tree(&root, &since).committed,
+            "and still is once the bot pushed it itself"
+        );
+        sh("checkout -q --detach");
+        assert!(r.scrub_tree(&root, &since).committed);
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    #[test]
     fn the_python_redactor_agrees() {
         let secrets = [
             "granted-file-secret-fixture",
@@ -1093,30 +1167,5 @@ mod tests {
         release("a-browser-turn");
         release("a-later-browser-turn");
         standing().lock().unwrap().clear();
-    }
-
-    /// Bench, not run by CI: heap bytes requested by `scrub_json` over 10,000 deltas, with no secret in them and
-    /// with one in each.
-    #[test]
-    #[ignore]
-    fn bench_scrub_json_allocations_for_10k_deltas() {
-        use serde_json::json;
-        let r = Redactor::new(&["granted-secret-value".into()]);
-        let delta = |i: usize, text: &str| json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": format!("token {i} {text}")});
-        let plain: Vec<Value> = (0..10_000).map(|i| delta(i, "of the answer ")).collect();
-        let leaky: Vec<Value> = (0..10_000)
-            .map(|i| delta(i, "granted-secret-value "))
-            .collect();
-        for (name, events) in [("no secret", &plain), ("secret in each", &leaky)] {
-            let asked = crate::util::alloc_probe::requested();
-            for e in events {
-                let v = r.scrub_json(e);
-                std::hint::black_box(&v);
-            }
-            eprintln!(
-                "scrub_json, 10,000 deltas, {name}: bytes requested {}",
-                crate::util::alloc_probe::requested() - asked
-            );
-        }
     }
 }

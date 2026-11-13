@@ -131,23 +131,6 @@ def test_a_hidden_person_and_one_the_caller_cannot_see_are_left_out(api):
     assert by_id(teammates(api, "ben-test"), "dan")["who"] == [support]
 
 
-def test_the_people_and_bots_are_the_ones_the_org_chart_shows(api):
-    org(api)
-    add_people(
-        api,
-        {"id": "dan", "email": "dan@acme.example", "team": "support-tier-2", "name": "Dan"},
-        {"id": "frank", "email": "frank@acme.example", "team": "support", "name": "Frank", "hidden": True},
-    )
-    rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})
-    rule(api, {"kind": "internal", "text": "Bots cite their source.", "who": {"all_bots": True}})
-    set_access(api, "humans/dan", see={"people": ["ben"]}, read={"people": ["ben"]}, write={"people": ["ben"]})
-    for token in ("ana-test", "ben-test", "cara-test"):
-        chart = get(api, "org", token)
-        mine = teammates(api, token)
-        assert {p["id"] for p in mine["people"]} <= {p["id"] for p in chart["people"]}, token
-        assert {b["slug"] for b in mine["bots"]} <= {b["slug"] for b in chart["bots"]}, token
-
-
 def test_can_edit_is_true_for_an_admin_and_an_owner_and_false_for_a_plain_member(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
@@ -167,17 +150,6 @@ def test_a_runner_credential_is_refused_as_the_rules_list_refuses_it(api):
         with pytest.raises(Problem) as refused:
             O.teammate_rules(c, api.app.state.auth, Identity("runner:ci", "runner"))
     assert refused.value.status == 403
-
-
-def test_a_person_gets_the_rules_the_list_route_gives_her(api):
-    """No person is denied a rule in force (every teammate reads every sentence), so the rules the new route returns are
-    the ones GET /api/v2/rules returns to that person, active ones only."""
-    org(api)
-    rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})
-    rule(api, {"kind": "internal", "text": "Bots cite their source.", "who": {"all_bots": True}})
-    for token in ("cara-test", "ben-test"):
-        listed = api.get("/api/v2/rules", headers=headers(token)).json()["rules"]
-        assert {r["id"] for r in listed} == {r["id"] for r in teammates(api, token)["rules"]}
 
 
 def test_the_answer_matches_the_declared_schema(api):

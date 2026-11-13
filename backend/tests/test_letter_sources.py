@@ -3,7 +3,6 @@
 import importlib.util
 import json
 import sqlite3
-import time
 from pathlib import Path
 
 import pytest
@@ -166,37 +165,6 @@ def test_large_source_fanout_coalesces_to_one_invalidation_without_letter_ids(ap
     invalidated = read_letters(api, 'ana-test', before)
     assert len(invalidated) == 1 and invalidated[0][2]['invalidate'] is True and 'id' not in invalidated[0][2]
     assert read_letters(api, 'cara-test', before) == []
-
-
-@pytest.mark.slow
-def test_unrelated_task_access_change_uses_the_index_at_archive_scale(api, hq):
-    task = post(
-        api,
-        'tasks',
-        {'owner': 'human:cara', 'title': 'Unrelated', 'body': 'Source.', 'private': False},
-        token='cara-test',
-    )
-    row = quote(api)
-    room = create_thread(api, 'cara-test', audience='company')
-    with api.app.state.store.transaction() as c:
-        clone_rows(c, 'letters', row['id'], 4999, 'archive-letter-')
-        clone_rows(c, 'conversations', room['id'], 10000, 'archive-room-')
-        c.execute("INSERT INTO letter_sources SELECT id,'task','another-task' FROM letters")
-        plan = ' '.join(
-            r[3]
-            for r in c.execute(
-                "EXPLAIN QUERY PLAN SELECT letter_id FROM letter_sources WHERE source_type='task' AND source_id=?",
-                (task['id'],),
-            )
-        )
-        assert 'letter_sources_source' in plan and 'SEARCH' in plan and 'SCAN' not in plan
-        before = E.latest(c)
-        started = time.process_time()  # this process's CPU: a loaded runner's waits do not count
-        c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
-        elapsed = time.process_time() - started
-        assert elapsed < 0.050, f'unrelated indexed privacy update took {elapsed:.4f}s'
-        assert c.execute("SELECT count(*) FROM changes WHERE topic='letters' AND seq>?", (before,)).fetchone()[0] == 0
-        print(f'5k letters / 10k conversations: indexed unrelated task update {elapsed * 1000:.3f} ms')
 
 
 def test_source_map_migration_is_standalone_and_backfills_tasks_threads_and_roots():

@@ -115,7 +115,7 @@ async function open(browser: import('playwright').Browser, hash: string, viewpor
     if (p === '/api/v2/operations') return json({machines: [], services: []});
     if (p === '/api/v2/event-types') return json({items: CATALOG});
     if (p === '/api/v2/sleep') return json({sleep: {hosted: state.hosted, hours: 0, runners: false}});
-    if (p === '/api/v2/system-routines') return json({jobs: [], departments: [], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'sales', name: 'Sales'}]});
+    if (p === '/api/v2/system-routines') return json({now: new Date().toISOString(), jobs: [], departments: ['Engineering', 'Sales'], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'sales', name: 'Sales'}]});
     if (p === '/api/v2/pipelines') return json({pipelines: [{id: 'general', name: 'General', retired_at: null, stages: []}, {id: 'engineering', name: 'Engineering', retired_at: null, stages: []}]});
     if (p === '/api/v2/triggers' && !post) return json({triggers: state.triggers});
     if (p === '/api/v2/triggers') {

@@ -250,21 +250,6 @@ def test_the_turn_carries_what_each_gateway_model_reads():
         gateway_tiers.reset()
 
 
-def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_refused(api):
-    settings = api.app.state.store.settings
-    seeded = providers.env_seed(type("S", (), {"models_preset": "subscriptions-gateway"})())
-    assert (seeded["enabled"], seeded["preset"]) == (["anthropic", "openai"], "subscriptions-gateway")
-    assert providers.env_seed(type("S", (), {"models_preset": "something-else"})()) is None
-    with api.app.state.store.transaction() as c, pytest.raises(providers.ProviderError):
-        record = providers.load(c, settings)
-        providers.save(
-            c,
-            "human:ana",
-            {"enabled": ["anthropic"], "preset": "something-else", "expected_revision": record["revision"]},
-            "2026-10-19T00:00:00Z",
-        )
-
-
 def needs(api):
     """The company's sign-in card (models_preset.card), as a list. Needs you no longer lists setup cards since the
     cut-over (it is the engine's list and a person's @s), so the card is read where it is made."""
@@ -777,15 +762,58 @@ def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_
     hop = [*rows, {"bot": "pipe", "harness": "codex", "model": None, "waiting_for_sign_in": None, "changed_at": None}]
     with api.app.state.store.read() as c:
         text = health._fallback_lines(c, settings, listed := [dict(r) for r in hop], {"ops", "cpo"})
-    assert text.startswith("Every bot") and text.endswith(listed[-1]["line"])
+        ops = health._bot_name(c, "ops")
+    assert text.startswith(ops) and text.endswith(listed[-1]["line"])
 
 
-def test_health_names_five_bots_then_says_how_many_more_in_plain_words():
-    """Health names up to five bots, then says how many more there are in words a person reads: "And 1 more bot."""
-    from backend import health
+def test_the_one_fallback_line_names_its_bots_when_a_healthy_bot_also_ran(api, monkeypatch):
+    """Source audit H04: two bots ran on the Gateway for want of a sign-in and a third ran on what it is set to. A
+    healthy turn carries no `waiting_for_sign_in`, so the third bot is not counted, and the one line must name the two
+    bots it covers rather than say every bot runs on the Gateway."""
+    from backend import health, hubdb
 
-    lines = [f"Bot {n} runs on its fallback." for n in range(7)]
-    assert health._named_lines(lines[:1]) == lines[0]
-    assert health._named_lines(lines[:5]) == " ".join(lines[:5])
-    assert health._named_lines(lines[:6]) == " ".join(lines[:5]) + " And 1 more bot."
-    assert health._named_lines(lines) == " ".join(lines[:5]) + " And 2 more bots."
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated="cloud")
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    got = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    with api.app.state.store.transaction() as c:
+        template = dict(c.execute("SELECT * FROM attempts WHERE id=?", (got["id"],)).fetchone())
+        stamp = hubdb.now()
+        runs = {
+            "ops": {"model": "tico-medium-1.0", "waiting_for_sign_in": "claude"},
+            "cpo": {"model": "tico-medium-1.0", "waiting_for_sign_in": "codex"},
+            "pipe": {"model": "claude-opus-5-5"},
+        }
+        for bot, result in runs.items():
+            row = {
+                **template,
+                "id": f"run-{bot}",
+                "token_hash": f"run-{bot}",
+                "job_id": None,
+                "bot_id": bot,
+                "state": "completed",
+                "created_at": stamp,
+                "started_at": stamp,
+                "finished_at": stamp,
+                "result": json.dumps(result),
+                "usage_model": result["model"],
+            }
+            c.execute(f"INSERT INTO attempts({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+    settings = api.app.state.store.settings
+    with api.app.state.store.read() as c:
+        on, _, carrying = health._fallbacks(c)
+        text = health._fallback_lines(c, settings, on, carrying)
+        names = [health._bot_name(c, bot) for bot in ("ops", "cpo", "pipe")]
+    assert sorted(r["bot"] for r in on) == ["cpo", "ops"] and carrying == {"cpo", "ops"}
+    assert not text.startswith("Every bot")
+    assert names[0] in text and names[1] in text and names[2] not in text
+    assert "Tico Medium" in text and "Claude or Codex" in text
+    # Past five bots the line names five and counts the rest.
+    many = [{**on[0], "bot": f"bot-{n}"} for n in range(7)]
+    with api.app.state.store.read() as c:
+        text = health._fallback_lines(c, settings, many, {row["bot"] for row in many})
+    assert "bot-4" in text and "bot-5" not in text and "2 more" in text

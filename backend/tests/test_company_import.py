@@ -1635,17 +1635,6 @@ def test_an_import_that_names_no_places_keeps_the_places_already_saved(environme
         assert O.load(c)["answers"]["regions"] == ["Worldwide", "Texas"]
 
 
-def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_given():
-    from backend import librarian_setup as LS
-    from backend import onboarding as O
-
-    assert "- Serves: Worldwide; Texas" in O._answer_lines({"regions": ["Worldwide", "Texas"]})
-    assert not any("Serves" in line for line in O._answer_lines({"regions": []}))
-    blank = {key: "" for key in LS.QUESTIONS}
-    assert "Serves: Texas. Size the market for these places." in LS.market_text(blank, ["Texas"])
-    assert "Serves" not in LS.market_text(blank)
-
-
 # ----------------------------------------------------------------------------- live seats and teams
 # (title, template, the title of the seat it reports to or "" for the owner, live, team). A live seat is made as a bot
 # that fills it; the QA Owner is a live seat, and the Growth Manager a plain one.

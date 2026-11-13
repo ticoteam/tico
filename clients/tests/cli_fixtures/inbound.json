@@ -26,66 +26,6 @@
  {
   "argv": [
    "inbound",
-   "audience",
-   "1",
-   "team",
-   "--group",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_inbound_audience",
-    {
-     "audience": "team",
-     "group": "1",
-     "inbox_id": "1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "PUT",
-    "inbound/inboxes/1/audience",
-    {
-     "audience": "team",
-     "group_id": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "inbound"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico inbound: error: argument sub: invalid choice: 'nope' (choose from inboxes, create-email, list, search, cursor, wait, audience, read, code) Did you mean: tico inbound code, tico inbound inboxes?",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
    "inboxes",
    "--after",
    "after-1",
@@ -324,17 +264,6 @@
  {
   "argv": [
    "inbound",
-   "search"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico inbound search <q>\ntico inbound search: error: the following arguments are required: q",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
    "cursor"
   ],
   "tools": [
@@ -516,56 +445,6 @@
  {
   "argv": [
    "inbound",
-   "audience",
-   "inbox-id-1",
-   "company",
-   "--group",
-   "group-1"
-  ],
-  "tools": [
-   [
-    "tico_inbound_audience",
-    {
-     "audience": "company",
-     "group": "group-1",
-     "inbox_id": "inbox-id-1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "PUT",
-    "inbound/inboxes/inbox-id-1/audience",
-    {
-     "audience": "company",
-     "group_id": "group-1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "inbound",
-   "audience"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico inbound audience <inbox_id> {company|team}\ntico inbound audience: error: the following arguments are required: inbox_id, audience",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
    "read",
    "message-id-1"
   ],
@@ -624,17 +503,6 @@
  {
   "argv": [
    "inbound",
-   "read"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico inbound read <message_id>\ntico inbound read: error: the following arguments are required: message_id",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
    "code",
    "message-id-1"
   ],
@@ -651,129 +519,6 @@
    [
     "GET",
     "inbound/messages/message-id-1/code",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "inbound",
-   "code"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico inbound code <message_id>\ntico inbound code: error: the following arguments are required: message_id",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
-   "wait",
-   "--after",
-   "12",
-   "--inbox-id",
-   "ib_1",
-   "--inbox-id",
-   "ib_2",
-   "--kind",
-   "sms",
-   "--from",
-   "Bank",
-   "--has-code",
-   "--timeout",
-   "30"
-  ],
-  "tools": [
-   [
-    "tico_inbound_wait",
-    {
-     "after": 12,
-     "has_code": true,
-     "inbox_ids": [
-      "ib_1",
-      "ib_2"
-     ],
-     "kind": "sms",
-     "operation_id": null,
-     "sender": "Bank",
-     "timeout": 30
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "inbound/wait",
-    {
-     "inbox_ids": [
-      "ib_1",
-      "ib_2"
-     ],
-     "kind": "sms",
-     "sender": "Bank",
-     "has_code": true,
-     "after": 12,
-     "timeout": 30
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "inbound",
-   "wait"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico inbound wait\ntico inbound wait: error: the following arguments are required: --after",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
-   "list",
-   "--kind",
-   "fax"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico inbound list: error: argument --kind: invalid choice: 'fax' (choose from email, sms)",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
-   "list",
-   "--spam",
-   "--before",
-   "40",
-   "--limit",
-   "5"
-  ],
-  "tools": [
-   [
-    "tico_inbound_list",
-    {
-     "before": 40,
-     "limit": 5,
-     "operation_id": null,
-     "spam": true
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "inbound/messages?limit=5&before=40&spam=True",
     null
    ]
   ],
@@ -814,80 +559,6 @@
      "audience": "team",
      "group_id": "g1"
     }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "inbound",
-   "audience",
-   "ib_1",
-   "everyone"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico inbound audience: error: argument audience: invalid choice: 'everyone' (choose from company, team)",
-  "exit": 64
- },
- {
-  "argv": [
-   "inbound",
-   "create-email",
-   "Billing"
-  ],
-  "tools": [
-   [
-    "tico_inbound_create_email",
-    {
-     "name": "Billing",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "inbound/inboxes",
-    {
-     "kind": "email",
-     "name": "Billing"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "inbound",
-   "read",
-   "m1",
-   "--offset",
-   "100",
-   "--max-chars",
-   "2000"
-  ],
-  "tools": [
-   [
-    "tico_inbound_read",
-    {
-     "max_chars": 2000,
-     "message_id": "m1",
-     "offset": 100,
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "inbound/messages/m1?offset=100&max_chars=2000",
-    null
    ]
   ],
   "stdout": "{\n  \"ok\": true\n}\n",

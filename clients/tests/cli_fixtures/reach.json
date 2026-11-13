@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "reach"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "reach",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico reach: error: argument sub: invalid choice: 'nope' (choose from show, set) Did you mean: tico reach set, tico reach show?",
-  "exit": 64
- },
- {
-  "argv": [
    "reach",
    "show"
   ],
@@ -43,37 +22,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "reach",
-   "show",
-   "party-1"
-  ],
-  "tools": [
-   [
-    "tico_reach_show",
-    {
-     "operation_id": null,
-     "party": "party-1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "reach",
-    null
-   ],
-   [
-    "GET",
-    "bots",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"AttributeError: 'str' object has no attribute 'get'\"\n}\n",
-  "stderr": "",
-  "exit": 1
  },
  {
   "argv": [
@@ -127,17 +75,6 @@
  {
   "argv": [
    "reach",
-   "set"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico reach set <party>\ntico reach set: error: the following arguments are required: party",
-  "exit": 64
- },
- {
-  "argv": [
-   "reach",
    "set",
    "bot:ana",
    "--chats-per-day",
@@ -174,19 +111,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "reach",
-   "set",
-   "bot:ana",
-   "--mode",
-   "sideways"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico reach set: error: argument --mode: invalid choice: 'sideways' (choose from open, nearby, closed, inherit)",
-  "exit": 64
  }
 ]

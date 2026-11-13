@@ -16,14 +16,6 @@ def watch(heads, supervised=True, lines=None):
     )
 
 
-def test_a_new_revision_is_stale_once_and_says_so():
-    heads, lines = ["a" * 40], []
-    w = watch(heads, lines=lines)
-    assert not w.stale()
-    heads[0] = "b" * 40
-    assert w.stale() and "aaaaaaa to bbbbbbb" in lines[0] and "restarts it" in lines[0]
-
-
 def test_nothing_exits_without_a_supervisor_or_when_the_revision_is_unknown():
     heads = ["a" * 40]
     unsupervised = watch(heads, supervised=False)

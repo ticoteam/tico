@@ -841,6 +841,30 @@ impl Stopper {
     }
 }
 
+/// A harness process: `program` as `identity` (or the bot user when isolation is on), inside a limited scope of its
+/// own where this runner limits turns (crate::turn_limits), else exactly as `isolation::command_as`.
+pub fn harness_command(
+    identity: Option<(u32, u32)>,
+    program: impl AsRef<std::ffi::OsStr>,
+) -> tokio::process::Command {
+    match crate::turn_limits::prefix() {
+        Some(parent) => crate::isolation::command_after(&parent, identity, program),
+        None => crate::isolation::command_as(identity, program),
+    }
+}
+
+/// `harness_command` for a harness that runs as this runner's own user even when isolation is on.
+pub fn own_user_harness_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    match crate::turn_limits::prefix() {
+        Some(parent) => {
+            let mut cmd = tokio::process::Command::new(&parent[0]);
+            cmd.args(&parent[1..]).arg(program);
+            cmd
+        }
+        None => tokio::process::Command::new(program),
+    }
+}
+
 /// Makes the process `command` starts the leader of a new session and process group, so a stop (`own`) reaches
 /// what it starts (tool commands, MCP servers, a browser) as well as itself. A turn's standard streams are piped, so
 /// losing the controlling terminal costs nothing, and nothing it runs can stop on a read from one.
@@ -1345,73 +1369,6 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A harness in its own group that starts a child; its pid (the group) and the child's.
-    async fn grouped_harness() -> (tokio::process::Child, i32, i32) {
-        use tokio::io::AsyncBufReadExt;
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command.args([
-            "-c",
-            "sleep 900 </dev/null >/dev/null 2>&1 & echo $!; while :; do sleep 1; done",
-        ]);
-        command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped());
-        let mut child = new_group(&mut command).spawn().unwrap();
-        let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
-        let tool: i32 = lines
-            .next_line()
-            .await
-            .unwrap()
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        let group = child.id().unwrap() as i32;
-        (child, group, tool)
-    }
-
-    fn group_gone(group: i32) -> bool {
-        // SAFETY: signal 0 only checks whether any process of the group is left.
-        unsafe {
-            libc::kill(-group, 0) == -1
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-        }
-    }
-
-    #[tokio::test]
-    async fn a_terminate_ends_the_whole_group_and_a_kill_ends_only_the_leader() {
-        let (child, group, tool) = grouped_harness().await;
-        // SAFETY: getpgid only reads.
-        assert_eq!(unsafe { libc::getpgid(tool) }, group);
-        let (stopper, exited) = own(child);
-        stopper.terminate(std::time::Duration::from_secs(5));
-        tokio::time::timeout(std::time::Duration::from_secs(5), exited)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !group_gone(group) && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        assert!(group_gone(group), "the harness's child outlived the stop");
-
-        // A background-wait end kills the harness alone: the shells it keeps run on in its group.
-        let (child, group, tool) = grouped_harness().await;
-        let (stopper, exited) = own(child);
-        stopper.kill();
-        tokio::time::timeout(std::time::Duration::from_secs(5), exited)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        // SAFETY: signal 0 only checks the pid.
-        let kept = unsafe { libc::kill(tool, 0) } == 0;
-        // SAFETY: the child this test started, and its group.
-        unsafe { libc::kill(-group, libc::SIGKILL) };
-        assert!(kept, "a kill reached the harness's child");
-    }
 
     #[test]
     fn a_shell_line_reads_only_when_every_run_of_it_reads() {

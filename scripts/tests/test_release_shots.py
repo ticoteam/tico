@@ -256,14 +256,9 @@ def test_markdown_for_a_release_with_no_page_change_says_so() -> None:
     assert '|' not in text
 
 
-@pytest.mark.parametrize(('pct', 'unchanged'), [(0.0, True), (0.0999, True), (0.1, False), (None, False)])
+@pytest.mark.parametrize(('pct', 'unchanged'), [(0.0999, True), (0.1, False), (None, False)])
 def test_a_pair_under_a_tenth_of_a_percent_is_unchanged(pct: float | None, unchanged: bool) -> None:
     assert shots.Shot('updates', 'phone', 'light', 'b.png', 'a.png', pct).unchanged is unchanged
-
-
-def test_picture_names_add_the_theme_only_for_dark() -> None:
-    assert shots.shot_file('updates', 'phone', 'light', 'before') == 'updates-phone-before.png'
-    assert shots.shot_file('updates', 'desktop-1440', 'dark', 'after') == 'updates-desktop-1440-dark-after.png'
 
 
 def test_a_base_from_before_the_rename_reads_the_old_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

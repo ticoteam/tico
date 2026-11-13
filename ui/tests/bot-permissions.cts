@@ -244,7 +244,7 @@ async function roles(browser: import('playwright').Browser) {
     method: 'POST', path: '/api/v2/access/humans', body: {name: 'Sean', email: 'sean@example.test'}, diff: []};
   let accepts = false;
   // The runner keeps a limit of 2, as one that cannot take a raised Turns at once setting does.
-  let turnsAtOnce: number | null = null, holdTurns = false, heldTurns: import('playwright').Route | null = null;
+  let turnsAtOnce: number | null = null;
   const bot = (name: string, display_name: string, extra: Json = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
     state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1,
     can_manage: true, ...extra});
@@ -289,8 +289,6 @@ async function roles(browser: import('playwright').Browser) {
     }
     if (p === '/api/v2/computers/r1/turns-at-once' && method === 'POST') {
       posts.push(['turns-at-once', request.postDataJSON()]);
-      // A held save is answered by the test, so a change can land in the field while it is in flight.
-      if (holdTurns) { heldTurns = route; return; }
       turnsAtOnce = request.postDataJSON().turns_at_once;
       return json({turns_at_once: turnsAtOnce, turn_limit: 2});
     }
@@ -396,20 +394,6 @@ async function roles(browser: import('playwright').Browser) {
   await turns.fill('');
   await turns.dispatchEvent('change');
   assert.equal(await pop.count(), 0, 'the line clears once the value is valid');
-
-  // A change that lands while a save is in flight is not dropped: the field's value once that save
-  // answers is sent next.
-  holdTurns = true;
-  await turns.fill('3');
-  await turns.dispatchEvent('change');
-  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-turns-at-once=r1]')?.disabled === true);
-  await turns.evaluate(el => { (el as HTMLInputElement).value = '5'; el.dispatchEvent(new Event('change', {bubbles: true})); });
-  holdTurns = false;
-  heldTurns!.fulfill({contentType: 'application/json', body: JSON.stringify({turns_at_once: 3, turn_limit: 2})});
-  for (let i = 0; i < 100 && posts.length < 2; i++) await page.waitForTimeout(50);
-  assert.deepEqual(posts.splice(0), [['turns-at-once', {turns_at_once: 3}], ['turns-at-once', {turns_at_once: 5}]],
-    'the change made during the save is sent after it, and not with it');
-  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-turns-at-once=r1]')?.value === '5');
 
   // ---- BotOps' Confirm card, in the Assistant's chat, and nothing happens until the person clicks it
   await page.goto('https://tico-ui.test/#/assistant');

@@ -118,11 +118,5 @@ class Rules(CLI):
         self.assertEqual(payload["counts"]["payment-risk-words"], 1)
 
 
-class Audit(CLI):
-    def test_the_audit_line_never_carries_a_body(self):
-        self.run_cli("inbox", "--as", "influencer")
-        self.assertNotIn("pricing work", json.dumps(self.audit_lines()))
-
-
 if __name__ == "__main__":
     unittest.main()

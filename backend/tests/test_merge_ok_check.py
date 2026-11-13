@@ -4,6 +4,7 @@
 import pytest
 
 from backend import task_engine as E
+from backend.hubdb import Refused
 from backend.item_sources import github as MQ
 from backend.item_sources import github as F
 from backend.tests.helpers import engine as X
@@ -52,21 +53,7 @@ def test_the_merge_stage_posts_the_check_on_the_pinned_head_then_queues_it(compa
     assert task_id in summary and "Ship it" not in summary  # the task by id only: its title stays in Tico
 
 
-def test_a_bot_s_own_enqueue_before_the_merge_stage_is_refused(company):
-    gh = FakeGitHub()
-    gh.require_merge_ok(REPO)
-    with company.transaction() as c:
-        engineering(c)
-        task_id = new(c, 1)
-        head = gh.open_pr(REPO, 1)
-        gh.set_checks(REPO, head, "pending")
-        seen(c, gh, 1)
-        assert stage(c, task_id) == "Build"
-    assert gh.enqueue(REPO, 1, head) == {"ok": False, "how": None, "reason": REFUSED}  # a bot's `gh pr merge`
-    assert posted(gh) == []
-
-
-def test_a_push_after_sign_off_has_no_check_until_the_owner_queues_it_again(company):
+def test_a_push_after_sign_off_has_no_check_until_a_person_queues_it_again(company):
     gh = FakeGitHub()
     gh.require_merge_ok(REPO)
     with company.transaction() as c:
@@ -81,7 +68,11 @@ def test_a_push_after_sign_off_has_no_check_until_the_owner_queues_it_again(comp
     assert gh.enqueue(REPO, 1, pushed)["reason"] == REFUSED  # a bot queuing its new commit itself
     with company.transaction() as c:
         assert stage(c, task_id) == "Merge"
-        MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])  # C22: the stage owner, same PR
+        version = E.task(c, task_id)["version"]
+        with pytest.raises(Refused, match="Move the task back to Fixes 2"):  # C22: a bot may not queue a moved head
+            MQ.requeue(c, task_id, RM, seen_version=version)
+    with company.transaction() as c:
+        MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])  # a person may
     MQ.run(company, gh, later(30))
     assert gh.merge_ok_on(REPO, pushed) is True and gh.prs[(REPO, 1)]["queue_state"] == "queued"
     assert gh.merge_ok_on(REPO, signed) is True  # the old head keeps its success: GitHub has no undo for it

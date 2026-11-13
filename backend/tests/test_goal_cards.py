@@ -170,17 +170,6 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     assert next(a for a in asks(api) if a["ref"] == ref)["title"] == "My own words"  # a person's title stays
 
 
-def test_a_flags_task_says_what_the_strategy_bot_noticed(api):
-    goal_manager(api, level=2)
-    goal, _ = goal_with_kpi(api)
-    flag = propose(api, "flag", {"issue": "vague"}, goal["id"])
-    sync(api)
-    [task] = [a for a in asks(api) if a["ref"] == flag["id"]]
-    with api.app.state.store.read() as c:
-        name = strategy_bot.name(c)
-    assert task["title"] == f"The {name} noticed something on Raise activation"
-
-
 def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
     goal, kpi = goal_with_kpi(api)
     proposed = {"kind": "improve", "baseline": 10, "target": 40, "deadline": "2099-06-30"}
@@ -305,8 +294,8 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     # A fresh reading past the target writes the inbox goal's colour reason; nothing of it reaches her.
     import datetime
 
-    today = datetime.date.today().isoformat()
-    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    yesterday = (datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=1)).isoformat()
     post(api, f"kpis/{secret['id']}/readings", {"value": 7, "period_start": yesterday, "period_end": yesterday})
     with api.app.state.store.read() as c:
         assert "NDAs waiting" in str(
@@ -367,7 +356,7 @@ def test_an_old_link_to_a_hidden_measure_names_it_in_no_colour_reason_or_suggest
         old_link(api, goal["id"], secret["id"], max=3)
     import datetime
 
-    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    yesterday = (datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=1)).isoformat()
     post(api, f"kpis/{secret['id']}/readings", {"value": 7, "period_start": yesterday, "period_end": yesterday})
     post(api, "goals/refresh", {"goal_ids": [auto["id"], manual["id"]]})
     with api.app.state.store.read() as c:

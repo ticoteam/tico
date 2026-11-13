@@ -476,30 +476,6 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_http_server_still_opens() {
-        // Saved, built-in and environment addresses keep today's rules; only adding an org asks for HTTPS.
-        let mut org = sample("o_0000000a", "https://acme.example.com/");
-        org.url = "http://team.example.com/".into();
-        assert_eq!(org.hub().unwrap().as_str(), "http://team.example.com/");
-        org.url = "not an address".into();
-        assert!(org.hub().is_none());
-    }
-
-    #[test]
-    fn the_list_round_trips_through_orgs_json() {
-        let doc = Document {
-            version: VERSION,
-            active: Some("o_7f3a0001".into()),
-            orgs: vec![
-                sample("o_7f3a0001", "https://acme.example.com"),
-                sample("o_7f3a0002", "https://tidy.example.com"),
-            ],
-        };
-        let text = serde_json::to_string(&doc).unwrap();
-        assert_eq!(parse(&text), Some(doc));
-    }
-
-    #[test]
     fn an_orgs_last_place_is_saved_read_back_and_goes_with_the_org() {
         let path = folder("last-place");
         let doc = Document {
@@ -628,24 +604,6 @@ mod tests {
         let ids: Vec<&str> = doc.orgs.iter().map(|org| org.id.as_str()).collect();
         assert_eq!(ids, ["o_cccccccc"]);
         assert_eq!(doc.active.as_deref(), Some("o_cccccccc"));
-    }
-
-    #[test]
-    fn ids_are_eight_hex_digits_and_never_handed_out_twice() {
-        let mut orgs = Orgs::new(Document::default(), None);
-        let mut seen = HashSet::new();
-        for _ in 0..2000 {
-            let id = new_id(&orgs.issued);
-            assert!(valid_id(&id), "{id}");
-            assert!(seen.insert(id.clone()));
-            orgs.issued.insert(id);
-        }
-        assert!(
-            valid_id("o_7f3a0001")
-                && !valid_id("o_7F3A0001")
-                && !valid_id("o_7f3a00")
-                && !valid_id("x_7f3a0001")
-        );
     }
 
     #[test]

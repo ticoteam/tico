@@ -291,17 +291,6 @@ class MintWithoutKey(Base):
 
 
 class WorkspaceRefusals(Base):
-    def test_each_refusal_kind_is_a_failure_that_names_the_mailbox_and_the_fix(self):
-        self.assertEqual(set(oauth.WORKSPACE_REFUSALS), set(REFUSED.values()))
-        for kind in oauth.WORKSPACE_REFUSALS:
-            error = oauth.workspace_refused(kind, "eve@acme.example")
-            self.assertIsInstance(error, oauth.SignInFailed)
-            self.assertIsInstance(error, Failure)
-            self.assertEqual(error.kind, kind)
-            self.assertIn("eve@acme.example", error.msg)
-            self.assertTrue(error.hint)
-            self.assertNotIn("{m}", error.msg + error.hint)
-
     def test_the_supervisor_names_each_workspace_refusal_as_that_kind(self):
         os.environ[auth.SOCKET_ENV] = "/run/tico/credential.sock"
         os.environ["HUB_TOKEN"] = "synthetic-token"

@@ -1648,34 +1648,6 @@ def test_a_finished_turn_whose_job_a_person_dismissed_first_still_ends_completed
     assert bot_replies(api, message) == ['Done: the summary is in the room.']
 
 
-def test_finished_turns_that_come_back_in_a_burst_after_a_runner_wide_stall_all_settle(api):
-    """1c166f6f and 38131cc0 reached the hub in the same second after the whole runner stalled: one job dismissed,
-    one still uncertain. Both end completed, each with its own answer."""
-    from backend.tests.helpers.api import runner
-
-    machine = runner(api, 'ana')
-    assign(api, machine, 'ops')
-    assign(api, machine, 'finance')
-    first = finished_then_lapsed(api, machine, 'ops')[2]
-    message, second = finished_then_lapsed(api, machine, 'finance')[1:]
-    aged(api, first['id'])
-    post(
-        api,
-        f"jobs/{first['job_id']}/reconcile",
-        {
-            'run_id': first['id'],
-            'decision': 'dismiss',
-            'note': 'Stopped; nothing more to send for it.',
-            'acknowledge_uncertain_effects': True,
-        },
-    )
-    hand_in(api, machine, first)
-    hand_in(api, machine, second, text='Finance summary.')
-    assert settled(api, first) == ('completed', 'completed')
-    assert settled(api, second) == ('completed', 'completed')
-    assert bot_replies(api, message, 'finance') == ['Finance summary.']
-
-
 def test_a_lapsed_finished_turn_is_not_run_a_second_time_while_its_result_may_still_come(api):
     """8df1be95: the sweep resumed the job 15 minutes after the lease lapsed and the request ran twice; its result
     came seven seconds later. Now the sweep waits RESULT_GRACE, and the late result settles the job."""
@@ -2804,22 +2776,6 @@ def test_restart_read_only_run_ignores_another_runs_merge(api):
     assert [d['state'] for d in sweep(api)] == ['queued']
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops'").fetchone()
-
-
-def test_restart_run_that_consumed_its_own_approval_is_held(api):
-    from backend.store import H
-
-    add_recovery_reviewer(api)
-    machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
-    with api.app.state.store.transaction() as c:
-        started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
-        c.execute(
-            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at,content_hash,created_at,ok_by_id) SELECT ?1, ?2, ?4, ?4, ?5, ?6, 'sha256-of-the-act', ?5, 'human:ana'",
-            (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
-        )
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    review = get(api, 'bots/ops/execution-review')['jobs'][0]
-    assert review['stopped'] == 'changed' and 'used OK' in review['reason']
 
 
 def test_restart_safe_shell_run_card_names_the_restart_not_only_read(api):

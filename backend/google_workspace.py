@@ -50,6 +50,13 @@ READ_ONLY_SCOPES = {
     "gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
     "calendar": ["https://www.googleapis.com/auth/calendar.readonly"],
 }
+# Google Meet calls in threads (backend/calls.py, docs/meet.md): Tico makes a space as the caller and reads who is in it.
+# This scope covers only the spaces Tico made. It is asked for in the setup link and proved by the check, but it is not
+# one of What Tico may do: a key without it keeps narrowing as before, and Meet calls stay off for it (`meet_ready`).
+MEET_SCOPE = "https://www.googleapis.com/auth/meetings.space.created"
+MEET_SCOPES = {"meet": [MEET_SCOPE]}
+# A space that cannot exist: Google answering it as missing proves the Meet API took the token (`_probe_meet`).
+MEET_PROBE = "https://meet.googleapis.com/v2/spaces/tico-scope-check-0"
 # What Tico may do in Google beyond reading (Tools > Settings > Email), one JSON row in registry_metadata. Each is on until an
 # admin turns it off. Organize mail and Send mail both need gmail.modify (Google has no narrower scope Tico uses), so
 # Send mail is also held in Tico: off, no bot sends (backend/mailbox_access.py, backend/email_sending.py).
@@ -96,6 +103,18 @@ def _cipher():
 
 def scope_urls():
     """Every scope the Workspace grants, sorted: the link's clientScopeToAdd and the copy text, byte for byte."""
+    return sorted(
+        {
+            scope
+            for table in (WORKSPACE_SCOPES, READ_ONLY_SCOPES, MEET_SCOPES)
+            for scopes in table.values()
+            for scope in scopes
+        }
+    )
+
+
+def _narrowing_scopes():
+    """The scopes What Tico may do narrows between: Gmail's and Calendar's, never Meet's."""
     return sorted(
         {scope for table in (WORKSPACE_SCOPES, READ_ONLY_SCOPES) for scopes in table.values() for scope in scopes}
     )
@@ -151,8 +170,45 @@ def minting_scopes(service, may, row):
 
 
 def narrowable(row):
-    """Whether `row`'s key was authorized for every scope Tico shows, so each box of What Tico may do narrows it."""
-    return set(scope_urls()) <= set(authorized(row))
+    """Whether `row`'s key was authorized for every scope What Tico may do narrows, so each of its boxes narrows it.
+    Meet's scope is not one of them: a key without it narrows as before."""
+    return set(_narrowing_scopes()) <= set(authorized(row))
+
+
+def meet_ready(c):
+    """Whether Google Meet calls can be made: the Workspace key is active and its last check proved the Meet scope."""
+    row = active(c)
+    return bool(row) and MEET_SCOPE in authorized(row)
+
+
+def workspace_mailbox(c, actor):
+    """The person's own mailbox when the active Workspace key covers it (a Meet space is made as this mailbox), else
+    None. Bots and anyone off the roster have none."""
+    from .google_connect import mailbox_for
+
+    if not str(actor or "").startswith("human:"):
+        return None
+    try:
+        box = str(mailbox_for(c, H.actor_id(actor))[0] or "").strip().lower()
+    except Problem:
+        return None
+    return box if box and covers(c, box) else None
+
+
+def google_address(c, actor):
+    """The Google account a person opens Google with, for Meet's `authuser`: their Workspace mailbox, else the address of
+    their own live Connect Google grant, else None."""
+    box = workspace_mailbox(c, actor)
+    if box:
+        return box
+    if not str(actor or "").startswith("human:"):
+        return None
+    found = c.execute(
+        "SELECT mailbox FROM google_connects WHERE person_id=? AND holder IS NOT NULL AND grant_hash IS NOT NULL "
+        "AND status<>'disconnected' LIMIT 1",
+        (H.actor_id(actor),),
+    ).fetchone()
+    return str(found[0]).strip().lower() if found and found[0] else None
 
 
 def delegation_scopes():
@@ -442,15 +498,16 @@ def _exchange(c, row, box, scopes, now):
 
 
 def mint(c, mailbox, service, row=None, scopes=None):
-    """An access token for `mailbox` and one service ('gmail' or 'calendar'), as {access_token, expiry, scopes}.
+    """An access token for `mailbox` and one service ('gmail', 'calendar' or 'meet'), as {access_token, expiry, scopes}.
 
     `row` is the key row to mint with; None means the active key. A refusal raises Problem 'not_connected' (403)
     with the kind in extra. Callers decide who may ask first (`authority`); this only signs. The answers are cached
     per key revision until five minutes before they expire, so a check that starts on a revision never reads
     another revision's token. Reads only: the caller records the outcome in a write transaction (`record_mint`).
-    `scopes` names them outright (a check proving what the key was authorized for); None is `minting_scopes`."""
-    if service not in WORKSPACE_SCOPES:
-        raise Problem("scope", "A token is for gmail or calendar", 422)
+    `scopes` names them outright (a check proving what the key was authorized for); None is `minting_scopes`, and
+    Meet's own scope for 'meet' (What Tico may do does not narrow it)."""
+    if service not in WORKSPACE_SCOPES and service not in MEET_SCOPES:
+        raise Problem("scope", "A token is for gmail, calendar or meet", 422)
     box = _address(mailbox)
     current = dict(row) if row else active(c)
     if not current:
@@ -458,6 +515,8 @@ def mint(c, mailbox, service, row=None, scopes=None):
             "not_connected", "The Google Workspace connection is not set up", 403, extra={"kind": "not_connected"}
         )
     # Narrowed to What Tico may do. The scopes are in the cache key, so a box turned off takes effect on the next mint.
+    if not scopes and service in MEET_SCOPES:
+        scopes = MEET_SCOPES[service]
     scopes = list(scopes) if scopes else minting_scopes(service, permissions(c), current)
     key = (current["id"], current["revision"], box, service, tuple(scopes))
     now = time.time()
@@ -769,7 +828,22 @@ def _probe(store, row, mailbox):
         if status != 200:
             kind = "not_found" if status == 404 else "other"
             return False, kind, MESSAGES[kind], []
-    return True, None, "", sorted(proven)
+    return True, None, "", sorted(proven + _probe_meet(store, row, mailbox))
+
+
+def _probe_meet(store, row, mailbox):
+    """Meet's scope, when the key was authorized for it: [MEET_SCOPE] or []. A token for it proves the authorization; a
+    read of a space that cannot exist, answered as missing, proves the Meet API is on for the key's project. Nothing is
+    made. A key without it passes its check as before, with Meet calls off."""
+    with store.read() as c:
+        try:
+            token = mint(c, mailbox, "meet", row=row, scopes=MEET_SCOPES["meet"])["access_token"]
+        except Problem:
+            return []
+    status, _ = google_call(MEET_PROBE, token=token)
+    # 404 (or 400 for a name Google will not parse) comes only after the token and the API were accepted; 401 and 403
+    # are a scope or API Google refused. 200 cannot happen for this name; a fake that answers it proves it too.
+    return [MEET_SCOPE] if status in (200, 400, 404) else []
 
 
 def _settle(c, row, mailbox, ok, kind, message, actor, scopes=None):

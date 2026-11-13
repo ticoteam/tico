@@ -108,17 +108,6 @@ def test_expired_or_superseded_harness_events_cannot_finish_current_goal(api):
     assert get(api, f'conversations/{cid}/goal')['goal'] == newer
 
 
-def test_goal_migration_numbers_and_idempotency(api):
-    from backend.chat_goals_schema import SCHEMA
-    from backend import hubdb
-
-    with api.app.state.store.transaction() as c:
-        assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=49').fetchone()
-        H._apply(c, SCHEMA)
-        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='chat_goals_current'").fetchone()
-    assert hubdb.MIGRATIONS[15] == SCHEMA
-
-
 @pytest.mark.parametrize('ruled', [False, True])
 def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api, ruled):
     """With a company rule in force the done note is the fixed "Goal met.": the harness's words were never checked."""

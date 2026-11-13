@@ -1,8 +1,11 @@
 /* ui/app/task-pipelines.ts — One pipeline on the Tasks page (docs/pipelines-v3.md S7, S8, S17.3): its open tasks as
    columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
-   row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed.
+   row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed. A snoozed
+   task stays in its stage, after every task that is not, dimmed, with a sleep mark and the day it wakes (or On ice);
+   it holds no slot, so a stage's number leaves it out.
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
-   for whoever may change the pipeline. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   for whoever may change the pipeline. Beside it, ▶ and how many items in the stage wait on the person opens the
+   stage's review (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone it sits beside the stage tabs. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
    search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
    file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -47,8 +50,11 @@ function pvStateFor(rec: PipelineRec): PvState {
   return PV;
 }
 
-/** The open tasks the manager's rail reads, when the view shows that pipeline. */
-const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks : [];
+/** A task set aside in its stage (`snoozed`): drawn last there, and holding no slot. */
+const pvSnoozed = (t: TaskAny): boolean => !!(t as {snoozed?: boolean}).snoozed;
+
+/** The open tasks the manager's rail reads, when the view shows that pipeline: the snoozed ones are no one's turn. */
+const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks.filter(t => !pvSnoozed(t)) : [];
 
 // ---------------------------------------------------------------- drawing
 
@@ -58,33 +64,92 @@ const pvShown = (state: PvState, t: TaskAny): TaskAny => {
   return to ? {...t, stage_id: to} : t;
 };
 
-/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks, out of its limit when it has one. */
-function pvStageCount(state: PvState, stage: PipelineStageRec): string {
-  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id).length;
-  return stage.task_limit ? `${n}/${stage.task_limit}` : String(n);
+/** A list row that waits only on a person's OK or answer: it holds no slot in a stage with a limit (`on_person`). */
+const pvOnPerson = (t: TaskAny): boolean => !!(t as {on_person?: boolean}).on_person;
+
+/** How many of a limited stage's open tasks wait only on a person; 0 for a stage without a limit, where every task
+ * counts the same. */
+function pvPersonCount(state: PvState, stage: PipelineStageRec): number {
+  if (!stage.task_limit) return 0;
+  return state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && pvOnPerson(t) && !pvSnoozed(t)).length;
 }
 
-/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise. */
+/** A person, as the mark beside a limited stage's number. */
+const PV_PERSON_ICON = '<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true" focusable="false">'
+  + '<circle cx="7" cy="4.6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.4"/>'
+  + '<path d="M2.6 12c.5-2.4 2.1-3.7 4.4-3.7s3.9 1.3 4.4 3.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+/** Beside a limited stage's number, a person mark and how many wait only on a person: a mark, not words (S8); its
+ * label and title say "15 wait on a person". '' when none do. */
+function pvPersonHTML(n: number): string {
+  if (!n) return '';
+  const words = `${n} ${n === 1 ? 'waits' : 'wait'} on a person`;
+  return `<span class="pv-stage-person tnum" role="img" aria-label="${words}" title="${words}">${PV_PERSON_ICON}${n}</span>`;
+}
+
+/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks that are not snoozed, out of its limit when it
+ * has one. Against a limit it counts the tasks that hold a slot: one waiting only on a person's OK or answer does not
+ * (`pvPersonCount`), nor does a snoozed one (task_engine.has_room). */
+function pvStageCount(state: PvState, stage: PipelineStageRec): string {
+  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && !pvSnoozed(t)).length;
+  return stage.task_limit ? `${n - pvPersonCount(state, stage)}/${stage.task_limit}` : String(n);
+}
+
+/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise.
+ * Beside a limited stage's number, a person mark and a count keeps the tasks that hold no slot in view. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
-  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>`;
+  const pill = pvPersonHTML(pvPersonCount(state, stage));
+  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>${pill}`;
   return state.rec.may_change
     ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}">${inner}</button>`
     : `<span class="pv-stage-h">${inner}</span>`;
 }
 
-/** The tasks of one stage that the search and the filters let through, in the order the page gave them. */
-function pvInStage(state: PvState, stageId: string): TaskAny[] {
-  return state.tasks.map(t => pvShown(state, t))
-    .filter(t => t.stage_id === stageId && taskFilterMatch(t, state.opts.q, state.opts.filters));
+/** ▶ n: the stage's review, with how many of its items wait on the person; '' when none do. */
+function pvPlayHTML(stage: PipelineStageRec): string {
+  const n = stage.id ? needsStageCount(stage.id) : 0;
+  if (!n) return '';
+  return `<button type="button" class="pv-play" data-pv-play="${esc(stage.id ?? '')}" aria-label="${esc(`Review ${stage.name}: ${n} ${n === 1 ? 'waits' : 'wait'} on you`)}" title="Review ${esc(stage.name)}">`
+    + `<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tnum">${n}</span></button>`;
 }
+
+/** The tasks of one stage that the search and the filters let through, in the order the page gave them, the snoozed
+ * ones after all the others. */
+function pvInStage(state: PvState, stageId: string): TaskAny[] {
+  const shown = state.tasks.map(t => pvShown(state, t))
+    .filter(t => t.stage_id === stageId && taskFilterMatch(t, state.opts.q, state.opts.filters));
+  return [...shown.filter(t => !pvSnoozed(t)), ...shown.filter(pvSnoozed)];
+}
+
+/** A crescent moon: the sleep mark on a snoozed task. */
+const PV_SLEEP_ICON = '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" focusable="false">'
+  + '<path d="M11.6 8.9A5 5 0 0 1 5.1 2.4a5 5 0 1 0 6.5 6.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+
+/** When a snoozed task wakes: "Nov 14", or "On ice" when its snooze has no end. Its turn is the snooze (waiting_on). */
+const pvWake = (t: TaskAny): string => shortDate(t.turn?.state === 'snoozed' ? t.turn.until : null) || 'On ice';
+
+/** A snoozed task, dimmed: the sleep mark (a mark, not words: its label and title say "Snoozed until Nov 14"), the title
+ * and the day it wakes. `card` in a column, else a row of the list or the phone's stage. Its tip is the task's line, as
+ * an awake one's is: for a snoozed task, the snooze's why. */
+function pvSnoozedHTML(t: TaskAny, card: boolean): string {
+  const wake = pvWake(t), words = wake === 'On ice' ? 'Snoozed, On ice' : `Snoozed until ${wake}`;
+  const mark = `<span class="tk-mark pv-sleep" role="img" aria-label="${esc(words)}" title="${esc(words)}">${PV_SLEEP_ICON}</span>`;
+  const title = `<span class="tk-title">${esc(t.title || '')}</span>`, when = `<span class="tk-age pv-wake">${esc(wake)}</span>`;
+  const tip = esc(taskLine(t)), attrs = `data-task="${esc(t.id)}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}`;
+  return card
+    ? `<div class="tk-card pv-snoozed" ${attrs}>${title}${mark}${when}</div>`
+    : `<div class="tk-row tk-row-dim pv-snoozed" ${attrs}>${mark}${title}${when}</div>`;
+}
+const pvCardHTML = (t: TaskAny): string => pvSnoozed(t) ? pvSnoozedHTML(t, true) : taskCardHTML(t);
+const pvRowHTML = (t: TaskAny): string => pvSnoozed(t) ? pvSnoozedHTML(t, false) : taskRowHTML(t, {look: 'list'});
 
 const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || taskFiltersOn(opts.filters);
 
 function pvColumnsHTML(state: PvState): string {
   const cols = state.rec.stages.map(stage => {
     const id = stage.id ?? '';
-    const cards = pvInStage(state, id).map(t => taskCardHTML(t)).join('');
-    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}</header>
+    const cards = pvInStage(state, id).map(pvCardHTML).join('');
+    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}</header>
       <div class="pv-col-body">${cards}</div></section>`;
   }).join('');
   return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
@@ -95,8 +160,8 @@ function pvListHTML(state: PvState): string {
   const groups = state.rec.stages.map(stage => {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
-    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}</h2>
-      <div class="pv-rows">${rows.map(t => taskRowHTML(t, {look: 'list'})).join('')}</div></section>`;
+    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}</h2>
+      <div class="pv-rows">${rows.map(pvRowHTML).join('')}</div></section>`;
   }).join('');
   return groups || '<p class="pv-empty muted">Nothing found</p>';
 }
@@ -111,8 +176,10 @@ function pvPhoneHTML(state: PvState): string {
     return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}">`
       + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span></button>`;
   }).join('');
-  const rows = pvInStage(state, shown).map(t => taskRowHTML(t, {look: 'list'})).join('');
-  return `<div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div><div class="pv-rows pv-phone">${rows}</div>`;
+  const rows = pvInStage(state, shown).map(pvRowHTML).join('');
+  const on = stages.find(s => s.id === shown), play = on ? pvPlayHTML(on) : '';
+  const pill = pvPersonHTML(on ? pvPersonCount(state, on) : 0);
+  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${pill}${play}</div><div class="pv-rows pv-phone">${rows}</div>`;
 }
 
 function pvBarHTML(bar: PvBar | null): string {
@@ -141,6 +208,7 @@ function pvDraw(state: PvState): void {
   root.innerHTML = pvHTML(state);
   const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
   if (next) { next.value = text; if (typing) next.focus(); }
+  pipelineAskPaint();     // the Ask bar's stage and the tasks on screen follow the tab
 }
 
 // ---------------------------------------------------------------- what a person does here
@@ -150,6 +218,8 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   if (!target) return;
   const settings = target.closest<HTMLElement>('[data-pv-settings]');
   if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
+  const play = target.closest<HTMLElement>('[data-pv-play]');
+  if (play) { void decideStageOpen(play.dataset['pvPlay'] ?? ''); return; }
   const tab = target.closest<HTMLElement>('[data-pv-tab]');
   if (tab) { pvStageShow(state, tab.dataset['pvTab'] ?? ''); return; }
   if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); }
@@ -260,5 +330,6 @@ TASK_PAGE_HOOKS.pipeline = {
     taskBoardBind(root);
   },
   rail(host, rec) { pipelineRailSync(host, rec); },
+  ask(host, rec, phone) { pipelineAskSync(host, rec, phone); },
   edit(rec) { void openPipelineEditor(rec.id); },
 };

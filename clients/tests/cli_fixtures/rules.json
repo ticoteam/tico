@@ -31,36 +31,6 @@
  },
  {
   "argv": [
-   "rule",
-   "list"
-  ],
-  "tools": [
-   [
-    "tico_rules_list",
-    {
-     "mine": false,
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "rules",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
    "rules",
    "list",
    "--kind",
@@ -138,19 +108,6 @@
   "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "list",
-   "--kind",
-   "both"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico rules list: error: argument --kind: invalid choice: 'both' (choose from internal, external)",
-  "exit": 64
  },
  {
   "argv": [
@@ -718,36 +675,6 @@
  {
   "argv": [
    "rules",
-   "add",
-   "--text",
-   "Pay"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules add\ntico rules add: error: the following arguments are required: --kind",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
-   "add",
-   "--kind",
-   "internal",
-   "--text",
-   "Pay",
-   "--if-broken",
-   "explode"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico rules add: error: argument --if-broken: invalid choice: 'explode' (choose from block, escalate, warn)",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
    "edit",
    "r1",
    "--version",
@@ -877,32 +804,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "edit",
-   "r1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules edit <id>\ntico rules edit: error: the following arguments are required: --version",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
-   "edit",
-   "r1",
-   "--version",
-   "two"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico rules edit: error: argument --version: invalid int value: 'two'",
-  "exit": 64
  },
  {
   "argv": [
@@ -1209,36 +1110,6 @@
   "argv": [
    "rules",
    "due",
-   "list"
-  ],
-  "tools": [
-   [
-    "tico_rules_due",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "rules/due",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "due",
    "list",
    "--next",
    "30d",
@@ -1306,19 +1177,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "due",
-   "--status",
-   "late"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico rules due: error: argument --status: invalid choice: 'late' (choose from overdue, due_soon, upcoming, satisfied)",
-  "exit": 64
  },
  {
   "argv": [
@@ -1417,23 +1275,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "due",
-   "add",
-   "r1",
-   "--first",
-   "2026-12-01",
-   "--owner",
-   "Ada"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules due add <id>\ntico rules due add: error: the following arguments are required: --repeats",
-  "exit": 64
  },
  {
   "argv": [
@@ -1747,18 +1588,6 @@
  {
   "argv": [
    "rules",
-   "check",
-   "Done"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules check <text>\ntico rules check: error: the following arguments are required: --to",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
    "appeal",
    "h1"
   ],
@@ -1818,141 +1647,6 @@
  {
   "argv": [
    "rules",
-   "withdraw",
-   "h1"
-  ],
-  "tools": [
-   [
-    "tico_rules_withdraw",
-    {
-     "id": "h1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "rule-holds/h1/withdraw",
-    {}
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "withdraw"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules withdraw <id>\ntico rules withdraw: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
-   "red",
-   "r1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico rules: error: argument sub: invalid choice: 'red' (choose from list, read, ask, suggested, add, edit, accept, skip, retire, due, check, appeal, withdraw) Did you mean: tico rules read, tico rules edit?",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
-   "list",
-   "--mine"
-  ],
-  "tools": [
-   [
-    "tico_rules_list",
-    {
-     "mine": true,
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "rules?mine=true",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "check"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules check <text>\ntico rules check: error: the following arguments are required: text, --to",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
-   "add"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico rules add\ntico rules add: error: the following arguments are required: --kind, --text",
-  "exit": 64
- },
- {
-  "argv": [
-   "rules",
-   "add",
-   "--kind",
-   "internal",
-   "--text",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_rules_add",
-    {
-     "kind": "internal",
-     "operation_id": null,
-     "text": "1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "rules",
-    {
-     "kind": "internal",
-     "text": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
    "retire",
    "1"
   ],
@@ -1980,117 +1674,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "list",
-   "--status",
-   "any",
-   "--source",
-   "1",
-   "--limit",
-   "100"
-  ],
-  "tools": [
-   [
-    "tico_rules_list",
-    {
-     "limit": 100,
-     "mine": false,
-     "operation_id": null,
-     "source": "1",
-     "status": "any"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "rules?status=any&source=1&limit=100",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "add",
-   "--kind",
-   "external",
-   "--from",
-   "1",
-   "--text",
-   "1",
-   "--file",
-   "1",
-   "--version",
-   "1",
-   "--section",
-   "1",
-   "--quote",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_rules_add",
-    {
-     "cite": {
-      "file_id": "1",
-      "quote": "1",
-      "section": "1",
-      "version": 1
-     },
-     "kind": "external",
-     "operation_id": null,
-     "source_id": "1",
-     "text": "1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "rules",
-    {
-     "kind": "external",
-     "text": "1",
-     "source_id": "1",
-     "cite": {
-      "file_id": "1",
-      "section": "1",
-      "quote": "1",
-      "version": 1
-     }
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
  },
  {
   "argv": [
@@ -2139,106 +1722,6 @@
       ]
      },
      "if_broken": "block"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "add",
-   "--kind",
-   "internal",
-   "--text",
-   "Search ads pause when cost per new customer passes 1 times its 30-day average.",
-   "--who",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_rules_add",
-    {
-     "kind": "internal",
-     "operation_id": null,
-     "text": "Search ads pause when cost per new customer passes 1 times its 30-day average.",
-     "who": {
-      "names": [
-       "1"
-      ]
-     }
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "rules",
-    {
-     "kind": "internal",
-     "text": "Search ads pause when cost per new customer passes 1 times its 30-day average.",
-     "who": {
-      "names": [
-       "1"
-      ]
-     }
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "rules",
-   "add",
-   "--kind",
-   "internal",
-   "--who",
-   "1",
-   "--text",
-   "Social ads pause when cost per new customer passes 1 times its 30-day average"
-  ],
-  "tools": [
-   [
-    "tico_rules_add",
-    {
-     "kind": "internal",
-     "operation_id": null,
-     "text": "Social ads pause when cost per new customer passes 1 times its 30-day average",
-     "who": {
-      "names": [
-       "1"
-      ]
-     }
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "rules",
-    {
-     "kind": "internal",
-     "text": "Social ads pause when cost per new customer passes 1 times its 30-day average",
-     "who": {
-      "names": [
-       "1"
-      ]
-     }
     }
    ]
   ],

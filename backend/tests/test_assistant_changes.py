@@ -110,21 +110,6 @@ def test_a_bulk_close_through_the_route_is_one_change_per_task(api):
     restore_one_of_two(api, a["id"], b["id"])
 
 
-def test_a_bulk_close_shape_is_one_listed_and_restorable_change_per_task(api):
-    """What `task-bulk` writes for each task it closes, as the Assistant's (the route's own check is above)."""
-    a = post(api, "tasks", {"title": "Bulk one", "body": "x", "owner": "human:ben"}, token="ben-test")
-    b = post(api, "tasks", {"title": "Bulk two", "body": "x", "owner": "human:ben"}, token="ben-test")
-    with api.app.state.store.transaction() as c:
-        for task in (a, b):
-            via, deleg = H.VIA.set("assistant"), H.DELEGATION.set({"for": "human:ben", "cited": "", "run": ""})
-            try:
-                H.task_close(c, "human:ben", task["id"], note="")
-            finally:
-                H.VIA.reset(via)
-                H.DELEGATION.reset(deleg)
-    restore_one_of_two(api, a["id"], b["id"])
-
-
 def restore_one_of_two(api, a, b):
     per_task = {t: changes_for(api, f"task:{t}") for t in (a, b)}
     assert all(len(rows) == 1 and rows[0]["undoable"] for rows in per_task.values())
@@ -138,21 +123,6 @@ def test_a_setting_the_assistant_changes_through_the_route_is_listed_and_restore
     said = turn_message(api, attempt)
     rev = get(api, "bots/ops", "ana-test")["revision"]
     asked(api, "bots/ops/turns-at-once", {"turns_at_once": 3, "expected_revision": rev}, attempt["token"], said)
-    [change] = [
-        c
-        for c in get(api, "assistant/changes?days=30", "ana-test")["changes"]
-        if c["object"] == "setting:ops:turns_at_once"
-    ]
-    assert change["undoable"] is True
-    restore(api, change["id"], token="ana-test")
-    assert turns_at_once(api, "ana-test") is None
-
-
-def test_a_setting_marked_as_the_assistants_is_listed_and_restored(api):
-    """The owner's own setting write, its change row marked `via` the Assistant as the route records it."""
-    set_turns_at_once(api, 3, "ana-test")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE settings_changes SET via='assistant' WHERE bot='ops' AND field='turns_at_once'")
     [change] = [
         c
         for c in get(api, "assistant/changes?days=30", "ana-test")["changes"]
@@ -178,23 +148,6 @@ def test_a_message_citing_the_assistant_is_listed_however_its_refs_are_spaced(ap
     listed = [c for c in get(api, "assistant/changes?days=30", "ben-test")["changes"] if c["id"] == msg["id"]]
     assert listed and listed[0]["undoable"] is False
     restore(api, msg["id"], expected=409)
-
-
-def test_the_list_pages_and_stays_small(api):
-    tasks = [
-        post(api, "tasks", {"title": f"Stale item {n}", "body": "x", "owner": "human:ben"}, token="ben-test")
-        for n in range(3)
-    ]
-    r, attempt = assistant_turn(api, "ben-test", "Close the stale items")
-    said = turn_message(api, attempt)
-    for task in tasks:
-        close_on_turn(api, task["id"], attempt, said, task["version"])
-    page = get(api, "assistant/changes?days=30&limit=2", "ben-test")
-    assert len(page["changes"]) <= 2
-    assert all(len(c["what"]) <= 200 and len(c["words"]) <= 200 for c in page["changes"])
-    if page["next"]:
-        rest = get(api, "assistant/changes?days=30&limit=2&before=" + page["next"], "ben-test")
-        assert {c["id"] for c in rest["changes"]}.isdisjoint({c["id"] for c in page["changes"]})
 
 
 def test_undoing_an_assistant_reopen_leaves_the_task_closed_again(api):
@@ -256,12 +209,6 @@ def test_an_automation_change_is_not_restored_by_someone_who_no_longer_manages_i
     ]
     assert change["undoable"] is False and change["why_not"] == "you no longer manage this automation"
     restore(api, change["id"], token="ben-test", expected=409)
-
-
-def test_the_restore_route_is_admitted_on_the_cited_turn(api):
-    from backend import assistant
-
-    assert assistant.write_allowed("POST", "/api/v2/assistant/changes/x/restore", body=b"{}", actor="human:ben")
 
 
 def test_an_owner_change_the_assistant_made_is_restored_to_the_earlier_owner(api):

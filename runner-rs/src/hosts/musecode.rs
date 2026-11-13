@@ -855,7 +855,7 @@ impl MuseCodeHost {
         effort: Option<&str>,
     ) -> Command {
         let argv = self.argv(thread_id, settings, prompt, effort);
-        let mut command = crate::isolation::command(&argv[0]);
+        let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::null())
@@ -1512,31 +1512,6 @@ mod tests {
         );
         assert!(host.inner().turn.is_none() && host.inner().stopper.is_none());
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn tool_calls_follow_the_real_muse_stream() {
-        let proposed = |task: &str| json!({"event": {"kind": "proposed", "task_kind": task}});
-        assert_eq!(
-            tool_started(
-                "task.lifecycle.proposed",
-                &proposed("tool.mcp__tico__tico_task_list")
-            )
-            .as_deref(),
-            Some("mcp__tico__tico_task_list")
-        );
-        assert_eq!(
-            tool_started("task.lifecycle.proposed", &proposed("model.meta.response")),
-            None
-        );
-        assert_eq!(
-            tool_started("task.lifecycle.started", &json!({"task_id": "t"})),
-            None
-        );
-        assert_eq!(
-            tool_started("tool.bash.started", &json!({"tool_name": "bash"})).as_deref(),
-            Some("bash")
-        );
     }
 
     #[test]

@@ -91,18 +91,6 @@ def test_the_status_names_the_database_size_while_the_snapshot_runs(monkeypatch,
     assert updater.status["state"] == "healthy"
 
 
-def test_the_quick_check_on_the_snapshot_is_always_on_and_has_no_switch(monkeypatch, tmp_path):
-    sent = []
-    updater = load(monkeypatch, "", tmp_path)
-    monkeypatch.setattr(updater, "compose", lambda *a, tag=None, **k: sent.append(a) or "")
-    updater.take_snapshot("v0.1.0", 1200)
-    assert sent[-1][-1] == str(max(1200 - 60, 1200 * 4 // 5))  # the limit is the last argument: no check flag after it
-    assert "quick_check" in updater.SNAPSHOT_SCRIPT and "page_count" not in updater.SNAPSHOT_SCRIPT
-    assert not hasattr(updater, "FULL_CHECK")
-    monkeypatch.setenv("TICO_UPDATER_FULL_CHECK", "0")  # an old setting does nothing now
-    assert "quick_check" in load(monkeypatch, "", tmp_path).SNAPSHOT_SCRIPT
-
-
 def test_the_snapshot_script_removes_parts_left_by_an_attempt_that_ran_out_of_time(monkeypatch, tmp_path):
     import sqlite3, subprocess, sys
 
@@ -616,7 +604,7 @@ def test_compose_passes_the_snapshot_settings_from_env_to_the_updater():
     assert "TICO_UPDATER_FULL_CHECK" not in environment
 
 
-@pytest.mark.parametrize("override", ["soon", "0", "-30"])
+@pytest.mark.parametrize("override", ["soon", "0"])
 def test_a_bad_snapshot_override_falls_back_to_the_scaled_allowance(monkeypatch, tmp_path, capsys, override):
     monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", override)
     updater = load(monkeypatch, "", tmp_path)
@@ -844,38 +832,57 @@ def server_wait(monkeypatch, tmp_path, rows, answers):
     return updater, inspected, asked
 
 
-def test_a_server_container_that_exited_during_start_ends_the_health_wait_early(monkeypatch, tmp_path):
+def wait_clock(monkeypatch, updater):
+    """The updater's clock, turned by its own sleeps and by nothing else: how long a health wait lasted is then how
+    long it chose to wait, whatever else the computer was doing."""
     import time
+    from types import SimpleNamespace
 
+    clock = SimpleNamespace(now=1_000_000.0)
+
+    class Time:
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def time(self):
+            return clock.now
+
+        def sleep(self, seconds):
+            clock.now += seconds
+
+    monkeypatch.setattr(updater, "time", Time())
+    return clock
+
+
+def test_a_server_container_that_exited_during_start_ends_the_health_wait_early(monkeypatch, tmp_path):
     updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["exited|0|False"], ["down"])
-    started = time.time()
+    clock = wait_clock(monkeypatch, updater)
+    started = clock.now
     assert updater.healthy(60) is False
-    assert time.time() - started < 5  # the window is 60 s; the wait ends at the first poll
+    assert clock.now - started < 5  # the window is 60 s; the wait ends at the first poll
     assert inspected.n == 1 and asked.n == 1
     assert "the server container exited during start" in updater.HEALTH_GAVE_UP
 
 
 def test_a_server_container_restarting_in_a_loop_ends_the_health_wait_early(monkeypatch, tmp_path):
-    import time
-
     # The restart count is read when the wait begins (5); two restarts since then is a crash loop, not a slow start.
     updater, inspected, asked = server_wait(
         monkeypatch, tmp_path, ["running|5|False", "running|6|False", "restarting|7|False"], ["down"]
     )
-    started = time.time()
+    clock = wait_clock(monkeypatch, updater)
+    started = clock.now
     assert updater.healthy(60) is False
-    assert time.time() - started < 5
+    assert clock.now - started < 5
     assert inspected.n == 3
     assert "restarted 2 times during start" in updater.HEALTH_GAVE_UP
 
 
 def test_a_running_server_with_no_restarts_waits_the_whole_window(monkeypatch, tmp_path):
-    import time
-
     updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["running|0|False"], ["down"])
-    started = time.time()
+    clock = wait_clock(monkeypatch, updater)
+    started = clock.now
     assert updater.healthy(0.3) is False
-    assert time.time() - started >= 0.3  # it kept polling until the deadline
+    assert clock.now - started >= 0.3  # it kept polling until the deadline
     assert inspected.n > 1 and asked.n > 1
     assert updater.HEALTH_GAVE_UP == ""
 

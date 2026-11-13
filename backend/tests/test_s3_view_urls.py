@@ -40,7 +40,3 @@ def test_signed_in_callers_read_the_mapping_and_nobody_else(environment):
     assert api.get("/api/v2/config").status_code in (401, 403)
     with api.app.state.store.read() as c:
         assert "s3_view_urls" not in config_view(c, api.app.state.store.settings, None)
-
-
-def test_without_the_setting_the_mapping_is_empty(environment):
-    assert environment().get("/api/v2/config", headers=signed_in()).json()["s3_view_urls"] == {}

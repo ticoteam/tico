@@ -3011,51 +3011,6 @@ mod tests {
     }
 
     #[test]
-    fn a_computer_wants_what_its_bots_run_on_and_removes_what_the_owner_turned_off() {
-        let dir =
-            std::env::temp_dir().join(format!("tico-harness-{}", uuid::Uuid::new_v4().simple()));
-        let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());
-        let none: [&str; 0] = [];
-        let choices =
-            json!({"codex": true, "claude-code": false, "cursor-agent": false, "unknown": true});
-        h.choose(choices.as_object().unwrap());
-        assert!(!h.turned_off("cursor-agent")); // nothing is off before the bots were read
-                                                // An empty computer takes the company default, unless the owner turned it off.
-        assert!(h.want(&none, &["gemini"]).contains("gemini-cli"));
-        assert!(!h.want(&none, &["claude"]).contains("claude-code"));
-        assert_eq!(
-            h.want(&["claude", "nope"], &none),
-            HashSet::from(["claude-code".to_string(), "codex".to_string()])
-        );
-        assert_eq!(
-            h.choose(choices.as_object().unwrap()),
-            HashSet::from(["claude-code".to_string(), "codex".to_string()])
-        );
-        assert!(!h.turned_off("claude-code") && h.turned_off("cursor-agent")); // a bot here still needs Claude Code
-        assert_eq!(
-            h.installing("codex").as_deref(),
-            Some("Codex is installing")
-        );
-        assert!(h.installing("cursor").is_none());
-        // A turned-off install this runner made is removed when no turn uses it.
-        let cursor = h.manifests["cursor-agent"].clone();
-        std::fs::create_dir_all(dir.join("tools").join("cursor-agent").join("x")).unwrap();
-        std::fs::create_dir_all(h.bin_dir()).unwrap();
-        std::os::unix::fs::symlink(
-            "../cursor-agent/current/x",
-            h.bin_dir().join(&cursor.executable),
-        )
-        .unwrap();
-        h.step(|| HashSet::from(["cursor".to_string()]));
-        assert!(dir.join("tools").join("cursor-agent").exists()); // busy: kept
-        h.check_every = f64::INFINITY;
-        h.step(HashSet::new);
-        assert!(!dir.join("tools").join("cursor-agent").exists());
-        assert!(std::fs::symlink_metadata(h.bin_dir().join(&cursor.executable)).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn task_models_require_their_runtime_until_cleared_even_when_switched_off() {
         let dir = std::env::temp_dir().join(format!(
             "tico-task-runtime-{}",

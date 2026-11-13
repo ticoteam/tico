@@ -7,6 +7,7 @@ Eve is on no team and owns the Helper bot."""
 import json
 
 from backend import bot_settings as BS
+from backend.reach import may_book
 from backend.store import encode
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
 import pytest
@@ -91,7 +92,8 @@ def test_each_field_comes_from_the_nearest_party_that_sets_it_then_everyone_then
         "mode": "closed",
         "chats_per_day": 50,
         "tasks_per_day": 5,
-        "from": {"mode": "*", "chats_per_day": "group:support", "tasks_per_day": "bot:finance"},
+        "book": "anyone",
+        "from": {"mode": "*", "chats_per_day": "group:support", "tasks_per_day": "bot:finance", "book": None},
     }
     # A team takes it from the teams above it; someone on no team from Everyone, then the default.
     assert found["group:support-tier-2"]["chats_per_day"] == 50
@@ -102,7 +104,13 @@ def test_each_field_comes_from_the_nearest_party_that_sets_it_then_everyone_then
     put_setting(api, "group:support-tier-2", {"chats_per_day": 10})
     assert reach(api)["effective"]["human:fay"]["chats_per_day"] == 10
     cleared = put_setting(api, "bot:finance", {"tasks_per_day": None})
-    assert cleared["setting"] == {"party": "bot:finance", "mode": None, "chats_per_day": None, "tasks_per_day": None}
+    assert cleared["setting"] == {
+        "party": "bot:finance",
+        "mode": None,
+        "chats_per_day": None,
+        "tasks_per_day": None,
+        "book": None,
+    }
     assert "bot:finance" not in {s["party"] for s in reach(api)["settings"]}  # nothing left set: the row goes
     assert reach(api)["effective"]["bot:finance"]["tasks_per_day"] == 999
 
@@ -118,34 +126,13 @@ def test_a_setting_change_is_audited_and_bad_values_and_unknown_parties_are_refu
         "mode": "closed",
         "chats_per_day": 50,
         "tasks_per_day": None,
+        "book": None,
     }
     put_setting(api, "group:support", {"mode": "sometimes"}, expected=422)
     put_setting(api, "group:support", {"chats_per_day": 100001}, expected=422)
     put_setting(api, "group:nowhere", {"mode": "open"}, expected=404)
     put_setting(api, "human:nobody", {"mode": "open"}, expected=404)
     put_setting(api, "ana", {"mode": "open"}, expected=422)  # a party says what it is
-
-
-def test_the_map_has_the_contract_shape(api):
-    org(api)
-    put_setting(api, "group:support", {"tasks_per_day": 20})
-    made = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 3})["line"]
-    found = reach(api)
-    assert {"defaults", "settings", "effective", "lines", "may_edit"} <= set(found)
-    assert found["defaults"] == {"mode": "nearby", "chats_per_day": 999, "tasks_per_day": 999, "person_mode": "open"}
-    assert {"party", "mode", "chats_per_day", "tasks_per_day"} <= set(found["settings"][0])
-    assert {"mode", "chats_per_day", "tasks_per_day", "from"} <= set(found["effective"]["*"])
-    line = next(row for row in found["lines"] if row["id"] == made["id"])
-    assert {"id", "sender", "receiver", "per_day", "rule", "may_edit"} <= set(line)
-    assert (line["sender"], line["receiver"], line["per_day"], line["rule"], line["may_edit"]) == (
-        "bot:finance",
-        "human:eve",
-        3,
-        None,
-        True,
-    )
-    assert {"*", "group:support", "human:cara", "bot:finance"} <= set(found["may_edit"])
-    assert "human:ana" not in found["may_edit"]  # the owner is never limited
 
 
 def test_a_lines_rule_is_an_internal_org_rule_made_edited_and_retired_with_it(api):
@@ -266,3 +253,71 @@ def test_an_edit_may_flip_a_line_and_its_rule_follows_but_never_onto_a_pair_that
     edit_line(api, mine["id"], {"sender": "human:eve"}, token="cara-test", expected=403)
     assert edit_line(api, flipped["id"], {"rule": ""})["line"]["rule"] is None  # "" retires it too
     assert rule_row(api, flipped["rule"]["id"])["status"] == "retired"
+
+
+# ----------------------------------------------------------------------------------------- who bots may book (may_book)
+def may(api, actor, target):
+    with api.app.state.store.read() as c:
+        return may_book(c, actor, target)
+
+
+def events(api, action, target):
+    with api.app.state.store.read() as c:
+        return [
+            json.loads(r[0])
+            for r in c.execute("SELECT detail FROM events WHERE action=? AND target=?", (action, target))
+        ]
+
+
+def test_who_bots_may_book_is_anyone_until_a_setting_narrows_it_and_a_team_passes_it_down(api):
+    org(api)
+    assert reach(api)["defaults"]["book"] == "anyone"
+    assert may(api, "bot:finance", "human:cara")[0]  # the default: anyone
+    put_setting(api, "group:support", {"book": "nearby"})
+    found = reach(api)["effective"]
+    # Finance is on Support Tier 2, under Support, so it takes the setting from Support; Helper is on no team.
+    assert found["bot:finance"]["book"] == "nearby" and found["bot:finance"]["from"]["book"] == "group:support"
+    assert found["bot:helper"]["book"] == "anyone" and found["bot:helper"]["from"]["book"] is None
+    # A bot's own setting wins over its team's; clearing it takes the team's again.
+    put_setting(api, "bot:finance", {"book": "none"})
+    assert reach(api)["effective"]["bot:finance"]["from"]["book"] == "bot:finance"
+    assert not may(api, "bot:finance", "human:fay")[0]
+    put_setting(api, "bot:finance", {"book": None})
+    assert reach(api)["effective"]["bot:finance"]["book"] == "nearby"
+
+
+def test_nearby_books_only_who_the_nearby_mode_reaches_and_the_reason_says_where_it_was_set(api):
+    org(api)
+    put_setting(api, "group:support", {"book": "nearby"})
+    assert may(api, "bot:finance", "human:ana")[0]  # its manager (the owner: it has none on the chart)
+    assert may(api, "bot:finance", "human:fay")[0]  # on its team
+    assert may(api, "bot:finance", "bot:helper")[0]  # a peer
+    allowed, reason = may(api, "bot:finance", "human:cara")  # in Support, but off finance's part of the chart
+    assert not allowed
+    assert reason.startswith("Who bots may book is Nearby for Support: ") and "Nothing was booked." in reason
+    # A line from it adds its receiver, as the nearby mode does, and a line that blocks the pair takes its neighbor away.
+    add_line(api, {"sender": "bot:finance", "receiver": "human:cara"})
+    assert may(api, "bot:finance", "human:cara")[0]
+    add_line(api, {"sender": "bot:finance", "receiver": "human:fay", "per_day": 0})
+    assert not may(api, "bot:finance", "human:fay")[0]
+
+
+def test_none_books_no_one_but_a_person_the_hub_and_the_assistant_are_never_limited(api):
+    org(api)
+    put_setting(api, "*", {"book": "none"})
+    allowed, reason = may(api, "bot:finance", "human:fay")
+    assert not allowed and reason.startswith("Who bots may book is No one for Everyone, so ")
+    assert not may(api, "bot:helper", "human:ana")[0]
+    assert may(api, "human:ana", "human:cara")[0]
+    assert may(api, "human:fay", "human:cara")[0]
+    assert may(api, "keeper", "human:cara")[0]
+    assert may(api, "bot:assistant", "human:cara")[0]  # the Assistant (TICO_ASSISTANT_BOT) is a built-in helper
+
+
+def test_the_book_setting_is_validated_audited_and_its_change_is_an_event(api):
+    org(api)
+    put_setting(api, "group:support", {"book": "sometimes"}, expected=422)
+    put_setting(api, "group:support", {"book": "nearby"})
+    assert json.loads(audit(api, "reach_setting:group:support")[-1]["after"])["book"] == "nearby"
+    assert events(api, "reach.setting_changed", "reach_setting:group:support")[-1]["fields"] == ["book"]
+    assert reach(api)["settings"][0]["book"] == "nearby"

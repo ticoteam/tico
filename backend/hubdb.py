@@ -2632,12 +2632,13 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     return resolved
 
 
-def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False):
+def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False, *, labels=None, task=None):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
     not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
     watcher's for a Monitor. Returns (rule, why) or None without recording a refusal, so automatic assignment
-    can skip an ineligible bot. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
+    can skip an ineligible bot. `title`, `parent` and `labels` say what is being filed, `task` which existing task is
+    being given; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
@@ -2667,11 +2668,13 @@ def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=Fa
             parent,
             routine,
             owner=target,
+            labels=labels,
+            task=task,
         )
 
 
-def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
-    if found := task_taking_refusal(conn, actor, target, title, parent, routine):
+def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False, *, labels=None, task=None):
+    if found := task_taking_refusal(conn, actor, target, title, parent, routine, labels=labels, task=task):
         refuse(conn, actor, *found)
 
 
@@ -5015,6 +5018,10 @@ def task_comment(
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     if is_human(actor) and (wake if delegate is None else delegate):
         delegate_woken(conn, task_id, actor, msg)
+    if is_human(actor) and is_bot(owner) and owner in (bot for bot, _ in _woken_bots(conn, msg)):
+        from . import task_engine
+
+        task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
@@ -5038,11 +5045,23 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
+    until = shift(now(), hours=24)
+    for recipient, mid in _woken_bots(conn, msg):
+        conn.execute(
+            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
+            "VALUES(?,?,?,?,?)",
+            (task_id, recipient, person, mid, until),
+        )
+
+
+def _woken_bots(conn, msg):
+    """The bots a message wakes, each with the message that starts its run: the bot it is written to, unless it is
+    quiet, and each bot a steer or queue delivery is pending for."""
     woken = []
     refs = _json(msg.get("refs"), {}) or {}
     if is_bot(msg.get("recipient_id")) and not refs.get("quiet"):
         woken.append((msg["recipient_id"], msg["id"]))
-    woken += [
+    return woken + [
         (r["recipient"], r["carrier_id"])
         for r in _rows(
             conn.execute(
@@ -5052,13 +5071,6 @@ def delegate_woken(conn, task_id, person, msg):
             )
         )
     ]
-    until = shift(now(), hours=24)
-    for recipient, mid in woken:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
 
 
 def jobs_mark(conn):
@@ -5376,6 +5388,48 @@ def task_comment_delete(conn, actor, task_id, message_id):
     return deleted
 
 
+PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", re.IGNORECASE)
+
+
+def review_finding_route(conn, actor, task_id, target):
+    """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
+    task's own pull request goes back to that task's Builder through its review (docs/pipelines-v3.md, Engineering),
+    and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
+    links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
+    if not is_bot(actor) or not is_human(target):
+        return
+    row = task(conn, task_id)
+    if not row or row.get("pipeline_id") != GENERAL_PIPELINE:
+        return
+    prs = {
+        (str(repo).lower(), int(number))
+        for repo, number in conn.execute(
+            "SELECT repo, number FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+            "AND number IS NOT NULL",
+            (task_id,),
+        )
+    }
+    words = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    prs |= {(f"{owner}/{name}".lower(), int(number)) for owner, name, number in PR_IN_TEXT.findall(words)}
+    for repo, number in sorted(prs):
+        own = conn.execute(
+            "SELECT t.title, s.name FROM task_links l JOIN tasks t ON t.id=l.task_id JOIN stages s ON s.id=t.stage_id "
+            "WHERE l.kind='pr' AND lower(l.repo)=? AND l.number=? AND t.id<>? AND t.status='open' "
+            "AND t.pipeline_id IS NOT NULL AND t.pipeline_id<>? ORDER BY t.created_at LIMIT 1",
+            (repo, number, task_id, GENERAL_PIPELINE),
+        ).fetchone()
+        if own:
+            refuse(
+                conn,
+                actor,
+                "review_route",
+                f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
+                "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
+                "reviewers' answer in Fixes 2), never to a person: put it there and close this task with a link. Only "
+                "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
+            )
+
+
 def task_create(
     conn,
     actor,
@@ -5417,6 +5471,7 @@ def task_create(
     follow=False,
     readers=(),
     readers_check=None,
+    unassigned=False,
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
 
@@ -5434,6 +5489,8 @@ def task_create(
     `top`.
     `number` keeps an imported task's number: a mover's (`mover`), and free.
     `routine` is an automation's own run: a Monitor or Reviewer takes it as its own work.
+    `unassigned` enters it with no assignee: `owner` is still its requester and reach, but a stage owned by the task's
+    assignee has nobody, and its pipeline's manager is woken to pick one (a handoff, backend/stage_effects.py).
     `occurrence` is the marker of a due-date routine's occurrence, "<automation_id>:<due_on>": each day's task is its
     own, so an open one with the same title (an overdue day's) does not count as a duplicate of it, and it is stored
     on the task (`tasks.occurrence`) for the sweeps and the app. With `occurrence_step` too, the task is one per
@@ -5456,7 +5513,10 @@ def task_create(
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
     _botops_only(conn, actor, target)
-    _takes_tasks(conn, actor, target, title, parent_id, routine)
+    from . import profiles
+
+    labels = profiles.review_labels(title, parent_id, _labels(labels))
+    _takes_tasks(conn, actor, target, title, parent_id, routine, labels=labels)
     _learning(conn, actor, target)
     if occurrence and occurrence_step:
         again = _one(
@@ -5763,7 +5823,7 @@ def task_create(
             row["id"],
             pipeline_id,
             actor,
-            assignee=target,
+            assignee=None if unassigned else target,
             parent=parent["id"] if parent else None,
             link=link,
             wake=wake,
@@ -6739,6 +6799,15 @@ def task_run_now(conn, actor, task_id):
         refuse(conn, actor, "run-now", f"the task is {row['status']}; {task_reopen_hint(conn, actor, row)}")
     if why := setup_hold(conn, row["owner_id"]):
         raise Refused("run-now", why)  # not a refused write: nothing to count against the caller
+    if (
+        row.get("pipeline_id")
+        and conn.execute("SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()
+    ):
+        # Run now asks for the work now: like the task's Wake button it ends the snooze, in the presser's name. Left
+        # snoozed, the engine holds the run it queues (task_wakes.may_start) and Run now did nothing.
+        from . import task_engine
+
+        task_engine.unsnooze(conn, task_id, actor, "Run now")
     waiting = None
     try:
         waiting = _one(
@@ -7163,7 +7232,8 @@ def rate_limits(conn):
 # An attempt with a job and no trigger failed before its record was written (old history) and has none.
 TURN_SELECT = (
     "id, bot_id AS bot, thread_id, created_at AS started_at, settled_at AS finished_at, trigger, "
-    "message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, usage_model AS model, "
+    "message_id, task_id, exit, summary, input_tokens, cached_tokens, cache_write_tokens, output_tokens, "
+    "usage_model AS model, "
     "provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, "
     "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id"
 )
@@ -7229,19 +7299,22 @@ def turn_start(
 
 
 # Why a finished run's usage says 0 tokens or no cost (`attempts.usage_reason`). Usage is written on every finish, so a
-# sum over input_tokens, cached_tokens, output_tokens and est_cost_usd counts every run, failed and stopped ones too.
+# sum over input_tokens, cached_tokens, cache_write_tokens, output_tokens and est_cost_usd counts every run, failed and
+# stopped ones too. cache_write_tokens is NULL on a run whose runner did not count cache writes apart (an older runner):
+# its input_tokens include them.
 USAGE_REASONS = {
     "usage_unreported": "its runner sent a result with no token counts (the harness reported none)",
     "usage_limited": "the runtime refused the turn on a usage limit and reported no tokens",
     "no_result": "its runner never sent a result (the lease ran out, or a restore ended it)",
     "cost_unpriced": "tokens were counted, but its model has no list price, so est_cost_usd is null",
 }
-NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
+NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
 
 
 def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, usage_reason="usage_unreported"):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
-    `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
+    `usage` is what the run cost in tokens: input_tokens (uncached, without cache writes), cached_tokens,
+    cache_write_tokens (None when its runner did not count them apart), output_tokens, model, provider,
     est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
     Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
     left blank."""
@@ -7263,11 +7336,12 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     if not recorded:
         conn.execute(
             "UPDATE attempts SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-            "output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+            "cache_write_tokens=:cache_write_tokens, output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
             "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
             {
                 "input_tokens": None,
                 "cached_tokens": None,
+                "cache_write_tokens": None,
                 "output_tokens": None,
                 "model": None,
                 "provider": None,
@@ -7714,6 +7788,24 @@ def labels_in_use(conn, visible="1"):
     ]
 
 
+# A keyset page starts after the last row's sort key: queue order (rank-less last, rank, created, id) or finished order
+# (most recently finished first, id). Row values compare left to right as the ORDER BY sorts. created_at is a nullable
+# column: a missing date is '' here, which sorts where NULL does (before every date ascending, after every date
+# descending), so a row with none is still reached and its key still round-trips as a string.
+KEYSET_SQL = {
+    "queue": "((rank IS NULL), COALESCE(rank, 0), COALESCE(created_at, ''), id) > (?, ?, ?, ?)",
+    "finished": "(COALESCE(done_at,closed_at,updated_at,created_at,''), id) < (?, ?)",
+}
+
+
+def task_sort_key(row, order="queue"):
+    """The sort key `tasks(after=...)` takes, of one raw task row, as a list that survives JSON."""
+    if order == "queue":
+        return [int(row.get("rank") is None), row.get("rank") or 0, row.get("created_at") or "", row["id"]]
+    when = next((row[k] for k in ("done_at", "closed_at", "updated_at", "created_at") if row.get(k) is not None), "")
+    return [when, row["id"]]
+
+
 def tasks(
     conn,
     owner=None,
@@ -7733,14 +7825,23 @@ def tasks(
     snoozed=None,
     q=None,
     exclude_owner=None,
+    match=(),
+    after=None,
+    keys_only=False,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `updated_since` is a stored timestamp.
     `member` keeps the tasks that actor is on
     in some role (task_roles), or in `role` when given. `ids` limits it to those tasks (a delta
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
-    `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match."""
+    `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match. `match` is more WHERE fragments
+    over the task's own columns, each with its arguments (backend/task_match.py, the Tasks page's filters). `after` is
+    a keyset start: the sort key of the last row a page gave (`task_sort_key`), so the page holds the rows after it.
+    `keys_only` answers every match's (id, title, number) in order instead, for a filter worked out in Python."""
     sql, args, where = "SELECT * FROM tasks", [], []
+    for fragment, values in match:
+        where.append("(" + fragment + ")")
+        args += list(values)
     if q and q.strip():
         query = q.strip()[:1000]
         if re.fullmatch(r"#\d+", query):
@@ -7793,14 +7894,22 @@ def tasks(
         else:
             where.append(f"status IN ({','.join('?' * len(wanted))})")
             args += wanted
-    if where:
-        sql += " WHERE " + " AND ".join(where)
     if order == "queue":
         ordering = "(rank IS NULL), rank, created_at, id"
     elif order == "finished":
         ordering = "COALESCE(done_at,closed_at,updated_at,created_at) DESC, id DESC"  # most recently done first
     else:
         raise ValueError("task order is queue or finished")
+    if after is not None:
+        # The same tuple the ORDER BY sorts on; a rank-less row's rank is never compared (its first part decides).
+        where.append(KEYSET_SQL[order])
+        args += list(after)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    if keys_only:
+        return conn.execute(
+            "SELECT id, title, number" + sql[len("SELECT *") :] + f" ORDER BY {ordering}", args
+        ).fetchall()
     page = (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))
     if order == "queue" and limit is not None:
         # The page's ids first, then its full rows. Sorting `SELECT *` copied every visible task's body into the

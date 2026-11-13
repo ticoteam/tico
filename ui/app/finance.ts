@@ -220,9 +220,10 @@ const finNote = (text: string) => `<p class="muted fin-note">${esc(text)}</p>`;
 const finFail = (e: unknown) => finNote(errorStatus(e) === 403 ? 'Not in your view.' : errorMessage(e, 'Did not load.'));
 function finRail(html: string) { const rail = $('#fin-rail'); if (rail) rail.innerHTML = html; }
 
-// An action with a fresh Idempotency-Key: committed, or sent to someone for approval; anything else is an error.
-async function finAct(kind: string, payload: object) {
-  const r: FinActResult | null = await post('/v2/finance/actions', {kind, payload});
+// An action with a fresh Idempotency-Key, or `operationId` when the caller keeps one so a retry after a lost answer is the
+// same action: committed, or sent to someone for approval; anything else is an error.
+async function finAct(kind: string, payload: object, operationId?: string) {
+  const r: FinActResult | null = await post('/v2/finance/actions', {kind, payload}, operationId);
   if (r?.status === 'committed') return r;
   if (r?.status === 'needs_approval') { toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval'); return r; }
   throw new Error(r?.reason || 'Not done');

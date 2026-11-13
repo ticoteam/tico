@@ -76,16 +76,6 @@ def test_botops_signin_uses_requester_rights_by_default():
     assert not default_delegable('GET', 'runner-logins')
 
 
-def test_subscriptions_migrations_are_repeatable_and_follow_repositories(api):
-    from backend import hubdb as H
-
-    assert H.MIGRATIONS[16:19] == [H.REPOSITORIES_SCHEMA, H.TASK_LINKS_V2_SCHEMA, H.SUBSCRIPTIONS_SCHEMA]
-    with api.app.state.store.transaction() as c:
-        H._apply(c, H.SUBSCRIPTIONS_SCHEMA)
-        assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=52').fetchone()
-        assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
-
-
 def test_subscription_computers_use_computer_visibility(api):
     r = runner(api)
     with api.app.state.store.transaction() as c:

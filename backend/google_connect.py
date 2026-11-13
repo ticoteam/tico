@@ -35,6 +35,7 @@ a service account.
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import time
 import urllib.error
@@ -52,11 +53,13 @@ from . import routines
 from .google_workspace import acts as acts_allowed, oauth_client, permissions
 from .store import H, P, Problem
 
+log = logging.getLogger(__name__)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
  person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
  kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, client_id TEXT, started_at REAL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL);
+ updated_at TEXT NOT NULL, operation_id TEXT, answered TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
 """
@@ -64,6 +67,10 @@ CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds
 # (`pending_hash`, from the exchange) and the one connected (`grant_hash`, once the computer says connected). The scopes
 # Google gave the same exchange are kept the same way (`pending_scopes`, then `grant_scopes`), as a JSON list. A NULL
 # `grant_scopes` is a grant from before they were recorded: read only, as it was made.
+# Each connect or disconnect is one operation (`operation_id`, new at each start; migration
+# 20261112160353_add_operation_to_google_connects): the claim hands it to the computer as the request's `id`, and
+# `/exchange` and `/result` are addressed by it, so an answer from an earlier operation finds no row and changes nothing.
+# `answered` is the status the computer reported for this operation, so a repeat of that answer gets the same reply.
 COLUMNS = {"pending_hash": "TEXT", "grant_hash": "TEXT", "pending_scopes": "TEXT", "grant_scopes": "TEXT"}
 
 
@@ -350,6 +357,21 @@ def mailbox_for(c, person_id):
     return routines.mailbox_of(person, routines.message_bot_mailboxes(c, people)), person
 
 
+def new_operation():
+    return "gc_" + secrets.token_hex(16)
+
+
+def stale(category, operation_id):
+    """An answer for a connect or disconnect that was replaced or ended: logged by category and operation id (never a
+    token or a code), and refused with nothing changed."""
+    log.warning("google connect %s: operation %s is no longer current", category, operation_id)
+    return Problem(
+        "stale",
+        "This Google connect was replaced or ended before this answer arrived, so nothing was changed",
+        409,
+    )
+
+
 def require_self(who):
     """The person acting as themselves: never a bot, a computer, or BotOps or the Assistant acting for them."""
     if who.role not in ("owner", "human") or who.via or who.task_actor:
@@ -381,8 +403,9 @@ def expire(c):
         (H.now(), now - SIGN_IN_SECONDS),
     )
     c.execute(
+        # A grant exchanged for the claim that timed out is not left waiting: only a result commits a grant.
         "UPDATE google_connects SET status='failed',kind='unknown',oauth_state=NULL,verifier=NULL,code=NULL,"
-        "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?",
+        "pending_hash=NULL,pending_scopes=NULL,updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?",
         (H.now(), now - CLAIM_SECONDS),
     )
 
@@ -548,12 +571,13 @@ def install(app, store, member, mutate):
             now = H.now()
             c.execute(
                 "INSERT INTO google_connects(person_id,mailbox,status,oauth_state,verifier,code,kind,message,hint,"
-                "runner_id,started_at,created_at,updated_at) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
+                "runner_id,operation_id,started_at,created_at,updated_at) "
+                "VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?,?) "
                 "ON CONFLICT(person_id) DO UPDATE SET mailbox=excluded.mailbox,status='signing_in',"
                 "oauth_state=excluded.oauth_state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
-                "can=NULL,"
+                "can=NULL,pending_hash=NULL,pending_scopes=NULL,answered=NULL,operation_id=excluded.operation_id,"
                 "runner_id=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at",
-                (pid, mailbox, state, verifier, time.time(), now, now),
+                (pid, mailbox, state, verifier, new_operation(), time.time(), now, now),
             )
             H.event(c, who.actor, "mail.google.connect.start", mailbox, {})
             return {"auth_url": AUTH_URI + "?" + urllib.parse.urlencode(query), "mailbox": mailbox}
@@ -605,11 +629,12 @@ def install(app, store, member, mutate):
             mailbox, _ = mailbox_for(c, pid)
             now = H.now()
             c.execute(
-                "INSERT INTO google_connects(person_id,mailbox,status,started_at,created_at,updated_at) "
-                "VALUES(?,?,'disconnecting',?,?,?) ON CONFLICT(person_id) DO UPDATE SET "
+                "INSERT INTO google_connects(person_id,mailbox,status,operation_id,started_at,created_at,updated_at) "
+                "VALUES(?,?,'disconnecting',?,?,?,?) ON CONFLICT(person_id) DO UPDATE SET "
                 "mailbox=excluded.mailbox,status='disconnecting',oauth_state=NULL,verifier=NULL,code=NULL,kind=NULL,"
-                "message=NULL,hint=NULL,can=NULL,runner_id=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at",
-                (pid, mailbox, time.time(), now, now),
+                "message=NULL,hint=NULL,can=NULL,runner_id=NULL,pending_hash=NULL,pending_scopes=NULL,answered=NULL,"
+                "operation_id=excluded.operation_id,started_at=excluded.started_at,updated_at=excluded.updated_at",
+                (pid, mailbox, new_operation(), time.time(), now, now),
             )
             H.event(c, who.actor, "mail.google.disconnect", mailbox, {})
             return person_view(c, who)
@@ -658,32 +683,40 @@ def install(app, store, member, mutate):
                     (H.now(), row["person_id"]),
                 )
                 return {"connect": None}
+            # `id` is this operation, never the person: /exchange and /result are addressed by it. A row written
+            # without one (not by connect or disconnect) gets one now.
+            operation_id = row["operation_id"] or new_operation()
             c.execute(
-                "UPDATE google_connects SET status=?,runner_id=?,started_at=?,updated_at=? WHERE person_id=?",
+                "UPDATE google_connects SET status=?,runner_id=?,operation_id=?,started_at=?,updated_at=? "
+                "WHERE person_id=?",
                 (
                     "finishing" if action == "connect" else "revoking",
                     runner["id"],
+                    operation_id,
                     time.time(),
                     H.now(),
                     row["person_id"],
                 ),
             )
-            out = {"id": row["person_id"], "action": action, "mailbox": row["mailbox"]}
+            out = {"id": operation_id, "action": action, "mailbox": row["mailbox"]}
             if action == "connect":
                 out.update(client_id=client[0], broker="server")
             return {"connect": out}
 
-    @app.post("/api/v2/connectors/mail/google/{person_id}/exchange")
-    def google_exchange(person_id: str, request: Request, body: M.Empty | None = None):
+    @app.post("/api/v2/connectors/mail/google/{operation_id}/exchange")
+    def google_exchange(operation_id: str, request: Request, body: M.Empty | None = None):
         """Trade a claimed connect's code for its grant, for the computer that claimed it, once. The code and the
         verifier are cleared before Google is asked; the answer goes to that computer and is not kept here. An answer
-        with more scopes than this app may grant is refused: its grant is revoked at Google and nothing is passed on."""
+        with more scopes than this app may grant is refused: its grant is revoked at Google and nothing is passed on.
+        `operation_id` is the claim's `id`: a connect replaced meanwhile is refused, and so is its grant if Google
+        answers after the replacement (see the end)."""
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
-            row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
+            row = c.execute("SELECT * FROM google_connects WHERE operation_id=?", (operation_id,)).fetchone()
+            if not row:
+                raise stale("stale_exchange", operation_id)
             if (
-                not row
-                or row["runner_id"] != runner["id"]
+                row["runner_id"] != runner["id"]
                 or row["status"] != "finishing"
                 or not row["code"]
                 or not row["verifier"]
@@ -694,8 +727,8 @@ def install(app, store, member, mutate):
                 raise Problem("forbidden", google_rights.FORBIDDEN, 403)
             code, verifier = row["code"], row["verifier"]
             c.execute(
-                "UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
-                (H.now(), person_id),
+                "UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE operation_id=?",
+                (H.now(), operation_id),
             )
         with store.read() as c:
             client = oauth_client(c, settings)
@@ -722,20 +755,24 @@ def install(app, store, member, mutate):
                 409,
                 extra={"kind": "scope"},
             )
-        if answer.get("refresh_token"):
-            # The scopes Google gave this grant, never more than this app may grant (granted_scopes), kept with its
-            # fingerprint.
-            with store.transaction() as c:
-                c.execute(
-                    "UPDATE google_connects SET pending_hash=?,pending_scopes=? WHERE person_id=? "
-                    "AND runner_id=? AND status='finishing'",
-                    (
-                        fingerprint(answer["refresh_token"]),
-                        json.dumps(granted_scopes(answer, client[2])),
-                        person_id,
-                        runner["id"],
-                    ),
-                )
+        # The scopes Google gave this grant, never more than this app may grant (granted_scopes), kept with its
+        # fingerprint, while this connect is still the one under way.
+        with store.transaction() as c:
+            current = c.execute(
+                "UPDATE google_connects SET pending_hash=?,pending_scopes=? WHERE operation_id=? "
+                "AND runner_id=? AND status='finishing'",
+                (
+                    fingerprint(answer["refresh_token"]) if answer.get("refresh_token") else None,
+                    json.dumps(granted_scopes(answer, client[2])) if answer.get("refresh_token") else None,
+                    operation_id,
+                    runner["id"],
+                ),
+            ).rowcount
+        if not current:
+            # The person connected again or disconnected while Google answered. The grant is disposed of here: not
+            # passed on and its fingerprint not kept, so this server never refreshes it. It is not revoked at Google,
+            # where one client and one person share one grant: that would end the grant still connected too.
+            raise stale("stale_exchange", operation_id)
         return {k: answer[k] for k in ("access_token", "refresh_token", "expires_in", "scope") if k in answer}
 
     @app.post("/api/v2/connectors/mail/google/token")
@@ -813,13 +850,20 @@ def install(app, store, member, mutate):
             "scopes": granted,
         }
 
-    @app.post("/api/v2/connectors/mail/google/{person_id}/result")
-    def google_result(person_id: str, request: Request, body: ConnectorResult):
+    @app.post("/api/v2/connectors/mail/google/{operation_id}/result")
+    def google_result(operation_id: str, request: Request, body: ConnectorResult):
+        """The computer's answer to the connect or disconnect it claimed (`operation_id`, the claim's `id`). An answer
+        for an operation replaced since is refused with nothing changed; the same answer again gets the same reply."""
         with store.transaction() as c:
             runner, named = member(c, request.state.identity)
-            row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
+            row = c.execute("SELECT * FROM google_connects WHERE operation_id=?", (operation_id,)).fetchone()
             if not row:
-                raise Problem("not_found", "No Google connect is waiting for this person", 404)
+                raise stale("stale_result", operation_id)
+            # A repeat is answered before the checks below because it writes nothing; keep every write after them.
+            if row["answered"] is not None and row["runner_id"] == runner["id"]:
+                if row["answered"] != body.status:
+                    raise Problem("state", "This Google connect was already answered differently", 409)
+                return {"ok": True}  # a repeat: already recorded
             if row["runner_id"] != runner["id"] or row["status"] not in ("finishing", "revoking"):
                 raise Problem("state", "This Google connect is not this computer's to finish", 409)
             hosts, live = google_rights.inbox_hosts(c), google_rights.live_runners(c)
@@ -844,8 +888,8 @@ def install(app, store, member, mutate):
             client_id = client[0] if client else row["client_id"]
             c.execute(
                 "UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
-                "grant_scopes=?,client_id=?,pending_hash=NULL,pending_scopes=NULL,"
-                "oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE person_id=?",
+                "grant_scopes=?,client_id=?,pending_hash=NULL,pending_scopes=NULL,answered=?,"
+                "oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE operation_id=?",
                 (
                     body.status,
                     kind if failed else None,
@@ -856,13 +900,14 @@ def install(app, store, member, mutate):
                     grant_hash,
                     grant_scopes,
                     client_id,
+                    body.status,
                     H.now(),
-                    person_id,
+                    operation_id,
                 ),
             )
             H.event(
                 c,
-                "human:" + person_id,
+                "human:" + row["person_id"],
                 "mail.google." + body.status,
                 row["mailbox"],
                 {"kind": kind} if body.status == "failed" else {},

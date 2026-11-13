@@ -32,6 +32,12 @@ keeps the copy; in the bot's own checkout its next memory commit does. The move 
 pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
 that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
 
+Several checkouts and turns of one bot write the same repository, so its commits often land behind what another
+pushed. The runner rebases them onto the remote and pushes again; where both sides added lines to the same spot of
+a `memory/` note (`memory/state.md` aside), it keeps both sides' lines (git's union merge,
+`safegit::MERGE_ATTRIBUTES`) instead of stopping. Only a conflict it cannot settle that way, in AGENT.md say, leaves
+the commits unpushed, and the health check files it once for BotOps (`push_stuck`, docs/health-monitor.md).
+
 A stateless bot keeps no memory at all: The Rules Owner, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
 says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/`, `knowledge/`
 or `state.md`, its memory folders are not committed for it, and Learn skips it. Each task is judged from

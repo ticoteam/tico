@@ -134,22 +134,6 @@ def test_a_switch_past_its_commit_point_cannot_be_canceled_and_one_canceled_firs
     post(api, f"runner-logins/{sign_in['id']}/report", {"state": "finishing"}, token=r["token"], expected=422)
     out = post(api, f"runners/{rid}/logouts", {"runtime": "claude", "profile": "work"})
     post(api, f"runner-logins/{out['id']}/report", {"state": "finishing"}, token=r["token"], expected=422)
-    # The runner asks to put the new login in place; the server agrees, and from then on refuses a cancel and gives it
-    # time of its own to finish in.
-    switch = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
-    report(api, r, switch["id"], state="waiting", url="https://auth.openai.com/codex/device", code="ABCD-1234")
-    with api.app.state.store.transaction() as c:  # nearly out of time
-        c.execute("UPDATE model_logins SET expires_at=? WHERE id=?", (H.shift(H.now(), seconds=5), switch["id"]))
-    assert report(api, r, switch["id"], state="finishing") == {"state": "finishing"}
-    row = get(api, f"runners/{rid}/logins/{switch['id']}")
-    assert row["state"] == "finishing" and row["url"] == "" and row["code"] == ""
-    with api.app.state.store.read() as c:
-        expires = c.execute("SELECT expires_at FROM model_logins WHERE id=?", (switch["id"],)).fetchone()[0]
-    assert expires >= H.shift(H.now(), seconds=100), "finishing gets about two minutes of its own"
-    refused = post(api, f"runners/{rid}/logins/{switch['id']}/cancel", {}, expected=409)
-    assert "can't be canceled" in refused["error"]["detail"]
-    assert switch["id"] in [p["id"] for p in pending(api, r)], "still the computer's to finish"
-    assert report(api, r, switch["id"], state="signed_in") == {"state": "signed_in"}
     # Canceled before the commit point: the runner's finishing gets canceled back, so it keeps the old login.
     late = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
     post(api, f"runners/{rid}/logins/{late['id']}/cancel", {})

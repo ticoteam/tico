@@ -90,7 +90,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C1.** A bot should give an end date when it snoozes, and its wake says so. It is not required. A bot's snooze with
   no end date shows as "On ice", the manager bot is told once, and it is listed on the manager's rail. After 3 snoozes
   by a bot in one stage, the next goes to the manager bot. *Draft 4 refused a bot's snooze with no end date.*
-- **C2.** A snoozed task gives up its slot in a stage that has a limit.
+- **C2.** A snoozed task gives up its slot in a stage that has a limit, and so does one that waits only on a person's
+  OK or answer ("Limits").
 - **C3.** Push past is off by default for **PR merged** and **In a release** only. It is on for everything else, Checks
   pass included. A task that can't be pushed past can still be moved back or closed.
 - **C4.** What counts as progress, and resets the 3 tries: a move, a requirement changing state, a new commit, a new
@@ -105,8 +106,10 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   Close. Bots can close tasks that bots asked for.
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
-- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that. A request a
-  person filed that still waits in Ideas takes the room first, by itself.
+- **C10.** Ideas: nobody is told when Spec has room, in any pipeline. A request a person filed that still waits in
+  Ideas takes the room by itself, oldest first; a bot's own idea waits for a person to pick it. *Changed Nov 12: the
+  "has room" wake did no work (none of 33 was ever delivered, no idea moved because of one) and one idea's re-fired
+  every few minutes.*
 - **C11.** Held actions (send this email, spend, publish) become an Approve ask on the task the bot is working on. If
   there is no task, Tico files one for you in General.
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
@@ -130,8 +133,11 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C20.** Sub-tasks nest at most 5 deep.
 - **C21.** A rule made from a 👎 on an ask stops the next ask like it. On the third 👎 on one bot's asks in 30 days, the
   sheet opens with the rule already drafted. *Today a rule made from a 👎 lets the work through with a note.*
-- **C22.** A commit added after your OK still merges once it is green. The task shows "Changed after OK" and the manager
-  bot is told. It doesn't come back to you.
+- **C22.** Your OK is for the commits you were shown. A rebase or conflict fix after it that changes the same lines
+  keeps it. One that changes other lines is read by Reviewer 2 first: its OK keeps yours, and the PR merges without
+  asking you again. Its send back goes to the Builder, and you are asked again after the next read. The task shows
+  "Changed after OK" and the manager bot is told. *Until Nov 12 a commit after your OK merged once green; on Nov 12
+  any commit after it asked you again, which at ~100 PRs a day meant an ask for every rebase.*
 - **C23.** A row is the title and a mark, on one line. In your own list it is the ask, as a sentence. Who has it and what
   is missing is on the task. *Draft 5 put those words on the row.*
 - **C24.** A person never has to type a reason to snooze, move back, reassign or close. Moving on with something missing
@@ -141,8 +147,10 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   with no owner. It decides: reassign, move back, move on, snooze or close. The owner stays the owner. *Confirmed Nov
   9.*
 - **C26.** Done and Closed are not columns on a pipeline. They are behind the archive button, with Snoozed.
-- **C27.** A stage header is a name and a number: how many tasks, or "2/3" where the stage has a limit. The setting is
-  called Limit. The word "pool" is gone.
+- **C27.** A stage header is a name and a number: how many tasks, or "2/3" where the stage has a limit. Against a limit
+  the number counts tasks that hold a slot, and beside it a person mark and a number count those waiting only on a
+  person's OK or answer; the words ("15 wait on a person") are its label and tooltip only, on desktop and phone. The
+  setting is called Limit. The word "pool" is gone.
 - **C28.** Needs you is the one place to check. It holds every requirement with your name, every task you own, and every
   @ of you by a person, on a task or in a channel, until you reply. A bot's @ on a task only marks it unread: a bot that
   needs you has to use a requirement. A task never waits on an @, and an @ sends no push. A bot that @s someone and stops
@@ -190,7 +198,10 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
 - **A person's request moves on:** a switch on a by-hand stage only (`requests_move_on`), off by default. When on, a
   person's request (a task a person filed that no task filed) on its first visit is not held: it moves on when the
   next stage has room, oldest first. Moved back into the stage, or snoozed there, it is held like any other. On in
-  Product's Ideas; off in Growth's and Success's Ideas and in Monitoring's Watching.
+  Product's Ideas; off in Growth's and Success's Ideas and in Monitoring's Watching. With the switch on, work handed
+  over to the owner bot (filed there by a bot that is not the owner as its requester, or moved back there by such a
+  bot) is the owner's turn: "Move to Spec, or snooze to park it", due 24 hours after it entered, with one wake. Past
+  that it is Late and the manager bot is woken once. An owner's own ideas rest as before.
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
@@ -207,7 +218,8 @@ That gives three kinds of stage, and no others:
 1. **Owner says done.** The owner marks the stage's work finished. This is the whole of General.
 2. **OK from someone.** A named person or bot approves. Nothing is attached.
 3. **A page.** The owner attaches a page or file. Jev checks it against a "what to check" line. Optionally a person then
-   OKs it.
+   OKs it. The page is HTML: the attach refuses a version that is not (Markdown or plain text) with what to do instead,
+   and a person's OK view draws a non-HTML page attached before that as Markdown.
 4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
    under `backend/item_sources/`; GitHub is the only one. Its item is a PR and its conditions are:
    - **PR open.** At least one PR is linked, and none was closed without merging.
@@ -283,7 +295,9 @@ Every move records who, when and why, and raises the task's version. A move made
 - The on-enter action happens once per visit. Coming back to the stage later is a new visit.
 - The owner is woken once, with what is missing.
 - Moving back or closing undoes the action: PRs leave the merge queue, and tasks filed in that visit close with a note. A
-  filed task whose PR already merged finishes its release.
+  filed task whose PR already merged finishes its release. An undo is the visit's, not the PR's: it is skipped while an
+  open visit (the task's next one, or another task's) still wants the same PR queued at the same head, and one that
+  took such a PR out anyway queues it again.
 
 ### What a requirement can say
 
@@ -339,9 +353,12 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: After 2 hours of checks it is the bot's turn; a drop from the merge queue is the owner's turn at once. A
      release that never comes turns Late.
 7. **Other tasks**
-   - Starts: It filed tasks that are still open.
-   - Ends: The last one ends. The owner is woken once.
-   - If not: Those tasks have their own turn.
+   - Starts: It filed tasks that are still open; or, in a stage that queues PRs (Merge), it goes after a task that
+     has not merged yet ("After #40: waits for it to merge", see Merge).
+   - Ends: The last one ends. The owner is woken once. For an order: the earlier task merges (or is Done) and the PRs
+     are queued; or it is closed without merging, and it is the owner's turn once ("#40 closed without merging. Queue
+     it, or send it back.").
+   - If not: Those tasks have their own turn. A task waiting on its order wakes nobody and is not Late.
 8. **A full stage**
    - Starts: Everything is met and the next stage is full.
    - Ends: A slot frees. Oldest first.
@@ -350,7 +367,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: It enters a stage that tasks leave by hand. Where a person's request moves on, one on its first visit is
      not held: it is in state 8.
    - Ends: Someone picks it, closes it or snoozes it.
-   - If not: Nothing. It is a place to wait.
+   - If not: Nothing. It is a place to wait. Work handed over to the owner bot where a person's request moves on is the
+     owner's turn instead (state 4), due in 24 hours; then Late, and the manager bot is woken once.
 
 Two labels can sit on top of any state: **Late** and **Pushed past**. Two states end a task: **Done** and **Closed**.
 
@@ -399,7 +417,15 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 
 ### Limits
 
-- A stage's limit counts its open tasks that are not snoozed.
+- A stage's limit counts its open tasks that are not snoozed and hold a slot. A task holds a slot unless every wait on
+  it is a person's OK or an answer it asks a person for, and none is a bot's, Jev's, GitHub's or a sub-task's: bots
+  keep working while people review. A task the ladder brought to a person, or whose bot is Paused, still holds its slot:
+  that is stuck work, not review. Every check for room counts this way: requests leaving Ideas,
+  filling free slots, moves by hand and by the engine, "No room in …" and the Heartbeat's over-the-limit check.
+  *Changed Nov 12: on Tico Team Spec sat at 20 of 20 with 15 waiting on one person's OK, and nothing left Ideas.*
+- When a task's turn becomes a person's, its slot frees at once, as when a task leaves: the oldest waiting task takes
+  it. Nobody is told about the room. When a person's answer gives the turn back to a bot
+  (sent back, or answered with work left), the task keeps its place: the stage may sit over its limit, as after Back.
 - Only forward moves need room. Back, Close and Reopen never wait.
 - When a slot frees, the oldest waiting task takes it. This runs right after the move that freed the slot, and again on
   the Heartbeat.
@@ -421,6 +447,16 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 - A bot's snooze on a task that waits on tasks it filed ends when the last of them ends, and the owner is woken with how
   each ended. A person's snooze stays. *Changed Nov 11: Initech's SEO Owner slept a week after the person said the
   change was applied.*
+- A bot's snooze in a stage that checks the release production runs (Product's Validate), on a task whose filed work is
+  in the repository the company's Tico server runs, ends when that server starts on another release, and the owner is
+  woken with it. A bot waits for a release, never for a guessed release time. *Added Nov 11: Tico Team's Product Owner
+  slept three tasks to "the next release window" while the release they waited for landed minutes later.*
+- A bot's snooze in any stage ends, and whoever has the turn is woken once with the reason, when the checks on the
+  newest commit of the task's PR finish, the PR starts or stops conflicting, or a PR the reason names ("waiting for
+  #3417 to land") merges or closes. Merge adds its own news (see Engineering, Merge). A person's snooze stays, and the
+  bot's snooze count is as it was. *Added Nov 12: Tico Team's Builder slept in Fixes 1 to 08:00 waiting for #3417,
+  which merged at 03:01.*
+- Run now on a snoozed task ends the snooze, in the name of whoever pressed it, as Wake does.
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
 
@@ -459,7 +495,9 @@ Every 10 s, for each open task: what is missing, who has it, and are they on it?
    repeats.
 
 At any of the three steps: if the task changed, the count goes back to zero and the check asks again whose turn it
-is.
+is. While the owner bot has it, a person's comment that wakes the bot also puts the count back to zero: the run it
+starts is the first of a new count, so a bot that says "I'll carry on" and stops is woken again 2 min later. A comment
+the Assistant or BotOps writes for a person does not.
 
 ### What the check does for each kind of wait
 
@@ -739,9 +777,10 @@ From an idea to something checked in production. Manager: the Product Manager bo
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
-- **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
+- **Ideas.** Owner: Product Owner. Tasks leave by hand. Nobody is told when Spec has room. To park an idea, snooze it with
   no end date. A person's request moves on (the stage's switch is on): it goes into Spec as soon as Spec has room,
-  oldest first.
+  oldest first. Work a bot hands over (Bug Triage files a bug, or moves one back) is the Product Owner's turn, due in
+  24 hours; past that it is Late and the Product Manager is woken once.
 - **Spec.** Owner: Product Owner. To leave: a Spec page with the goal, the scope (in and out) and acceptance criteria
   someone can check. Jev checks it, then **a person OKs it** (people only: no bot
   OKs it or pushes past it). Limit 2. Expected time: 2 days.
@@ -749,6 +788,8 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
   time: 5 days.
 - **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs
   and shows the change working there: what was run or looked at, and what it gave. Jev checks it. No person. Expected time: 1 day.
+  The Product Owner takes the page's screenshots itself, in a read-only view of the app
+  ([computers.md](computers.md#let-a-bot-view-the-app-read-only)).
 
 ### Engineering
 
@@ -767,14 +808,37 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built, that the checks pass at
   the newest commit, and what both reviewers found on the commit they reviewed. Jev checks it against the linked PRs'
   newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
-  then **a person OKs it** (people only). Expected time: 4 hours.
+  then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after Review 2's page are reviewed
+  before the person is asked: Reviewer 2 (the bot that wrote the newest review) reads only those commits against what
+  the reviews found and the spec, and OKs them or sends them back as an answer on the page, at the commits it read. A
+  send back is the Builder's to fix; its next commits are a new round. After 2 rounds in a visit, or with no other bot
+  that reviewed the task, the person is asked anyway and the ask says "not reviewed by a bot". With no commits after
+  Review 2 the person is asked at once. The person's OK is for the commits it was given at (C22). New commits after
+  it that change the same lines (GitHub's diff of each from where it branched off, without line numbers or context,
+  as `git patch-id` reads it) keep it. Others are read by Reviewer 2 the same way, the 2 rounds counted from the OK:
+  its OK keeps the person's; its send back goes to the Builder, and the person is asked again once the next commits
+  were read. Until Tico has read what the new commits change, the page waits on GitHub.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
-  PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
-  back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
-  the merge queue's checks are the gate.
+  PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
+  when the fault needs the Builder. A bot queues a new commit only when it changes the same lines as the one the task
+  came into Merge with; otherwise it sends the task back to Fixes 2, where Reviewer 2 reads it and the person's OK
+  comes back with the task (C22). A person may queue any commit. Besides what ends a bot's snooze in any stage (see
+  Snooze), a bot's snooze in Merge ends when GitHub takes the PR out of the queue or merges it, or its base branch
+  moves (once per base commit; not while the PR is queued or its checks run, nor when the reason names a PR to wait
+  for). Only in Merge: before it, every merge into main would wake the bot. A person's snooze stays. *Added Nov 11: Tico Team's Release Owner slept to guessed clock times, up to 90
+  minutes past the merge it waited for.* A task that goes after another one ("after #40": `tico task after 42 40`,
+  or `--after` when filing) is not queued while #40 is open and has not merged; see "GitHub", Merge. *Added Nov 12:
+  in conflict-storm drill B the order "B6, then B7" lived on a side task, and B7 merged first.*
 - **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
   Owner cuts the release with `tico task release` (see "GitHub", Release).
+
+A review finding on a task's own PR (a bug, a security flaw, a risky path) goes back through the review: blocking on the
+Review page, or a send back in Fixes 2, so the task goes to Fixes and the Builder fixes it. It never becomes a task for
+a person; what only a person decides (the Spec OK, the pre-release OK) is asked on the task itself. Tico refuses
+(`review_route`) a bot that gives a person a General task linking or naming a PR an open pipeline task links, with the
+task it belongs on. Seen live: Reviewer 2 sent a real bug on its task's PR "privately" through the Engineering Manager
+to a person's Needs you.
 
 Also:
 
@@ -796,7 +860,7 @@ Success Monitoring. Who manages a pipeline is that pipeline's setting, and a per
   Stages: Ideas → Building → Running → Done · Closed
   - **Ideas.** By hand. One line each: what to try and why. Ideas rest here, a person's too: nothing wakes, chases
     or marks them Late, and a freed slot in Building wakes nobody. The owner starts one of its own when Building has
-    room ("No room in Building. It holds 6: move it again when one leaves." when it has none); a person can start any.
+    room ("No room in Building. It holds 6 a bot is working on: move it again when one leaves." when it has none); a person can start any.
   - **Building.** The real thing, not yet live: the email, the page change, the ad. Limit 6. To leave: a **Go-live
     page** (the thing that goes live, its copy or a picture of it; the metric, the prediction as a number, the cost,
     how long it runs, when to stop early, and the brand check passed or, with no brand card published yet, a plain
@@ -1040,18 +1104,44 @@ late. Nothing depends on the exact 10 seconds.
   While the stage waits on a person's OK or answer, the conflict is held: it stays not met, the person's ask adds one
   line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken, so the ask does
   not change under the person. When the person answers, the Builder is woken once to rebase: after an OK it is told to
-  leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. A rebase does
-  not ask the person again: their OK stands unless a new page is attached.
+  leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. A rebase that
+  changes the same lines keeps the person's OK; one that changes others is read by Reviewer 2 (Fixes 2, C22).
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
   commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
   owner is told once. Tico never queues it again by itself. The owner (the Release Owner, who may push to PR
-  branches) queues it again (`tico task queue`), after pushing its own fix if one is needed, or sends the task back to
-  Fixes 2. Queuing again is refused while the PR's own checks on its newest commit are running or failing, with the
-  reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
-- **A commit after the person's OK** still merges once it is green. The task shows "Changed after OK" and the manager bot
-  is told once (C22).
+  branches) queues it again (`tico task queue`) at the commit the task came into Merge with, or sends the task back to
+  Fixes 2 (after pushing its own fix, if one is needed). Queuing again is refused while the PR's own checks on its
+  newest commit are running or failing, with the reason. For a bot, it is also refused when the PR's newest commit
+  changes other lines than the one the task came into Merge with ("<ref> has new changes since the person's OK. Move
+  the task back to Fixes 2, where Reviewer 2 reads them."), and while Tico has not read what it changes yet ("Try
+  again in a minute"). Tico reads that from GitHub once per commit (its compare from where the commit branched off),
+  for the PRs of a task a person OK'd or in Merge whose commits moved.
+  A PR GitHub says conflicts with its base branch is never queued, by the stage or by a queue-again: Tico reads
+  GitHub's `mergeable` right before it queues, and a conflict fails the queue at once while `UNKNOWN` (GitHub still
+  working it out) is read again 1, 5 and 15 minutes later. Queuing again is refused while the PR's link says it
+  conflicts. The refusal, and a removal for a conflict, tell the owner to send the task back to Fixes 2, where the
+  Builder rebases it ("No merge conflict" before Merge).
+  **An order between tasks** (backend/merge_order.py). A task may go after other tasks: `tico task after <task>
+  <earlier>` (`--remove` takes it off), `--after` on `tico task file` and `tico task create`, the MCP tools'
+  `after`. Whoever may change the later task sets it; the earlier one need only be readable. A loop ("#40 already
+  goes after #42") and an order on or after a task that has ended are refused. Before Merge it changes nothing: both
+  build and are reviewed side by side. In Merge, one check holds the queue (`merge_order.held`, asked on entering,
+  when a PR's metadata comes late and by `tico task queue`): while a task it goes after is open and has not merged
+  its PRs (a task with no PR: until it is Done), its PRs are not queued. Its turn is that task's, "After #40: waits
+  for it to merge" (PR merged says "Not queued until #40 merges"); nobody is woken and it is not Late. A bot's `tico
+  task queue` is refused ("Waits for #40 to merge"); a person may queue it anyway, and its history says "Queued
+  before #40 merged". When #40 merges a PR or moves on, the tasks after it are read again: one no longer held is
+  queued then, and if GitHub now says it conflicts, the owner's send-back to Fixes 2 names #40 for the Builder to
+  rebase onto. When #40 is closed without merging, the order ends and it is the owner's turn once: Tico does not
+  queue it by itself. Both tasks show the order, read-only: "After #40 · Merge" and "Before #42 · Build" (to a
+  reader who cannot open #40: "After a task you can't open").
+- **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise Reviewer 2
+  reads it in Fixes 2 (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
+  page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,
+  and the person is asked after the next read. The task shows "Changed after OK" and the manager bot is told once
+  (C22).
 - **A PR linked in Merge.** While a task is in a stage that queues PRs, only a person links another PR to it: a bot is
   told "Send the task back before linking another pull request.", and a bot's worktree branch PR is not linked there.
 - **`tico/merge-ok`.** Before queuing a PR, the server posts a check run `tico/merge-ok` = success on exactly the commit
@@ -1062,14 +1152,14 @@ late. Nothing depends on the exact 10 seconds.
   shared with people: their PRs are not Tico's to pass or fail). Only the server's own token writes checks; no bot's
   token does. A repo ruleset that requires the check, pinned to the company App, stops a bot merging
   or queuing a PR around the Merge stage ([GitHub App](github-app.md#require-ticos-merge-check)). It means "Tico's Merge
-  stage queued this PR after the person's OK", not "every commit was reviewed": under C22 the owner's queue-again posts
-  it on a commit pushed after the OK. A post that fails queues nothing and is tried again like any failed call.
-- **Open question.** Should a commit pushed after the person's OK send the task back for review instead (C22 says no)?
-  Until it does, `tico/merge-ok` can't promise more than the line above.
+  stage queued this PR after the person's OK": a commit pushed after the OK is queued by a bot only when it changes the
+  same lines, or after Reviewer 2 read it (C22), and by a person as they choose. A post that fails queues nothing and
+  is tried again like any failed call.
 - **Leaving Merge backwards, or closing,** takes the PRs out of the queue. That call doesn't exist today and gets built.
   If GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
 - **In a release** means the merge commit is in the commit history of a published release of the release repo: not a
-  draft, and no dash in the tag unless the In a release setting "Pre-releases count" is on (off by default). Time
+  draft. Pre-releases count by default, including tags with a dash; explicitly turn off In a release's
+  "Pre-releases count" setting to require a stable release. Time
   plays no part. A repo that publishes no releases: met once merged (C31). Checked when a release publishes and on the 5-minute read.
 - **Release.** In a release's setting **Release with** says how Tico cuts one: `workflow:<file>` (Tico runs that
   workflow on the default branch; the App's Actions: write), `tag` (Tico creates the tag the Release Owner names at the
@@ -1362,7 +1452,9 @@ Rules:
 
 Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 1 0".
 
-- A name and a number. Where the stage has a limit, the number is "how many / the limit".
+- A name and a number. Where the stage has a limit, the number is "how many hold a slot / the limit", then a person
+  mark and how many wait only on a person's OK or answer, when any do (C27). Its label and tooltip say "15 wait on a
+  person"; the phone's head shows the same mark for the stage on screen.
 - No other words. Tapping it opens the stage's settings (S11).
 
 ### S9. A pipeline's state
@@ -1554,6 +1646,14 @@ Rules:
 - A long sentence wraps on a phone.
 - On an ask the buttons stay at the bottom while the page scrolls.
 - A pipeline shows one stage at a time.
+- A pipeline has an Ask bar above the bottom bar, in place of the manager's rail: a line saying what goes with the
+  message ("Product › Spec · 3 tasks on screen"), a button for the manager (picked first) and one for the stage's
+  holder ("Spec · Product Owner"; none when the stage is held by whoever the task is for, once when it is the manager),
+  and the box, "Ask Product Manager…". The message goes to that bot's direct chat and carries the pipeline, the stage
+  and the ids of the tasks on screen (`refs.board`, at most 50, search and filter applied), shown as one card under it.
+  The chat opens over the board, the chat alone; ✕, Escape or a swipe down puts it away.
+- A card on a pipeline opens its task at its conversation, the box reading "Ask Builder about this task…"; Details
+  shows the rest.
 
 ### S18. What goes away
 
@@ -1646,8 +1746,8 @@ into a test in phase 1.
 - **F26. Moved back out of Merge, and the PR still merges.** Prevented. Same as F17. Moving back takes the PRs out of the
   queue in the same step.
 - **F27. The reviewed commit and the merged commit differ.** Tightened. A PR is queued at the commit that was checked.
-  New (C22): a commit added after your OK still merges once green, the task shows "Changed after OK", and the manager bot
-  is told once. It doesn't come back to you.
+  C22 (Nov 12): a commit added after your OK merges on it only when it changes the same lines or Reviewer 2 OK'd it;
+  the task shows "Changed after OK", and the manager bot is told once.
 - **F28. Checks pass waits on Tico's own check run.** Prevented. It ignores them.
 - **F29. A crash right after a move.** Prevented. The on-enter action is written in the same transaction as the move,
   keyed by the visit. It happens once or not at all, and a retry does nothing.
@@ -1891,7 +1991,9 @@ Numbered in order so they can be cited (scenario 1 to 52).
 48. A third 👎 on one bot's asks in 30 days: the sheet opens with a drafted rule.
 49. A bot makes an ask that a rule covers: refused with the rule's words. With the rule check down: the ask goes through.
 50. A closed task's PR merges anyway: the task shows it and the manager bot is told once.
-51. A commit lands after the person's OK: it merges once green and the task shows "Changed after OK".
+51. A commit lands after the person's OK: a rebase with the same lines keeps the OK; other changes are read by
+    Reviewer 2, whose OK keeps it and whose send back asks the person again after the next read. The task shows
+    "Changed after OK".
 52. A linked task is deleted: the waiting task treats it as Closed.
 
 ### Ten real tasks

@@ -1019,11 +1019,19 @@ def server_sends(c, mailbox):
     return google_workspace.authority(c, mailbox) == "workspace"
 
 
-def drain(store, auth, limit=20):
-    """The server's own dispatch, on scheduler ticks: each Workspace inbox with queued mail is reconciled, and its due
-    sends go to Gmail one at a time (pacing usually allows one a pass). A token is minted before any permit, so a
-    credential that fails leaves the email pending, never unknown. Gmail is called under no write lock."""
-    from . import gmail_live, google_workspace
+# inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
+# Workspace inbox the process has sent from, so it is never pruned; it only orders inboxes, never decides a send.
+_SERVED = {}
+
+
+def drain(store, auth, limit=20, budget=None):
+    """The server's own dispatch, on its drain worker (backend/drains.py): each Workspace inbox with queued mail is
+    reconciled, and its due sends go to Gmail one at a time (pacing usually allows one a pass). A token is minted before
+    any permit, so a credential that fails leaves the email pending, never unknown. Gmail is called under no write lock.
+    With a `budget`, nothing new is leased once it is spent; the inboxes not reached go first in the next pass."""
+    import time
+
+    from . import drains, gmail_live, google_workspace
 
     if store.settings.rehearsal or store.settings.demo:
         return 0
@@ -1035,8 +1043,12 @@ def drain(store, auth, limit=20):
             ).fetchall()
         ]
         boxes = [box for box in boxes if server_sends(c, box)]
+    boxes.sort(key=lambda box: _SERVED.get(box, 0.0))
     sent = 0
     for mailbox in boxes:
+        if not drains.left(budget):
+            break
+        _SERVED[mailbox] = time.monotonic()
         token = None
         with store.read() as c:
             if c.execute(
@@ -1050,6 +1062,8 @@ def drain(store, auth, limit=20):
                 except Problem:
                     token = None  # the key is failing: the email waits; Tools > Settings > Email says why
         for _ in range(limit):
+            if not drains.left(budget):
+                break  # the rest waits for the next pass
             with store.transaction(durable=True) as c:
                 row = _lease(c, auth, mailbox, SERVER, permit=True, lease=token is not None)
             if not row:

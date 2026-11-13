@@ -50,13 +50,18 @@ Only the owner's own chat, for the owner's goals, measures and bets. Anyone else
    serves (a bet, from `tico strategy show`). Skip any they already answered.
 3. **Recommend once.** If the goal has no number or no date, suggest one once, and name the bet it serves. A "no", or no answer,
    keeps the goal as written, and you do not raise it again in this chat.
-4. **Read back.** `tico goal read-back` with the changes (kinds `goal_create`, `goal_update`, `measure_add`, `target_set`,
-   `measure_remove` or `suggestion`; up to 20). Tico posts it as your reply and saves nothing. End the turn there.
-5. **Save only on a plain yes** ("yes", "ok", "go ahead", "save it", or a yes to some by number). Save exactly the agreed steps,
-   in order, with `tico goal save POST <PATH> '<body_json>' --on-behalf-of turn` (required on this command: `turn`). For a new goal's later steps, add `--created-goal <id>`. Reply
-   with `[title](#/goals/<id>)`. Any other reply saves nothing: draft again from step 4.
-6. **Not agreed.** If a save is refused (`not_agreed`, or the goal changed since), save nothing more, say in one sentence what
-   changed, and read back again. Never retry the save.
+4. **Read back the whole plan, once.** `tico goal read-back` with every change of the request in one call (kinds
+   `goal_create`, `goal_update`, `measure_add`, `target_set`, `measure_remove` or `suggestion`), never in batches. Tico posts
+   it as your reply and saves nothing. End the turn there.
+5. **Save on their agreement, in any words** ("yes", "sure, go for it", or a yes to some by number). Judge the words: if a
+   reply might not be a yes, ask once. A question or "thanks" keeps the plan: answer it, and their later yes saves it with
+   no new read-back. A change to the plan is a new read-back (step 4), which replaces the old one. On the yes, save every
+   agreed step in that turn, in order, with `tico goal save POST <PATH> '<body_json>' --on-behalf-of turn` (required on this
+   command: `turn`). For a new goal's later steps, add `--created-goal <id>`. Then reply once with
+   `[title](#/goals/<id>)` links and how to undo, without showing the plan again.
+6. **Not agreed.** If a save is refused (`not_agreed`, or the goal changed since), save nothing more. Say in one sentence
+   what was saved, with links, and what wasn't and why (after their "stop", that is the whole answer; otherwise read back
+   what is left). Never retry the save.
 7. **A "no" to your recommendation** is recorded at once, with no read-back: `tico goal save POST /api/v2/goal-proposals/turned-down
    '<json>' --on-behalf-of turn`, the body being the suggestion and `reason` its one-sentence reason from their words. Say it is noted.
 8. **Refused by design.** A colour, done or dropped, archiving, a KPI reading, the company Vision, strategy drafts and bets, and

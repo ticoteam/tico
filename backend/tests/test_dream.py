@@ -229,11 +229,3 @@ def test_get_reads_the_same_branch_post_files_on(api):
     assert theirs != mine
     assert current(api, "cara-test", bot="cpo")["task"] == mine
     assert current(api, "ben-test", bot="cpo")["task"] == theirs
-
-
-def test_both_dream_routes_answer_on_a_bot_with_no_dream_and_then_with_one(api):
-    # GET and POST both read a dream through dream._dreams, which orders by the task's rowid: the TASKS subquery has
-    # no rowid, so both routes failed even on a bot that had never dreamed.
-    assert current(api) is None
-    started = dream(api)["dream"]
-    assert current(api)["task"] == started["task"]

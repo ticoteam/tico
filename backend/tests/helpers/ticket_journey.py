@@ -350,10 +350,14 @@ class Company:
             )
         return run
 
-    def clean(self):
+    def clean(self, expected=()):
         """Nothing a person would have to fix by hand: no refused write since the company was made, no open task without an owner, no task made
-        twice."""
-        refused = self.rows("SELECT actor, rule, detail FROM refusals ORDER BY created_at, id")
+        twice. `expected`: words of refusals the journey meant to meet (a bot told to send the task back instead)."""
+        refused = [
+            r
+            for r in self.rows("SELECT actor, rule, detail FROM refusals ORDER BY created_at, id")
+            if not any(words in r["detail"] for words in expected)
+        ]
         assert not refused, (
             f"writes were refused along the way: {[(self.slug_of(r['actor']), r['rule'], r['detail'][:200]) for r in refused]}"
         )

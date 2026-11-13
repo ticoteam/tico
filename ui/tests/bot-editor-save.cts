@@ -235,8 +235,8 @@ declare function loadSettings(): void;
     // of them save together.
     await open();
     await pick('model', 'codex', 'gpt-6-luna');
-    assert.deepEqual(await editor.locator('[data-bot-compact] option').allInnerTexts(), ['100k', '150k', '250k', '400k', '600k', '1M'],
-      'the Compact at choices, 100k first; the default stays 250k');
+    assert.deepEqual(await editor.locator('[data-bot-compact] option').allInnerTexts(), ['100k', '150k', '200k', '250k', '300k', '400k', '500k', '600k', '700k', '800k', '900k', '1M'],
+      'the Compact at choices, 100k first');
     await editor.locator('[data-bot-compact]').selectOption('100000');
     await editor.locator('[data-bot-turns-at-once]').fill('5');
     await editor.locator('[data-bot-turns-at-once]').dispatchEvent('change');

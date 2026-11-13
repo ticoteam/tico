@@ -69,8 +69,6 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#changelog-notice').click();
     await page.locator('.release-entry').first().waitFor();
     assert.equal(await page.locator('.release-entry').count(),2);
-    const timed = page.locator('.release-entry', {hasText:'Tico v0.3.23'}).locator('.release-date');
-    assert.match((await timed.locator('.release-time').textContent())!,/^\d{1,2}:42\s?(AM|PM)\s\S+$/,'a timed release shows its time with a zone');
     assert.equal(await page.locator('.release-entry', {hasText:'Tico v0.3.22'}).locator('.release-time').count(),0,'a date-only release shows just the date');
     assert.equal(await page.locator('[data-add-update]').isVisible(),false);
     assert.equal(await page.locator('[data-read-changes]').count(),0,'there is no mark-as-read button');

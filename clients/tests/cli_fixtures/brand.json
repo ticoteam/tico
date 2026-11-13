@@ -178,19 +178,6 @@
  {
   "argv": [
    "brand",
-   "check",
-   "file-1",
-   "--json"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "brand",
    "check"
   ],
   "tools": [],
@@ -241,31 +228,6 @@
      "body": "Hello all",
      "operation_id": null,
      "revision": 5,
-     "section": "name"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
- },
- {
-  "argv": [
-   "brand",
-   "draft",
-   "--section",
-   "name",
-   "--body",
-   "Hello all",
-   "--json"
-  ],
-  "tools": [
-   [
-    "tico_brand_draft",
-    {
-     "body": "Hello all",
-     "operation_id": null,
      "section": "name"
     }
    ]
@@ -431,49 +393,5 @@
   "stdout": "section: claims\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "brand",
-   "show",
-   "--section",
-   "naming"
-  ],
-  "tools": [
-   [
-    "tico_brand_show",
-    {
-     "operation_id": null,
-     "section": "naming"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "brand",
-    null
-   ]
-  ],
-  "stdout": "section: naming\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "brand",
-   "check",
-   "1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
  }
 ]

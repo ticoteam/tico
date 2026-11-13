@@ -2,6 +2,8 @@
 what changed and what left, never naming a task the reader could not have seen; a stale cursor
 resets; an unchanged full read is a 304."""
 
+import base64
+import json
 import time
 import uuid
 
@@ -257,15 +259,79 @@ def test_a_deleted_task_with_no_trash_row_is_reported_gone_to_its_reader(api):
     assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
 
 
-def test_a_changed_trigger_is_rebuilt_on_the_next_start(api):
-    # Every start runs events.ensure, which replaces a trigger whose SQL differs: an install from before the snapshot
-    # kept its pipeline still has the old tasks update trigger.
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DROP TRIGGER changes_tasks_update")
-        c.execute("CREATE TRIGGER changes_tasks_update AFTER UPDATE ON tasks BEGIN SELECT 1; END")
-        E.ensure(c)
-        sql = c.execute(
-            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='changes_tasks_update'"
-        ).fetchone()[0]
-    assert "OLD.pipeline_id" in sql
+def test_an_unknown_filter_is_refused_not_ignored(api):
+    """A filter the list does not take answers 422 naming it, never the list without it (#150: `assignee=` read as
+    no filter and answered every open task)."""
+    post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    r = api.get("/api/v2/tasks?assignee=bot:x&status=open", headers=headers())
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "filter" and "assignee" in error["detail"] and "owner=" in error["detail"]
+    assert "status" in error["detail"] and "waiting_on" in error["detail"]  # the filters it does take
+    # A delta read is refused the same way.
+    cursor = tasks(api, ACTIVE)["cursor"]
+    r = api.get(f"/api/v2/tasks?status=open&changed_after={cursor}&colour=red", headers=headers())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "filter" and "colour" in r.text, r.text
+    assert api.get("/api/v2/tasks?owner=bot:x", headers=headers()).status_code == 200
+    assert get(api, "tasks?owner=bot:ops&status=open")["tasks"] == []  # owner= still filters
+
+
+def test_every_filter_the_list_takes_still_answers(api):
+    from backend import task_list_routes
+
+    made = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    cursor = tasks(api, ACTIVE)["cursor"]
+    values = {
+        "owner": "ben",
+        "requester": "ana",
+        "status": "open",
+        "lane": "company",
+        "label": "area-a",
+        "limit": "10",
+        "offset": "0",
+        "sort": "queue",
+        "number": "1",
+        "updated_since": "2026-01-01T00:00:00Z",
+        "brief": "true",
+        "member": "ana",
+        "role": "requester&member=ana",  # role narrows member
+        "changed_after": cursor,
+        "ids": made["id"],
+        "snoozed": "all",
+        "q": "agenda",
+        "pipeline": made.get("pipeline_id") or "engineering",
+        "stage": made.get("stage_id") or "engineering-build",
+        "waiting_on": "ben",
+        "pushed_past": "false",
+        "search": "agenda",
+        "owners": "human:ben",
+        "stages": made.get("stage_id") or "general-todo",
+        "requesters": "human:ana",
+        "labels": "area-a",
+        "turn": "human:ben",
+        "due": "any",
+        "late": "false",
+        "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
+        "on_behalf_of": "default",
+        "type": "bug",  # installed Recorder builds send it; accepted and ignored
+    }
+    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of", "type"}
+    for name, value in values.items():
+        r = api.get(f"/api/v2/tasks?{name}={value}", headers=headers())
+        assert r.status_code == 200, (name, r.text)
+
+
+def test_the_filter_list_is_what_the_route_declares(api):
+    """LIST_FILTERS is kept by hand next to the handler; it must name exactly the route's query parameters."""
+    from backend import task_list_routes
+
+    route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/v2/tasks" and "GET" in r.methods)
+    assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS
+
+
+def test_an_installed_recorder_type_search_still_answers(api):
+    """Recorder builds from 0.5.181 send `type=<task type>` with a picker search: it answers the search, unnarrowed."""
+    made = post(api, "tasks", {"owner": "ben", "title": "Review pricing", "body": "Please."})
+    r = api.get("/api/v2/tasks?q=pricing&limit=30&brief=true&offset=0&type=bug", headers=headers())
+    assert r.status_code == 200, r.text
+    assert [t["id"] for t in r.json()["tasks"]] == [made["id"]]

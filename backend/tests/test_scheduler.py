@@ -29,6 +29,39 @@ def test_failed_computer_retirement_records_failure_and_runs_the_remaining_clean
     assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
+def _scheduler_health(store):
+    import json
+
+    with store.read() as c:
+        row = c.execute("SELECT last_error, detail FROM service_health WHERE service='scheduler'").fetchone()
+    return row[0], json.loads(row[1])["failures"]
+
+
+def test_a_failure_late_in_the_tick_reaches_the_schedulers_health_row(api, monkeypatch):
+    """The health row is written at the end of the pass: a job that fails after the 10-second writes is on it."""
+    from backend import thread_rank
+
+    monkeypatch.setattr(thread_rank, "tick", Mock(side_effect=RuntimeError("down")))
+    store = api.app.state.store
+    result = Scheduler(store, api.app.state.execution).tick()
+    assert {"thread_rank": "RuntimeError"} in result["failures"]
+    last_error, failures = _scheduler_health(store)
+    assert last_error == "schedule errors"
+    assert {"thread_rank": "RuntimeError"} in failures
+
+
+def test_a_tick_that_raises_still_writes_its_health_row(api, monkeypatch):
+    from backend import maintenance
+
+    monkeypatch.setattr(maintenance, "tick", Mock(side_effect=RuntimeError("down")))
+    store = api.app.state.store
+    with pytest.raises(RuntimeError):
+        Scheduler(store, api.app.state.execution).tick()
+    last_error, failures = _scheduler_health(store)
+    assert last_error == "schedule errors"
+    assert {"scheduler": "RuntimeError"} in failures
+
+
 def test_the_finance_sweep_commits_its_money_actions_durably(api, monkeypatch):
     """The hourly Finance sweep ends actions whose OK was given, as the OK route does: its commit reaches the disk
     before the pass goes on (store.transaction(durable=True))."""

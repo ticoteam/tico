@@ -30,6 +30,15 @@ from fastapi.responses import Response
 from . import events as E
 
 CAP = 500  # more changed tasks than one page: a full read is no dearer
+SNOOZE_LINE_BYTES = 200  # a brief row's snooze line, in UTF-8 bytes: the task's own read keeps the whole why
+
+
+def clip_line(text, limit=SNOOZE_LINE_BYTES):
+    """`text` cut to at most `limit` UTF-8 bytes on a character boundary, ending in "…" when it was cut."""
+    raw = text.encode()
+    if len(raw) <= limit:
+        return text
+    return raw[: limit - len("…".encode())].decode(errors="ignore").rstrip() + "…"
 
 
 def access(visible_sql):
@@ -199,10 +208,13 @@ def _could_read(c, visible_sql, tid, ref):
 # ----------------------------------------------------------------------------- the engine's part of a list row
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
-    row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`
-    and `pushed_past` (it entered its stage pushed past a requirement). One `H.task_waits` for every row, one read of the
+    row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
+    `pushed_past` (it entered its stage pushed past a requirement) and `on_person` (it waits only on a person's OK or
+    answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one read of the
     open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
-    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed)."""
+    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed turn's
+    line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
+    keeps it whole."""
     from . import waiting_on as W
     from .store import H
 
@@ -242,15 +254,20 @@ def brief(c, rows, visible_sql="1"):
         else set()
     )
     turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
+    # Waits only on a person's OK or answer: it holds no slot in a stage with a limit (waiting_on.on_person_many).
+    person = W.on_person_many(c, waits)
     running = _running(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
     for row in rows:
         turn = turns.get(row["id"])
         if turn:
             turn["running"] = row["id"] in running
+            if turn["state"] == W.SNOOZED:
+                turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
         row["late"] = late.get(row["id"])
         row["snoozed"] = row["id"] in snoozed
         row["pushed_past"] = row["id"] in pushed
+        row["on_person"] = row["id"] in person
     return rows
 
 

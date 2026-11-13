@@ -781,7 +781,7 @@ ENTRIES = TEAM_RULES + [
         value="json",
         card=_card("models", "settings-subs"),
         read="computer-subscriptions",
-        words="give assign subscription computer claude codex",
+        words="give assign subscription computer claude codex person plans failover next plan reset",
     ),
     # Bots
     S(
@@ -892,6 +892,8 @@ ENTRIES = TEAM_RULES + [
         "compact_at",
         "int",
         _card("bots"),
+        words="compact compaction autocompact context window tokens sizes 100000 150000 200000 250000 300000 400000 "
+        "500000 600000 700000 800000 900000 1000000",
     ),
     S(
         "bot.manages_reports",
@@ -1069,6 +1071,18 @@ ENTRIES = TEAM_RULES + [
         value="json",
         card=_card("bots"),
         words="shared cloud machine size always on pause after minutes grow storage disk",
+    ),
+    S(
+        "cloud.shared_machine.replace",
+        "Replace the shared cloud machine",
+        COMPUTERS,
+        "admin",
+        "confirm",
+        "DELETE",
+        "cloud-machines/shared",
+        value="json",
+        card=_card("computers"),
+        words="replace shared cloud machine delete disk fresh broken stuck failed",
     ),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).

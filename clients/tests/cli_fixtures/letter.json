@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "letter"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "letter",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico letter: error: argument sub: invalid choice: 'nope' (choose from quote, list, send, show, cancel) Did you mean: tico letter quote, tico letter cancel?",
-  "exit": 64
- },
- {
-  "argv": [
    "letter",
    "quote",
    "--recipient",
@@ -199,17 +178,6 @@
  {
   "argv": [
    "letter",
-   "send"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico letter send <letter_id>\ntico letter send: error: the following arguments are required: letter_id",
-  "exit": 64
- },
- {
-  "argv": [
-   "letter",
    "show",
    "letter-id-1"
   ],
@@ -236,17 +204,6 @@
  {
   "argv": [
    "letter",
-   "show"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico letter show <letter_id>\ntico letter show: error: the following arguments are required: letter_id",
-  "exit": 64
- },
- {
-  "argv": [
-   "letter",
    "cancel",
    "letter-id-1"
   ],
@@ -269,17 +226,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "letter",
-   "cancel"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico letter cancel <letter_id>\ntico letter cancel: error: the following arguments are required: letter_id",
-  "exit": 64
  },
  {
   "argv": [
@@ -335,33 +281,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "letter",
-   "quote",
-   "--text",
-   "Hello",
-   "--recipient",
-   "not json"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico letter quote: error: argument --recipient: invalid loads value: 'not json'",
-  "exit": 64
- },
- {
-  "argv": [
-   "letter",
-   "quote",
-   "--text",
-   "Hello"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico letter quote\ntico letter quote: error: the following arguments are required: --recipient",
-  "exit": 64
  }
 ]

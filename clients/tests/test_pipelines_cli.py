@@ -336,11 +336,6 @@ def test_task_list_narrows_to_a_pipeline_a_stage_and_whose_turn_it_is(cli, capsy
     )
 
 
-def test_the_pipeline_requirement_and_wait_commands_are_no_longer_caught_as_removed():
-    for argv in (["pipeline", "list"], ["requirement", "list", "s1"], ["task", "wait", "T1"], ["stage", "show", "s1"]):
-        assert hubcli.removed_notice(argv) is None
-
-
 # ----------------------------------------------------------------------------- tico task wait
 def task(tid, stage, status="open", version=1, turn="bot", who="bot:x", filed=(), to_leave=()):
     return {

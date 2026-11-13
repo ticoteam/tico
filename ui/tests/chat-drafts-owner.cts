@@ -51,7 +51,8 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     await page.locator(box).waitFor();
     await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
   };
-  const saved = () => page.evaluate(() => ({drafts: localStorage.getItem('hub.chat.drafts'), pending: sessionStorage.getItem('hub.chat.pending')}));
+  const saved = () => page.evaluate(() => ({drafts: localStorage.getItem('hub.chat.drafts'), pending: sessionStorage.getItem('hub.chat.pending'),
+    threads: localStorage.getItem('hub.thread.drafts')}));
   try {
     await page.goto('https://tico-ui.test/#/assistant');
     await ready();
@@ -64,6 +65,8 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     const owner = JSON.stringify(['company-a', 'ana']);
     assert.equal(JSON.parse(mine.drafts!).identity, owner, 'a draft names its account and company');
     assert.equal(JSON.parse(mine.pending!).identity, owner, 'a pending send names its account and company');
+    // A bot's Home or DM keeps its words too (thread-view.ts), under the same owner rule; this page draws no thread box.
+    await page.evaluate(o => localStorage.setItem('hub.thread.drafts', JSON.stringify({identity: o, value: {'d:bot:coo': 'Ana thread words'}})), owner);
     if (options.legacy) await page.evaluate(() => {
       localStorage.setItem('hub.chat.drafts', JSON.stringify({coo: 'Ana legacy draft'}));
       sessionStorage.setItem('hub.chat.pending', JSON.stringify([['assistant', {text: 'Ana legacy pending', signature: 'old', key: 'old-key', at: Date.now()}]]));
@@ -89,7 +92,10 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
       assert.ok(!after.drafts?.includes('Ana'), name + ': the other draft is gone from storage');
       assert.ok(!after.pending?.includes('Ana'), name + ': the other pending send is gone from storage');
     }
-    assert.deepEqual(posts, [], name + ': restoring sends nothing');
+    if (!keep && !options.legacy) assert.equal(after.threads, null, name + ': the other thread words are gone from storage at sign-in');
+    if (keep) assert.ok(after.threads?.includes('Ana thread words'), name + ': the thread words stay for their account');
+    // Opening the Assistant marks its chat read (assistant-page.ts assistantRead): a read, not a restored send.
+    assert.deepEqual(posts.filter(p => !p.endsWith('/read-all')), [], name + ': restoring sends nothing');
     assert.deepEqual(errors, [], name + ': no page errors');
   } finally { await context.close(); }
   console.log('ok -', name);

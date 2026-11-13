@@ -1,5 +1,5 @@
-/* ui/app/threads-page.ts — New thread and New DM, a thread's Members and settings, and Make task on a message. The Threads
-   page itself (the rail beside one thread) is ui/app/thread-rail.ts.
+/* ui/app/threads-page.ts — A thread's Members and settings, and the teammate pickers they share. The Threads page itself
+   (the rail beside one thread) is ui/app/thread-rail.ts; New message is ui/app/new-message.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -7,10 +7,6 @@
 interface ThdPick { actor: string; label: string }
 // A roster row or group that may carry the viewer's access to it (`my_access`).
 interface ThdAccessible { my_access?: AccessLevel }
-// The audience choices a thread's form names (a form's named controls).
-type ThdAudience = 'members' | 'team' | 'company';
-// What the create calls answer: the thread itself, or the thread under `thread` (with `held` when a rule held the first message).
-type ThdThreadReply = ThreadRow & { thread?: ThreadRow; held?: boolean };
 
 // A node the dialog's own markup just drew: it is there, or the draw itself is broken (the old code threw on it too).
 function thdFind<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
@@ -74,139 +70,7 @@ function threadDialog(id: string, label: string): HTMLDialogElement {
 }
 const threadDialogHead = (title: string) => `<header class="tmodal-head"><h2>${esc(title)}</h2><span class="spacer"></span>
   <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>`;
-const threadDialogFoot = (action: string) => `<footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span>
-  <button type="button" class="ghost" data-close>Cancel</button><button class="primary" type="submit">${esc(action)}</button></footer>`;
 function threadDialogWire(dlg: HTMLDialogElement): void { dlg.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dlg.close(); }); }
-
-// ----------------------------------------------------------------- new thread
-// A named thread: its members, who else sees it (only them, a group, everyone) and a pin for each member. Every thread
-// needs a name; a group chat (two or more others) says so. A DM (`dm`, from a teammate's page) is the DM form.
-const NT_X = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-function threadNewOpen({dm = false, members = []}: {dm?: boolean; members?: string[]} = {}) {
-
-  if (dm) return threadDmOpen(members);
-  const dlg = threadDialog('thread-new', 'New thread');
-  dlg.className = 'nt-dialog';
-  const groups = (S.orgGroups || []).filter(g => g.id);
-  const chosen: string[] = [...members];
-  let audience: ThdAudience = 'members', hit = 0;
-  dlg.innerHTML = `<form class="nt" novalidate>
-    <div class="nt-head"><h2>New thread</h2><button type="button" class="nt-x" data-close aria-label="Close">${NT_X}</button></div>
-    <div class="nt-body">
-      <div class="nt-field"><label class="nt-lbl" for="nt-add">Members</label>
-        <div class="nt-chips"><span class="nt-chiplist"></span><input id="nt-add" type="text" placeholder="Add" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="nt-sugg"></div>
-        <ul class="nt-sugg" id="nt-sugg" role="listbox" aria-label="Teammates" hidden></ul></div>
-      <div class="nt-field"><label class="nt-lbl" for="nt-name">Name</label>
-        <div class="nt-name"><span aria-hidden="true">#</span><input id="nt-name" name="title" maxlength="200" placeholder="launch-plan" autocomplete="off" aria-describedby="nt-why"></div>
-        <span class="nt-why" id="nt-why" role="status"></span></div>
-      <fieldset class="nt-field"><legend class="nt-lbl">Who sees it</legend>
-        <div class="nt-seg">${([['members', 'Members'], groups.length && ['team', 'A group'], ['company', 'Everyone']].filter(Boolean) as string[][]).map(([k, label]) =>
-          `<button type="button" data-aud="${k}" aria-pressed="${k === audience}">${label}</button>`).join('')}</div>
-        ${groups.length ? `<select class="nt-group" name="group" aria-label="Group" hidden>${groups.map(g => `<option value="${esc(g.id)}">${esc(g.name || g.id)}</option>`).join('')}</select>` : ''}</fieldset>
-      <label class="nt-check"><input type="checkbox" name="pin" checked><span>Pin for members</span></label>
-    </div>
-    <div class="nt-foot"><span class="err" role="status" data-status></span><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary" disabled>Create</button></div></form>`;
-  threadDialogWire(dlg);
-  const form = thdFind<HTMLFormElement>(dlg, 'form'), add = thdFind<HTMLInputElement>(form, '#nt-add'), sugg = thdFind<HTMLUListElement>(form, '.nt-sugg');
-  const name = thdFind<HTMLInputElement>(form, '#nt-name'), why = thdFind(form, '.nt-why'), submit = thdFind<HTMLButtonElement>(form, '[type=submit]'), status = thdFind(form, '[data-status]');
-  const label = (a: string) => threadAddable().find(t => t.actor === a)?.label || actorName(a);
-  const check = () => {
-    const title = name.value.trim().replace(/^#+/, '').trim();
-    why.textContent = !title && chosen.length >= 2 ? 'Group chats need a name.' : '';
-    submit.disabled = !title;
-  };
-  const drawChips = (): void => {
-    thdFind(form, '.nt-chiplist').innerHTML = chosen.map(a => `<span class="nt-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(label(a))}</span><button type="button" data-remove aria-label="Remove ${esc(label(a))}">×</button></span>`).join('');
-    check();
-  };
-  const options = () => {
-    const w = add.value.trim().toLowerCase();
-    return threadAddable().filter(t => !chosen.includes(t.actor) && (!w || t.label.toLowerCase().includes(w))).slice(0, 8);
-  };
-  const drawSugg = (open = true) => {
-    const list = open ? options() : [];
-    hit = Math.min(hit, Math.max(0, list.length - 1));
-    sugg.innerHTML = list.map((t, i) => `<li role="option" id="nt-opt-${i}" data-actor="${esc(t.actor)}" aria-selected="${i === hit}">${actorAvatar(t.actor, 20)}<span>${esc(t.label)}</span></li>`).join('');
-    sugg.hidden = !list.length;
-    add.setAttribute('aria-expanded', String(!!list.length));
-    if (list.length) add.setAttribute('aria-activedescendant', 'nt-opt-' + hit); else add.removeAttribute('aria-activedescendant');
-  };
-  const pick = (actor: string | undefined) => { if (actor && !chosen.includes(actor)) chosen.push(actor); add.value = ''; hit = 0; drawChips(); drawSugg(); add.focus(); };
-  add.oninput = () => { hit = 0; drawSugg(); };
-  add.onfocus = () => drawSugg();
-  add.onblur = () => setTimeout(() => drawSugg(false), 120);
-  add.onkeydown = (ev: KeyboardEvent) => {
-    const n = sugg.querySelectorAll('li').length;
-    if (ev.key === 'ArrowDown' && n) { ev.preventDefault(); hit = (hit + 1) % n; drawSugg(); }
-    else if (ev.key === 'ArrowUp' && n) { ev.preventDefault(); hit = (hit - 1 + n) % n; drawSugg(); }
-    else if (ev.key === 'Enter') { ev.preventDefault(); if (n) pick(sugg.querySelectorAll<HTMLElement>('li')[hit]?.dataset.actor); }
-    else if (ev.key === 'Backspace' && !add.value && chosen.length) { chosen.pop(); drawChips(); drawSugg(); }
-    else if (ev.key === 'Escape' && !sugg.hidden) { ev.preventDefault(); ev.stopPropagation(); drawSugg(false); }
-  };
-  sugg.onmousedown = ev => { ev.preventDefault(); pick(eventElement(ev)?.closest<HTMLElement>('[data-actor]')?.dataset.actor); };
-  thdFind(form, '.nt-chips').onclick = ev => {
-    const b = eventElement(ev)?.closest('[data-remove]');
-    if (b) { chosen.splice(chosen.indexOf(b.closest<HTMLElement>('[data-actor]')!.dataset.actor!), 1); drawChips(); }
-    add.focus();
-  };
-  thdFind(form, '.nt-seg').onclick = ev => {
-    const b = eventElement(ev)?.closest<HTMLElement>('[data-aud]'); if (!b) return;
-    audience = b.dataset.aud as ThdAudience;
-    form.querySelectorAll('[data-aud]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-    const group = form.querySelector<HTMLSelectElement>('.nt-group'); if (group) group.hidden = audience !== 'team';
-  };
-  name.oninput = check;
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const title = name.value.trim().replace(/^#+/, '').trim();
-    if (!title) { check(); return; }
-    submit.disabled = true; status.textContent = '';
-    try {
-      const r: ThdThreadReply | null = await post('/v2/threads', {title, audience, audience_group_id: audience === 'team' ? (form.elements.namedItem('group') as HTMLSelectElement | null)?.value || null : null,
-        members: chosen, pin_for_members: (form.elements.namedItem('pin') as HTMLInputElement).checked});
-      const t = r?.thread || r;
-      dlg.close();
-      if (t?.id) { threadsPut(t); location.hash = threadHref(t); }
-    } catch (e) {
-      const code = errorCode(e) || (isErrorRecord(e) && isErrorRecord(e.body) ? e.body.code : undefined);
-      if (code === 'name_required') why.textContent = 'Group chats need a name.';
-      else status.textContent = errorMessage(e, '');
-      submit.disabled = false;
-    }
-  };
-  drawChips();
-  dlg.showModal();
-  (chosen.length ? name : add).focus();
-}
-// A DM with the chosen teammates (always private), reusing the open one with exactly them.
-function threadDmOpen(members: string[] = []): void {
-  const dlg = threadDialog('thread-new', 'New DM');
-  dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog';
-  dlg.innerHTML = `<form>${threadDialogHead('New DM')}
-    <div class="dash-form">
-      <div class="thd-members"><span class="thd-lbl">With</span>${threadPickerHTML(members, new Set(), {groups: false})}</div>
-      <label>Message<textarea name="body" rows="3"></textarea></label></div>
-    ${threadDialogFoot('Start')}</form>`;
-  threadDialogWire(dlg); threadPickerWire(dlg);
-  const form = thdFind<HTMLFormElement>(dlg, 'form');
-  form.onsubmit = async ev => {
-    ev.preventDefault();
-    const status = thdFind(form, '[data-status]');
-    const chosen = [...form.querySelectorAll<HTMLInputElement>('[name=member]:checked')].map(i => i.value);
-    const body = (form.elements.namedItem('body') as HTMLTextAreaElement).value.trim();
-    if (!chosen.length) { status.textContent = 'Choose someone'; return; }
-    const submit = thdFind<HTMLButtonElement>(form, '[type=submit]'); submit.disabled = true; status.textContent = '';
-    try {
-      const r: ThdThreadReply | null = await post('/v2/threads/dm', {members: chosen, ...(body ? {body} : {})});
-      const t = r?.thread || r;
-      if (r?.held) toast('Your first message was held by a rule', true);
-      dlg.close();
-      if (t?.id) { threadsPut(t); location.hash = threadHref(t); }
-    } catch (e) { status.textContent = errorMessage(e, ''); submit.disabled = false; }
-  };
-  dlg.showModal();
-  form.querySelector<HTMLElement>('.thd-q')?.focus();
-}
 
 // ----------------------------------------------------------------- members
 async function threadMembersOpen(view: ThvView): Promise<void> {

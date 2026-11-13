@@ -39,15 +39,31 @@ def save(api, source, items, status="ok", error="", expected=200, key=None):
 
 class FakeJudge:
     """Answers a rule yes when the post's text names it: `[r0]` is 0.9 for the first rule, `[r1:0.8]` is 0.8 for the
-    second. Every other rule is 0.05."""
+    second. Every other rule is 0.05. A call about several posts (backend/decide_groups.py) answers each from its own
+    text. `calls` has one entry per call (the post's text, or the list of texts a grouped call held); `posts` every
+    text asked about, in order."""
 
     def __init__(self, fail=False):
-        self.calls, self.fail = [], fail
+        self.calls, self.posts, self.fail = [], [], fail
 
     def __call__(self, state, questions, label=None):
-        self.calls.append(state["text"])
+        from backend import decide_groups as DG
+
+        parts = DG.split(state, questions)
+        texts = [one["text"] for _, one, _ in parts] if parts else [state["text"]]
+        self.calls.append(texts if parts else texts[0])
+        self.posts.extend(texts)
         if self.fail:
             raise RuntimeError("down")
-        named = {qid: float(value or 0.9) for qid, value in MARK.findall(state["text"])}
-        answers = {qid: {"type": "noul", "noul": named.get(qid, 0.05)} for qid in questions}
+        if parts is None:
+            return {"answers": self.answer(state["text"], questions), "ms": 1, "model": "fake-judge", "usage": {}}
+        answers = {}
+        for _, one, mine in parts:
+            own = self.answer(one["text"], mine)
+            answers.update({key: own[qid] for qid, key in mine.items()})
         return {"answers": answers, "ms": 1, "model": "fake-judge", "usage": {}}
+
+    @staticmethod
+    def answer(text, questions):
+        named = {qid: float(value or 0.9) for qid, value in MARK.findall(text)}
+        return {qid: {"type": "noul", "noul": named.get(qid, 0.05)} for qid in questions}

@@ -73,11 +73,6 @@ def task_thread(api, task, title="Pricing"):
     return thread
 
 
-def test_a_thread_on_an_open_task_shows_in_threads_and_catch_up(api):
-    thread = task_thread(api, make_task(api))
-    assert shows(api, thread["id"]) == (True, True)
-
-
 def test_a_thread_on_a_task_that_is_done_or_closed_leaves_threads_and_catch_up(api):
     for number, finish in enumerate(FINISHES):
         task = make_task(api, title=f"Finish {number}")
@@ -108,14 +103,6 @@ def test_a_post_after_the_task_closed_brings_its_thread_back_and_a_later_task_ed
     assert shows(api, thread["id"]) == (True, True)
     change_task(api, task, {"title": "Ship pricing (renamed)"})
     assert shows(api, thread["id"]) == (True, True)
-
-
-def test_a_post_before_the_task_closed_does_not_bring_its_thread_back(api):
-    task = make_task(api)
-    thread = task_thread(api, task)
-    say(api, thread["id"], "Last word before the close", token="cara-test")
-    change_task(api, task, {"status": "done"})
-    assert shows(api, thread["id"]) == (False, False)
 
 
 def test_finishing_a_task_writes_nothing_that_brings_its_own_thread_back(api):

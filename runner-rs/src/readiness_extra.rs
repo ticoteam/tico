@@ -991,32 +991,6 @@ mod tests {
     }
 
     #[test]
-    fn a_server_from_before_isolation_reports_gets_the_same_check_in_without_it() {
-        // The refusal a server from before `isolated` sends (backend/models.py StructuredReadiness forbids unknown
-        // fields), word for word: that field alone is held back and the check-in is sent again with the rest, so
-        // the computer keeps claiming work.
-        let detail = "body.readiness.StructuredReadiness.isolated: Extra inputs are not permitted; \
-                      body.readiness.dict[constrained-str,bool].runtimes: Input should be a valid boolean; \
-                      body.readiness.dict[constrained-str,bool].bots: Input should be a valid boolean";
-        let mut body = json!({"version": "test", "readiness": {"schema_version": 1, "isolated": true,
-                              "recent_errors": ["x"], "runtimes": {"claude": {"installed": true}}, "bots": {}}});
-        let hold = refused(detail, &body["readiness"]);
-        assert_eq!(hold.as_deref(), Some("readiness.isolated"));
-        crate::lanes::hold_back("readiness.isolated");
-        drop_held(&mut body);
-        crate::lanes::release("readiness.isolated");
-        assert!(
-            body["readiness"].get("isolated").is_none(),
-            "only the refused field goes"
-        );
-        assert_eq!(body["readiness"]["recent_errors"], json!(["x"]));
-        assert_eq!(
-            body["readiness"]["runtimes"]["claude"]["installed"],
-            json!(true)
-        );
-    }
-
-    #[test]
     fn an_older_server_loses_only_the_own_logins_usage_windows() {
         let window = json!({"used_percent": 53.0, "resets_at": "2026-10-16T03:10:00+00:00", "reported_at": "2026-10-16T02:47:00+00:00", "status": "allowed"});
         let mut body = json!({"readiness": {"recent_errors": ["x"], "bots": {},

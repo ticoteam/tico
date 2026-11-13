@@ -8,6 +8,8 @@ interface ApiWriteOptions {
   keepalive?: boolean | undefined;
   onRetry?: ((attempt: number, status: number) => void) | undefined;
   onResponse?: ((status: number) => void) | undefined;
+  /** The route answers 204 or an empty body by design, so an empty success counts as saved (writeRequestOnce). */
+  noContent?: boolean | undefined;
 }
 
 /** A tagged list the page keeps: the ETag the server sent with it, and the body it came with. */
@@ -132,6 +134,14 @@ const newRequestId = (): string => globalThis.crypto?.randomUUID?.() || 'xxxxxxx
 // instead of waiting for the browser to give up, and the request id is kept so a retry is never saved twice.
 // `opts.onRetry` hears each retry (attempt, status), so a slow send can say it is trying again.
 // The error names the write's signature, so the caller can forget the kept request id once the person moves on.
+// A success counts as saved only when its body is a JSON object or array, as an upload's does (formRequestOnce): a
+// proxy or sign-in page, or a cut-off answer, is retried with the same request id and ends unconfirmed. Only a write
+// declared `opts.noContent` counts an empty success; no UI write is declared today (no JSON write's route answers 204).
+// A redirect is refused, so a sign-in redirect goes through the signed-out check below.
+const writeConfirmation = (text: string | null): object | null => {
+  try { const value: unknown = text ? JSON.parse(text) : null; return value && typeof value === 'object' ? value : null; }
+  catch { return null; }
+};
 const writeTimedOut = (ms: number | undefined, signature: string) => Object.assign(new Error(`No answer from the server in ${Math.round(Number(ms) / 1000)} seconds.`), {unconfirmed: true, timedOut: true, signature});
 /**
  * One attempt chain for a JSON write: retries reuse the same Idempotency-Key, and `opts.timeout` bounds all of them.
@@ -150,14 +160,16 @@ const writeRequestOnce = async (method: string, p: string, body: unknown = {}, o
     const abort = new AbortController(), timer = left < Infinity ? setTimeout(() => abort.abort(), left) : 0;
     let status = 0;
     try {
-      const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal, keepalive:!!opts.keepalive});
+      const r = await fetch(API + p, {method, redirect:'error', headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal, keepalive:!!opts.keepalive});
       status = r.status;
       opts.onResponse?.(status);
       window.TicoObservability?.response(r.status);
       if (r.ok) SESSION.seen = true;
       // The JSON answer: apiError and signInRedirect read its fields with checks, so it is cast to a failure body here.
-      const j = failureBody(await r.json().catch((error: unknown) => { if (abort.signal.aborted) throw error; return {}; }));
+      const text = await r.text().catch((error: unknown) => { if (abort.signal.aborted) throw error; return null; });
+      const confirmation = writeConfirmation(text), j = failureBody(confirmation ?? {});
       if ([429,502,503,504].includes(r.status)) throw new TypeError(apiError(j, r));
+      if (r.ok && !confirmation && !(opts.noContent && text === '')) throw new TypeError('The answer to this write was not valid JSON');
       pendingWrites.delete(signature);
       if (!r.ok) { signInRedirect(r, j); throw apiFailure(j, r); }
       return j;
@@ -307,6 +319,9 @@ async function cloudCompose(path: string, body: Record<string, unknown>, files: 
 }
 const toast = (msg: string, isErr?: boolean, action?: ToastAction | null, opts: ToastOptions = {}): void => {
   if (isErr && SESSION.out && !opts.keepWhenSignedOut) return;   // the signed-out banner says why every request fails (session.js)
+  // A bot's read-only view (backend/app_view.py) clicks nothing: a toast there is only a person-only part of the page
+  // refusing the bot, which a person never sees, and it would sit in the bot's screenshot.
+  if (typeof S !== 'undefined' && S.me?.read_only_view) return;
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
   if (isErr && !action && msg && typeof window.talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => window.talkToUs?.({kind: 'toast', title: String(msg)})};
   const t = document.createElement('div'); t.className = 'toast' + (isErr ? ' err' : ''); t.textContent = msg;

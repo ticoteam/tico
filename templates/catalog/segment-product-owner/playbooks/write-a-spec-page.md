@@ -46,6 +46,10 @@ The spec says what the team builds and how it is judged; it does not pick the de
 write "open question" and name who decides. No customer's name, email address or other personal detail: name an account
 by its id.
 
+When the page describes its sign-off, identify the configured approver by their name. If you are writing the page for
+that approver, address them as "you". Do not call the person "Product Manager" or another role unless the sentence is
+about that role in general.
+
 ## 5. Check it with the builders' eyes
 
 Read it as the engineer: can each criterion be tested? Is anything ambiguous ("quickly", "simple")? Is there a dependency

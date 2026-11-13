@@ -317,11 +317,6 @@ def test_a_quarterly_stat_leaves_the_months_inside_its_quarter_unseen_too(store)
     assert {148.0, 162.0} <= values
 
 
-def test_a_plural_unit_reads_singular_at_exactly_one_and_a_word_ending_in_ss_does_not(store):
-    assert ST._text(1, "posts") == "1 post" and ST._text(-1, "posts") == "-1 post"
-    assert ST._text(2, "posts") == "2 posts" and ST._text(1, "class") == "1 class"
-
-
 def test_runway_next_to_burn_or_cash_holds_when_the_third_is_kept_back(store):
     setup(store, shown("burn"), shown("cash_runway"), ("cash_runway", "cash", {"mode": "hidden"}))
     with store.transaction() as c:

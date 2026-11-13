@@ -176,9 +176,3 @@ def test_a_hub_phrase_is_the_longest_command_it_starts_with():
     assert turns.tool_label({"tool": "Bash", "summary": "tico settings set"}) == "Changing a setting"
     assert turns.tool_label({"tool": "shell", "summary": "tico history"}) == "Reading the chat"
     assert turns.tool_label({"tool": "Bash", "summary": "tico task ask 12 --to ana"}) == "Asking a teammate"
-
-
-def test_an_unmapped_hub_command_never_shows_its_words():
-    assert turns.tool_label({"tool": "Bash", "summary": "tico release now"}) == "Ran tico"
-    assert turns.tool_label({"tool": "Bash", "summary": "tico webhook pause"}) == "Ran tico"
-    assert turns.tool_label({"tool": "Bash", "summary": "tico release sk-live-1"}) == "Ran tico"

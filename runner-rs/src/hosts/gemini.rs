@@ -424,7 +424,7 @@ impl GeminiHost {
 
     fn command(&self, thread_id: &str, t: &Thread) -> Command {
         let argv = self.argv(thread_id, t);
-        let mut command = crate::isolation::command(&argv[0]);
+        let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())

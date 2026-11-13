@@ -395,18 +395,6 @@ def test_stage_and_requirement_ids_stay_the_same_across_saves_and_the_change_is_
     assert data["changes"][f"stages.{intake['id']}.name"] == ["Intake", "Triage"]
 
 
-def test_the_pipelines_log_lists_each_save_newest_first_by_who_made_it(c):
-    from backend import task_factories_routes as TF
-
-    saved = PS.save(c, ANA, _ops())
-    PS.save(c, ANA, dict(saved, goal="Keep the office running well"))
-    who = H.actor_name(c, ANA)
-    assert [x["text"] for x in TF.log(c, saved["id"], "1=1") if x["by"] == ANA] == [
-        f"{who} saved the pipeline",
-        f"{who} made the pipeline",
-    ]
-
-
 def test_a_stage_with_open_tasks_cannot_be_removed_and_an_empty_one_is_retired(c):
     saved = PS.save(c, ANA, dict(_ops(), owner_id=None))
     intake, sign = saved["stages"]
@@ -441,6 +429,8 @@ def test_a_removed_requirement_lets_a_waiting_task_move_in_the_same_step(c):
 
 def test_a_raised_limit_lets_the_oldest_waiting_task_in(c):
     record = _ops()
+    # Sign off's owner has work there too: a task waiting only on Ben's OK would hold no slot (task_engine.has_room).
+    _stage(record, 1)["requirements"].append(_stage(record)["requirements"][0])
     _stage(record)["requirements"] = []
     _stage(record, 1)["task_limit"] = 1
     saved = PS.save(c, ANA, record)

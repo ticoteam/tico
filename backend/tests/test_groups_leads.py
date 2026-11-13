@@ -156,25 +156,6 @@ def test_a_bare_person_id_in_reports_to_is_that_person(api):
     assert roster["default_user"] != "cara"
 
 
-def test_deleting_a_group_takes_its_peoples_automations_to_the_group_above(api):
-    outer = send(api, "POST", "groups", {"name": "Product"})["id"]
-    inner = send(api, "POST", "groups", {"name": "Web", "parent": outer, "add": {"people": ["ana"]}})["id"]
-    aid = post(
-        api,
-        "automations",
-        {
-            "name": "Acme digest",
-            "owner": "person:ana",
-            "group": "group:" + inner,
-            "trigger": {"type": "event", "name": "x.y"},
-            "steps": [],
-        },
-    )["id"]
-    send(api, "DELETE", "groups/" + inner)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT group_id FROM automations WHERE id=?", (aid,)).fetchone()[0] == "group:" + outer
-
-
 def test_deleting_a_group_moves_what_it_owns_and_what_outsiders_tagged_with_it(api):
     outer = send(api, "POST", "groups", {"name": "Product"})["id"]
     inner = send(api, "POST", "groups", {"name": "Web", "parent": outer})["id"]

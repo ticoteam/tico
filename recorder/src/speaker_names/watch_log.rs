@@ -1,5 +1,6 @@
-//! Log lines for one recording's Meet watch, so a live call can be debugged from the log
-//! alone: change-driven, rate-limited, and cheap per poll. Names only, never transcript text.
+//! Log lines for one recording's meeting watch (Meet or Teams), so a live call can be debugged
+//! from the log alone: change-driven, rate-limited, and cheap per poll. Names only, never
+//! transcript text.
 use super::{Interval, Observation};
 use crate::diag::Limit;
 use std::{
@@ -14,8 +15,10 @@ const STATS_EVERY: Duration = Duration::from_secs(60);
 #[derive(Default)]
 pub(super) struct PollInfo {
     pub found: bool,
+    /// The meeting app whose document was read ("Meet", "Teams").
+    pub app: &'static str,
     pub browser: String,
-    /// Meet-titled windows walked.
+    /// Meeting-titled windows walked.
     pub windows: usize,
     pub nodes: usize,
     /// The walk ran out of time or nodes, so the poll was discarded.
@@ -26,6 +29,7 @@ pub(super) struct PollInfo {
 pub(super) struct WatchLog {
     rec: String,
     found: bool,
+    app: &'static str,
     rows: Option<(usize, &'static str, Vec<String>)>,
     rows_limit: Limit,
     turns: BTreeMap<String, (u64, u64)>,
@@ -52,6 +56,7 @@ impl WatchLog {
         Self {
             rec: id.chars().take(8).collect(),
             found: false,
+            app: "",
             rows: None,
             rows_limit: Limit::new(20),
             turns: BTreeMap::new(),
@@ -76,16 +81,17 @@ impl WatchLog {
     ) -> Vec<String> {
         let rec = &self.rec;
         let mut out = vec![];
-        if info.found != self.found {
+        if info.found != self.found || (info.found && info.app != self.app) {
             self.found = info.found;
+            self.rows = None;
             out.push(if info.found {
+                self.app = info.app;
                 format!(
-                    "meet: rec={rec} document found in {} ({} Meet window(s) walked, {} nodes, {} ms)",
-                    info.browser, info.windows, info.nodes, info.ms
+                    "meet: rec={rec} {} document found in {} ({} window(s) walked, {} nodes, {} ms)",
+                    info.app, info.browser, info.windows, info.nodes, info.ms
                 )
             } else {
-                self.rows = None;
-                format!("meet: rec={rec} document lost")
+                format!("meet: rec={rec} {} document lost", self.app)
             });
         }
         if info.found {
@@ -102,14 +108,28 @@ impl WatchLog {
                     observed.self_names.clone(),
                 );
                 if self.rows.as_ref() != Some(&rows) {
+                    // Meet's rows are People-panel rows; Teams' are video tiles.
+                    let (unit, one, missing) = if self.app == "Teams" {
+                        (
+                            "tiles",
+                            "tile",
+                            "no video tiles (no call, or a layout not recognised); no names",
+                        )
+                    } else {
+                        (
+                            "rows",
+                            "row",
+                            "no People-panel rows (panel closed?); names from tiles only, no speaking state",
+                        )
+                    };
                     let line = match observed.local_by {
-                        "" => "no People-panel rows (panel closed?); names from tiles only, no speaking state".to_owned(),
+                        "" => missing.to_owned(),
                         "none" => format!(
-                            "{} rows; local row unknown, speaking state not used",
+                            "{} {unit}; local {one} unknown, speaking state not used",
                             observed.rows
                         ),
                         how => format!(
-                            "{} rows; local {} by {how}",
+                            "{} {unit}; local {} by {how}",
                             observed.rows,
                             observed.self_names.join(", ")
                         ),

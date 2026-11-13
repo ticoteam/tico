@@ -1994,7 +1994,11 @@ def quiet_notice(message):
     is read,
     never a reason to start a run."""
     refs = (message or {}).get("refs") or {}
-    return isinstance(refs, dict) and any(refs.get(k) for k in NO_WAKE_REF_KEYS)
+    if not isinstance(refs, dict):
+        return False
+    call = refs.get("call")
+    # A call's card (backend/calls.py) is the call's place in the thread, not something said to its bots.
+    return any(refs.get(k) for k in NO_WAKE_REF_KEYS) or (isinstance(call, dict) and bool(call.get("card")))
 
 
 def carrier_current(c, carrier, bot):
@@ -4510,10 +4514,28 @@ def brief(c, principal, row):
     return out
 
 
-def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
+def live_calls(c, ids):
+    """{thread id: {"id", "live_count"}} for the threads among `ids` with a live call (backend/calls.py), one query a
+    chunk. A Tico Meet call counts the people in it; a Google Meet call, what its status source last said."""
+    out = {}
+    for part in H.chunks(list(dict.fromkeys(ids))):
+        out.update(
+            (r[0], {"id": r[1], "live_count": int(r[2] or 0)})
+            for r in c.execute(
+                "SELECT k.thread_id, k.id, CASE WHEN k.provider='tico' THEN (SELECT COUNT(*) FROM call_participants p "
+                "WHERE p.call_id=k.id AND p.left_at IS NULL AND p.removed_at IS NULL) ELSE k.live_count END "
+                "FROM calls k WHERE k.state='live' AND k.thread_id IN (%s)" % ",".join("?" * len(part)),
+                part,
+            )
+        )
+    return out
+
+
+def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None, calls=None):
     """A thread as `principal` reads it. `summary` (subtree_summaries) makes `me.unread` and `me.activity` the whole
     subtree's, as a root row in a list shows them, in place of this thread's own, and adds `new_at`. `dm` is this row's
-    entry from `dm_with`, for a list that read them together; `pins` the viewer's pin rows by root (`pin_rows`).
+    entry from `dm_with`, for a list that read them together; `pins` the viewer's pin rows by root (`pin_rows`);
+    `calls` the live calls by thread (`live_calls`), so a list reads them once a page.
     `pinned_for_everyone` and `me.pinned` are the root's: a sub-thread shows its root's pin."""
     v = _as_viewer(principal)
     row = thread_row(c, row)
@@ -4539,6 +4561,8 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
         "retention_days": root.get("retention_days"),
         "pinned_for_everyone": bool(root.get("pinned_for_everyone_at")),
     }
+    # The thread's live call, for its row's mark; the row is only built for a reader of the thread.
+    out["live_call"] = (calls if calls is not None else live_calls(c, [out["id"]])).get(out["id"])
     # What the thread is called: its title, or the name its people give it (`_name`). Never stored.
     out["name"] = _name(c, v, root, out["title"])
     if out["audience"] == "home":
@@ -4836,6 +4860,9 @@ def _timeline_rows(c, v, rows, thread_id, depth):
     hidden rows of one kind collapse into one; a row that stands for shared-room history the viewer's Home Read doesn't
     reach says so (`earlier`), the "Earlier messages" row."""
     known = v.known(c)
+    from .files import prime_page_references
+
+    prime_page_references(c, [_message_out(m) for m in rows])  # the pages every row names, in one lookup
     out, hidden_open = [], None
     for m in rows:
         shown = (
@@ -4977,6 +5004,9 @@ def _branches(c, v, tops):
         for b in found:
             b["mark"] = int(read.get(b["id"]) or 0)
         tails = _branch_tails(c, ids) if total < MAX_INLINE_ROWS and level < MAX_BRANCH_LEVELS else {}
+        from .files import prime_page_references
+
+        prime_page_references(c, [_message_out(m) for tail in tails.values() for m in tail])  # one per level
         below = {
             b["id"]: (tails[b["id"]][-1]["seq"] if tails.get(b["id"]) else int(b["last_seq"] or 0) + 1) for b in found
         }
@@ -5492,6 +5522,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     followers = _followers_of(c, v, [r["id"] for r in every])
     dms = dm_with(c, v, every)
     pins = pin_rows(c, v.actor, [r["id"] for r in every])
+    calls = live_calls(c, [r["id"] for r in every])
 
     def items_of(rows, more):
         """Each row as its list shows it, up to half a page's bytes, so a long list leaves the other room; and its next
@@ -5499,7 +5530,16 @@ def _sidebar_page(c, v, cursor, limit, sort):
         found, budget = [], MAX_PAGE_BYTES // 2
         for r in rows:
             summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
-            item = view(c, v, r, summary=summary, dm=dms.get(r["id"]), follower=followers.get(r["id"], {}), pins=pins)
+            item = view(
+                c,
+                v,
+                r,
+                summary=summary,
+                dm=dms.get(r["id"]),
+                follower=followers.get(r["id"], {}),
+                pins=pins,
+                calls=calls,
+            )
             item["activity_seq"] = r["activity"]
             item["importance"] = r["importance"]
             if needing.get(r["id"], {}).get("new_at"):

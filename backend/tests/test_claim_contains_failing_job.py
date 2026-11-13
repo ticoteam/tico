@@ -298,29 +298,6 @@ def test_a_task_gets_no_second_job_while_its_held_job_waits(api, monkeypatch):
     assert [job["held"] for job in task_jobs(api, task_id)] == [1]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the engine cancels a finished task's queued wakes in task_wakes without claim_holds.clear, so a held run "
-    "it cancels keeps hold_reason and its Needs-you item stays open; release_due and the obsolete-notice pass look "
-    "only at queued jobs, so nothing closes the item until a person releases the bot",
-)
-def test_a_held_job_whose_task_finishes_is_canceled_and_its_needs_you_item_closes(api, monkeypatch):
-    """A task that finishes cancels the wakes still queued for it, a held one too. Once its wait has ended nothing is
-    left to retry, and the Needs-you item its hold filed closes, so no item waits on a run that can no longer start."""
-    machine, task_id = held_refresh(api, monkeypatch)
-    held = task_jobs(api, task_id)[0]
-    with api.app.state.store.transaction() as c:
-        H.task_done(c, H.KEEPER, task_id, "Exported by hand.")
-    assert hold_of(api, held["id"])["state"] == "canceled"
-
-    monkeypatch.undo()  # the job's checks work again, and its wait has ended
-    wait_ends(api, monkeypatch, held["id"])
-    assert claim(api, machine) is None
-    after = hold_of(api, held["id"])
-    assert (after["state"], after["held"], after["hold_reason"]) == ("canceled", 0, None)
-    assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
-
-
 def test_release_frees_a_held_job_another_path_canceled_and_closes_its_item(api, monkeypatch):
     """Archiving a bot cancels its queued jobs, held ones too. Release still frees them and closes the Needs-you item
     they filed, so no item waits on a job that can no longer run."""

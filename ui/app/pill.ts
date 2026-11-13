@@ -97,6 +97,7 @@ function chatIdentityRestore() {
   CHAT_PENDING.clear();
   for (const [slug, u] of chatPendingRead()) CHAT_PENDING.set(slug, u);
   chatDrafts();
+  if (typeof thvDraftTexts === 'function') thvDraftTexts();   // a bot's Home, DM or thread words (thread-view.ts)
 }
 function chatDraftSave(P: Pill) {
   if (P?.mode !== 'chat' || !P.slug) return;
@@ -435,29 +436,13 @@ function makePill(cfg: PillConfig): Pill {
   if (attach) q('.p-attach').onclick = () => q('.p-file').click();
   if (P.slug && q('.p-bot')) pillBotWire(q('.p-bot'), P.slug);
   if (attach) q('.p-file').onchange = (ev: Event & {target: HTMLInputElement}) => { P.files.push(...(ev.target.files ?? [])); pillChips(P); chatDraftSave(P); ev.target.value = ''; };
-  box.addEventListener('paste', (ev: ClipboardEvent) => {
-    const clipboard = ev.clipboardData;
-    if (!clipboard || !attach) return;
-    const images = Array.from(clipboard.items || [])
-      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
-      .map(item => item.getAsFile()).filter(file => file !== null);
-    if (!images.length) return; // Ordinary text keeps the browser's normal paste behavior.
-    ev.preventDefault();
-    P.files.push(...images);
-    const text = clipboard.getData('text/plain');
-    if (text) {
-      box.setRangeText(text, box.selectionStart, box.selectionEnd, 'end');
-      box.dispatchEvent(new Event('input', {bubbles: true}));
-    }
-    pillChips(P);
-  });
+  if (attach) pillPasteWire(box, files => { P.files.push(...files); pillChips(P); chatDraftSave(P); });
   q('.p-chips').onclick = (ev: MouseEvent & {target: HTMLElement}) => {
     const thumb = ev.target.closest<HTMLElement>('.p-thumb'); if (thumb) { ev.preventDefault(); chatImageOpen(thumb); return; }
     const i = ev.target.dataset.rm;
     if (i != null) {
       ev.preventDefault();
-      const [gone] = P.files.splice(+i, 1);
-      if (gone && PILL_PREVIEWS.has(gone)) { URL.revokeObjectURL(PILL_PREVIEWS.get(gone)!); PILL_PREVIEWS.delete(gone); }
+      pillPreviewForget(P.files.splice(+i, 1)[0]);
       pillChips(P);
     }
   };
@@ -530,21 +515,70 @@ async function pillStop(P: Pill) {
   catch (e) { P.stopping = false; redraw(); toast(`Not stopped: ${errorMessage(e, String(e))}`, true); }
 }
 // "when i paste an image into a box, can we show a clickable preview of it?"
-// An image waiting to be sent shows as a small thumbnail; a tap opens it full size.
+// An image waiting to be sent shows as a small thumbnail; a tap opens it full size. Shared by this pill and a bot's
+// Home and DM composer (ui/app/thread-view.ts thvChips), which is where the bot chat lives now (#138).
 const PILL_PREVIEWS = new WeakMap<File, string>();
 const pillPreview = (f: File) => {
   if (!/^image\//.test(f.type || '')) return '';
   if (!PILL_PREVIEWS.has(f)) PILL_PREVIEWS.set(f, URL.createObjectURL(f));
   return PILL_PREVIEWS.get(f);
 };
+function pillPreviewForget(f: File | undefined) {
+  if (f && PILL_PREVIEWS.has(f)) { URL.revokeObjectURL(PILL_PREVIEWS.get(f)!); PILL_PREVIEWS.delete(f); }
+}
+// One chip per waiting file: an image as its thumbnail (a button chatImageOpen opens), any other file as a file icon
+// and its name; × carries `rm` (the composer's own key for the file) in data-rm.
+function pillChipHTML(f: File, rm: string) {
+  const src = pillPreview(f), name = f.name || 'file';
+  const lead = src ? `<button class="p-thumb" type="button" data-name="${esc(name)}" title="Open ${esc(name)}" aria-label="Open ${esc(name)}"><img src="${esc(src)}" alt=""></button>`
+    : '<span class="p-fileicon nav-icon" aria-hidden="true">description</span>';
+  return `<span class="${src ? 'has-thumb' : 'has-icon'}">${lead}<span class="p-chipname">${esc(name)}</span> <a href="#" data-rm="${esc(rm)}" aria-label="Remove ${esc(name)}">×</a></span>`;
+}
+// A file the clipboard or a restored draft hands over with no type takes one from its name, so an image still shows.
+const PILL_TYPES: Record<string, string> = {png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  bmp: 'image/bmp', svg: 'image/svg+xml', heic: 'image/heic', tif: 'image/tiff', tiff: 'image/tiff', pdf: 'application/pdf'};
+function pillTyped(f: File): File {
+  if (f.type) return f;
+  const type = PILL_TYPES[(f.name.split('.').pop() || '').toLowerCase()];
+  return type ? new File([f], f.name, {type, lastModified: f.lastModified}) : f;
+}
+// The files one paste carries, once each (#138): the clipboard's file list, or else its file items. A browser can list
+// the same screenshot in both, or twice among the items, and one paste must still give one chip.
+function pastedFiles(clipboard: DataTransfer | null | undefined): File[] {
+  if (!clipboard) return [];
+  let files = Array.from(clipboard.files || []);
+  if (!files.length) files = Array.from(clipboard.items || []).filter(item => item.kind === 'file')
+    .map(item => item.getAsFile()).filter((f): f is File => f !== null);
+  // Two different files copied together with the same name, size and type would also merge; rare enough to accept.
+  const seen = new Set<string>();
+  return files.map(pillTyped).filter(f => {
+    const key = `${f.name}\n${f.size}\n${f.type}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+// A paste into a composer's box: files become chips (`take`), and the clipboard's text, if any, goes in at the cursor
+// once. A paste with no file is the browser's own, untouched. A file copied in a file manager also brings its name as
+// text; that name is not typed into the message.
+function pillPasteWire(box: HTMLTextAreaElement, take: (files: File[]) => void) {
+  box.addEventListener('paste', (ev: ClipboardEvent) => {
+    const files = pastedFiles(ev.clipboardData);
+    if (!files.length) return;
+    ev.preventDefault();
+    const text = ev.clipboardData?.getData('text/plain') || '';
+    const names = new Set(files.map(f => f.name));
+    const lines = text.split(/\r?\n/).map(line => line.trim().split(/[\\/]/).pop()).filter(Boolean);
+    if (text && !(lines.length && lines.every(line => names.has(line!)))) {
+      box.setRangeText(text, box.selectionStart, box.selectionEnd, 'end');
+      box.dispatchEvent(new Event('input', {bubbles: true}));
+    }
+    take(files);
+  });
+}
 function pillChips(P: Pill) {
   P.sendNotice = '';
   const el = pq(P, '.p-chips'); if (!el) return;
-  el.innerHTML = P.files.map((f, i) => {
-    const src = pillPreview(f);
-    const thumb = src ? `<button class="p-thumb" type="button" data-name="${esc(f.name)}" title="Open ${esc(f.name)}" aria-label="Open ${esc(f.name)}"><img src="${esc(src)}" alt=""></button>` : '';
-    return `<span${src ? ' class="has-thumb"' : ''}>${thumb}${esc(f.name)} <a href="#" data-rm="${i}" aria-label="remove ${esc(f.name)}">×</a></span>`;
-  }).join('');
+  el.innerHTML = P.files.map((f, i) => pillChipHTML(f, String(i))).join('');
   pillLabel(P); pillButtons(P);
 }
 // The chat composer's send is an arrow: a busy word goes to its label, never over the icon. A busy word said while

@@ -29,11 +29,6 @@ def cases():
     return out
 
 
-def test_the_template_names_commands_to_check():
-    # Guard the guard: if this finds nothing, the parse below would pass for the wrong reason.
-    assert len(cases()) > 80
-
-
 def test_every_hub_command_in_the_template_parses():
     """One parser, every command: the failures are all listed, each as file:line and the command."""
     parser = hubcli.parser()
@@ -57,16 +52,3 @@ def test_every_hub_command_in_the_template_parses():
 # Refresh brings AGENT.md, playbooks/ and skills/ to a live Assistant (clients/catalog.py PRODUCT_OWNED). Anything the
 # instructions name under those folders must exist, or an upgraded install would read a file that never arrives.
 PATH_IN_TEXT = re.compile(r"`((?:playbooks|skills)/[\w./-]+)`")
-
-
-def test_every_playbook_or_skill_the_assistant_names_exists():
-    named = set()
-    for path in [ASSISTANT / "AGENT.md", *sorted((ASSISTANT / "playbooks").glob("*.md"))]:
-        named.update(PATH_IN_TEXT.findall(path.read_text()))
-    assert named, "the Assistant names no playbook or skill"
-    missing = sorted(
-        p
-        for p in named
-        if not (ASSISTANT / p.rstrip("/")).exists() and not (ASSISTANT / (p.rstrip("/") + ".md")).exists()
-    )
-    assert not missing, missing

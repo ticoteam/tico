@@ -13,36 +13,28 @@ assertions here must pass on it too.
 
 import json
 import os
-import types
 from pathlib import Path
 
 import pytest
 
-from runner_support.tests.test_threads_e2e_turns import *  # noqa: F401,F403  (the threads turn tests)
+from runner_support.tests.test_threads_e2e_turns import (  # noqa: F401
+    computer,
+    finished,
+    live,
+    provider_turns,
+    setup,
+    until,
+    test_a_bot_woken_in_a_sub_thread_answers_there_from_that_subtree_and_no_sibling,
+    test_a_mention_wakes_the_bot_and_plain_chatter_in_its_thread_does_not,
+    test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them,
+    test_a_thread_keeps_its_provider_session_and_no_other_thread_shares_it,
+    test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots_history,
+    test_a_public_turn_never_carries_a_direct_message_or_legacy_text,
+)
 from backend.tests.threads_e2e import call, create_thread, ok, require_threads_api, say
 from runner_support.tests.test_conformance import (  # noqa: F401
     test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only,
     test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_its_run,
-)
-
-# An old runner gives a fresh thread no history (runner-rs prompt.rs: a session with no saved cursor is told nothing but
-# where the history is), so the replay half of each test cannot pass on it. Its privacy half stays a hard failure in the
-# test it came from. An updated runner replays, which the new runner's suite checks.
-REPLAY_LIMIT = "an old runner gives a fresh thread no history; recovery needs an updated runner"
-
-
-def _replay_limited(test):
-    """A copy of the imported test, marked here: a mark on the function itself would reach the updated runner's suite."""
-    copy = types.FunctionType(test.__code__, test.__globals__, test.__name__, test.__defaults__, test.__closure__)
-    copy.__dict__.update(test.__dict__)
-    return pytest.mark.xfail(strict=True, reason=REPLAY_LIMIT)(copy)
-
-
-test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages = _replay_limited(
-    test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages
-)
-test_a_public_turn_is_replayed_its_threads_public_history = _replay_limited(
-    test_a_public_turn_is_replayed_its_threads_public_history
 )
 
 

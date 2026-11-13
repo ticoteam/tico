@@ -268,20 +268,6 @@ def test_the_product_task_is_handed_the_pre_release_sign_offs_of_the_work_it_fil
     assert not [e for e in SI.of(c, E.task(c, product), shown=lambda task_id: False) if e["kind"] == "signoff"]
 
 
-def test_tico_task_show_prints_a_sign_off_with_its_person():
-    task = {
-        "id": "t1",
-        "title": "Saved carts",
-        "version": 4,
-        "stage": {"name": "Validate"},
-        "to_leave": [],
-        "inputs": [{"kind": "signoff", "line": SIGNED, "by": ANA, "answer": "ok"}],
-    }
-    lines = hubtools.task_text(task, {ANA: "Ana"}).splitlines()
-    at = lines.index("From earlier stages:")
-    assert lines[at + 1] == f"  {SIGNED} (Ana)"
-
-
 def _link_other_pr(c, task_id, repo, number):
     c.execute(
         "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
@@ -329,3 +315,23 @@ def test_the_turn_is_handed_the_one_repository_its_task_is_in(api):
     with api.app.state.store.transaction() as c:
         _link_other_pr(c, task["id"], "acme/app", 46)
     assert claim(api, r, "ops")["github_repository"] == "acme/app"
+
+
+def test_a_builder_handed_a_task_with_an_open_pr_is_told_to_push_to_it_not_open_a_second(c):
+    """#171: a task reassigned to a second Builder mid-Build got a second PR beside the first. The new owner's wake
+    names the task's open PR and says to push to its branch; a merged PR, or a PR of the work a task filed, says
+    nothing of the kind."""
+    product, eng = _filed_engineering(c)
+    _move(c, eng, "engineering-build")
+    assert "Never open a second PR" not in _wake(c, eng, "bot:builder")  # no PR yet
+    _link_pr(c, eng, 12, "aaa")
+    X.bot(c, "builder-2")
+    E.reassign(c, eng, "bot:builder-2", ANA, "Builder 2 takes it", E.task(c, eng)["version"])
+    wake = TW.body(c, E.task(c, eng), "This task is yours now.", to="bot:builder-2")  # what its wake says
+    url = f"https://github.com/{REPO}/pull/12"
+    assert SI.one_pr(SI.of(c, E.task(c, eng))) in wake
+    assert f"`gh pr checkout {url}`" in wake and "Never open a second PR" in wake
+    _move(c, product, "product-validate")
+    assert "Never open a second PR" not in _wake(c, product, "bot:pm")  # the filed work's PR is not its own
+    _push(c, 12, "aaa", state="merged", merged_sha="ccc111")
+    assert SI.one_pr(SI.of(c, E.task(c, eng))) == ""

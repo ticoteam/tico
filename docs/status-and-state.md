@@ -1,54 +1,96 @@
 # Status and state columns
 
 Every stored status or state column in the hub database: what each allowed value means, the transitions the code makes,
-and how the database enforces the list. The lists themselves live in `backend/status_values.py`, which is what the
-database enforces. If this page and that file disagree, the file is right and this page needs fixing.
+what guards them, and how the database enforces the list. The lists themselves live in `backend/status_values.py`,
+which is what the database enforces. The value table below is generated from that file
+(`python3 scripts/build_status_docs.py`), and `--check` fails when the table, or a column's bullets, drift from it.
 
-Schema facts are from a fresh database built by `Store.initialize` on this branch. Transitions are from the code that
-writes each column (`UPDATE <table> SET <column>=...`, `INSERT`, or the helper that calls it). File names are given
-without line numbers so they stay greppable.
+A list only says which labels a column may hold. It does not say which change is allowed, or which run, worker or
+sign-in owns the change: that is what the transitions, guards and the operation-identity table below are for. Schema
+facts are from a fresh database built by `Store.initialize`. Transitions are from the code that writes each column
+(`UPDATE <table> SET <column>=...`, `INSERT`, or the helper that calls it). File names are given without line numbers so
+they stay greppable.
+
+## Value lists
+
+<!-- status-values:start -->
+| Column | Enforced by | NULL | Values | Retired spelling (mapped to) |
+|---|---|---|---|---|
+| [`tasks.status`](#tasksstatus) | trigger | refused | `open`, `done`, `closed` |  |
+| [`jobs.state`](#jobsstate) | trigger | refused | `queued`, `leased`, `running`, `input`, `completed`, `failed`, `uncertain`, `canceled` | `cancelled` (`canceled`), `done` (`completed`) |
+| [`attempts.state`](#attemptsstate) | trigger | allowed | `leased`, `running`, `input`, `completed`, `failed`, `interrupted`, `expired` |  |
+| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `failed`, `empty`, `skipped`, `held` |  |
+| [`webhook_sends.state`](#webhook_sendsstate) | trigger | refused | `ready`, `sending`, `delivered`, `failed`, `canceled`, `withheld` | `cancelled` (`canceled`) |
+| [`bots.state`](#botsstate) | check | allowed | `active`, `paused`, `planned`, `quarantined`, `archived` |  |
+| [`bot_config.onboarding_state`](#bot_configonboarding_state) | check | allowed | `needs_setup`, `onboarded` | `needs_onboarding` (`needs_setup`) |
+| [`bot_status.state`](#bot_statusstate) | check | allowed | `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`, `quarantined` |  |
+| [`automation_versions.status`](#automation_versionsstatus) | check | refused | `active`, `pending` |  |
+| [`goals.status`](#goalsstatus) | check | allowed | `red`, `yellow`, `green`, `gray`, `done`, `dropped` |  |
+| [`goals.status_source`](#goalsstatus_source) | check | allowed | `person`, `auto` |  |
+| [`goals.suggest_status`](#goalssuggest_status) | check | allowed | `red`, `yellow`, `green` |  |
+| [`goal_proposals.status`](#goal_proposalsstatus) | check | refused | `pending`, `confirmed`, `rejected` |  |
+| [`bot_files.state`](#bot_filesstate) | check | refused | `ready`, `deleted`, `not_synced` |  |
+| [`doc_sources.status`](#doc_sourcesstatus) | check | refused | `link_only`, `queued`, `preparing`, `updating`, `ready`, `empty`, `failed`, `access_needed` |  |
+| [`model_subscriptions.status`](#model_subscriptionsstatus) | check | refused | `new`, `working`, `needs_reconnect` |  |
+| [`strategy_actions.state`](#strategy_actionsstate) | check | refused | `proposed`, `done`, `undone` |  |
+| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `ready`, `finishing`, `revoking`, `disconnecting`, `connected`, `disconnected`, `failed` |  |
+| [`google_workspaces.status`](#google_workspacesstatus) | check | refused | `pending`, `connected`, `failing` |  |
+| [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` | `cancelled` (`canceled`) |
+| [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` | `cancelled` (`canceled`) |
+| [`fin_transfers.status`](#fin_transfersstatus) | check | refused | `queued`, `submitted`, `unknown`, `failed`, `posted`, `canceled` | `cancelled` (`canceled`) |
+<!-- status-values:end -->
 
 ## How the lists are enforced
 
-Three kinds of enforcement:
+Two kinds of enforcement, both refusing a new write outside the list:
 
 - **trigger**: `BEFORE INSERT` and `BEFORE UPDATE OF <column>` triggers named `status_values_<table>_<column>_ins` and
   `_upd`. They `RAISE(ABORT, '<table>.<column>: invalid value')`. Used on the hot and growing tables (tasks, jobs,
-  attempts, automation_runs, webhook_sends), where a CHECK would mean rebuilding a large table.
+  attempts, automation_runs, webhook_sends), where a CHECK would mean rebuilding a large table. They check new writes
+  only; rows already stored are not read.
 - **check**: a named table constraint `CONSTRAINT status_values_<column> CHECK (<column> IN (...))`, installed by
   rebuilding the small table. A rebuild renames the old table aside, copies every row (mapping retired spellings), checks
   the row count, then drops the old table. Foreign keys are off for the rebuild, so child rows are not cascaded.
-- **none**: no constraint. Listed below where the column is in the stable set but deliberately left alone.
 
 Changing a list is a code change in `backend/status_values.py`. `Store.initialize` calls `enforce` on every start: it
 replaces a trigger whose text differs and rebuilds a CHECK whose list differs. Adding a value needs nothing else.
 
-Removing a value is not free. Only migration 0002 counts stored values against the list. After that, a removed value that
-is still stored is left alone on trigger columns (old rows keep it, new writes are refused), and makes the CHECK rebuild
-fail on a CHECK column. A removal therefore needs its own migration that maps or refuses those rows first.
+### A stored value outside its list
+
+Nothing stops the server for a value outside a list. Migration 0002 (`upgrade`) and every later start (`enforce`) do
+this instead:
+
+| Column kind | Rows that hold the value | New writes | What is logged |
+|---|---|---|---|
+| trigger | kept as they are | refused by the new trigger | a warning, `status values outside their lists, kept as they are`, naming `table.column = 'value' (n rows)` |
+| check | kept as they are | the CHECK is **not** installed or rebuilt for that column, so the column keeps whatever it had (no CHECK, or the old list's) until its rows are fixed | the same warning, on every start until the rows are fixed |
+
+So removing a value from a CHECK column's list while rows still hold it leaves that column enforcing the old list, and
+says so in the log. Remediation: read the rows with `status_values.unknown_values(conn)` (or the warning), write a
+migration that maps or refuses them, and the next start's `enforce` installs the CHECK. Tests:
+`test_status_values.py::test_the_upgrade_keeps_values_it_cannot_map_logs_them_and_still_guards_new_writes`,
+`::test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check` and
+`::test_a_later_start_logs_a_check_column_it_cannot_enforce`.
 
 ## Retired spellings and the upgrade
 
 Migration `backend/migrations/0002_status_values.py` runs `backend/status_values.py` `upgrade`, with foreign keys off
 (`FOREIGN_KEYS_OFF`) so a CHECK rebuild does not cascade:
 
-1. Counts every stored value outside the list, plus the retired spellings it maps. If any remain, it stops before
-   changing anything and raises `StatusValuesError` listing each one as `table.column = 'value' (n rows)`.
+1. Counts every stored value outside the list (retired spellings are accepted, they are mapped next) and logs what it
+   finds (see above). It never stops for them.
 2. Rewrites retired spellings on trigger columns with `UPDATE`, and maps them on CHECK columns while the table is copied.
-3. Installs the triggers and CHECKs.
+3. Installs the triggers, and the CHECKs for every column whose rows are all in its list.
 
-Retired spellings on this branch:
-
-| Retired | Current | Columns |
-|---|---|---|
-| `cancelled` | `canceled` | `jobs.state`, `webhook_sends.state`, `fin_payments.status`, `fin_transfers.status` (migration 0002); `fin_cards.status` and the columns in migration 0032: `assistant_actions.status`, `automation_mail_actions.state`, `bot_tool_requests.state`, `bot_transitions.state`, `bot_transition_checkpoints.state`, `credential_requests.status`, `fin_cards.provider_status`, `model_logins.state`, `seats.request_state`, `service_jobs.state`, `slack_posts.state`, `task_reconnects.ended`, `worktree_waits.state` |
-| `cancelling` | `canceling` | `seats.request_state` (migration 0032) |
-| `needs_onboarding` | `needs_setup` | `bot_config.onboarding_state` (migration 45 rewrote stored rows; this maps any stale row) |
+The retired spellings are the last column of the value table. `cancelled` was also moved to `canceled` outside the
+stable set by migration 0032: `assistant_actions.status`, `automation_mail_actions.state`, `bot_tool_requests.state`,
+`bot_transitions.state`, `bot_transition_checkpoints.state`, `credential_requests.status`, `fin_cards.provider_status`,
+`model_logins.state`, `seats.request_state` (with `cancelling` to `canceling`), `service_jobs.state`, `slack_posts.state`,
+`task_reconnects.ended`, `worktree_waits.state`. `jobs.state` `done` is the spelling older hubs stored for a finished
+job.
 
 Readers of `bot_config.onboarding_state` still accept `needs_onboarding` for one release (`backend/statuses.py`).
-That is unchanged here. New writes can only be `needs_setup` or `onboarded`.
-
-`complete` is not stored in any stable-set column. Two live-meeting tables still write it (see "Outside the stable set").
+New writes can only be `needs_setup` or `onboarded`.
 
 On a fresh file the migration runs before the module schema code creates most tables, so `Store.initialize` calls
 `enforce` last, on every start: a new database has the constraints and no retired spelling.
@@ -61,42 +103,40 @@ On a fresh file the migration runs before the module schema code creates most ta
 - Finance `unknown` (a payment or transfer whose send got no answer; reconciliation pending) and `withheld`
   (`fin_outbox.status`: a rehearsal copy did not send). `withheld` is not in the payment or transfer lists.
 
-## Summary of the stable set
+## Which attempt owns a change
 
-| Column | Kind | Enforcement | NULL | Growing or user-defined set? |
+A state machine whose writes come from more than one run, worker, callback or sign-in needs more than its list: each
+write must name the attempt that owns it (a token, a generation, a revision or a snapshot), so a late or reclaimed one
+cannot settle what a newer one owns. Where that is missing, the fix adds the identity to the existing machine; it does
+not add states.
+
+| Machine | Owner (writer) | Guard: which attempt owns the change | Recovery | Example test |
 |---|---|---|---|---|
-| `tasks.status` | status | trigger | NOT NULL | no, fixed in code |
-| `jobs.state` | state | trigger | NOT NULL, default `queued` | no |
-| `attempts.state` | state | trigger | NOT NULL | no |
-| `automation_runs.status` | status | trigger | NOT NULL | no |
-| `webhook_sends.state` | state | trigger | NOT NULL, default `ready` | no |
-| `bots.state` | state | check | allowed (default `active`) | no |
-| `bot_status.state` | state | check | allowed | no |
-| `bot_config.onboarding_state` | state | check | allowed (NULL: not a starter bot) | no |
-| `automation_versions.status` | status | check | NOT NULL, default `active` | no |
-| `goals.status` | status | check | allowed (NULL: never scored) | no |
-| `goals.status_source` | source | check | allowed | no |
-| `goals.suggest_status` | suggestion | check | allowed | no |
-| `goal_proposals.status` | status | check | NOT NULL, default `pending` | no |
-| `bot_files.state` | state | check | NOT NULL, default `ready` | no |
-| `doc_sources.status` | status | check | NOT NULL, default `link_only` | no |
-| `model_subscriptions.status` | status | check | NOT NULL, default `new` | no |
-| `strategy_actions.state` | state | check | NOT NULL | no |
-| `google_connects.status` | status | check | NOT NULL | no |
-| `fin_payments.status` | status | check | NOT NULL, default `queued` | no |
-| `fin_transfers.status` | status | check | NOT NULL, default `queued` | no |
-| `meetings.review_state` | state | check (already in the schema) | NOT NULL, default `live` | no |
-| `bot_status_history.state` | state (history) | none | allowed | no, see below |
+| `jobs.state` / `attempts.state` | `execution.py` | the runner's assignment `generation` and the job's `attempt_id` | lease expiry; `restore` within `STALL_MAX`; a late result settles only when `settleable` or `settles_late`, otherwise it is filed | `test_execution_review.py::test_a_late_result_never_overrides_the_attempt_that_took_the_work_over` |
+| `doc_sources.status` | `doc_sources.py` | the source's `generation` and the job's `lease` | a failed refresh keeps the last good snapshot | `test_doc_sources.py::test_failed_refresh_keeps_the_last_good_copy` |
+| `google_workspaces.status` | `google_workspace.py` | the key revision a check started on | `tick` checks a pending or failing key again | `test_google_workspace.py::test_a_result_for_a_key_that_changed_meanwhile_is_dropped` |
+| `bot_files.state` | `files.py` | none needed: each report is the file's latest, and the newest wins | the next successful publish writes `ready` | `test_files.py::test_a_file_that_failed_to_sync_is_ready_again_once_it_publishes` |
+| `idempotency.state` bindings | `store.py` (`Store.mutate`), `invites.py`, `github_app.py` | one key per operation, `pending` while its outcome is unknown | a repeat answers the stored result, and is refused while pending | `test_idempotency_one_table.py` |
 
-No column in the stable set holds a user-defined value. A pipeline's stages are rows, not statuses: a task's status
-stays `open` in every stage. The Growth and Finance tables that a
-user shapes (channels, budgets, rules) have their own columns, listed under "Outside the stable set".
+The state-machines audit (SM-01 to SM-09) found the machines below guarded by their state alone. Each row names what its
+fix adds; its race test is the example to follow.
+
+| Fix | Machine | Owner (writer) | Guard before the fix | What the fix adds | Race test |
+|---|---|---|---|---|---|
+| SM-01 | statement upload preview and agent pairing (UI) | `ui/app` | none: the latest reply wins | a phase and a request revision; only the current revision may submit | `ui/tests/finance-statement-race-unit.cts`, `ui/tests/agent-pair-race-unit.cts` |
+| SM-02 | merge-queue act and undo | `source_actions.py` | the item's state | the undo checks the current visit's intent before it dequeues | `test_merge_queue_undo_intent.py::test_back_and_forward_while_the_queue_call_is_out_leaves_the_pr_queued` |
+| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect, required at exchange and result | `test_google_connect.py::test_a_late_result_from_an_earlier_connect_does_not_finish_the_next_one` |
+| SM-04 | `automation_runs.status`, `webhook_sends.state` | `automations.py`, `webhook_delivery.py` | the state (`running`, `sending`) | a claim token; a reclaimed worker cannot settle | `test_automation_reclaimed_worker.py::test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run`, `test_webhook_reclaimed_worker.py` |
+| SM-05 | direct meeting-turn claims (`live_meeting_turns.status`) | `live_meetings.py` | the claim | a recoverable claim: returned on reconnect, or abandoned | `test_live_meeting_claims.py::test_a_lost_claim_answer_is_shown_to_its_bot_again_and_the_same_claim_is_returned` |
+| SM-07 | AI Gateway spending cap | `finance/gateway_sync.py` | the cap record | the key and destination the cap was set for | `test_finance_gateway_cap_target.py::test_a_reply_for_a_key_replaced_meanwhile_does_not_satisfy_the_new_key` |
+| SM-08 | desktop confirm before delete or revoke | desktop bridge, `ui/app` | none: the Promise reads as yes | an awaited `true` before every write | pending (SM-08) |
+| SM-09 | GitHub PR facts | `item_sources/github.py` | `updated_at` | an equal-time conflict is reread before it is final; only merged is final | `test_github_equal_version.py::test_same_time_close_and_reopen_end_at_githubs_state_in_either_order` |
 
 ## Detail
 
-### tasks.status (trigger)
+### tasks.status
 
-Values (`TASK_STATUSES`):
+Trigger. NULL refused.
 
 - `open`: in a stage of its pipeline. What it waits on is read, never stored (`backend/waiting_on.py`).
 - `done`: it left the last stage. Only Done counts as output.
@@ -106,13 +146,9 @@ Transitions: only the engine writes it (`backend/task_engine.py` `move`), inside
 reads. A task is inserted `open` and entered in the first stage of its pipeline in the same transaction. Done, Close and
 Reopen are moves. See [Tasks](tasks.md#done-closed-and-reopen) and [the spec](pipelines-v3.md#how-a-task-moves).
 
-Enforcement: trigger on insert and on update of `status`. NULL is refused.
+### jobs.state
 
-### jobs.state (trigger)
-
-One job per message a bot must answer.
-
-Values (`JOB_STATES`):
+Trigger. NOT NULL, default `queued`. One job per message a bot must answer.
 
 - `queued`: waiting for a runner to claim it.
 - `leased`: claimed by a runner for an attempt; the attempt holds a lease.
@@ -121,29 +157,33 @@ Values (`JOB_STATES`):
 - `completed`: answered.
 - `failed`: the attempt failed.
 - `uncertain`: the outcome cannot be known (the runner was lost, or the hub restarted mid-run). Looked at before any retry.
+  A run whose harness process was killed or crashed resumes once by itself; a second in a row waits for its operator
+  or BotOps. Until someone chooses, its task's wait line, Needs you and Health say it waits on a person, and **Run
+  now** on the task (by its operator or BotOps) runs it again.
 - `canceled`: stopped before it finished (a person stopped it, the task closed, a duplicate wake
-  replaced it, or the owner's rule dropped it). Spelled `cancelled` before migration 0002.
+  replaced it, or the owner's rule dropped it).
 
 Transitions:
 
-- Insert: `queued`.
-- `queued` to `leased`: claim (`backend/execution.py`, `UPDATE jobs SET state='leased',attempt_id=...`).
-- `leased` to `running`: the attempt starts (`execution.py`).
-- `running` or `queued` to `input`: an ask is sent and the attempt waits (`execution.py`).
-- `input` to `running`: the answer arrives and the attempt resumes (`execution.py`).
-- `leased`, `running` or `input` to `queued` or `uncertain`: the attempt's lease expires or the attempt ends without a result. `queued` when nothing was done yet, `uncertain` otherwise (`execution.py` expiry and end-of-attempt paths).
-- On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop canceled (`execution.py`).
-- `running` or `input` to `uncertain`, and `leased` to `queued`: hub restart (`backend/backup.py`).
-- `queued` to `completed`: a person answers before any bot runs (`backend/bot_status_routes.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
-- Any open state to `canceled`: stop, task closed, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
+| From | To | Writer | Guard |
+|---|---|---|---|
+| (insert) | `queued` | delivery | |
+| `queued` | `leased` | claim (`execution.py`) | |
+| `leased` | `running` | the attempt starts (`execution.py`) | |
+| `running`, `queued` | `input` | an ask is sent (`execution.py`) | |
+| `input` | `running` | the answer arrives (`execution.py`) | |
+| `leased`, `running`, `input` | `queued` or `uncertain` | lease expiry or an attempt that ends without a result: `queued` when nothing was done yet (`execution.py`) | |
+| `running`, `input` | `uncertain` | hub restart (`backend/backup.py`) | |
+| `leased` | `queued` | hub restart (`backend/backup.py`) | |
+| `uncertain` | `running` | `restore`: the runner reports in within `STALL_MAX` | job still `uncertain` and on this attempt, no Stop, no review, lane free |
+| open | the attempt's outcome, or `canceled` | the attempt ends (`execution.py`) | job still on this attempt |
+| `uncertain`, `canceled`, `queued` | `completed` | a late result (`settleable`, `settles_late`) | see the operation-identity table |
+| `queued` | `completed` | a person answers before any bot runs (`bot_status_routes.py`) | `AND state='queued'` |
+| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
 
-Enforcement: trigger on insert and update of `state`. NOT NULL, default `queued`.
+### attempts.state
 
-### attempts.state (trigger)
-
-One attempt is one run of a job on a runner.
-
-Values (`ATTEMPT_STATES`):
+Trigger. NULL allowed. One attempt is one run of a job on a runner.
 
 - `leased`: claimed, and the runner holds the lease.
 - `running`: the runner has started.
@@ -151,44 +191,44 @@ Values (`ATTEMPT_STATES`):
 - `completed`: finished with a result.
 - `failed`: finished with an error.
 - `interrupted`: the runner reported that it stopped partway. It can resume (`execution.py` treats it as resumable).
-- `expired`: the lease ran out with nothing reported, or the hub restarted mid-run. A timeout, not a report.
+- `expired`: the lease ran out with nothing reported, the runner handed back a lease it did not use, or the hub
+  restarted mid-run. A timeout, not a report.
+
+NULL is a run recorded with no lease: the demo seed, and the old `turns` rows migration
+`0072_turns_into_attempts.py` moved onto `attempts`. These are history; no code moves them. Every leased run has a
+state.
 
 Transitions:
 
-- Insert `leased` on claim (`execution.py`).
-- `leased` to `running`, and again when resumed (`execution.py`).
-- `leased` or `running` to `expired`: lease timeout (`execution.py` expiry), or hub restart (`backup.py`).
-- `leased` or `running` to `failed`: a recorded error on the attempt (`execution.py`).
-- `running` to `completed`, `failed` or `interrupted`: the runner's outcome, from its result body (`execution.py`).
+| From | To | Writer (`execution.py` unless named) | Guard |
+|---|---|---|---|
+| (insert) | `leased` | claim | |
+| `leased` | `running` | start | a start reservation |
+| `leased` | `expired` | `hand_back`: the runner returns an unused lease | |
+| `leased` | `failed` | a start refused for good | the job still `leased` on this attempt |
+| `leased`, `running` | `expired` | lease expiry; hub restart (`backup.py`) | |
+| `running` | `completed`, `failed`, `interrupted` | the runner's result | the reporting runner holds the bot's current assignment (`current_owner`: runner and generation) |
+| `expired` | `running` | `restore`: the runner renews within `STALL_MAX` | the job is still `uncertain` and on this attempt, no Stop, no cap, no review (`job_recovery`), no other live attempt in the lane |
+| `expired` | `completed`, `failed`, `interrupted` | a late result that `settleable` or `settles_late` allows | as for `restore`, without the clock; `settles_late` only for a completed result on a job let go meanwhile |
+| `expired` | (stays) | a late result that may not settle: `file_result` records its text and tokens on the attempt | |
 
-Enforcement: trigger on insert and update of `state`. NOT NULL.
+`expired` is therefore not final: a lapsed lease is a guess about the runner, and the runner's own report can still win
+while nothing newer owns the job. Tests: `test_execution_review.py` (`test_a_run_that_only_read_waits_out_a_lapsed_lease_for_the_runner_to_restore_it`,
+`test_a_late_result_never_overrides_the_attempt_that_took_the_work_over`,
+`test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed`).
 
 ### Runs
 
 API v2, the live events, webhooks, the MCP tools, the tico CLI and the web app call an attempt a run until Release 2
-moves the table: a field is `run_id` (the attempt's id), an object is `run`, a list is `runs`. `run.state` comes from
-`attempts.state` by one fixed map (`backend/runs.py`, `STATE`):
+moves the table: a field is `run_id` (the attempt's id), an object is `run`, a list is `runs`. `run.state` is
+`attempts.state` under the same name (`backend/runs.py`, `STATE`), one value for one value. `expired` and `interrupted`
+stay apart: one is a timeout that says nothing about what the run did, the other a report from the runner. `leased`,
+`running` and `input` are live (`runs.LIVE`). A run with no attempt row yet, or a NULL state, has `state: null`. The
+runner's own wire (`/api/v2/runners/...`, `/api/v2/attempts/...`, `contracts/runner`) keeps the storage names.
 
-| `attempts.state` | `run.state` | Meaning |
-|---|---|---|
-| `leased` | `leased` | a runner holds the lease and has not started the harness |
-| `running` | `running` | the harness is working |
-| `input` | `input` | paused for an answer it asked for |
-| `completed` | `completed` | finished with a result |
-| `failed` | `failed` | finished with an error it reported |
-| `interrupted` | `interrupted` | the runner reported that it stopped partway; it can resume |
-| `expired` | `expired` | the lease ran out with nothing reported, or the hub restarted mid-run |
+### automation_runs.status
 
-`expired` and `interrupted` stay apart: one is a report from the runner, the other a timeout that says nothing about
-what the run did. `leased`, `running` and `input` are live (`runs.LIVE`). A run with no attempt row yet has
-`state: null`. The runner's own wire (`/api/v2/runners/...`, `/api/v2/attempts/...`, `contracts/runner`) keeps the
-storage names.
-
-### automation_runs.status (trigger)
-
-One run of an automation.
-
-Values (`RUN_STATUSES`):
+Trigger. NOT NULL, no default. One run of an automation.
 
 - `queued`: waiting to run.
 - `held`: queued but held by an active guard hold on the automation (`automation_guard_holds`).
@@ -207,21 +247,19 @@ Transitions (`backend/automations.py`):
 - `queued` to `running` on claim.
 - `running` to `waiting` when a wait step sets `wake_at`.
 - `waiting` to `queued` or `held` when `wake_at` passes (`RUNNABLE` picks `held` if a guard hold is still active, else `queued`).
-- `running` to `ok`, `failed` or `empty` when the flow finishes; any state to `failed` on a fatal error (`automations.py`).
+- `running` to `ok`, `failed` or `empty` when the flow finishes; any state to `failed` on a fatal error.
+- A `running` row whose worker stopped is reclaimed by recovery, which clears its `claim_token`. Every save and the
+  settle that ends the run carry the worker's token, so a worker that lost the row changes nothing and is told to stop.
 
-Enforcement: trigger on insert and update of `status`. NOT NULL, no default.
+### webhook_sends.state
 
-### webhook_sends.state (trigger)
-
-One delivery of one event to one endpoint.
-
-Values (`WEBHOOK_SEND_STATES`):
+Trigger. NOT NULL, default `ready`. One delivery of one event to one endpoint.
 
 - `ready`: waiting to be sent, or a retry is scheduled (`next_attempt_at`).
 - `sending`: claimed by a delivery worker.
 - `delivered`: the endpoint answered with a 2xx.
 - `failed`: retries are used up, or the endpoint refused it for good.
-- `canceled`: the endpoint asked not to be sent this message again, or the endpoint was deleted. Spelled `cancelled` before migration 0002.
+- `canceled`: the endpoint asked not to be sent this message again, or the endpoint was deleted.
 - `withheld`: a rehearsal copy did not send it. Nothing is sent from a copy.
 
 Transitions (`backend/webhook_delivery.py`, `backend/webhooks.py`):
@@ -231,16 +269,15 @@ Transitions (`backend/webhook_delivery.py`, `backend/webhooks.py`):
 - `sending` to `delivered`: 2xx.
 - `sending` to `canceled`: the receiver's abort.
 - `sending` to `failed`: retry budget used up (`retry_delay` returns nothing).
-- `sending` to `ready`: a retry is scheduled, or the claim is released.
+- `sending` to `ready`: a retry is scheduled, or the claim is released or reclaimed. As for automation runs, every
+  write about a send carries its claim's `claim_token`, so a reclaimed worker cannot settle it.
 - `ready` to `withheld`: rehearsal withhold (`withhold`).
 - `ready` or `sending` to `canceled`: endpoint deleted (`webhooks.py`).
 - `failed`, `canceled` or `delivered` to `ready`: a person retries the send by hand (`webhooks.py` refuses `ready`, `sending` and `withheld`).
 
-Enforcement: trigger on insert and update of `state`. NOT NULL, default `ready`.
+### bots.state
 
-### bots.state (check)
-
-Values (`BOT_STATES`):
+CHECK. NULL allowed, default `active`.
 
 - `active`: running normally.
 - `paused`: stopped by a person. Takes no new work.
@@ -258,13 +295,10 @@ Transitions:
 - `active` or `paused` to `archived`: `shared_bots.py`, `settings_admin.py`.
 - `archived` to the previous state: restore (`shared_bots.py`, `settings_admin.py`).
 
-Enforcement: CHECK. Nullable, default `active`.
+### bot_status.state
 
-### bot_status.state (check)
-
-What a bot is doing now. One live row per bot.
-
-Values (`hubdb.STATUS_STATES`, which is `BOT_STATUS_STATES` in `status_values.py`):
+CHECK. NULL allowed by the base schema; every writer sets a value. What a bot is doing now, one live row per bot
+(`hubdb.STATUS_STATES`, which is `BOT_STATUS_STATES` in `status_values.py`).
 
 - `idle`: no current work.
 - `running`: working on a turn.
@@ -272,7 +306,7 @@ Values (`hubdb.STATUS_STATES`, which is `BOT_STATUS_STATES` in `status_values.py
 - `waiting_bot`: waiting for another bot.
 - `blocked`: cannot continue until a blocker is cleared.
 - `limited`: a usage or quota limit; cools off (`execution.py`, `health.py`).
-- `crashed`: the run failed unexpectedly. Listed; no writer found on this base beyond the list itself.
+- `crashed`: the run failed unexpectedly. Listed; no writer found beyond the list itself.
 - `paused`: mirrors `bots.state` `paused`.
 - `quarantined`: mirrors `bots.state` `quarantined`.
 
@@ -281,31 +315,28 @@ writes the new one. `active` passed to `status_set` is stored as `idle` (it clea
 `active`). `settle_status(..., 'idle')` in `execution.py` returns a bot to `idle` after a stopped or reviewed run.
 `limited` is set by `execution.py` on quota hits.
 
-Enforcement: CHECK. Nullable, because the base schema allows it; every writer sets a value.
+### bot_config.onboarding_state
 
-### bot_config.onboarding_state (check)
-
-Values:
+CHECK, with `needs_onboarding` mapped to `needs_setup`. NULL is a bot with no setup state (not a starter).
 
 - `needs_setup`: a starter bot that has not finished its setup. Parked: it claims no work and answers only its setup.
 - `onboarded`: setup finished.
-- NULL: a bot with no setup state (not a starter).
 
-Transitions: a starter bot is written `needs_setup` when created (`backend/onboarding.py`, `backend/recruiting.py`), and `onboarded` when its setup finishes (`onboarding.py`).
+Transitions: a starter bot is written `needs_setup` when created (`backend/onboarding.py`, `backend/recruiting.py`), and
+`onboarded` when its setup finishes (`onboarding.py`).
 
-`needs_onboarding` is retired (see above); readers in `statuses.py` still accept it for one release.
+### automation_versions.status
 
-Enforcement: CHECK with a retired mapping for `needs_onboarding`. Nullable.
+CHECK. NOT NULL, default `active`.
 
-### automation_versions.status (check)
-
-Values: `active` (the version the automation runs), `pending` (saved, not yet live). Default `active`.
+- `active`: the version the automation runs.
+- `pending`: saved, not yet live.
 
 Transitions: a new edit writes a `pending` version (`backend/automations.py`); publishing it sets `active`.
 
-### goals.status (check)
+### goals.status
 
-Values:
+CHECK. NULL: never scored.
 
 - `red`, `yellow`, `green`: a colour.
 - `gray`: the automatic check has no reading to score. A goal with no status stays unscored rather than taking `gray`.
@@ -318,41 +349,58 @@ Transitions (`backend/goals.py`):
 - The automatic check writes `red`, `yellow`, `green` or `gray` (`status_source` becomes `auto`). It never writes `done` or `dropped`.
 - `status_restore` puts back the prior value, recorded in the goal's events.
 
-Enforcement: CHECK. Nullable (NULL: never scored).
+### goals.status_source
 
-### goals.status_source (check)
+CHECK. NULL allowed. Who last set `status`, written with it.
 
-Values: `person`, `auto`. Who last set `status`. Written with `status`. Nullable.
+- `person`: a person set it.
+- `auto`: the automatic check set it.
 
-### goals.suggest_status (check)
+### goals.suggest_status
 
-Values: `red`, `yellow`, `green`. The automatic check's suggestion for a goal a person set. It is never set on an automatic goal.
-Cleared when a person sets or accepts a status and when an automatic write lands (`goals.py`). Nullable.
+CHECK. NULL allowed. The automatic check's suggestion for a goal a person set; never set on an automatic goal.
 
-### goal_proposals.status (check)
+- `red`, `yellow`, `green`: the suggested colour.
 
-Values: `pending` (default, awaiting a decision), `confirmed` (accepted), `rejected` (declined).
+Cleared when a person sets or accepts a status and when an automatic write lands (`goals.py`).
+
+### goal_proposals.status
+
+CHECK. NOT NULL, default `pending`.
+
+- `pending`: awaiting a decision.
+- `confirmed`: accepted.
+- `rejected`: declined.
 
 Transitions: `pending` to `confirmed` or `rejected` only (`backend/goals.py`, `backend/company.py`). Not reversible.
 
-### bot_files.state (check)
+### bot_files.state
 
-Values:
+CHECK. NOT NULL, default `ready`.
 
-- `ready` (default): the current file.
-- `not_synced`: the source changed, so the copy on a bot's computer is out of date (`backend/files.py`).
+- `ready`: the file's current version (or link) is stored on Tico and opens.
+- `not_synced`: the bot's runner could not upload the file's bytes. After its retries it reports the failure
+  (`runner-rs/src/files_publish.rs` `report_not_synced`, an upload with `sync=failed`), so the file's page never shows a
+  link that opens nothing. No version is added.
 - `deleted`: an archived tombstone (`backend/file_library.py` sets `deleted` and `archived=1`).
 
-Transitions: `ready` to `not_synced` (`files.py`); any to `deleted` (`file_library.py`). No writer back to `ready` was found
-on this base after `not_synced`, so a re-synced file stays `not_synced` until it is replaced. Flagged in "Decisions".
+Transitions:
 
-Enforcement: CHECK. NOT NULL, default `ready`.
+| From | To | Writer | Guard |
+|---|---|---|---|
+| (insert), `ready` | `not_synced` | an upload with `sync=failed` (`files.py` `publish`) | |
+| (insert), `not_synced`, `ready` | `ready` | any successful upload (`files.py` `add_version`), changed or not | |
+| (insert), `not_synced`, `ready` | `ready` | a link is saved (`files.py`, `files/links`) | |
+| any | `deleted` | delete (`file_library.py`) | |
 
-### doc_sources.status (check)
+Recovery from `not_synced` is the next successful publish of the same file, which the runner tries again on its own
+next sync. Test: `test_files.py::test_a_file_that_failed_to_sync_is_ready_again_once_it_publishes`.
 
-Values:
+### doc_sources.status
 
-- `link_only` (default): linked; nothing fetched.
+CHECK. NOT NULL, default `link_only`.
+
+- `link_only`: linked; nothing fetched.
 - `queued`: the first fetch is waiting.
 - `preparing`: the first fetch is running.
 - `updating`: a refresh is running and a snapshot is still in use.
@@ -363,13 +411,11 @@ Values:
 
 Transitions (`backend/doc_sources.py`): `link_only` to `queued` on request; `queued` to `preparing` when a worker starts;
 `ready` or `updating` to `updating` on refresh; `preparing` to `ready` or `empty` on success; `updating` to `ready` on
-success; any to `failed` or `access_needed` on error.
+success; any to `failed` or `access_needed` on error. A worker settles only for the `generation` and `lease` it took.
 
-Enforcement: CHECK. NOT NULL, default `link_only`.
+### model_subscriptions.status
 
-### model_subscriptions.status (check)
-
-Values:
+CHECK. NOT NULL, default `new`.
 
 - `new`: saved, not yet checked.
 - `working`: the last check passed.
@@ -378,19 +424,19 @@ Values:
 Transitions (`backend/model_subscriptions.py`): any to `new` when the key is saved again (`revision` goes up);
 `new` to `working` or `needs_reconnect` from a check (`_status`); `needs_reconnect` blocks use until reconnected.
 
-Enforcement: CHECK. NOT NULL, default `new`.
+### strategy_actions.state
 
-### strategy_actions.state (check)
+CHECK. NOT NULL.
 
-Values: `proposed` (suggested, not yet acted on), `done` (carried out), `undone` (reversed).
+- `proposed`: suggested, not yet acted on.
+- `done`: carried out.
+- `undone`: reversed (an undo records `undone_at` and `undone_by`).
 
-Transitions (`backend/strategy_acts.py`): insert `proposed`; `proposed` to `done`; `done` to `undone` (an undo records `undone_at` and `undone_by`).
+Transitions (`backend/strategy_acts.py`): insert `proposed`; `proposed` to `done`; `done` to `undone`.
 
-Enforcement: CHECK. NOT NULL.
+### google_connects.status
 
-### google_connects.status (check)
-
-Values:
+CHECK. NOT NULL, no default.
 
 - `signing_in`: the sign-in started and waits for its callback. `oauth_state` holds the one-time nonce.
 - `ready`: the callback arrived, the code is stored, and the connection waits to be finished.
@@ -404,70 +450,93 @@ Values:
 Transitions (`backend/google_connect.py`): (none) to `signing_in` on start; `signing_in` to `ready` on callback (clears
 `oauth_state`); `ready` to `finishing`; `finishing` to `connected` or `failed`; `connected` or `ready` to `disconnecting`;
 `disconnecting` to `revoking`; `revoking` to `disconnected` or `failed`. A row stuck in `signing_in`, `ready`, `finishing`
-or `revoking` past its time limit is reset by a sweep.
+or `revoking` past its time limit is reset by a sweep. Each start (connect or disconnect) sets a new `operation_id` and
+clears the pending grant; the claim, `/exchange` and `/result` name that operation, and every write after the claim is
+conditional on it, so an answer for an earlier operation changes nothing. `answered` records the computer's result for
+the current operation, and a repeat of it is answered the same way.
 
-Enforcement: CHECK. NOT NULL, no default.
+The column `google_connects.state` was renamed to `oauth_state`. `ensure_schema` renames it on an existing database and
+recreates its index as `google_connects_oauth_state`.
 
-The column `google_connects.state` was renamed to `oauth_state` on this branch (the only rename among the columns on this page). `ensure_schema`
-renames it on an existing database and recreates its index as `google_connects_oauth_state`.
+### google_workspaces.status
 
-### fin_payments.status (check)
+CHECK. NOT NULL. The company's Google Workspace service-account key.
 
-Values: `queued` (default), `sending`, `awaiting_bank_approval` (sent, the bank needs its own approval), `submitted`
-(accepted by the bank), `settled` (money moved), `returned`, `failed` (refused or the send failed), `canceled` (stopped
-before it moved; spelled `cancelled` before migration 0002), `unknown` (the send got no answer, so the outcome is not known
-and reconciliation is pending). `unknown` is not `withheld`.
+- `pending`: an uploaded key whose first check has not passed. The active key keeps working meanwhile.
+- `connected`: the key's last check, or the last token a computer asked for, worked.
+- `failing`: a check or a computer's token failed; `last_error` says why.
+
+Transitions (`backend/google_workspace.py`): an upload writes `pending` and deletes any older pending key
+(`_store_pending`); a passing check promotes it to `connected` and deletes the key it replaces (`_settle`); a failing
+check or token turns it `failing` (`_settle`, `record_mint`); a later success turns it `connected` again. `tick` checks a
+pending or failing key again for a while. A result is recorded only for the key revision it started on.
+
+### fin_cards.status
+
+CHECK, with `cancelled` mapped. NOT NULL.
+
+- `active`: usable.
+- `frozen`: paused at the provider.
+- `canceled`: closed for good.
+
+### fin_payments.status
+
+CHECK, with `cancelled` mapped. NOT NULL, default `queued`.
+
+- `queued`: waiting to be sent.
+- `sending`: the send started.
+- `awaiting_bank_approval`: sent; the bank needs its own approval.
+- `submitted`: accepted by the bank.
+- `settled`: money moved.
+- `returned`: the money came back.
+- `failed`: refused, or the send failed.
+- `canceled`: stopped before it moved.
+- `unknown`: the send got no answer, so the outcome is not known and reconciliation is pending. Not `withheld`.
 
 Transitions (`backend/finance/payments.py`, `backend/finance/store/banking.py`): `queued` to `sending` when the send
 starts (`banking.py`); a send that gets no answer goes to `unknown` (`payments.py`); the bank's answer moves it on to
 `submitted`, `awaiting_bank_approval`, `settled`, `returned` or `failed`; a rule, an owner or a bank rejection moves it to
-`canceled`.
+`canceled`. The OpenAPI v2 enum uses the same list.
 
-Enforcement: CHECK (the retired `cancelled` is mapped during the table copy). NOT NULL, default `queued`.
+### fin_transfers.status
 
-The OpenAPI v2 enum (`GET /api/v2/openapi.json`) uses the same list, so the public payment status changes from `cancelled` to `canceled`.
+CHECK, with `cancelled` mapped. NOT NULL, default `queued`.
 
-### fin_transfers.status (check)
-
-Values: `queued` (default), `submitted` (sent to the bank, feed ids cleared), `unknown` (send got no answer; reconciliation
-pending), `failed`, `posted` (in the books), `canceled` (spelled `cancelled` before migration 0002).
+- `queued`: waiting to be sent.
+- `submitted`: sent to the bank, feed ids cleared.
+- `unknown`: the send got no answer; reconciliation pending.
+- `failed`: refused, or the send failed.
+- `posted`: in the books.
+- `canceled`: stopped before it moved.
 
 Transitions (`backend/finance/transfers.py`, `backend/finance/store/banking.py`): `queued` to `submitted` on send
 (`banking.py`); the bank's answer or an error moves it to `posted`, `unknown` or `failed` (`transfers.py`); `unknown` is
 retried or reconciled; a stopped transfer goes to `canceled`.
 
-Enforcement: CHECK (as for payments). NOT NULL, default `queued`.
-
-### meetings.review_state (check, already in the schema)
-
-Values: `pending`, `live`, `dismissed`. Already constrained in the base schema, left as it was.
-
-### bot_status_history.state (none)
-
-The status a bot had before each change, copied from `bot_status` by `status_set`. Values are the `bot_status` list, so a
-CHECK would refuse any older row written by an earlier version of the code. Left unconstrained on purpose. Flagged in "Decisions".
-
 ## Outside the stable set
 
-Columns found by a scan of the fresh schema whose names mean status, state, decision, stage, outcome or review. These are
-not in this branch's lists and are not changed here, except where a spelling is noted.
+`meetings.review_state` (`pending`, `live`, `dismissed`) has a CHECK in the base schema, not from `status_values.py`.
+`bot_status_history.state` is left unconstrained on purpose: it copies `bot_status` rows, and a CHECK would refuse an
+older row written by an earlier version of the code.
 
-Already constrained by a CHECK in the base schema (values unchanged on this branch):
+Columns found by a scan of the fresh schema whose names mean status, state, decision, stage, outcome or review, and
+that `status_values.py` does not list:
+
+Already constrained by a CHECK in the base schema:
 
 - `chat_goals.status`: active, paused, met, stopped, cleared.
-- `live_meeting_chat_routes.status`, `live_meeting_windows.status`: deciding, complete (and interrupted for windows). **Still `complete`.** Not in the stable set, so not renamed; see "Decisions".
+- `live_meeting_chat_routes.status`, `live_meeting_windows.status`: deciding, complete (and interrupted for windows). **Still `complete`**; see "Decisions".
 - `live_meeting_turns.status`: pending, claimed, replied, skipped.
 - `live_meetings.state`: live, paused, ended.
 - `meeting_items.status`: proposed, pushed, dismissed.
 - `org_rules.status`: suggested, active, retired. `org_rule_holds.state`: held, sent, kept.
-- `growth_channels.stage`: the Growth module's channel stages. (The idea and segment tables it used to hold are gone; see the growth rethink migration.)
-- `fin_cards.status`: active, frozen, canceled (`backend/status_values.py` enforces it with a CHECK).
+- `growth_channels.stage`: the Growth module's channel stages.
 - `fin_actions.status`, `fin_bills.status`, `fin_invoices.status`, `fin_entries.status`, `fin_holds.status`, `fin_outbox.status`
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
   `fin_recipients.status`, `fin_view_grants.status`, `fin_money_accounts.kind`, and others in the Finance schema.
 - `strategy_bets.status`, `strategy_versions.status`, `tico_storage.state`, `storage_moves.state`,
   `update_archive_overrides.state`, `blob_media.media_state`, `bot_file_versions.media_state`.
-- `idempotency.state`: pending, completed, refused (a CHECK). A stored answer is always completed and is swept after
+- `idempotency.state`: pending, completed, refused. A stored answer is always completed and is swept after
   48 hours. An operation binding (`binding` set: `invites`, `github_product_repo`, `github_review`) is never swept: it is
   pending while its outcome is unknown (a repeat is refused with no second external call), then completed or refused.
   Invites map `sending` to pending, `sent` to completed and `refused` to refused; a product repository's `rejected` is
@@ -475,7 +544,7 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
   `response` {"invited_at"}, so a repeat of that request answers its own time.
 - `task_links.review_state` and others with a CHECK in the base schema.
 
-Without a CHECK (not constrained here; values are whatever the code writes):
+Without a CHECK (values are whatever the code writes):
 
 - `tasks.checkpoint_state` (a fingerprint, not a status), `tasks.verdict`, `tasks.verdict_head`.
 - `bot_tool_requests.state`, `credential_requests.status`, `credential_imports.state`, `bot_transitions.state`,
@@ -496,31 +565,20 @@ Spellings still outside the stable set:
   it sent them. Tico's own lists are all `canceled` since migration 0032.
 - `complete` in `live_meeting_chat_routes.status` and `live_meeting_windows.status`. Same meaning as `completed`; not changed.
 
-## Tables named in the plan without a status column on this base
-
-- `principals`: no status column. Its `kind` (human, bot, agent, service, system) is a type, enforced by a CHECK.
-- `pages`, `humans`, `runners`, `cards`, `docs`, `automations`: no status or state column (`automations`
-  keeps its state in `automation_versions.status` and `automation_runs.status`).
-- `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, notice, steer; old `ask` and `answer` rows are history only): types, not statuses.
-- `kpis.stage`, `goal_kpis.kind`, `kpi_readings`: the KPI tree's stage and kind; not statuses, not constrained here.
-- `attempts.state` is NULL on a run recorded with no lease (the demo seed, a run from before leases; migration 0072 moved
-  the old `turns` rows onto `attempts`); its value triggers allow NULL.
+Tables without a status column: `principals` (its `kind` is a type, enforced by a CHECK), `pages`, `humans`, `runners`,
+`cards`, `docs`, `automations` (its state is in `automation_versions.status` and `automation_runs.status`).
+`conversations.kind`, `messages.kind`, `kpis.stage`, `goal_kpis.kind` and `kpi_readings` are types, not statuses.
 
 ## Decisions
 
 These are open for the integration owner.
 
-1. **`attempts.state` `input`.** Listed, but no code path writes it. Keep it (harmless, matches the list the upgrade
-   accepts) or drop it in a later change with a migration.
-2. **`bot_status_history.state` unconstrained.** Old history rows may hold values from older code. A CHECK would make
-   the upgrade refuse them.
-3. **`bot_files.state`.** No code moves a file from `not_synced` back to `ready`. Confirm whether that is intended
-   before a sync feature relies on it.
-4. **`complete` outside the stable set.** The live-meeting tables use `complete` where other lists say `completed`.
+1. **`attempts.state` `input`.** Listed, but no code path writes it. Keep it (harmless) or drop it in a later change
+   with a migration.
+2. **`bot_status_history.state` unconstrained.** Old history rows may hold values from older code.
+3. **`complete` outside the stable set.** The live-meeting tables use `complete` where other lists say `completed`.
    Unify in a follow-up, with a migration.
-5. **Public API.** The v2 spec (`GET /api/v2/openapi.json`) changes the `cancelled` enum values for webhook sends,
-   payments, transfers and finance cards to `canceled`. Any client that matches the old spelling breaks.
-6. **`needs_onboarding` readers.** `backend/statuses.py` still accepts it for one release. Remove that acceptance in a
+4. **`needs_onboarding` readers.** `backend/statuses.py` still accepts it for one release. Remove that acceptance in a
    later release, after this migration has run everywhere.
-7. **Removing a list value later.** Needs a migration that maps or refuses stored rows first (see "How the lists are
-   enforced").
+5. **Removing a list value later.** Needs a migration that maps or refuses stored rows first (see "A stored value outside
+   its list").

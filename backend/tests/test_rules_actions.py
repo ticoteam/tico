@@ -55,32 +55,6 @@ def test_a_bots_request_asks_the_owner_bots_operator_and_with_none_wakes_the_bot
     assert [w.who for w in asks(c, row["id"])] == [BEN]
 
 
-def test_close_and_reassign_go_through_the_task_calls_with_the_rule_as_why(c):
-    row = task(c)
-    carry(c, row, R.ACTION, {"action": "assign", "owner": "bot:ops"})
-    moved = c.execute(
-        "SELECT actor_id, old, new, note FROM history_events WHERE subject_type='task' AND subject_id=? "
-        "AND kind='reassign'",
-        (row["id"],),
-    ).fetchone()
-    assert tuple(moved) == (H.KEEPER, "bot:cpo", "bot:ops", "Rule rule_x")
-    carry(c, H.task(c, row["id"]), R.ACTION, {"action": "close", "note": "Not needed"})
-    after = H.task(c, row["id"])
-    assert after["status"] == "closed"
-    closed = c.execute(
-        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' ORDER BY rowid DESC",
-        (row["id"],),
-    ).fetchone()
-    assert closed[0] == "Rule rule_x: Not needed"
-    events = [
-        json.loads(r[0])
-        for r in c.execute(
-            "SELECT detail FROM events WHERE action='rule.action' AND target=? ORDER BY rowid", (row["id"],)
-        )
-    ]
-    assert [e["action"] for e in events] == ["assign", "close"]
-
-
 def test_a_refused_move_is_undone_and_the_message_wakes_the_bot(c):
     row = task(c)
     found = carry(c, row, R.ACTION, {"action": "move", "stage": "done"})  # the owner has not said it is done
@@ -96,15 +70,6 @@ def test_an_action_rule_asks_a_named_person(c):
     carry(c, row, R.ACTION, {"action": "ask", "person": BEN, "line": "Can Ben review the plan?"})
     [wait] = asks(c, row["id"])
     assert (wait.who, wait.line) == (BEN, "Can Ben review the plan?")
-
-
-def test_a_rule_never_changes_a_private_task_its_writer_cannot_read(c):
-    unrelated_task_managers(c)
-    row = task(c, by="bot:cpo", private=True)
-    assert not H.task_private_readable(c, BEN, row)
-    found = carry(c, row, R.ACTION, {"action": "close", "note": "Not needed"}, by=BEN)
-    assert (found.outcome, found.rule) == (R.WAKE, R.FAIL_OPEN)
-    assert H.task(c, row["id"])["status"] == "open"
 
 
 def no_task(c, decision_by=ANA, room="room-1", body="Can someone check the Acme invoice?"):

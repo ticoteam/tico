@@ -21,7 +21,7 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_delivery, mcp_oauth, oidc, views
+from . import agents, app_delivery, app_view, mcp_oauth, oidc, views
 from . import outcome_stats
 from . import pipeline_judges
 from . import recorder_installs
@@ -298,7 +298,6 @@ def create_app(settings=None):
             install_signals(recorder_thread.folder, recorder_thread.file)
 
         async def schedule_loop():
-            from . import heartbeat
             from .scheduler import Scheduler
 
             scheduler = Scheduler(store, execution, onboarding=onboarding, auth=auth, github_app=app.state.github_app)
@@ -316,6 +315,26 @@ def create_app(settings=None):
                 releases.notice()
                 # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
                 update_feeds.tick(store)
+
+            # The automation queue, the email sends and the Workspace key check, each on a worker of its own beside
+            # this loop (backend/drains.py): the beat's due times and recovery never wait for Gmail or a connector.
+            from . import drains
+
+            workers = drains.Drains(
+                store,
+                auth,
+                on_error=lambda name, exc: telemetry.capture(drains.TELEMETRY[name], exc),
+                stopping=stop.is_set,
+            ).start()
+            scheduler.drains = workers
+            try:
+                await run_passes(scheduler, recorded, release_check)
+            finally:
+                # No new claims; a call already started finishes within its own timeout.
+                await asyncio.to_thread(workers.stop, 75)
+
+        async def run_passes(scheduler, recorded, release_check):
+            from . import heartbeat
 
             rest = heartbeat.Rest()
             while not stop.is_set():
@@ -338,22 +357,6 @@ def create_app(settings=None):
                         import logging
 
                         logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
-                    try:
-                        # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
-                        from . import google_workspace as workspace_checks
-
-                        await asyncio.to_thread(
-                            system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store
-                        )
-                    except Exception as exc:
-                        telemetry.capture("google_workspace", exc)
-                    try:
-                        # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
-                        from . import email_sending
-
-                        await asyncio.to_thread(email_sending.drain, store, auth)
-                    except Exception as exc:
-                        telemetry.capture("email_drain", exc)
                 try:
                     # Seconds between beats (Automations > Heartbeat), read each pass: 10 by default, 5 to 60.
                     await asyncio.wait_for(stop.wait(), timeout=await asyncio.to_thread(heartbeat.interval, store))
@@ -448,6 +451,9 @@ def create_app(settings=None):
         # pool and clears the shared slot only while that slot is still its own.
         auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
         app.state.auth_pool = auth_pool
+        from . import needs_lane
+
+        lane = needs_lane.start(app)  # Needs you's own build threads (backend/needs_lane.py)
         try:
             yield
         finally:
@@ -455,6 +461,7 @@ def create_app(settings=None):
             if app.state.auth_pool is auth_pool:
                 app.state.auth_pool = None
             auth_pool.shutdown(wait=False, cancel_futures=True)
+            needs_lane.stop(app, lane)
             stop.set()
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
@@ -696,6 +703,7 @@ def create_app(settings=None):
     from .timing import Timing
 
     app.state.auth_pool = None  # the lifespan's own, while it runs; outside it sign-in uses the loop's default pool
+    app.state.needs_lane = None  # the same for Needs you's builds (backend/needs_lane.py)
     app.state.timing = Timing()
     app.state.timing.recorder = recorder
     app.state.flight = recorder
@@ -882,6 +890,10 @@ def create_app(settings=None):
 
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
+                if who.view:
+                    # A bot's read-only view (backend/app_view.py), on the path as sent as well.
+                    raw = request.scope.get("raw_path") or b""
+                    app_view.gate(raw.decode("latin-1") if raw else request.url.path, request.method)
                 if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
@@ -1789,11 +1801,13 @@ def create_app(settings=None):
         order="queue",
         visible_sql=None,
         narrow=None,
+        keyset=False,
         **more,
     ):
         """A page of the tasks `who` may read. `narrow` is a further WHERE fragment over the task's own columns (a
         list's pipeline, stage or pushed-past filter, task_list_routes.narrowing): it picks the rows only, while the
-        rows are still read with the reader's own visibility."""
+        rows are still read with the reader's own visibility. With `keyset`, the second value is the last row's sort
+        key when there is more (the next page's `after`), not an offset."""
         auth.domain(who)
         visible_sql = visible_sql or auth.task_sql(c, who)
         rows = H.tasks(
@@ -1810,6 +1824,8 @@ def create_app(settings=None):
             **more,
         )
         page, has_more = rows[:limit], len(rows) > limit
+        if keyset:
+            return task_views(page, c, who, visible_sql), H.task_sort_key(page[-1], order) if has_more else None
         return task_views(page, c, who, visible_sql), offset + limit if has_more else None
 
     def visual_view(c, who, rows):
@@ -2945,6 +2961,8 @@ def create_app(settings=None):
             raise Problem("status", "status is open, done or closed", 422)
         if snoozed not in (None, "hide", "only", "all"):
             raise Problem("snoozed", "snoozed is hide, only or all", 422)
+        if status == "all" and snoozed is None:
+            snoozed = "all"  # every task means the snoozed ones too: they are open, only set aside
         if number is not None and not 1 <= number <= 999_999_999:
             raise Problem("number", "number is a task number, from 1", 422)
         since = H.parse_ts(updated_since) if updated_since else None
@@ -3594,6 +3612,8 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
+        H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
@@ -4941,6 +4961,20 @@ def create_app(settings=None):
 
         if not options and (first := cloud_machines.first_home(c, bot)):
             options = [first]  # a cloud-mode bot whose own machine is not made yet: the shared one first
+        if not options and cloud_machines.offered(c, settings) and cloud_machines.adopt(c, bot, who.actor):
+            # A Tico Cloud bot whose cloud machine has not enrolled yet: it is assigned there when it does
+            # (cloud_machines.enrolled), so nothing is refused while the machine is on its way.
+            machine = cloud_machines.coming(c, bot)
+            if machine and machine["status"] == "out_of_credit":
+                raise Problem("out_of_credit", f"Out of credit: {machine['label']} can't start. Add credit first", 409)
+            if machine and machine["status"] == "failed":
+                raise Problem(
+                    "cloud_computer_failed",
+                    f"{machine['label']} didn't start: {machine['words']}. See Settings > Computers",
+                    409,
+                )
+            if machine:
+                return {"bot": bot, "computer": machine["label"], "placed": False, "already": False, "waiting": True}
         if not options:
             raise Problem(
                 "no_computer",
@@ -5370,6 +5404,9 @@ def create_app(settings=None):
 
     install_meeting_items(app, store, mutate, task_create, auth)
     pipeline_judges.install(app, store, mutate, auth)
+    from . import stage_rules
+
+    stage_rules.install(store)
     from . import presence
 
     presence.install(app, store, mutate, auth)
@@ -5379,6 +5416,9 @@ def create_app(settings=None):
     from .connectors import install_connectors
 
     install_connectors(app, store, execution, mutate)
+    from .calendar_api import install_calendar
+
+    install_calendar(app, store, mutate)
     from .imports import install_imports
 
     install_imports(app, store, auth, execution, mutate)
@@ -5410,6 +5450,9 @@ def create_app(settings=None):
     from .google_workspace import install as install_google_workspace
 
     install_google_workspace(app, store)
+    from . import web_push
+
+    web_push.install(app, store)  # after install_credentials: the VAPID key is sealed with the vault
     from .mailboxes import install as install_mailboxes
 
     install_mailboxes(app, store)
@@ -5697,6 +5740,8 @@ def create_app(settings=None):
     from .performance import install as install_performance
 
     install_performance(app, store, auth, mutate, execution)
+    # A bot's read-only view of the app, for its own screenshots (backend/app_view.py).
+    app_view.install(app, store, auth)
     # A bot's browser through another computer's internet (backend/browser_exit.py); the same relay as the screen.
     from .browser_exit import install as install_browser_exit
 

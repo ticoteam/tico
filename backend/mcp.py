@@ -119,6 +119,9 @@ class InProcessApi:
         content, raw_headers = raw_body(raw) if raw is not None else (None, {})
         if raw is not None and hasattr(raw, "read"):
             timeout = max(timeout, STREAM_WAIT)  # a file streamed from disk: stored after its last block
+        # A no-op when the caller already allocated it (`_run`, `request`, which report it on an error); a direct
+        # caller of `_send` still gets one id for the request and the timeout.
+        key = operation_key(method, raw, key)
 
         async def go():
             transport = httpx.ASGITransport(app=self.app)
@@ -127,7 +130,7 @@ class InProcessApi:
                 if delegate:
                     headers["X-Tico-On-Behalf-Of"] = delegate if isinstance(delegate, str) else "turn"
                 if raw is not None or method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
-                    headers["Idempotency-Key"] = key or hubtools_key()
+                    headers["Idempotency-Key"] = key
                 return await client.request(
                     method, path, json=body, content=content, headers=headers, params=query or None
                 )
@@ -143,6 +146,7 @@ class InProcessApi:
         return response
 
     def _run(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
+        key = operation_key(method, raw, key)
         response = self._send(method, path, body, key, query, delegate, raw)
         if response.headers.get("content-disposition"):
             payload = response_content(response)
@@ -164,6 +168,7 @@ class InProcessApi:
         path, _, query = path[len("/api/v2/") :].partition("?")
         if not binary:
             return self.call(method, path, body, key, dict(parse_qsl(query)), delegate, raw=raw)
+        key = operation_key(method, raw, key)
         response = self._send(method.upper(), path, body, key, dict(parse_qsl(query)) or None, delegate, raw=raw)
         if response.status_code >= 400:
             try:
@@ -250,6 +255,14 @@ def caller_kind(auth, who):
             else "bot"
         )
     return None
+
+
+def operation_key(method, raw, key):
+    """A write's operation id, allocated once before it is sent: the caller's own, or a new one. The request, a lost
+    answer and an error all report this same id, so a retry can reuse it as the CLI's does."""
+    if raw is not None or method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+        return key or hubtools_key()
+    return key
 
 
 def hubtools_key():

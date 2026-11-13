@@ -36,15 +36,22 @@ If the repository asks for a pre-push hook and its setup script does not turn it
 A push the hook stops is a finding: fix it and push again. Never skip the hook. If it cannot run on this computer (a
 tool it needs is missing and the setup script cannot install it), say on the task which tool, and do not push around it.
 
+One task has one pull request at a time. When the task already has an open one (`tico task show` lists it: the task
+was someone else's before you), work on its branch instead: `gh pr checkout <its link>`, commit and push there, and
+never open a second pull request beside it.
+
 Work only on that branch. Never commit to the base branch. Never force-push, with one exception: after a rebase on the
 base branch (a merge conflict wakes you for one), push your own branch with `git push --force-with-lease`. After the
-first commit, push and open the pull request as a draft, then link it:
+first commit, push. {{app_name}} opens the draft pull request for a `tico/<task>-` branch at its first push and links
+it to the task within a few minutes; give it your title and body with `gh pr edit`:
 
     git -C software/<repo> push -u origin HEAD
-    gh pr create -R <repo> --draft --base <base branch> --title "<title>" --body "<what changes and why>"
-    tico task link <id> <pull request url>
+    gh pr list -R <repo> --head <branch>
+    gh pr edit <n> -R <repo> --title "<title>" --body "<what changes and why>"
 
-If {{app_name}} already opened a draft for the branch, `gh pr create` says so: edit that one with `gh pr edit`. A draft
+Never run `gh pr create` on a task branch: racing {{app_name}}'s draft makes two pull requests on one branch. Only when
+no draft shows up ten minutes after the push (the repository is not connected to {{app_name}}), open one with
+`gh pr create -R <repo> --draft` and link it with `tico task link <id> <pull request url>`. A draft
 gets no review request. Where the repository's CI skips drafts ({{app_name}}'s own does; `knowledge/standards.md` says
 whether yours does), a draft runs no CI either, so push as often as you like while you work; otherwise each push runs CI,
 so push less often. Keep it a draft until step 6.
@@ -57,7 +64,8 @@ task gives. Only then change the code.
 ## 4. Change
 
 Make the smallest change that makes the test pass. A refactor you noticed on the way goes into a note on the task,
-for its requester, not into this pull request.
+for its requester, not into this pull request. If the change fixes a failure the repository's tests list as known (an
+exception or baseline entry), delete that entry in this pull request: a stale entry fails the merge queue.
 
 ## 5. Check on your computer
 

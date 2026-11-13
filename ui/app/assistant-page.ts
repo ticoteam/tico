@@ -83,6 +83,15 @@ async function pageAssistant() {
   thread.addEventListener('click', (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-hint]'); if (b && !P.sending) assistantSend(P, '', {text: b.dataset.hint ?? '', files: []}); });
   void v2ChatLoad(slug, {conv: {id: d.room_id as string}, messages: d.messages as ChatMessage[], execution: d.execution as ChatExecution | null, nextBefore: d.next_before as string | undefined,
                          empty: assistantEmptyHTML()});
+  assistantRead(slug, d.room_id);
+}
+// Opening the Assistant reads its chat, as opening any thread does: the server's read mark moves to now, and the
+// unread count on the Assistant's row in Team (the 1:1 DM count, THREADS.dms) goes.
+function assistantRead(slug: string, room: string | null | undefined) {
+  if (!room) return;
+  post(`/v2/threads/${encodeURIComponent(room)}/read-all`, {}).catch(() => {});
+  const dm = 'bot:' + slug;
+  if (Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; renderTree(); }
 }
 // Each message leaves the box at once and waits in P.outbox until the server has it; a Return while one is out queues
 // behind it. A failed send puts it, and everything queued after it, back in the box ahead of whatever is typed there.

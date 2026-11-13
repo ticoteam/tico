@@ -192,7 +192,9 @@ def _by(conn: "sqlite3.Connection", sql: str, column: str, keys: list[str]) -> d
 
 def _cached(conn: "sqlite3.Connection", what: str, sql: str, column: str, key: str) -> list[Row]:
     """The rows of `sql` for one key, read once in a snapshot (or seeded by `prime`)."""
-    return read_cache.value(conn, (what, key), lambda: _by(conn, sql, column, [key])[key])
+    # Stored rows hold only plain values, so a shallow copy of each is a full one; the snapshot keeps its own.
+    found = read_cache.value(conn, (what, key), lambda: _by(conn, sql, column, [key])[key], shared=True)
+    return [dict(row) for row in found]
 
 
 def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
@@ -294,6 +296,12 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"Sent back: {notes}" if notes else "Sent back")
+    if task.get("stage_id") == "product-validate":
+        from . import validate_gate
+
+        held = validate_gate.held(conn, task, requirement)  # a bot's OK reaches the person with a passed page only
+        if held:
+            return held
     return Standing(requirement, WAITING, person, what)
 
 
@@ -388,21 +396,42 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
     decides, once per visit:
     after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
-    list."""
+    list. On a page a person OKs that is not a review (Fixes 2's), commits pushed after the reviews are a bot's to
+    review before the person is asked (`_new_commits`). The person's OK is for the commits it was given at: new ones
+    since keep it when they change the same lines, or once a bot read and OK'd them (`_after_ok`); and it comes back
+    with the task from Merge (`page_for`)."""
     from . import page_verdicts as V
     from .item_sources import github as F
-    from . import task_pages as P
 
     visit_id = task["visit"]["id"]
     owner = task.get("owner_id")
-    page = P.current(conn, visit_id, requirement["id"])
+    page, carried = page_for(conn, task, requirement)
     if not page:
         return Standing(requirement, NOT_MET, owner, "No page attached")
     settings: Row = requirement.get("settings") or {}
     if settings.get("at_head") and json.loads(page["item_versions"] or "{}") != F.heads(conn, task["id"]):
         return Standing(requirement, NOT_MET, owner, STALE_REVIEW)
+    signoff = bool(requirement.get("person_id") or people_only(requirement)) and not settings.get("at_head")
+    if signoff and answer and _reviews_new(requirement, answer):
+        answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
+    answer = answer or carried
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         answer = None  # given on an earlier page
+    lapsed, lapsed_by, since_ok = "", None, None
+    if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
+        # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
+        # once a bot read them and OK'd them (`_after_ok`). Otherwise it lapses: the same person is asked again.
+        kept, since_ok = _after_ok(conn, task, requirement, answer)
+        if kept:
+            return kept
+        lapsed_by = str(answer["by_id"])
+        answer, lapsed = None, sentence(f"New commits since {_name(conn, lapsed_by)}'s OK") + " "
+        if carried:
+            # Back from Merge with no page of its own: the Builder fixes what was sent back and attaches the page again.
+            back = since_ok[-1] if since_ok and since_ok[-1]["answer"] == "no" else None
+            said = " ".join(str((back or {}).get("notes") or "").split())
+            line = f"{_name(conn, back['by_id'])} sent back the new commits: {said}" if back else lapsed.strip()
+            return Standing(requirement, NOT_MET, owner, sentences(line, ATTACH_AGAIN))
     if answer and answer["answer"] == "ok":
         return Standing(requirement, MET, line="OK'd")
     if answer and answer["answer"] == "no":
@@ -421,17 +450,22 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone()
     ):
         return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
+    # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
+    asked = max(str(page["created_at"]), str((verdict or {}).get("updated_at") or ""))
+    first = ""
+    if signoff:
+        # Commits pushed after the reviews are a bot's to review before the person is asked (`_new_commits`).
+        held, first = _new_commits(conn, task, requirement, asked, since_ok)
+        if held:
+            return held
     person = person_of(conn, requirement, visit_id)
     back = _sent_back(conn, visit_id, requirement["id"]) if oks_anyway else None
     if back and not requirement.get("person_id"):
         person = person or str(back["by_id"])  # the person who sent it back is asked again, by Tico, not by the bot
+    if lapsed_by and not requirement.get("person_id") and lapsed_by.startswith("human:"):
+        person = person or (lapsed_by if active_person(conn, lapsed_by) else None)
     after = sentence(f'Version {page["version"]}, after the send back: "{back["said"]}"') + " " if back else ""
-    if oks_anyway and not settings.get("at_head"):
-        # Said before the OK: the person decides knowing the newest commit had no bot's review.
-        fresh = unreviewed(conn, task)
-        after += f"{fresh} " if fresh else ""
-    # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
-    asked = max(str(page["created_at"]), str((verdict or {}).get("updated_at") or ""))
+    after = lapsed + after + first
     if said == "not_met":
         # A page a person OKs anyway that Jev sent back before on this visit: the owner had its round, so the person
         # decides with Jev's reason, as on an unsure (Initech, Nov 11: a page Jev could never pass left only a push-past).
@@ -492,35 +526,245 @@ REVIEWED_SQL = (
     "AND a.page_version = p.version AND a.answer = 'ok' AND a.undone_at IS NULL))"
 )
 NOT_REVIEWED = "not reviewed by a bot."
+# The bot that wrote the task's newest review: it reviews commits pushed after it (`_new_commits`).
+REVIEWER_SQL = (
+    REVIEWED_SQL.replace("SELECT p.item_versions", "SELECT p.attached_by_id")
+    + " ORDER BY p.created_at DESC, p.id DESC LIMIT 1"
+)
+# A bot's OK of the commits pushed after the reviews, at the commits it names (`_new_commits`): they count as reviewed.
+NEW_REVIEWED_SQL = (
+    "SELECT a.by_id, a.heads, r.person_id FROM answers a JOIN visits v ON v.id = a.visit_id "
+    "JOIN requirements r ON r.id = a.requirement_id WHERE v.task_id=? AND r.kind='page' AND a.answer='ok' "
+    "AND a.undone_at IS NULL AND a.heads IS NOT NULL AND (r.who_oks = 'people_only' OR r.person_id IS NOT NULL)"
+)
+# What the bot that wrote the newest review is asked when commits came after it, before a person OKs a page that is not
+# a review (Fixes 2's Review page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
+# that the newest commits had no bot's review. The Builder's fixes after a send back each start a round.
+REVIEW_NEW = "Review the new commits"
+# What the Builder is told when the person's OK, brought back from Merge, lapsed: the page is OK'd again.
+ATTACH_AGAIN = "Attach the Review page again"
+DELTA_ROUNDS = 2
+
+
+def heads_now(conn: "sqlite3.Connection", task: Row) -> dict[str, str]:
+    """{pr ref: newest commit} of the task's linked PRs Tico has read (item_sources.github.heads)."""
+    from .item_sources import github as F
+
+    return {ref: str(sha) for ref, sha in F.heads(conn, task["id"]).items() if sha}
+
+
+def _heads_of(text: object) -> dict[str, object] | None:
+    try:
+        found = json.loads(str(text)) if text else None
+    except ValueError:
+        return None
+    return cast("dict[str, object]", found) if isinstance(found, dict) else None
+
+
+def _new_heads(conn: "sqlite3.Connection", task: Row) -> list[tuple[str, str]]:
+    """The linked PRs whose newest commit no bot reviewed: no met Review page was for it (`REVIEWED_SQL`), and no bot
+    OK'd it as the commits after the reviews (`NEW_REVIEWED_SQL`). Empty when the task had no Review page."""
+    heads = heads_now(conn, task)
+    if not heads:
+        return []
+    reviewed: list[dict[str, object]] = []
+    for found in conn.execute(REVIEWED_SQL, (task["id"],)).fetchall():
+        if (versions := _heads_of(found[0] or "{}")) is not None:
+            reviewed.append(versions)
+    if not reviewed:
+        return []
+    for by, text, named in conn.execute(NEW_REVIEWED_SQL, (task["id"],)).fetchall():
+        if _is_bot(by) and by != named and (versions := _heads_of(text)) is not None:
+            reviewed.append(versions)
+    return [(ref, sha) for ref, sha in sorted(heads.items()) if not any(each.get(ref) == sha for each in reviewed)]
+
+
+def _where(conn: "sqlite3.Connection", task: Row, new: list[tuple[str, str]]) -> str:
+    if len(heads_now(conn, task)) == 1:
+        return f"now at {new[0][1][:7]}"
+    return ", ".join(f"{ref} at {sha[:7]}" for ref, sha in new)
 
 
 def unreviewed(conn: "sqlite3.Connection", task: Row) -> str | None:
-    """One line when a linked PR's newest commit is not one a met Review page was for: "New commits since the reviews
-    (now at eace67e): not reviewed by a bot." None when every newest commit was reviewed, or the task had no Review page.
-    It reads what Tico keeps (the PR's head, each Review page's `item_versions`), never a page's words. Tico keeps no
-    commit count, so the line names the newest commit, not how many came after the review."""
+    """One line when a linked PR's newest commit is not one a bot reviewed (`_new_heads`): "New commits since the
+    reviews (now at eace67e): not reviewed by a bot." None when every newest commit was reviewed, or the task had no
+    Review page. It reads what Tico keeps (the PR's head, each Review page's `item_versions`, the commits a bot's OK
+    names), never a page's words. Tico keeps no commit count, so the line names the newest commit, not how many came
+    after the review."""
+    new = _new_heads(conn, task)
+    return f"New commits since the reviews ({_where(conn, task, new)}): {NOT_REVIEWED}" if new else None
+
+
+def _is_bot(actor: object) -> bool:
+    from . import hubdb_core
+
+    core: Any = hubdb_core
+    return bool(core.is_bot(actor))
+
+
+def _name(conn: "sqlite3.Connection", actor: object) -> str:
+    from . import hubdb
+
+    H: Any = hubdb
+    return str(H.actor_name(conn, actor)) if actor else "someone"
+
+
+def _reviews_new(requirement: Row, answer: Row) -> bool:
+    """Whether `answer`, on a page a person OKs, is a bot's review of the commits after the reviews, not the OK: a bot's
+    answer that keeps its commits, unless the page names that bot to OK it."""
+    return _is_bot(answer["by_id"]) and bool(answer.get("heads")) and answer["by_id"] != requirement.get("person_id")
+
+
+def _visit_answers(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> list[Row]:
+    return [
+        row
+        for row in _cached(conn, "answers_on_visit", ANSWERS_SQL, "visit_id", visit_id)
+        if row["requirement_id"] == requirement["id"]
+    ]
+
+
+def _newest_signoff(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row | None:
+    """The newest answer on this visit's page that is not a bot's review of new commits (`_reviews_new`)."""
+    found = [row for row in _visit_answers(conn, visit_id, requirement) if not _reviews_new(requirement, row)]
+    return found[-1] if found else None
+
+
+def _moved_since(conn: "sqlite3.Connection", task: Row, answer: Row) -> bool:
+    """Whether the linked PRs' newest commits are not the ones `answer` was given at. An answer from before Tico kept
+    them (`heads` empty) stands."""
+    kept = _heads_of(answer.get("heads"))
+    return kept is not None and kept != heads_now(conn, task)
+
+
+def delta_reviewer(conn: "sqlite3.Connection", task: Row) -> str | None:
+    """The bot that wrote the task's newest review (Review 2's owner in Engineering), while it is still here. Not the
+    task's owner now: a bot never reviews the commits it pushed."""
+    from . import hubdb
+
+    H: Any = hubdb
+    found = conn.execute(REVIEWER_SQL, (task["id"],)).fetchone()
+    who = str(found[0]) if found and found[0] else None
+    if not who or not _is_bot(who) or who == task.get("owner_id"):
+        return None
+    return who if H._actor_exists(conn, who) else None
+
+
+def page_for(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[Row | None, Row | None]:
+    """(the page that counts for a requirement on the task's visit, the person's OK it carries). A page a person OKs
+    with none attached on this visit, on a task sent back to this stage from the stage that queues its PRs (Merge, as
+    the Release Owner does with new commits after the OK, C22), is the one the person OK'd on the visit before Merge,
+    with that OK. Else this visit's page, and no OK carried."""
+    from . import task_pages as P
+
+    page = P.current(conn, task["visit"]["id"], requirement["id"])
+    if page or not (requirement.get("person_id") or people_only(requirement)):
+        return page, None
+    ok = _carried_ok(conn, task, requirement)
+    return (P.current(conn, str(ok["visit_id"]), requirement["id"]), ok) if ok else (None, None)
+
+
+def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row | None:
+    """The person's OK of this page on the task's visit to this stage before the visits to Merge just before this one."""
     from .item_sources import github as F
 
-    heads = {ref: sha for ref, sha in F.heads(conn, task["id"]).items() if sha}
-    if not heads:
+    visits = conn.execute(
+        "SELECT v.id, v.stage_id, s.on_enter FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
+        "ORDER BY v.entered_at DESC, v.rowid DESC",
+        (task["id"],),
+    ).fetchall()
+    if len(visits) < 3 or str(visits[0][0]) != str(task["visit"]["id"]):
         return None
-    reviewed: list[dict[str, object]] = []
-    for found in conn.execute(REVIEWED_SQL, (task["id"],)).fetchall():
-        try:
-            versions = json.loads(found[0] or "{}")
-        except ValueError:
-            continue
-        if isinstance(versions, dict):
-            reviewed.append(cast("dict[str, object]", versions))
-    if not reviewed:
+    at = 1
+    while at < len(visits) and F.queues_prs({"on_enter": visits[at][2]}):
+        at += 1
+    if at == 1 or at == len(visits) or visits[at][1] != visits[0][1]:
         return None
-    new = [(ref, sha) for ref, sha in sorted(heads.items()) if not any(each.get(ref) == sha for each in reviewed)]
+    ok = _newest_signoff(conn, str(visits[at][0]), requirement)
+    if not ok or ok["answer"] != "ok" or not ok.get("heads") or not str(ok["by_id"]).startswith("human:"):
+        return None
+    return ok
+
+
+def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> tuple[Standing | None, list[Row]]:
+    """New commits since a person's OK (`ok`, a rebase or a conflict fixed, C22): (the standing that keeps the OK or
+    holds it for a bot's read, or None when it lapses; the bot reviews of new commits since it). Commits that change
+    the same lines as the OK'd ones (item_sources.github.same_changes) keep it; while Tico reads what they change, it
+    waits on GitHub. Others go to the bot that wrote the newest review (`_new_commits`, the same DELTA_ROUNDS): its OK
+    at the newest commits keeps the person's OK. Its send back, no such bot, or the rounds spent: the OK lapses, and
+    the person is asked again once the next commits were read."""
+    from .item_sources import github as F
+
+    name = _name(conn, ok["by_id"])
+    same = F.same_changes(conn, _heads_of(ok.get("heads")) or {}, cast("dict[str, object]", heads_now(conn, task)))
+    if same is None:
+        return Standing(requirement, WAITING, F.SOURCE, f"Reading what the commits since {name}'s OK change"), []
+    if same:
+        return Standing(requirement, MET, line=f"OK'd by {name}; the commits since change the same lines"), []
+    since = [
+        row
+        for row in _visit_answers(conn, task["visit"]["id"], requirement)
+        if _reviews_new(requirement, row) and row["created_at"] >= ok["created_at"]
+    ]
+    if any(row["answer"] == "no" for row in since):
+        return None, since
+    last = since[-1] if since else None
+    if last and _heads_of(last["heads"]) == heads_now(conn, task):
+        return Standing(
+            requirement, MET, line=f"OK'd by {name}; {_name(conn, last['by_id'])} read the commits since"
+        ), since
+    held, _ = _new_commits(conn, task, requirement, str(ok["created_at"]), since)
+    return held, since
+
+
+def _new_commits(
+    conn: "sqlite3.Connection", task: Row, requirement: Row, asked: str, reviews: list[Row] | None = None
+) -> tuple[Standing | None, str]:
+    """Before a person OKs a page that is not a review (Fixes 2's Review page): the commits no bot reviewed since the
+    reviews (`_new_heads`) go to the bot that wrote the newest review (`delta_reviewer`), which reads only them against
+    what the reviews found and the spec, and OKs them or sends them back as an answer on this page, at the commits it
+    read (answers.heads). Its send back is the owner's turn to fix them; the next commits are a new round. After
+    DELTA_ROUNDS rounds this visit, or with no such bot, the person is asked with "not reviewed by a bot" said. Returns
+    the standing that holds the person's ask, or None and what the ask says first. `reviews`: the bot reviews that
+    count (after a person's OK, those since it); else all of this visit's."""
+    visit_id = task["visit"]["id"]
+    if reviews is None:
+        reviews = [row for row in _visit_answers(conn, visit_id, requirement) if _reviews_new(requirement, row)]
+    here = heads_now(conn, task)
+    last = reviews[-1] if reviews else None
+    new = _new_heads(conn, task)
     if not new:
-        return None
-    if len(heads) == 1:
-        return f"New commits since the reviews (now at {new[0][1][:7]}): {NOT_REVIEWED}"
-    named = ", ".join(f"{ref} at {sha[:7]}" for ref, sha in new)
-    return f"New commits since the reviews ({named}): {NOT_REVIEWED}"
+        if last and last["answer"] == "ok" and _heads_of(last["heads"]) == here:
+            said = " ".join(str(last.get("notes") or "").split())
+            read = f"{_name(conn, last['by_id'])} reviewed the commits since the reviews"
+            return None, sentence(f"{read}: {said}" if said else read) + " "
+        return None, ""
+    if last and last["answer"] == "no" and _heads_of(last["heads"]) == here:
+        said = " ".join(str(last.get("notes") or "").split())
+        line = f"{_name(conn, last['by_id'])} sent back the new commits: {said}"
+        return Standing(requirement, NOT_MET, task.get("owner_id"), line), ""
+    reviewer = delta_reviewer(conn, task)
+    rounds = len({str(row["heads"]) for row in reviews})
+    if reviewer and rounds < DELTA_ROUNDS:
+        line = (
+            f"{REVIEW_NEW} since the reviews ({_where(conn, task, new)}): read only them, against what the reviews "
+            "found and the spec. OK them or send them back, and say what you read"
+        )
+        return Standing(requirement, WAITING, reviewer, sentence(line), since=asked), ""
+    return None, f"New commits since the reviews ({_where(conn, task, new)}): {NOT_REVIEWED} "
+
+
+def asked_to_review(standing: Standing, by: object) -> bool:
+    """Whether this standing asks `by`, a bot, to review the commits after the reviews (`_new_commits`)."""
+    return standing.state == WAITING and bool(by) and standing.on == by and standing.line.startswith(REVIEW_NEW)
+
+
+def review_commands(task_id: str, requirement_id: str) -> str:
+    """The two answers a bot asked to review new commits gives, as commands."""
+    answer = f"tico task answer {task_id} {requirement_id}"
+    return (
+        f'OK them: {answer} ok -m "<the commits you read and what you checked>" --version N. '
+        f'Send them back: {answer} no -m "<what must change>" --version N. Do not move the task.'
+    )
 
 
 def _unsure_to_bots(
@@ -704,6 +948,28 @@ def standings(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
     visit = task.get("visit")
     if not visit:
         return []
+    # Worked out once per task in a snapshot: Needs you asks for the same task's standings for its list, its brief and
+    # its ask. A Standing is never changed after it is made; a write starts the snapshot's values again (read_cache).
+    # The key holds every field of the row a standing reads (pr_conflicts reads its status, stage and who works it),
+    # so a caller that judges a changed copy of the row gets its own answer, not the stored row's.
+    stage: Row = task.get("stage") or {}
+    key = (
+        "standings",
+        task["id"],
+        visit["id"],
+        visit.get("stage_id"),
+        task.get("version"),
+        task.get("status"),
+        task.get("pipeline_id"),
+        task.get("stage_id"),
+        stage.get("id"),
+        task.get("owner_id"),
+        task.get("assignee_id"),
+    )
+    return list(read_cache.value(conn, key, lambda: _standings(conn, task, visit), shared=True))
+
+
+def _standings(conn: "sqlite3.Connection", task: Row, visit: Row) -> list[Standing]:
     answers = newest_answers(conn, visit["id"])
     out = [standing(conn, task, r, answers.get(r["id"])) for r in for_visit(conn, visit)]
     from . import pr_conflicts
@@ -711,7 +977,11 @@ def standings(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
     # A PR that conflicts with its base branch before Merge: the bot that built it rebases it first, or after a
     # person's answer the stage waits on (pr_conflicts).
     conflict = pr_conflicts.standing(conn, task, out)
-    return [conflict, *out] if conflict else out
+    from . import merge_order
+
+    # A task that goes after another one in a stage that queues PRs: held until that one merges (merge_order).
+    order = merge_order.standing(conn, task)
+    return [s for s in (order, conflict) if s] + out
 
 
 def unmet(conn: "sqlite3.Connection", task: Row) -> list[Standing]:

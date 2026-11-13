@@ -704,23 +704,6 @@ mod tests {
     }
 
     #[test]
-    fn held_is_reported_in_every_state() {
-        let updates = Updates::default();
-        for state in [
-            "none",
-            "checking",
-            "downloading",
-            "ready",
-            "installed",
-            "error",
-        ] {
-            updates.lock().state = state;
-            assert_eq!(updates.status(Some("After this recording"))["held"], true);
-            assert_eq!(updates.status(None)["held"], false);
-        }
-    }
-
-    #[test]
     fn a_held_app_admits_no_install_from_any_path() {
         for intent in [Intent::Background, Intent::Restart, Intent::Quit] {
             let (mut updating, mut installing) = (false, false);

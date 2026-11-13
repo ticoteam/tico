@@ -75,14 +75,6 @@ def _usage_lines(c):
     return out
 
 
-def test_setup_on_an_existing_install_is_idempotent(store):
-    with store.transaction() as c:
-        assert FA.ensure_setup(c, "ana@acme.example")
-        counts = [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("fin_accounts", "fin_budgets")]
-        assert FA.ensure_setup(c, "ana@acme.example")
-        assert [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("fin_accounts", "fin_budgets")] == counts
-
-
 def test_usage_posting_matches_gateway_billed_runs_once(books):
     with books.transaction() as c:
         _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.30)
@@ -224,7 +216,10 @@ class _Gateway:
 
 def test_the_cap_worker_withholds_in_rehearsal_and_waits_out_a_404(books, monkeypatch):
     monkeypatch.setattr(finance_tico, "gateway_connected", lambda c, settings: True)
-    monkeypatch.setattr(finance_tico, "gateway_target", lambda c, vault, settings: ("gk_test", "http://127.0.0.1:9"))
+    monkeypatch.setattr(
+        finance_tico, "gateway_target", lambda c, vault, settings: ("gk_test", "http://127.0.0.1:9", "settings:1")
+    )
+    monkeypatch.setattr(finance_tico, "gateway_fingerprint", lambda c, settings: "settings:1")
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})

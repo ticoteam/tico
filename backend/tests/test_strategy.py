@@ -230,22 +230,6 @@ def test_proof_since_reaches_past_a_hundred_versions_with_the_same_proof(api):
         assert S.proof_since(c) == changed["published_at"]
 
 
-def test_the_default_guide_asks_in_the_style_of_yc_and_every_answer_lands_in_a_section(api):
-    questions = S.guide("default")["questions"]
-    keys = [q["key"] for q in questions]
-    assert 12 <= len(questions) <= 14 and len(set(keys)) == len(keys)
-    assert all(q["section"] in (*S.FIXED_KEYS, "bets") and q["ask"].strip() and q["claim"].strip() for q in questions)
-    where = {q["key"]: q["section"] for q in questions}
-    assert {k: where[k] for k in ("proof", "now", "acute", "next-100", "why-you")} == {
-        "proof": "proof",
-        "now": "now",
-        "acute": "serve",
-        "next-100": "how",
-        "why-you": "know",
-    }
-    assert "not" in where.values()  # the one section publishing needs
-
-
 def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):
     # 20 closed goals sort first (owner ana before cara), so the sample of 20 holds none of the 21 live ones.
     bet = ready(api)

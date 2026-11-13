@@ -36,6 +36,15 @@ computer, then Tico Gateway when it is on. Otherwise the run waits.
    on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
 
+Instead of one plan, the picker can name a person under **People** ("Ana's plans · 3"): the computer then uses every
+plan that person owns for that tool, one at a time. A turn starts on the plan with usage left whose weekly reset comes
+soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan in a
+fresh session (never in the middle of one). A plan with no usage reading yet comes after those with one. When every plan
+is at its limit, turns run as for a single plan at its limit: the computer's own login, then the Gateway, else they wait.
+A plan the person adds later joins on its own, and one given to someone else leaves. API keys have no owner and are
+never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
+limit until Fri 09:00"); `tico subscription list` shows the same for agents.
+
 The plan is named after itself (*Claude*, then *Claude 2*) and its owner is the person who signed in; change either
 under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
 behind the sign-in, is the fallback when no computer can run it: the token from `claude setup-token`, or Codex's
@@ -46,7 +55,9 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
 picker until it updates.
 
-Each row shows a plan's owner (blank for an API key), how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the old one. The page asks first and says how many. **Edit** in the same menu changes the name or, for a plan, the owner.
+Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
+owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
+the next one is marked, and a plan at its limit says until when. Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the old one. The page asks first and says how many. **Edit** in the same menu changes the name or, for a plan, the owner.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -461,6 +472,21 @@ Where a website runs is chosen when it is opened:
 Every later command stays on that computer. If it goes offline or is no longer allowed, the command is refused and the
 bot opens the website again, which chooses afresh. A person's view follows the session to its computer and keeps its
 page; a browser that restarted or left the site goes back to the site. With no session it opens on the browser host.
+
+## Let a bot view the app (read only)
+
+A bot can open the app signed in as itself and take screenshots, so a Product Owner shows what it checked in
+production on its own page instead of asking a person to look. It is off for every bot until an owner or admin turns
+on **Can view the app (read only)** for that bot: `tico bot app-view <bot> on` (`off` turns it off and ends any view
+it has open).
+
+The bot then runs `tico bot app-shot /#/task/<id> --width 390 --out shot.png` (390 for a phone, 1280 for a desktop)
+on its computer, which needs Chrome. Each shot opens a view for at most 15 minutes, bound to the run that opened it.
+The view sees only what that bot already reads, never another person's view, and every write is refused with
+"Read-only view": a button, a form, marking something read. Reads that make or show a token, key or credential are
+refused too. Each view, and each time the setting changes, is a line in the audit log.
+
+API: `GET/POST /api/v2/bots/{bot}/app-view`, `POST /api/v2/app-view` ([OpenAPI](api.md#the-contract)).
 
 ## Add a connection
 

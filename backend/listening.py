@@ -35,6 +35,7 @@ from pydantic import Field
 from clients import judge as J
 
 from . import automation_flow as F
+from . import decide_groups as DG
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
@@ -50,7 +51,10 @@ TITLE_MAX = 140
 MAX_SCORE = 50  # items scored in one pass
 CLAIM_MINUTES = 10  # a claim older than this is free again: its pass was cut off
 MAX_TRIES = 3
-MAX_ERRORS = 3  # failed calls in one pass before the rest wait for the next
+MAX_ERRORS = 3  # failed posts in one pass before the rest wait for the next
+# Posts asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 YES = 0.75  # a rule holds at this score
 COPY_DAYS = 30  # the copy check's window
 COPY_COMPARISONS = 2_000
@@ -617,7 +621,7 @@ def score(store, row, flow, now, primary=None, left=None):
     earlier item is marked so; the rest are asked of the decision model, every rule in one call. With decisions off
     or a spend cap reached nothing is claimed and the items stay `new`. When the pass's time is used up (`left`) the
     claims still held are released, for the next pass."""
-    from .judge import audit_detail, server_engine
+    from .judge import server_engine
 
     aid, rules = row["id"], flow["trigger"].get("rules") or []
     with store.transaction() as c:
@@ -710,6 +714,54 @@ def score(store, row, flow, now, primary=None, left=None):
 
     out = {"scored": 0, "duplicates": 0, "errors": 0}
     ordered = sorted(claimed, key=lambda r: -r["n"])  # newest first: when time runs out the old ones wait
+
+    def ask(waiting, rest):
+        """Ask about the posts `waiting` (each with its place), several to a call (backend/decide_groups.py), and write
+        what came back. False when the pass stops; the claims still held, from `rest` on included, are released."""
+        pairs = [(_state(item, sources.get(item["source_id"])), questions) for _, item in waiting]
+        for run in DG.packs(pairs, GROUP):
+            # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
+            with store.read() as c:
+                go = on(c) and not _capped(c, aid, flow, now)
+            if not go or (left and not left()):
+                release([waiting[n][1] for n in range(run[0], len(waiting))] + ordered[rest:])
+                out["cut"] = True
+                return False
+            assert engine is not None  # rules without an engine returned above
+            calls = []
+            replies = DG.ask_run(engine, [pairs[n] for n in run], label, calls, run)
+            stop = False
+            with store.transaction() as c:
+                for call in calls:
+                    H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, automation=aid))
+                # Turned off or deleted while the call ran: no result is written, the posts stay `new`.
+                still = on(c)
+                for n, reply in zip(run, replies, strict=True):
+                    item = waiting[n][1]
+                    if isinstance(reply, BaseException):  # one post's failure is that post's; the pass goes on
+                        code = J.error_code(reply) if isinstance(reply, J.JudgeError) else type(reply).__name__
+                        if code != "spend_cap":  # the month's decision cap is not the post's fault, so not a try
+                            c.execute(
+                                "UPDATE listening_items SET tries=tries+1,claimed_at=NULL,updated_at=?,"
+                                "status=CASE WHEN tries+1>=? THEN 'failed' ELSE status END "
+                                "WHERE id=? AND status='new' AND claimed_at=?",
+                                (now, MAX_TRIES, item["id"], now),
+                            )
+                        out["errors"] += 1
+                        stop = stop or code == "spend_cap" or out["errors"] >= MAX_ERRORS
+                        continue
+                    if still:
+                        status, tag, value = verdict(rules, reply.get("answers") or {})
+                        _decided(c, item["id"], now, status, tag, value, float(reply.get("cost_usd") or 0), claimed=now)
+                        out["scored"] += 1
+            if stop or not still:
+                # This call's own posts too: one stopped by the spend cap (no try counted) or not written is free at
+                # once, not after CLAIM_MINUTES. A post already decided is no longer `new`, so it is left as it is.
+                release([waiting[n][1] for n in range(run[0], len(waiting))] + ordered[rest:])
+                return False
+        return True
+
+    waiting = []
     for place, item in enumerate(ordered):
         original = copy_of(item)
         if original:
@@ -727,59 +779,14 @@ def score(store, row, flow, now, primary=None, left=None):
                 break
             out["scored"] += 1
             continue
-        # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
-        with store.read() as c:
-            go = on(c) and not _capped(c, aid, flow, now)
-        if not go or (left and not left()):
-            release(ordered[place:])
-            out["cut"] = True
-            break
-        try:
-            state = _state(item, sources.get(item["source_id"]))
-            J.validate(state, questions, label)
-            assert engine is not None  # rules without an engine returned above
-            result = engine(state, questions, label)
-        except Exception as exc:  # noqa: BLE001 - one post's failure is that post's; the pass goes on
-            code = J.error_code(exc) if isinstance(exc, J.JudgeError) else type(exc).__name__
-            with store.transaction() as c:
-                H.event(
-                    c, H.KEEPER, "judge.call", label, {"automation": aid, "questions": len(questions), "error": code}
-                )
-                if code != "spend_cap":  # the month's decision cap is not the post's fault, so not a try
-                    c.execute(
-                        "UPDATE listening_items SET tries=tries+1,claimed_at=NULL,updated_at=?,"
-                        "status=CASE WHEN tries+1>=? THEN 'failed' ELSE status END "
-                        "WHERE id=? AND status='new' AND claimed_at=?",
-                        (now, MAX_TRIES, item["id"], now),
-                    )
-            out["errors"] += 1
-            if code == "spend_cap" or out["errors"] >= MAX_ERRORS:
-                release(ordered[place:])
+        waiting.append((place, item))
+        if len(waiting) == GROUP:
+            if not ask(waiting, place + 1):
+                waiting = []
                 break
-            continue
-        answers = result.get("answers") or {}
-        status, tag, value = verdict(rules, answers)
-        with store.transaction() as c:
-            H.event(
-                c,
-                H.KEEPER,
-                "judge.call",
-                label,
-                {
-                    "label": label,
-                    "automation": aid,
-                    "questions": len(questions),
-                    **audit_detail(result),
-                    "answers": J.summary(answers),
-                },
-            )
-            # Turned off or deleted while the call ran: no result is written, the post stays `new`.
-            if still := on(c):
-                _decided(c, item["id"], now, status, tag, value, float(result.get("cost_usd") or 0), claimed=now)
-        if not still:
-            release(ordered[place:])
-            break
-        out["scored"] += 1
+            waiting = []
+    if waiting:
+        ask(waiting, len(ordered))
     return out
 
 

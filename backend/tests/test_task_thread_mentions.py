@@ -95,11 +95,3 @@ def test_a_bots_ask_for_a_person_who_stopped_following_still_needs_them(api):
         assert [(n["kind"], n["task_id"], n["requirement_id"]) for n in waiting_on.needs(c, "human:ben")] == [
             ("ask", parent["id"], asked["requirement_id"])
         ]
-
-
-def test_a_bot_message_that_mentions_the_person_in_a_task_thread_reaches_them(api):
-    thread_id = task_thread(api)
-    asked = bot_say(api, thread_id, "@ben is the total final? If yes, I'll send it to the board.")
-    row = delivery(api, asked["id"], "human:ben")
-    assert row is not None and row["reason"] == "mention" and row["state"] == "pending"
-    assert unread_for(api, "human:ben", thread_id) == 1

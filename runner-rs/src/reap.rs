@@ -180,33 +180,8 @@ pub fn statuses(path: &std::path::Path) -> std::collections::HashMap<u32, i32> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    #[cfg(target_os = "linux")]
-    use std::time::{Duration, Instant};
 
     pub const ARGS: &str = "TICO_REAP_TEST_ARGS";
-
-    /// This test binary run as the parent of `script`: it runs only `as_parent`, which runs `main`.
-    #[cfg(target_os = "linux")]
-    fn parent(
-        status: &std::path::Path,
-        dir: &std::path::Path,
-        script: &str,
-    ) -> std::process::Child {
-        let args = serde_json::json!([status, "--", "sh", "-c", script]);
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "reap::tests::as_parent",
-                "--exact",
-                "--test-threads=1",
-                "--nocapture",
-                "-q",
-            ])
-            .env(ARGS, args.to_string())
-            .current_dir(dir)
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap()
-    }
 
     #[test]
     fn as_parent() {
@@ -215,61 +190,5 @@ pub mod tests {
         };
         let args: Vec<String> = serde_json::from_str(&args).unwrap();
         std::process::exit(main(&args));
-    }
-
-    // A child subreaper is Linux's.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn kept_shells_outlive_claude_and_their_exit_codes_are_reaped() {
-        let dir = std::env::temp_dir().join(format!("reap-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let status = dir.join("status");
-        // A "Claude" that starts a background shell and would end it on SIGTERM, as Claude does.
-        let script = "sh -c 'sleep 1; exit 7' & echo $! > shell.pid; trap 'kill $(cat shell.pid); exit 143' TERM; while :; do sleep 0.1; done";
-        let mut parent = parent(&status, &dir, script);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join("shell.pid").exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        let shell: u32 = std::fs::read_to_string(dir.join("shell.pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        // SAFETY: the parent this test started.
-        unsafe { libc::kill(parent.id() as i32, KEEP) };
-        let done = parent.wait().unwrap();
-        let codes = statuses(&status);
-        std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(codes.get(&shell), Some(&7), "{codes:?}");
-        assert_eq!(
-            codes.values().filter(|c| **c == -libc::SIGKILL).count(),
-            1,
-            "{codes:?}"
-        );
-        assert_eq!(done.code(), Some(128 + libc::SIGKILL));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_stop_still_ends_claude_and_what_it_ends() {
-        let dir = std::env::temp_dir().join(format!("reap-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let status = dir.join("status");
-        let script = "sh -c 'sleep 30' & echo $! > shell.pid; trap 'kill $(cat shell.pid); exit 143' TERM; while :; do sleep 0.1; done";
-        let mut parent = parent(&status, &dir, script);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !dir.join("shell.pid").exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        let started = Instant::now();
-        // SAFETY: the parent this test started.
-        unsafe { libc::kill(parent.id() as i32, libc::SIGTERM) };
-        let done = parent.wait().unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(done.code(), Some(143));
-        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

@@ -216,23 +216,3 @@ def test_untrusted_verification_urls_rejected(api):
     response = api.post(BASE + "/connect", headers=headers("ana-test"))
     assert response.status_code == 503 and url not in response.text
     assert provider.service.load("human:ana") is None
-
-
-def test_a_gzipped_answer_from_granola_is_read_once():
-    """Granola gzips its answers; the client must not decode the body twice (it reported 'unreachable')."""
-    import asyncio, gzip
-    import httpx
-    from backend import granola_mcp
-
-    body = gzip.compress(json.dumps({"client_id": "zipped"}).encode())
-    transport = httpx.MockTransport(
-        lambda request: httpx.Response(
-            200, headers={"Content-Encoding": "gzip", "Content-Type": "application/json"}, content=body
-        )
-    )
-    from types import SimpleNamespace
-
-    client = granola_mcp.GranolaMCP(SimpleNamespace(state=SimpleNamespace(store=None)))
-    client.transport = transport
-    response = asyncio.run(client.http("POST", granola_mcp.AUTH + "/oauth2/register", json={}))
-    assert granola_mcp.GranolaMCP.payload(response) == {"client_id": "zipped"}

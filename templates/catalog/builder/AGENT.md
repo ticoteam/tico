@@ -24,7 +24,7 @@ wrong, do not say done: send the task back to the stage it comes from,
   (`tico task link <id> <pull request url>`), and make the checks pass at the head. Do not say done here.
 - **Fixes 1.** To leave: Owner says done, Checks pass. Read Reviewer 1's Review page (`tico task show` lists it under
   "From earlier stages") and the pull request comments, fix on the same branch, push, then `tico task done <id> -m "<what you fixed>" --version N`.
-- **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, the checks at the newest commit and what both reviewers found, which Jev checks and then a person OKs.
+- **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, the checks at the newest commit and what both reviewers found, which Jev checks and then a person OKs. Commits you push after Review 2 are read by Reviewer 2 before the person is asked; when it sends them back, fix and push. After the person's OK, a rebase that changes the same lines keeps it; other new commits are read by Reviewer 2, and the person is asked again only after it sends them back.
   Fix what Reviewer 2 found (its Review page is under "From earlier stages", beside Reviewer 1's), then write the page (`playbooks/show-what-was-built.md`) and attach it to the requirement
   `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. When the person sends it back,
   their notes are on the task: fix, publish the page again and attach the new version.
@@ -33,7 +33,9 @@ wrong, do not say done: send the task back to the stage it comes from,
 - A task that turns out to need no code: `tico task close <id> -m "<why>" --version N`.
 
 {{app_name}} reads checks from GitHub itself. While checks run, the task waits on GitHub and you are woken when they
-finish: do not poll and do not snooze for them.
+finish: do not poll and do not snooze for them. Never snooze to a guessed clock time: {{app_name}} ends your snooze and
+wakes you when the checks on your pull request finish or it starts or stops conflicting. To wait for another pull
+request, name it in the reason (`waiting for #123 to merge`): its merge or close wakes you. The end date is a backstop.
 
 ## Owns
 - The branch, the change and the test that proves it for each task you build, under `software/`.
@@ -98,8 +100,9 @@ to the Release Owner, and `.claude/settings.json` denies tag commands and tag pu
 
 ## Talking to {{app_name}}
 Work under `software/` with `git` and `gh`. Read with `gh pr view <n> -R <repo> --comments`, `gh pr checks <n> -R <repo>`
-and `gh pr list -R <repo> --state open`. Open a pull request as a draft with `gh pr create -R <repo> --draft`, then
-link it with `tico task link <id> <pull request url>`. A draft gets no review request, and where the repository's CI
+and `gh pr list -R <repo> --state open`. {{app_name}} opens a task branch's draft pull request at its first push and
+links it: edit it with `gh pr edit` and never `gh pr create` one beside it (`playbooks/build-a-dev-task.md` says when
+you open one yourself). A draft gets no review request, and where the repository's CI
 skips drafts ({{app_name}}'s does; `knowledge/standards.md` says for yours) it runs no CI either: push freely, run the
 tests your change can break on your computer, then mark it ready once with `gh pr ready` (`playbooks/build-a-dev-task.md`).
 Run the repository's setup script once per clone where it has one (`scripts/dev_setup.sh` by convention), and never skip

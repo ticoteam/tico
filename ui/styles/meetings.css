@@ -34,8 +34,11 @@
 .nk svg{width:15px;height:15px;display:block}
 .p-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px}
 .p-chips:not(:empty){padding-top:7px}
-.p-chips span{padding:2px 8px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm)}
-.p-chips span.has-thumb{display:inline-flex;align-items:center;gap:6px;padding:3px 8px 3px 3px}
+.p-chips>span{padding:2px 8px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm)}
+.p-chips>span.has-thumb{display:inline-flex;align-items:center;gap:6px;padding:3px 8px 3px 3px}
+/* a file that is not an image: a file icon before its name */
+.p-chips>span.has-icon{display:inline-flex;align-items:center;gap:4px}
+.p-chips .p-fileicon{flex:none;width:16px;height:16px;font-size:16px;color:var(--muted)}
 .p-thumb{flex:none;width:44px;height:44px;padding:0;border:0;border-radius:7px;overflow:hidden;background:var(--bg);cursor:zoom-in}
 .p-thumb img{display:block;width:100%;height:100%;object-fit:cover}
 @media (max-width:760px){

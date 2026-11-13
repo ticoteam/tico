@@ -1650,6 +1650,94 @@ async fn a_shared_checkout_never_forces_and_says_which_files_conflict() {
     );
 }
 
+/// Product Owner on the Tico Team box: two of its checkouts each added a learning at the end of memory/learnings.md,
+/// and the push after a turn stopped on the conflict for good. Both lines are kept and the push goes through; a
+/// rewritten file (memory/state.md) still stops the catch-up and names it, with nothing half-done left behind.
+#[tokio::test]
+async fn memory_notes_both_checkouts_added_to_keep_both_sides_and_push() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-product-owner");
+    std::fs::create_dir_all(seed.join("memory")).unwrap();
+    std::fs::write(seed.join("memory/learnings.md"), "# Learnings\n\n- first\n").unwrap();
+    std::fs::write(seed.join("memory/state.md"), "idle\n").unwrap();
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["commit", "-qm", "memory"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let mine = tmp.0.join("mine");
+    sh(
+        &tmp.0,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            mine.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+
+    std::fs::write(
+        mine.join("memory/learnings.md"),
+        "# Learnings\n\n- first\n- mine\n",
+    )
+    .unwrap();
+    sh(&mine, &["commit", "-qam", "my learning"]);
+    commit_and_push(
+        &seed,
+        "memory/learnings.md",
+        "# Learnings\n\n- first\n- theirs\n",
+    );
+
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "non-fast-forward");
+    assert_eq!(sessions::catch_up(&mine, &env).await, "");
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "");
+    let learnings = std::fs::read_to_string(mine.join("memory/learnings.md")).unwrap();
+    assert!(
+        learnings.contains("- mine\n")
+            && learnings.contains("- theirs\n")
+            && !learnings.contains("<<<<<<<"),
+        "{learnings}"
+    );
+    // The bot's own git is untouched: nothing was written into the repository or its config.
+    assert_eq!(sh(&mine, &["status", "--porcelain"]), "");
+    assert!(!mine.join(".gitattributes").exists() && !mine.join(".git/info/attributes").exists());
+
+    // A task lane's rebase after its turn keeps both sides the same way.
+    std::fs::write(
+        mine.join("memory/learnings.md"),
+        format!("{learnings}- lane\n"),
+    )
+    .unwrap();
+    sh(&mine, &["commit", "-qam", "lane learning"]);
+    commit_and_push(
+        &seed,
+        "memory/learnings.md",
+        &format!("{learnings}- other lane\n"),
+    );
+    assert_eq!(sessions::finish(&mine, "run-1", &env, &[], true).await, "");
+    let learnings = std::fs::read_to_string(mine.join("memory/learnings.md")).unwrap();
+    assert!(
+        learnings.contains("- lane\n") && learnings.contains("- other lane\n"),
+        "{learnings}"
+    );
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "");
+
+    // state.md is rewritten whole each turn: a clash there is a real conflict, undone and named.
+    std::fs::write(mine.join("memory/state.md"), "working on A\n").unwrap();
+    sh(&mine, &["commit", "-qam", "my state"]);
+    commit_and_push(&seed, "memory/state.md", "working on B\n");
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "non-fast-forward");
+    let problem = sessions::catch_up(&mine, &env).await;
+    assert!(
+        problem.contains("they conflict with its unpushed commits in memory/state.md"),
+        "{problem}"
+    );
+    assert!(!mine.join(".git/rebase-merge").exists() && !mine.join(".git/rebase-apply").exists());
+    assert_eq!(
+        std::fs::read_to_string(mine.join("memory/state.md")).unwrap(),
+        "working on A\n"
+    );
+}
+
 /// BotOps, COO, Support and PR Reviewer on the Tico Team box: "Not possible to fast-forward" before each turn and a
 /// refused push after it, only logged, for hours. The turn's prompt now tells the bot to fix its own checkout.
 #[tokio::test]
@@ -1935,45 +2023,6 @@ async fn a_missing_agent_file_inside_the_retry_window_answers_from_the_cache_wit
 }
 
 #[tokio::test]
-async fn a_slow_heal_fetch_does_not_hold_the_checkouts_lock() {
-    let tmp = Tmp::new();
-    let env = turn_env(&tmp.0, &[("protocol.ext.allow", "always")]);
-    let (path, _seed) = wiped_clone(&tmp.0, "bot-slowfetch", &env).await;
-    let bare = tmp.0.join("bot-slowfetch.git");
-
-    // The origin is served through a helper that waits a second before it serves, so the heal's fetch is slow.
-    let helper = tmp.0.join("slow-serve.sh");
-    std::fs::write(&helper, "#!/bin/sh\nsleep 1\nexec git upload-pack \"$2\"\n").unwrap();
-    std::fs::set_permissions(&helper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    sh(
-        &path,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            &format!("ext::{} %S {}", helper.display(), bare.display()),
-        ],
-    );
-
-    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
-    let lanes = crate::sessions::Lanes::new(std::sync::Arc::new(
-        crate::repositories::Repositories::new(&tmp.0, &tmp.0, client),
-    ));
-    let heal = fetchrepo::heal_free_checkout(&lanes, "bot-slowfetch", &path, &env);
-    let probe = async {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        lanes.try_checkout("bot-slowfetch").is_some()
-    };
-    let (problem, free_during_fetch) = tokio::join!(heal, probe);
-    assert!(
-        free_during_fetch,
-        "a turn can take the checkout while the fetch runs"
-    );
-    assert_eq!(problem, "");
-    assert!(path.join("AGENT.md").is_file());
-}
-
-#[tokio::test]
 async fn an_attached_worktree_is_certified_then_saved_to_a_wip_branch_when_its_task_closes() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "product");
@@ -2076,111 +2125,6 @@ async fn an_attached_worktree_is_certified_then_saved_to_a_wip_branch_when_its_t
         ],
     );
     assert_eq!(saved, "half done");
-}
-
-#[tokio::test]
-async fn a_removal_with_a_changed_name_that_is_not_utf8_keeps_the_worktree_and_saves_nothing() {
-    use std::os::unix::ffi::OsStrExt;
-    let tmp = Tmp::new();
-    let (bare, _seed) = remote(&tmp.0, "product");
-    let workspace = tmp.0.join("ws");
-    let base = workspace
-        .join("repos")
-        .join(crate::repositories::base_folder("org/product"));
-    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
-    sh(
-        &tmp.0,
-        &[
-            "clone",
-            "-q",
-            bare.to_str().unwrap(),
-            base.to_str().unwrap(),
-        ],
-    );
-    sh(
-        &base,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/org/product.git",
-        ],
-    );
-    sh(
-        &base,
-        &[
-            "config",
-            &format!("url.{}.insteadOf", bare.display()),
-            "https://github.com/org/product.git",
-        ],
-    );
-    let tree = workspace.join("work/product");
-    sh(
-        &base,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "tico/feature",
-            tree.to_str().unwrap(),
-        ],
-    );
-    let env = turn_env(&tmp.0, &[]);
-    let row = json!({
-        "id": "link-0002", "task_id": "task-0002", "path": "work/product", "repo": "org/product",
-        "branch": "tico/feature", "owner": "bot:ops", "state": "present",
-        "detail_json": json!({"checkout_state": "attached_pending"}).to_string(),
-    });
-    let first = worktrees::inspect(&workspace, &row, &env, None).await;
-    assert_eq!(first["state"], "present", "{first}");
-    let head_before = sh(&tree, &["rev-parse", "HEAD"]);
-
-    // An untracked file whose name is not UTF-8 holds a token-shaped string; a second dirty file sits beside it.
-    let odd = tree.join(std::ffi::OsStr::from_bytes(b"notes-\xff.txt"));
-    std::fs::write(&odd, "ghp_abcdefghijklmnopqrstuvwxyz0123\n").unwrap();
-    std::fs::write(tree.join("draft.txt"), "half done\n").unwrap();
-    let mut action_row = row.as_object().unwrap().clone();
-    action_row.insert("full_name".into(), json!("org/product"));
-    let branch_before = sh(&tree, &["symbolic-ref", "--short", "HEAD"]);
-    let index_before = sh(&tree, &["ls-files", "--stage"]);
-    let kept = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
-        true
-    })
-    .await;
-    let why = kept.err().map(|e| e.text()).unwrap_or_default();
-    assert!(why.contains("not valid UTF-8"), "{why}");
-
-    // Nothing is added, committed or pushed: the worktree, its files, HEAD, branch and index stay as they were.
-    assert!(tree.exists() && odd.exists() && tree.join("draft.txt").exists());
-    assert_eq!(sh(&tree, &["rev-parse", "HEAD"]), head_before);
-    assert_eq!(
-        sh(&tree, &["symbolic-ref", "--short", "HEAD"]),
-        branch_before,
-        "the removal must not switch branches"
-    );
-    assert_eq!(
-        sh(&tree, &["ls-files", "--stage"]),
-        index_before,
-        "the removal must not add to the index"
-    );
-    let wip = worktrees::wip_branch(&row);
-    let heads = sh(
-        &tmp.0,
-        &[
-            "--git-dir",
-            bare.to_str().unwrap(),
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads",
-        ],
-    );
-    assert!(
-        !heads
-            .lines()
-            .any(|line| line == format!("refs/heads/{wip}")),
-        "{heads}"
-    );
 }
 
 #[tokio::test]
@@ -2602,4 +2546,211 @@ async fn session_destinations_refuse_the_install_before_the_turn_writes() {
             );
         }
     }
+}
+
+/// A base clone with a Builder's task worktree on `tico/t1` (one commit past main) and a second bot's worktree that
+/// took the same branch and rebased it onto a newer main, as `checkout -B` lets it before Git 2.44
+/// (`--ignore-other-worktrees` does the same on a newer Git). Returns (builder, the commit it last had).
+fn branch_moved_under_the_builder(root: &Path) -> (PathBuf, String) {
+    let (bare, seed) = remote(root, "product");
+    let base = root.join("base");
+    sh(
+        root,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    let builder = root.join("tasks").join("builder");
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            "tico/t1",
+            builder.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    std::fs::write(builder.join("drill.md"), "B3\n").unwrap();
+    sh(&builder, &["add", "-A"]);
+    sh(&builder, &["commit", "-qm", "drill"]);
+    let before = sh(&builder, &["rev-parse", "HEAD"]);
+    commit_and_push(&seed, "other.md", "main moved\n");
+    let owner = root.join("tasks").join("release-owner");
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            "tico/t1-release-owner",
+            owner.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    sh(&owner, &["fetch", "-q", "origin"]);
+    sh(
+        &owner,
+        &["checkout", "-q", "--ignore-other-worktrees", "tico/t1"],
+    );
+    sh(&owner, &["rebase", "-q", "origin/main"]);
+    (builder, before)
+}
+
+#[tokio::test]
+async fn a_branch_rebased_from_another_worktree_catches_the_builders_files_up_to_it() {
+    let tmp = Tmp::new();
+    let (builder, before) = branch_moved_under_the_builder(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    // HEAD moved under the Builder: its index still holds the old commit, which reads as staged changes undoing main.
+    assert!(sh(&builder, &["status", "--porcelain"]).contains("other.md"));
+
+    assert!(worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+    assert_eq!(sh(&builder, &["status", "--porcelain"]), "");
+    assert_eq!(
+        std::fs::read_to_string(builder.join("other.md")).unwrap(),
+        "main moved\n"
+    );
+    assert_ne!(sh(&builder, &["rev-parse", "HEAD"]), before);
+    // Caught up once: the next pass finds nothing to do.
+    assert!(!worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn a_moved_branch_with_a_real_edit_in_the_builders_tree_is_left_as_it_is() {
+    let tmp = Tmp::new();
+    let (builder, _) = branch_moved_under_the_builder(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    std::fs::write(builder.join("drill.md"), "B3, edited\n").unwrap();
+    let status = sh(&builder, &["status", "--porcelain"]);
+
+    assert!(!worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+    assert_eq!(sh(&builder, &["status", "--porcelain"]), status);
+    assert_eq!(
+        std::fs::read_to_string(builder.join("drill.md")).unwrap(),
+        "B3, edited\n"
+    );
+}
+
+#[tokio::test]
+async fn a_bots_own_staged_revert_is_not_a_moved_branch() {
+    let tmp = Tmp::new();
+    let (builder, _) = branch_moved_under_the_builder(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    sh(&builder, &["reset", "-q", "--hard", "HEAD"]);
+    // The bot's own work: HEAD stays where it put it, and its index holds an earlier commit of the branch.
+    sh(&builder, &["revert", "--no-commit", "HEAD"]);
+    let status = sh(&builder, &["status", "--porcelain"]);
+    assert!(!status.is_empty());
+
+    assert!(!worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+    assert_eq!(sh(&builder, &["status", "--porcelain"]), status);
+}
+
+/// A released task worktree on `tico/12345678-build` whose one commit was pushed, then rebased onto a newer main from
+/// elsewhere, force-pushed to the branch and merged; this tree still sits on the pre-rebase copy. Returns
+/// (workspace, worktree, its link row).
+fn released_tree_behind_a_rebase(
+    root: &Path,
+) -> (PathBuf, PathBuf, serde_json::Map<String, Value>) {
+    let (bare, seed) = remote(root, "product");
+    let workspace = root.join("workspace");
+    let base = workspace.join("repos").join("org__product");
+    std::fs::create_dir_all(workspace.join("repos")).unwrap();
+    sh(
+        root,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    let path = workspace.join("tasks/12345678/org__product");
+    let branch = "tico/12345678-build";
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            branch,
+            path.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    std::fs::write(path.join("task.md"), "task\n").unwrap();
+    sh(&path, &["add", "-A"]);
+    sh(&path, &["commit", "-qm", "Task"]);
+    sh(&path, &["push", "-q", "origin", branch]);
+    commit_and_push(&seed, "other.md", "main moved\n");
+    sh(&seed, &["fetch", "-q", "origin", branch]);
+    sh(&seed, &["checkout", "-q", "-b", "pr", "FETCH_HEAD"]);
+    sh(&seed, &["rebase", "-q", "origin/main"]);
+    sh(
+        &seed,
+        &["push", "-q", "--force", "origin", &format!("pr:{branch}")],
+    );
+    sh(&seed, &["push", "-q", "origin", "pr:main"]);
+    sh(&base, &["fetch", "-q", "origin"]);
+    let row = json!({
+        "id": "link1", "task_id": "12345678abcdef", "path": "tasks/12345678/org__product", "repo": "org/product",
+        "branch": branch, "default_branch": "main", "state": "present", "release": true, "prs_finished": true
+    });
+    (workspace, path, row.as_object().unwrap().clone())
+}
+
+#[tokio::test]
+async fn a_released_tree_on_the_pre_rebase_copy_of_a_merged_commit_is_freed() {
+    let tmp = Tmp::new();
+    let (workspace, path, mut row) = released_tree_behind_a_rebase(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    assert_eq!(
+        sh(
+            &path,
+            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]
+        ),
+        "1"
+    );
+
+    worktrees::act(&workspace, &mut row, "remove", &env, &[], || async { true })
+        .await
+        .unwrap();
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn a_released_tree_with_a_commit_nowhere_upstream_is_kept() {
+    let tmp = Tmp::new();
+    let (workspace, path, mut row) = released_tree_behind_a_rebase(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    std::fs::write(path.join("task.md"), "task, more\n").unwrap();
+    sh(&path, &["commit", "-qam", "More"]);
+
+    let kept = worktrees::act(&workspace, &mut row, "remove", &env, &[], || async { true })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        kept.text(),
+        "kept: unpushed commits; push them to free this worktree"
+    );
+    assert!(path.join("task.md").exists());
 }

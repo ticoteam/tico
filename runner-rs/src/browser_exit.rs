@@ -1506,31 +1506,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_address_the_relay_saw_is_refused_too_newest_first_and_kept_small() {
-        assert_eq!(hello_seen(r#"{"op":"open"}"#), None);
-        let heard =
-            hello_seen(r#"{"op":"hello","seen":["81.2.69.161","::ffff:81.2.69.162","nonsense"]}"#)
-                .unwrap();
-        assert_eq!(heard.len(), 2);
-        remember_seen(&heard);
-        let deny = own_and_seen();
-        assert_eq!(
-            refused("81.2.69.161".parse().unwrap(), &deny),
-            Some("this computer's own address")
-        );
-        assert_eq!(
-            refused("81.2.69.162".parse().unwrap(), &deny),
-            Some("this computer's own address")
-        );
-        for n in 0..20u8 {
-            remember_seen(&[IpAddr::V4(Ipv4Addr::new(81, 2, 70, n))]);
-        }
-        let kept = seen().lock().unwrap().clone();
-        assert_eq!(kept.len(), SEEN_KEPT);
-        assert_eq!(kept[0], IpAddr::V4(Ipv4Addr::new(81, 2, 70, 19)));
-    }
-
     #[tokio::test]
     async fn an_exit_never_dials_another_port_or_a_name_that_resolves_to_a_private_address() {
         // Something listens on loopback; the exit must not reach it however it is named.

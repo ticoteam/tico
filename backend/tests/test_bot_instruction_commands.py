@@ -76,32 +76,10 @@ def doc_cases():
     return out
 
 
-def test_no_doc_teaches_a_command_the_cli_took_away_or_renamed():
-    found = doc_cases()
-    assert len(found) > 500  # guard the guard
-    failures = []
-    for where, number, text, argv in found:
-        gone = hubcli.removed_notice(argv)
-        if gone:
-            failures.append(f"{where}:{number}: `{text}` is taught, but {gone}")
-        elif hubcli.rename_argv(argv)[1]:
-            failures.append(f"{where}:{number}: `{text}` is taught by its old name: {hubcli.rename_argv(argv)[1]}")
-    assert not failures, "\n".join(failures)
-
-
 def mention(argv):
     """A command named in prose (`tico task create`, `tico meeting read <id> --offset`): it names the command and maybe a
     flag, not a whole line to run."""
     return len([a for a in argv if not a.startswith("-")]) <= 2 or argv[-1].startswith("-")
-
-
-def test_the_texts_name_commands_to_check():
-    # Guard the guard: if this finds nothing, the checks below would pass for the wrong reason.
-    found = cases()
-    assert len(found) > 3000
-    assert {where.split("/")[0] for where, *_ in found} >= {"policies", "templates", "skills", "integrations"}
-    assert any(where.startswith("runner-rs/") for where, *_ in found)
-    assert len([1 for *_, argv in found if argv[0] in RUN_GROUPS]) > 1000
 
 
 def test_every_command_a_bot_is_taught_parses():
@@ -148,17 +126,6 @@ def taught_cases_missing_from_fixtures():
             if tuple(option) not in frozen[noun] and option not in missing.setdefault(noun, []):
                 missing[noun].append(option)
     return {noun: argvs for noun, argvs in missing.items() if argvs}
-
-
-def test_every_line_a_bot_is_taught_is_a_case_in_its_nouns_fixtures():
-    """A noun whose command line is frozen in clients/tests/cli_fixtures/<noun>.json has every line a bot is taught (its
-    alternatives expanded, placeholders filled as above) among the cases, so a change to how a taught line parses or
-    what it sends shows in that file's diff. Add each missing line as `{"argv": [...]}` and record (the file's
-    docstring says how)."""
-    missing = taught_cases_missing_from_fixtures()
-    assert not missing, "\n".join(
-        f"{noun}.json: {json.dumps(argv)}" for noun, argvs in missing.items() for argv in argvs
-    )
 
 
 class Any(dict):

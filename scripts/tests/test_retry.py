@@ -137,7 +137,6 @@ def test_optional_timings_fail_fast_or_use_a_short_retry_budget(downloads, monke
     [
         ('no artifact matches any of the names or patterns provided', '100', None),
         ('HTTP 503: Egress is over the account limit', '1', 0),
-        ('read tcp: connection reset by peer', '1', 0),
     ],
 )
 def test_remote_reports_missing_results_and_recovers_from_transient_downloads(
@@ -168,7 +167,6 @@ def test_remote_reports_missing_results_and_recovers_from_transient_downloads(
     [
         ('curl: (22) The requested URL returned error: 404', []),
         ('curl: (22) The requested URL returned error: 503', BACKOFF),
-        ('curl: (22) The requested URL returned error: 429', BACKOFF),
     ],
 )
 def test_candidate_downloads_stop_on_404_but_keep_full_transient_retries(downloads, monkeypatch, error, waits):

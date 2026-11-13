@@ -22,6 +22,8 @@ interface PropsErrors { id: string; map: Map<string, string>; }
 interface TaskDialog extends HTMLDialogElement {
   focusProp?: string;
   propsErrs?: PropsErrors | null;
+  // An owner a stage rule refused (409 task_stage_rule): a person may give it all the same with Set anyway.
+  propsAnyway?: {id: string; owner: string} | null;
   liveTask?: PropTask | null;
   taskLive?: TaskLive | null;
   saveQueue?: Promise<unknown>;
@@ -226,10 +228,15 @@ async function taskFollow(d: TaskDialog, task: PropTask, body: PropPatch): Promi
     taskPropsMsgPaint(d);
   }
 }
+const propsMsgBox = (d: TaskDialog) => $('[data-props-msg]', d) as HTMLElement | null;
 function taskPropsMsgPaint(d: TaskDialog): void {
-  const box = $('[data-props-msg]', d) as HTMLElement | null; if (!box) return;
+  const box = propsMsgBox(d); if (!box) return;
   const errs: [string, string][] = d.propsErrs?.id === String(d.dataset.task) ? [...d.propsErrs.map] : [];
   box.textContent = errs.length === 1 ? errs[0]![1] : errs.map(([k, text]) => `${PROP_WORDS[k] || 'Task'}: ${text}`).join('\n');
+  if (d.propsAnyway?.id !== String(d.dataset.task) || !errs.some(([k]) => k === 'owner')) return;
+  const anyway = document.createElement('button');
+  anyway.type = 'button'; anyway.className = 'linkish'; anyway.dataset.setAnyway = ''; anyway.textContent = 'Set anyway';
+  box.append(' ', anyway);
 }
 
 // ---- one small menu for every row (and the "…" menu): arrow keys, Home/End, Enter, Esc; an optional find box
@@ -345,6 +352,13 @@ function taskEarlierStages(t: PropTask): {id: string; name: string}[] {
 function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void {
   const box = $('[data-task-props]', d) as HTMLElement | null; if (!box) return;
   taskPropsMsgPaint(d);
+  const msg = propsMsgBox(d);
+  if (msg) msg.onclick = ev => {
+    const anyway = d.propsAnyway;
+    if (!anyway || !(ev.target as HTMLElement).closest('[data-set-anyway]')) return;
+    d.propsAnyway = null; d.focusProp = 'owner';
+    change({owner: anyway.owner, set_anyway: true});
+  };
   const save: TaskSave = (key, body) => {
     d.focusProp = key;
     const done = change(body);
@@ -467,7 +481,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (task.status === 'open' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('stage', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
-      if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
+      if (!(await askConfirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`))) return;
       try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(errorCode(e) === 'has_work' ? "This task has work on it, such as a bot's turn, an answer, a bot's file or a subtask, so it can't be deleted. Close it instead." : errorMessage(e, ''), true); return; }
       d.close(); toast('Deleted');
       if (TASKS_ST) void tasksCatchUp(TASKS_ST);

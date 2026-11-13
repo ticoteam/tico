@@ -22,12 +22,15 @@ from unittest import mock
 import pytest
 
 from clients import cli_spec, hubcli
+from clients.tico import APIError, Client
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 
 
 def run_hub(*args, env=None):
-    base = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+    # The child is told who it is only by `env`: a person's own TICO_PROFILE in the shell that runs the
+    # suite would otherwise be refused in a bot's turn before the request is ever sent.
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
     done = subprocess.run(
         [sys.executable, str(HUB), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60
     )
@@ -673,14 +676,6 @@ class AgainstAStub(unittest.TestCase):
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
         self.assertEqual((posted["owner"], posted["check_model"]), ("bot:assistant", "auto"))
 
-    def test_decision_readout_reads_the_days_asked(self):
-        code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
-        self.assertEqual((code, out["text"]), (0, "Decide readout"), out)
-        self.assertIn(("GET", "/api/v2/decisions/readout?days=14"), [(m, p) for m, p, _, _ in Stub.seen])
-        code, out = run_hub("decision", "readout", env=self.env)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(Stub.seen[-1][1], "/api/v2/decisions/readout", "the server's default, 7 days")
-
     def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
         code, out = run_hub(
             "tool",
@@ -767,50 +762,6 @@ class AgainstAStub(unittest.TestCase):
         code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
         self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
 
-    def test_an_ask_is_rated_through_its_task_and_approval_is_no_feedback_subject(self):
-        from clients import hubtools
-
-        code, out = run_hub("task", "thumbs", "T1", "r-2", "down", "--note", "Don't ask, just archive", env=self.env)
-        self.assertEqual(code, 0, out)
-        rated = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/asks/r-2/thumbs"]
-        self.assertEqual(rated, [{"up": False, "note": "Don't ask, just archive"}])
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["task", "thumbs", "T1", "r-2", "sideways"])
-        for argv in (["feedback", "give", "approval", "a-1", "up"], ["feedback", "markers", "approval", "a-1"]):
-            with self.assertRaises(SystemExit):
-                hubcli.parser().parse_args(argv)
-        hubcli.parser().parse_args(["feedback", "markers", "ask", "v-1:r-2"])
-        give = hubtools.BY_NAME["tico_feedback_give"]["inputSchema"]["properties"]["subject_type"]["enum"]
-        markers = hubtools.BY_NAME["tico_feedback_markers"]["inputSchema"]["properties"]["subject_type"]["enum"]
-        self.assertEqual((give, markers), (["message", "task"], ["message", "task", "ask"]))
-
-    def test_a_webhook_filters_by_pipeline_and_task_types_are_gone(self):
-        from clients import hubtools
-
-        argv = ("webhook", "create", "--name", "Ops", "--url", "https://hooks.example.test/x", "--pipelines", "General")
-        code, out = run_hub(*argv, env=self.env)
-        self.assertEqual(code, 0, out)
-        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/webhooks"][-1]
-        self.assertEqual(posted["filter"], {"pipelines": ["General"]})
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["webhook", "update", "w-1", "--task-types", "Bug"])
-        self.assertIn(
-            "pipelines", hubtools.BY_NAME["tico_webhook_create"]["inputSchema"]["properties"]["filter"]["properties"]
-        )
-
-    def test_settings_ask_is_gone_and_release_now_keeps_its_route(self):
-        from clients import hubtools
-
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["settings", "ask", "team.rules.admin_sql", "on"])
-        self.assertNotIn("tico_settings_ask", hubtools.BY_NAME)
-        code, out = run_hub("release", "now", "--note", "hotfix", env=self.env)
-        self.assertEqual(code, 0, out)
-        self.assertEqual([b for m, p, _, b in Stub.seen if p == "/api/v2/release/now"], [{"note": "hotfix"}])
-        for name in ("tico_release_now", "tico_release_schedule"):
-            self.assertNotIn("Pending Release", hubtools.BY_NAME[name]["description"])
-            self.assertNotIn("ticket", hubtools.BY_NAME[name]["description"])
-
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):
             return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
@@ -823,40 +774,6 @@ class AgainstAStub(unittest.TestCase):
         )
         self.assertEqual(run_hub("task", "snooze", "T1", "-m", "On ice", "--version", "3", env=self.env)[0], 0)
         self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"version": 3, "why": "On ice"})
-
-    def test_roadmap_commands_send_what_their_tools_send(self):
-        def last(method, path):
-            return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
-
-        for argv in (
-            ["task", "requesters", "T1", "--limit", "5"],
-            ["task", "requester-save", "T1", "--email", "jane@acme.example", "--organization", "Acme", "--important"],
-            ["task", "requester-save", "T1", "--requester-id", "R1", "--no-important"],
-            ["task", "requester-remove", "T1", "R1"],
-            ["task", "comment-moderate", "T1", "C1", "hide"],
-            ["roadmap", "tasks", "--sort", "size", "--direction", "asc"],
-            ["roadmap", "settings"],
-            ["roadmap", "settings", "--label", "roadmap", "--suggestion-limit", "5", "--no-bot-public-approval"],
-            ["roadmap", "settings", "--label", ""],
-        ):
-            code, out = run_hub(*argv, env=self.env)
-            self.assertEqual(code, 0, (argv, out))
-        self.assertIn("limit=5", last("GET", "/api/v2/tasks/T1/requesters")[0])
-        self.assertEqual(
-            last("POST", "/api/v2/tasks/T1/requesters")[1],
-            {"email": "jane@acme.example", "organization": "Acme", "important": True},
-        )
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1")[1], {"important": False})
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1/delete")[1], {})
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/comments/C1/moderate")[1], {"action": "hide"})
-        self.assertTrue(
-            {"sort=size", "direction=asc"} <= set(last("GET", "/api/v2/roadmap-tasks")[0].split("?")[1].split("&"))
-        )
-        self.assertTrue(any(m == "GET" and p == "/api/v2/roadmaps/settings" for m, p, _, _ in Stub.seen))
-        settings = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/roadmaps/settings"]
-        self.assertEqual(
-            settings, [{"labels": ["roadmap"], "suggestion_limit": 5, "bot_public_approval": False}, {"labels": []}]
-        )
 
     def test_a_refusal_from_the_api_exits_two(self):
         code, out = run_hub("message", "send", "nobody", "hello", env=self.env)
@@ -2280,11 +2197,6 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     assert "tico_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
 
 
-def test_tico_help_is_the_teamwork_help(capsys):
-    assert hubcli.main(["help"]) == 0
-    assert "task" in capsys.readouterr().out
-
-
 @pytest.mark.parametrize("argv, word", [(["status"], "status"), (["update"], "update")])
 @pytest.mark.parametrize("bot", ["", "ops"])
 def test_a_word_that_was_the_computers_says_where_it_went_to_a_person_only(argv, word, bot, capsys, monkeypatch):
@@ -2294,3 +2206,340 @@ def test_a_word_that_was_the_computers_says_where_it_went_to_a_person_only(argv,
     assert hubcli.main(argv) == 0
     note = f"this computer's own {word} is `tico-computer {word}`"
     assert (note in capsys.readouterr().err) == (not bot)
+
+
+# The Calendar commands and tools. The wire is the one place faked (clients/tico.Client.request): the client builds the
+# path and query as it does for real, and each request is recorded with its method, body and operation key.
+class _Wire(Client):
+    def __init__(self, answer=None, refusal=None):
+        super().__init__("https://tico.acme.example", "token")
+        self.answer, self.refusal, self.sent = answer, refusal, []
+
+    def request(self, method, path, body=None, key=None, **kwargs):
+        self.sent.append((method, path, body, key))
+        if self.refusal is not None:
+            raise self.refusal
+        return self.answer
+
+
+def _calendar_cli(argv, monkeypatch, answer=None, refusal=None, operation=None):
+    """`tico <argv>` through remotecli.main: the requests it sent, and the exit code."""
+    from clients import remotecli
+
+    wire = _Wire(answer, refusal)
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **k: wire)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    if operation:
+        monkeypatch.setenv("HUB_OPERATION_ID", operation)
+    else:
+        monkeypatch.delenv("HUB_OPERATION_ID", raising=False)
+    return remotecli.main(hubcli.parser().parse_args(argv)), wire.sent
+
+
+def _split(path):
+    """A request's path and its query, each name with its values as lists."""
+    from urllib.parse import parse_qs, urlsplit
+
+    split = urlsplit(path)
+    return split.path, parse_qs(split.query, keep_blank_values=True)
+
+
+CALENDAR_ANA = {"ref": "human:ana", "type": "human", "id": "ana", "name": "Ana", "time_zone": "America/Los_Angeles"}
+CALENDAR_EVENTS = {
+    "calendars": [CALENDAR_ANA],
+    "occurrences": [
+        {
+            "occurrence_id": "tico:evt_1:2026-11-11T17:30:00Z",
+            "title": "Standup",
+            "start": "2026-11-11T17:30:00Z",
+            "end": "2026-11-11T18:00:00Z",
+            "all_day": False,
+            "calendar": {"ref": "human:ana", "type": "human", "id": "ana", "name": "Ana"},
+        },
+        {
+            "occurrence_id": "due:task:t_9",
+            "title": "Ship the thing",
+            "start": "2026-11-11",
+            "end": "2026-11-12",
+            "all_day": True,
+            "calendar": {"ref": "human:ana", "type": "human", "id": "ana", "name": "Ana"},
+        },
+    ],
+    "errors": [{"ref": "human:ben", "reason": "gcal_refused"}],
+}
+
+
+def test_calendar_list_without_a_calendar_flag_still_reads_the_company_calendar(monkeypatch, capsys):
+    code, sent = _calendar_cli(["calendar", "list"], monkeypatch, answer={"appointments": []})
+    assert code == 0 and sent == [("GET", "/api/v2/calendar/appointments", None, None)]
+    assert json.loads(capsys.readouterr().out) == {"appointments": []}
+    code, sent = _calendar_cli(["calendar", "list", "--calendar", "legal@acme.example"], monkeypatch, answer={})
+    assert sent == [("GET", "/api/v2/calendar/appointments?calendar=legal%40acme.example", None, None)]
+
+
+def test_calendar_list_with_a_flag_reads_the_events_route_and_prints_one_line_per_occurrence(monkeypatch, capsys):
+    code, sent = _calendar_cli(
+        [
+            "calendar",
+            "list",
+            "--who",
+            "human:ana,bot:ops",
+            "--from",
+            "2026-11-11",
+            "--to",
+            "2026-11-14",
+            "--kinds",
+            "event,run",
+        ],
+        monkeypatch,
+        answer=CALENDAR_EVENTS,
+    )
+    assert code == 0
+    [(method, path, _body, _key)] = sent
+    assert method == "GET" and _split(path) == (
+        "/api/v2/calendar/events",
+        {"who": ["human:ana,bot:ops"], "from": ["2026-11-11"], "to": ["2026-11-14"], "kinds": ["event,run"]},
+    )
+    captured = capsys.readouterr()
+    # The first calendar's zone: 17:30Z is 09:30 in Los Angeles in November. An all-day line names no time.
+    assert captured.out == (
+        "Wed 11 Nov 09:30–10:00  Standup  (Ana)  [tico:evt_1:2026-11-11T17:30:00Z]\n"
+        "Wed 11 Nov all day  Ship the thing  (Ana)  [due:task:t_9]\n"
+    )
+    assert captured.err == "tico: could not read human:ben: gcal_refused\n"
+
+
+def test_calendar_list_json_prints_the_response_as_it_came(monkeypatch, capsys):
+    code, _sent = _calendar_cli(["calendar", "list", "--json"], monkeypatch, answer=CALENDAR_EVENTS)
+    assert code == 0 and json.loads(capsys.readouterr().out) == CALENDAR_EVENTS
+
+
+def test_calendar_free_sends_its_people_length_and_window_and_prints_the_slots(monkeypatch, capsys):
+    answer = {"slots": [{"start": "2026-11-11T17:30:00Z", "end": "2026-11-11T18:15:00Z"}]}
+    code, sent = _calendar_cli(
+        ["calendar", "free", "--who", "human:ana,human:ben", "--minutes", "45", "--within", "5d"],
+        monkeypatch,
+        answer=answer,
+    )
+    assert code == 0
+    assert sent == [("GET", "/api/v2/calendar/free?who=human%3Aana%2Chuman%3Aben&minutes=45&within=5d", None, None)]
+    assert capsys.readouterr().out == "Wed 11 Nov 17:30–18:15\n"  # no calendar gives a zone: the server's Z stays
+
+
+def test_calendar_add_posts_the_event_with_its_repeat_words_calendar_and_operation_key(monkeypatch, capsys):
+    answer = {
+        "occurrence_id": "tico:evt_2",
+        "title": "Standup",
+        "start": "2026-11-11T09:30:00-08:00",
+        "end": "2026-11-11T10:00:00-08:00",
+        "time_zone": "America/Los_Angeles",
+        "all_day": False,
+        "calendar": {"name": "Legal"},
+    }
+    code, sent = _calendar_cli(
+        [
+            "calendar",
+            "add",
+            "--title",
+            "Standup",
+            "--start",
+            "2026-11-11T09:30:00-08:00",
+            "--end",
+            "2026-11-11T10:00:00-08:00",
+            "--who",
+            "human:ben, bot:ops",
+            "--repeat",
+            "weekly on wed",
+            "--calendar",
+            "legal@acme.example",
+            "--notes",
+            "Bring numbers",
+            "--no-meet",
+        ],  # fmt: skip
+        monkeypatch,
+        answer=answer,
+        operation="op-7",
+    )
+    assert code == 0
+    assert sent == [
+        (
+            "POST",
+            "/api/v2/calendar/events",
+            {
+                "calendar": "legal@acme.example",
+                "title": "Standup",
+                "start": "2026-11-11T09:30:00-08:00",
+                "end": "2026-11-11T10:00:00-08:00",
+                "attendees": ["human:ben", "bot:ops"],
+                "repeat": "weekly on wed",
+                "notes": "Bring numbers",
+                "add_meet": False,
+            },
+            "op-7",
+        )
+    ]
+    assert capsys.readouterr().out == "Wed 11 Nov 09:30–10:00  Standup  (Legal)  [tico:evt_2]\n"
+
+
+def test_calendar_add_all_day_sends_dates_and_meet_on_by_default(monkeypatch):
+    code, sent = _calendar_cli(
+        ["calendar", "add", "--title", "Offsite", "--start", "2026-11-16", "--end", "2026-11-18", "--all-day"],
+        monkeypatch,
+        answer={},
+    )
+    assert code == 0
+    assert sent == [
+        ("POST", "/api/v2/calendar/events", {"title": "Offsite", "start": "2026-11-16", "end": "2026-11-18", "all_day": True, "add_meet": True}, None)
+    ]  # fmt: skip
+
+
+def test_calendar_move_patches_the_encoded_occurrence_with_its_scope(monkeypatch, capsys):
+    code, sent = _calendar_cli(
+        [
+            "calendar",
+            "move",
+            "tico:evt_1:2026-11-11T17:30:00Z",
+            "--start",
+            "2026-11-11T10:00:00-08:00",
+            "--end",
+            "2026-11-11T10:30:00-08:00",
+            "--scope",
+            "this",
+        ],  # fmt: skip
+        monkeypatch,
+        answer={},
+        operation="op-8",
+    )
+    assert code == 0
+    assert sent == [
+        (
+            "PATCH",
+            "/api/v2/calendar/events/tico%3Aevt_1%3A2026-11-11T17%3A30%3A00Z",
+            {"start": "2026-11-11T10:00:00-08:00", "end": "2026-11-11T10:30:00-08:00", "scope": "this"},
+            "op-8",
+        )
+    ]
+
+
+def test_calendar_cancel_deletes_the_encoded_occurrence_with_its_scope_and_says_so(monkeypatch, capsys):
+    code, sent = _calendar_cli(
+        ["calendar", "cancel", "google:chris@acme.example:evt_3", "--scope", "following"], monkeypatch, answer={}
+    )
+    assert code == 0
+    assert [(method, path) for method, path, _body, _key in sent] == [
+        ("DELETE", "/api/v2/calendar/events/google%3Achris%40acme.example%3Aevt_3?scope=following")
+    ]
+    assert capsys.readouterr().out == "cancelled google:chris@acme.example:evt_3 (following)\n"
+
+
+def test_calendar_search_sends_the_words_and_says_when_results_are_partial(monkeypatch, capsys):
+    answer = {"occurrences": [], "partial": True, "errors": []}
+    code, sent = _calendar_cli(
+        ["calendar", "search", "standup with:ben", "--who", "human:ana"], monkeypatch, answer=answer
+    )
+    assert code == 0
+    assert sent == [("GET", "/api/v2/calendar/search?q=standup+with%3Aben&who=human%3Aana", None, None)]
+    captured = capsys.readouterr()
+    assert captured.out == "No matches.\n"
+    assert captured.err == "tico: some results are missing: the search ran out of time\n"
+
+
+def test_a_refused_booking_prints_the_servers_reason_as_a_line_and_exits_two(monkeypatch, capsys):
+    refusal = APIError("book_rule", "Who bots may book: ops may book only people near it (rule: Nearby)", 403)
+    code, _sent = _calendar_cli(
+        ["calendar", "add", "--title", "x", "--start", "2026-11-11T09:00:00Z", "--end", "2026-11-11T09:30:00Z", "--who", "human:ben"],
+        monkeypatch,
+        refusal=refusal,
+    )  # fmt: skip
+    captured = capsys.readouterr()
+    assert code == 2 and captured.out == ""
+    assert captured.err == "tico: Who bots may book: ops may book only people near it (rule: Nearby)\n"
+
+
+def test_the_calendar_tools_send_their_arguments_as_the_requests(monkeypatch):
+    from clients import hubtools
+
+    wire = _Wire({"occurrences": []})
+    tools = hubtools.BY_NAME
+    tools["tico_calendar_events"]["fn"](
+        wire, {"who": "human:ana", "from": "2026-11-11", "to": "2026-11-14", "kinds": "event"}
+    )
+    tools["tico_calendar_free"]["fn"](wire, {"who": "human:ana,human:ben"})
+    tools["tico_calendar_search"]["fn"](wire, {"q": "standup", "who": "human:ana"})
+    tools["tico_calendar_add"]["fn"](
+        wire,
+        {
+            "title": "Hold",
+            "start": "2026-11-11",
+            "end": "2026-11-12",
+            "all_day": True,
+            "attendees": ["bot:ops"],
+            "operation_id": "op-1",
+        },
+    )
+    tools["tico_calendar_move"]["fn"](
+        wire,
+        {"occurrence": "tico:evt_1:2026-11-11T17:30:00Z", "start": "2026-11-11T10:00:00-08:00", "operation_id": "op-2"},
+    )
+    tools["tico_calendar_cancel"]["fn"](wire, {"occurrence": "tico:evt_1", "scope": "all", "operation_id": "op-3"})
+    assert wire.sent == [
+        ("GET", "/api/v2/calendar/events?who=human%3Aana&from=2026-11-11&to=2026-11-14&kinds=event", None, None),
+        ("GET", "/api/v2/calendar/free?who=human%3Aana%2Chuman%3Aben&minutes=30", None, None),
+        ("GET", "/api/v2/calendar/search?q=standup&who=human%3Aana", None, None),
+        (
+            "POST",
+            "/api/v2/calendar/events",
+            {"title": "Hold", "start": "2026-11-11", "end": "2026-11-12", "all_day": True, "attendees": ["bot:ops"], "add_meet": True},
+            "op-1",
+        ),
+        (
+            "PATCH",
+            "/api/v2/calendar/events/tico%3Aevt_1%3A2026-11-11T17%3A30%3A00Z",
+            {"start": "2026-11-11T10:00:00-08:00"},
+            "op-2",
+        ),
+        ("DELETE", "/api/v2/calendar/events/tico%3Aevt_1?scope=all", {}, "op-3"),
+    ]  # fmt: skip
+
+
+def test_bots_and_the_assistant_may_book_and_every_caller_may_read_the_calendar():
+    from clients import hubtools
+
+    for name in ("tico_calendar_add", "tico_calendar_move", "tico_calendar_cancel"):
+        assert {"bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
+    for name in ("tico_calendar_events", "tico_calendar_free", "tico_calendar_search"):
+        assert {"owner", "member", "bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
+
+
+def test_app_view_cli_sends_on_off_as_booleans_and_app_shot_keeps_the_token_off_the_command_line(monkeypatch, tmp_path):
+    import subprocess
+
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    sent = []
+    monkeypatch.setitem(BY_NAME['tico_bot_app_view'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'app-view', 'cpo'], ['bot', 'app-view', 'cpo', 'on'], ['bot', 'app-view', 'cpo', 'off']):
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args) if cli_spec.of(args) else remotecli.via_tool(None, args)
+    assert ['on' in row for row in sent] == [False, True, True] and [r.get('on') for r in sent[1:]] == [True, False]
+
+    class Api:
+        url = 'https://team.example'
+
+        def post(self, path, body=None, key=None):
+            assert path == 'app-view'
+            return {'id': 'v1', 'token': 'tico_av_secret', 'expires_at': 'later', 'read_only': True}
+
+    ran = []
+
+    def run(command, env, **kw):
+        ran.append((command, env))
+        return subprocess.CompletedProcess(command, 0, stdout='{"file": "x.png", "width": 390, "height": 844}\n')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    out = BY_NAME['tico_bot_app_shot']['fn'](Api(), {'path': '/#/tasks', 'out': str(tmp_path / 'x.png'), 'width': 390})
+    command, env = ran[0]
+    assert command[2] == 'https://team.example/#/tasks' and command[4] == '390'
+    assert 'tico_av_secret' not in ' '.join(command) and env['TICO_VIEW_TOKEN'] == 'tico_av_secret'
+    assert out['view'] == 'v1' and out['read_only'] is True

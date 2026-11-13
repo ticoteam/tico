@@ -217,8 +217,8 @@ def released(
     conn: "sqlite3.Connection", task_id: str, repo: str | None = None, visit_id: str | None = None
 ) -> list[str]:
     """Where the task's merges (into `repo` alone, when given) are released, as "v1.2.0 of owner/name", from the
-    releases Tico has saved, counted as In a release counts them (pre-releases only when it says so). Empty while any
-    of them is in no release yet, and when nothing merged."""
+    releases Tico has saved, counted as In a release counts them (pre-releases unless explicitly disabled). Empty
+    while any of them is in no release yet, and when nothing merged."""
     GS = _gs()
     settings = _settings(conn, task_id, visit_id)
     if settings is None:
@@ -234,7 +234,9 @@ def released(
         tag = next(
             (
                 str(release["tag"])
-                for release in reversed(GS.releases(conn, where, prereleases=bool(settings.get("prereleases"))))
+                for release in reversed(
+                    GS.releases(conn, where, prereleases=settings.get("prereleases", True) is not False)
+                )
                 if GS.included(conn, release["id"], str(metadata["merged_sha"]))
             ),
             None,
@@ -406,7 +408,7 @@ def cut(
         repo = GS.release_repo(settings, str(link["repo"]))
         held = any(
             GS.included(conn, release["id"], str(metadata["merged_sha"]))
-            for release in GS.releases(conn, repo, prereleases=bool(settings.get("prereleases")))
+            for release in GS.releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)
         )
         if held:
             continue

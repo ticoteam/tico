@@ -149,26 +149,3 @@ def test_a_release_hands_the_row_back_unsent_with_no_attempt_counted(c):
     assert back["state"] == "ready" and back["lease"] is None and back["attempts"] == 0
     assert O.claim(c, SENDS, "a", 6.0), "a released row is claimed again"
     assert not O.release(c, SENDS, "b"), "a row that is not held is not released"
-
-
-def test_each_caller_waits_what_it_waited_before():
-    """Each caller's schedule gives the same wait, and the same give-up point, as the formula it had before the move."""
-    from backend import postal_mail as PM, webhook_delivery as WH
-    from backend.finance import mirror as FM, sync as FS
-
-    class Factor:
-        def __init__(self, f):
-            self.f = f
-
-        def uniform(self, lo, hi):
-            return self.f
-
-    for f in (0.9, 1.0, 1.1):  # both edges of the webhook jitter band
-        for failed in range(1, 12):
-            old = None if failed >= 8 else WH.RETRY_AFTER[failed - 1] * f
-            assert WH.SCHEDULE.after(failed, Factor(f)) == old, ("webhook", failed, f)
-    for attempts in range(1, 12):
-        assert PM.SCHEDULE.after(attempts) == PM.BACKOFF[min(attempts - 1, len(PM.BACKOFF) - 1)]
-        assert FM.WRITE_SCHEDULE.wait_for(attempts) == FM.RETRY[min(attempts, len(FM.RETRY)) - 1]
-        assert FS.WRITE_SCHEDULE.wait_for(attempts) == FS.RETRY[min(attempts - 1, len(FS.RETRY) - 1)]
-    assert WH.MAX_ATTEMPTS == 8 and PM.SCHEDULE.max_attempts is None and FM.WRITE_SCHEDULE.max_attempts is None

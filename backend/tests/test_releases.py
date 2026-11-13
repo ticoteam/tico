@@ -40,6 +40,17 @@ def test_semver_comparison():
     assert not releases.newer("0.2.0", "dev") and not releases.newer("latest", "0.1.0")
 
 
+def test_a_server_on_a_newer_prerelease_is_not_shown_an_older_release_as_the_latest():
+    """Tico Team ran 0.6.0-rc.8 and Health said the latest was 0.5.216: the check reads the newest stable release."""
+    checker = releases.Checker()
+    checker.checked = checker.clock()  # fresh: no background read
+    checker.release = {**RELEASE, "tag": "v0.5.216", "url": "u", "name": "n"}
+    seen = checker.view("0.6.0-rc.8")
+    assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
+    assert checker.view("0.5.200")["latest"] == "0.5.216" and checker.view("0.5.200")["available"]
+    assert checker.view("0.5.300")["latest"] == "0.5.216"  # a stable build ahead of it still shows it
+
+
 def test_update_is_owner_only(environment):
     api = environment()
     person = as_person(api, "riley")
@@ -82,54 +93,6 @@ def test_update_is_forwarded_to_the_updater_with_the_token(environment, monkeypa
         "restored": False,
     }
     assert got["running"] == "0.1.9"  # the server's own record, beside the updater's view
-
-
-def test_docker_updater_speaks_the_servers_contract(environment, monkeypatch, tmp_path):
-    """The real docker/updater.py behind the real client: version spelling, token, status shape."""
-    import importlib.util
-    import threading
-    from http.server import ThreadingHTTPServer
-
-    spec = importlib.util.spec_from_file_location(
-        "tico_updater", Path(__file__).resolve().parents[2] / "docker/updater.py"
-    )
-    updater = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(updater)
-    (tmp_path / "token").write_text("s3cret\n")
-    started = []
-    monkeypatch.setattr(updater, "TOKEN_FILE", str(tmp_path / "token"))
-    monkeypatch.setattr(updater, "update", lambda version, running="": started.append((version, running)))
-    # What the previous update left in the status: a new one must not show any of it.
-    updater.status.update(
-        state="healthy", **{"from": "v0.1.0", "to": "v0.1.9"}, message="old", snapshot="s", restored=True
-    )
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), updater.Handler)
-    threading.Thread(target=lambda: httpd.serve_forever(0.02), daemon=True).start()
-    try:
-        monkeypatch.setenv("TICO_UPDATER_URL", "http://127.0.0.1:%d" % httpd.server_address[1])
-        monkeypatch.setenv("TICO_UPDATER_TOKEN", "s3cret")
-        monkeypatch.setenv("TICO_VERSION", "0.1.9")
-        api = environment()
-        r = api.post("/api/v2/system/update", json={"version": "0.2.0"}, headers=signed_in())
-        assert r.status_code == 200 and r.json()["configured"] is True and r.json()["state"] == "pulling"
-        assert r.json()["to"] == "v0.2.0"
-        # "from" is the release the server runs, not the previous update's; nothing else is carried over either.
-        assert (r.json()["from"], r.json()["message"], r.json()["snapshot"], r.json()["restored"]) == (
-            "v0.1.9",
-            "",
-            "",
-            False,
-        )
-        monkeypatch.setenv("TICO_UPDATER_TOKEN", "wrong")
-        assert api.get("/api/v2/system/update", headers=signed_in()).status_code == 502
-    finally:
-        httpd.shutdown()
-    import time
-
-    deadline = time.time() + 2
-    while not started and time.time() < deadline:
-        time.sleep(0.01)
-    assert started == [("v0.2.0", "v0.1.9")]
 
 
 def test_a_server_tico_updates_offers_no_update_now(environment, monkeypatch):

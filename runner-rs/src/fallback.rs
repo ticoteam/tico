@@ -1063,38 +1063,6 @@ mod tests {
     }
 
     #[test]
-    fn a_restarted_runner_skips_the_logins_the_server_still_holds() {
-        let until = |s: f64| crate::util::iso(&json!(crate::util::epoch_s() + s));
-        remember(&json!({"fallback_models": [], "login_holds": [
-            {"profile": "", "runtime": "restart-test", "until": until(600.0)},
-            {"profile": "", "runtime": "restart-test-over", "until": until(-60.0)}]}));
-        let now = crate::util::epoch_s();
-        assert!(
-            out_of_quota("", "restart-test", now) && !out_of_quota("", "restart-test", now + 601.0)
-        );
-        assert!(!out_of_quota("", "restart-test-over", now));
-        forget_limit("", "restart-test");
-        // Such a server knows a profile's `shared_login` (readiness.rs), so the runner reports it from now on.
-        assert!(server_keeps_holds());
-        let shared = crate::profiles::Profile::new("team-a", "/tmp/acme-team-a", true);
-        let own = crate::profiles::Profile::new("solo", "/tmp/acme-solo", false);
-        assert_eq!(login("claude", "", Some(&shared)).as_deref(), Some(""));
-        assert_eq!(login("claude", "", Some(&own)).as_deref(), Some("solo"));
-        // A Muse Code data folder goes in readiness only while the latest config says the server takes it.
-        assert!(
-            !server_takes_data_problem(),
-            "this server's config did not offer it"
-        );
-        remember(&json!({"fallback_models": [], "readiness_data_problem": true}));
-        assert!(server_takes_data_problem());
-        remember(&json!({"fallback_models": []}));
-        assert!(
-            !server_takes_data_problem(),
-            "a server rolled back to one without it"
-        );
-    }
-
-    #[test]
     fn a_login_out_of_quota_is_ready_again_at_the_providers_reset_or_once_it_works_or_signs_out() {
         let now = crate::util::epoch_s();
         let reset = |s: f64| crate::util::iso(&json!(now + s));

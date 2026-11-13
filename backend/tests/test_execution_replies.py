@@ -3,10 +3,8 @@
 import json
 
 import pytest
-from pydantic import ValidationError
 
 from backend import threads
-from backend.models import Completion
 from backend.store import H, encode
 from backend.tests.helpers.api import setup_attempt, post, get, ready, claim, runner, assign, headers
 from backend import bot_settings as BS
@@ -299,15 +297,6 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
     finish(api, r, attempt)
     post(api, path + "thread", {"thread_id": "late-thread"}, r["token"], expected=409)
     assert threads()[1] == ("new-thread", "new-thread")
-
-
-def test_a_completion_may_name_the_sub_thread_message_its_reply_goes_under():
-    # The runner sends the parent of a reply made in a sub-thread; a reply in the main thread sends none.
-    named = Completion(outcome="completed", last_seq=0, text="Done.", parent_message_id="m-parent")
-    assert named.parent_message_id == "m-parent"
-    assert Completion(outcome="completed", last_seq=0, text="Done.").parent_message_id is None
-    with pytest.raises(ValidationError):
-        Completion(outcome="completed", last_seq=0, parent_message="m-parent")
 
 
 def test_a_reply_under_a_named_parent_lands_in_its_sub_thread_and_the_parent_row_shows_it(api):

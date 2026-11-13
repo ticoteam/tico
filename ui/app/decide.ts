@@ -1,5 +1,6 @@
 /* ui/app/decide.ts — the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A modal
-   on a wide screen, the whole screen on a phone. The top bar is "2 of 7", then 👍 👎 ‹ › ✕. The thing asked about is on
+   on a wide screen, the whole screen on a phone. The top bar is "2 of 7", then 👍 👎 ‹ › ✕ (‹ › on a wide screen only;
+   Skip, in the answer row, steps on at every width). The thing asked about is on
    the left, shown in full (the page, the email, what an OK is for); the sentence asked, who asks, Notes and the buttons
    are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
    with its range, text a box; a value the server refuses stays typed, under the server's line.
@@ -8,6 +9,9 @@
    version, read here before Approve is on; what does not load leaves Approve off. Approve sends the hash of exactly that preview. If
    the engine answers that it changed, the new content is read and shown with "It changed. Look again." and Approve
    needs a new click: it is never sent again by itself.
+   A stage's review (the ▶ on a stage, #/decide?stage=<id>): the same screen, walking only what waits on the person in
+   that stage (needsStageOf); the top bar names the stage ("Spec · 2 of 7"), and a clear stage offers the next stage of
+   its pipeline that has items, then Close.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -16,7 +20,8 @@ type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
     load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
-    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. */
+    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. `shows`: the refs it
+    was read from. Held per ask (decideOkKey): a stage's requirement is the same on every task in the stage. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
   hash: string | null;
@@ -27,6 +32,7 @@ interface AskOkView {
   missing: boolean;
   urls: string[];
   page: string;
+  shows: string;
 }
 /** The 👎 sheet: what was wrong, then (Make a rule) the rule drafted from it. */
 interface AskSheet {
@@ -52,10 +58,16 @@ interface DecState {
   barTimer: number;
   opener: HTMLElement | null;
   off: (() => void)[];
+  /** A stage's review: the stage walked ('' walks everything; DEC_OTHER, what is in no stage). */
+  stage: string;
+  /** Answers given here in this stage's walk, for "Spec is clear · 7 answered". */
+  answered: number;
 }
 
 let DEC: DecState | null = null;            // the open screen, null while it is shut
 let DECIDE_WANT = '';                       // a deep link's item (#/decide?item=<id>), opened once Tasks has read
+let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
+const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 const DEC_UNDO_MS = 10_000;
 const DEC_CHIPS: [AskSheet['chip'], string][] = [['exist', "Shouldn't exist"], ['person', 'Wrong person'], ['written', 'Badly written']];
 
@@ -77,10 +89,20 @@ function decideKind(it: NeedsEntry): AskKind {
   return it.task?.turn?.state === 'paused' || it.task?.late?.level === 'person' ? 'stuck' : 'yours';
 }
 const decideRid = (it: NeedsEntry) => it.requirement_id || it.id;
+const decideTaskId = (it: NeedsEntry) => it.task_id || it.task?.id || '';
+/** One ask: its task and its requirement. A stage's requirement ("OK Chris") is the same on every task in the stage, so
+    the requirement alone would show one task's page on another's ask. */
+const decideOkKey = (it: NeedsEntry) => `${decideTaskId(it)}\n${decideRid(it)}`;
+const decideShows = (it: NeedsEntry) => (it.ask?.shows || []).join('\n');
+/** What is held for an ask was read from other refs than it has now (a new page version, another page). */
+const decideOkStale = (v: AskOkView, it: NeedsEntry) => v.page !== decidePage(it) || v.shows !== decideShows(it);
 const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
+/** The items a walk takes: a stage's review only that stage's. */
+const decideInWalk = (st: DecState, it: NeedsEntry) => !st.stage
+  || (st.stage === DEC_OTHER ? !decideStageName(needsStageOf(it)) : needsStageOf(it) === st.stage);
 function decideSync(st: DecState, items: NeedsEntry[]) {
-  const fresh = decideOrdered(items), keys = new Set(fresh.map(it => it.id));
+  const fresh = decideOrdered(items.filter(it => decideInWalk(st, it))), keys = new Set(fresh.map(it => it.id));
   const before = st.order, was = st.at ? st.items.get(st.at) : undefined;
   st.items = new Map(fresh.map(it => [it.id, it]));
   const order = before.filter(k => keys.has(k));
@@ -175,13 +197,18 @@ function decideNeedsText(root: HTMLElement) {
     b.disabled = !box?.value.trim() || !!DEC?.busy;
   }
 }
-/** Opens the item `id`, or the first of the list with none. False when there is no such item. */
-function decideOpen(id: string = ''): boolean {
+/** Opens the item `id`, or the first of the list with none. `items` is the list to walk, Needs you as the page shows
+    it by default; `stage` walks only that stage's items (a stage's review), and an open screen walking another switches
+    to it. False when there is no such item. */
+function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage: string = ''): boolean {
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), sheet: null, more: '',
-    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: []};
-  decideSync(st, decideSource());
+    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, answered: 0};
+  // Opening one item from a list walks the list it is in; ▶ on a stage walks that stage, from its first item.
+  if (st.stage !== stage && (stage || !id)) { st.stage = stage; st.order = []; st.gone.clear(); st.answered = 0; st.at = null; }
+  decideSync(st, items);
+  if (id && st.stage && !st.items.has(id)) { st.stage = ''; st.order = []; st.gone.clear(); st.answered = 0; decideSync(st, items); }
   const live = decideLive(st), to = id ? (live.includes(id) ? id : null) : live[0] || null;
   if (!to) return false;
   if (fresh) DEC = st;
@@ -191,6 +218,48 @@ function decideOpen(id: string = ''): boolean {
   return true;
 }
 const decideGoThrough = () => decideOpen('');
+/** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
+    id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
+    and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks
+    page's own copy is not read again behind an open task, so the shared list is looked in too. The list is read a page
+    at a time and the newest ask sorts last in its group, so a miss reads on through the pages (up to DEC_ASK_PAGES). */
+const DEC_ASK_PAGES = 20;
+async function decideOpenAsk(taskId: string, rid: string): Promise<boolean> {
+  const mine = (it: NeedsEntry) => it.kind === 'ask' && decideTaskId(it) === taskId && decideRid(it) === rid;
+  const find = () => [decideSource(), needsHeld()].map(items => ({items, it: items.find(mine)})).find(x => x.it);
+  let at = find();
+  if (!at) { await v2Refresh(); at = find(); }
+  for (let i = 0; !at && !needsAll() && i < DEC_ASK_PAGES; i++) {
+    if (!await v2NeedsMore()) break;
+    at = find();
+  }
+  if (at?.it && decideOpen(at.it.id, at.items)) return true;
+  // Found but not opened: only a bot's decideOpen refuses, and a bot has no Answer; kept as a guard.
+  toast(at ? 'This ask could not be opened here. Open it from Needs you.'
+    : needsAll() ? 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.'
+      : 'This ask was not found in the part of your Needs you list read so far. Open it from Needs you.', true);
+  return false;
+}
+/** ▶ on a stage: every page of Needs you is read first, then the stage's items are walked. False when none wait. */
+async function decideStageOpen(stage: string): Promise<boolean> {
+  if (!stage || S.me?.role === 'bot') return false;
+  if (!needsAll()) await needsReadAll();
+  return decideOpen('', decideSource(), stage);
+}
+/** A deep link to a stage's review (#/decide?stage=<id>): its walk, or, with nothing there, its pipeline on that stage
+    saying so. */
+async function decideStageWanted(stage: string) {
+  if (await decideStageOpen(stage)) return;
+  const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.stages.some(s => s.id === stage));
+  const name = decideStageName(stage) || 'this stage';
+  if (!p || typeof TASKS_ST === 'undefined' || !TASKS_ST) { toast(`Nothing in ${name} waits on you`); return; }
+  pvStageKeep(p.id, stage);
+  const view = pvStateFor(p);
+  view.stage = stage;
+  view.bar = {taskId: '', to: '', push: false, text: `Nothing in ${name} waits on you`};
+  if (TASKS_ST.pipeline !== p.id || TASKS_ST.archive) tasksShow(TASKS_ST, {pipeline: p.id, archive: ''});
+  else tasksRender(TASKS_ST);
+}
 function decideStop() {
   const st = DEC;
   if (!st) return;
@@ -229,14 +298,40 @@ function decideStep(st: DecState, dir: number) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + dir];
   if (next) decideGo(st, next);
 }
+/** Skip (every width; a phone has no ‹ ›): the next item, nothing answered; from the last, the first one still waiting,
+    which is the first one skipped. */
+function decideSkip(st: DecState) {
+  const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + 1] || live[0];
+  if (next && next !== st.at) decideGo(st, next);
+}
 /** After an answer: the next item, else the one before, else All caught up. */
 function decideAfter(st: DecState, id: string) {
   st.gone.add(id);
+  st.answered++;
   const i = st.order.indexOf(id), live = (k: string) => !st.gone.has(k) && st.items.has(k);
   decideGo(st, st.order.slice(i + 1).find(live) || st.order.slice(0, Math.max(i, 0)).reverse().find(live) || null);
 }
 
 // ---- drawing
+/** The walk's name in the top bar: the stage's, Other, or nothing for the whole list. */
+const decideWalkName = (st: DecState) => !st.stage ? '' : st.stage === DEC_OTHER ? 'Other' : decideStageName(st.stage) || 'Stage';
+/** The next stage of the stage's pipeline with items for the person, after it, else before it: [id, name, count]. */
+function decideNextStage(stage: string): [string, string, number] | null {
+  const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.stages.some(s => s.id === stage));
+  if (!p) return null;
+  const at = p.stages.findIndex(s => s.id === stage), counts = needsStageCounts();
+  const s = [...p.stages.slice(at + 1), ...p.stages.slice(0, at)].find(x => x.id && (counts.get(x.id) || 0) > 0);
+  return s?.id ? [s.id, s.name, counts.get(s.id) || 0] : null;
+}
+/** Nothing left: All caught up; a stage's walk says the stage is clear and offers the next stage with items. */
+function decideDoneHTML(st: DecState): string {
+  const close = '<button type="button" class="ghost" data-dc="close">Close</button>';
+  if (!st.stage) return `<div class="dc-done"><h2>All caught up</h2>${close}</div>`;
+  const next = st.stage === DEC_OTHER ? null : decideNextStage(st.stage);
+  const play = next ? `<button type="button" class="primary" data-dc-walk="${esc(next[0])}">▶ ${esc(next[1])} · <span class="tnum">${next[2]}</span></button>` : '';
+  return `<div class="dc-done"><h2>${esc(decideWalkName(st))} is clear</h2>`
+    + (st.answered ? `<p class="dc-sub">${st.answered} answered</p>` : '') + `<div class="dc-acts">${play}${close}</div></div>`;
+}
 const decideStageName = (id: string | null | undefined): string => {
   for (const p of (typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []) {
     const s = p.stages.find(x => x.id === id);
@@ -254,7 +349,8 @@ function decidePaintHead(st: DecState) {
   const root = $('.decide');
   if (!root) return;
   const live = decideLive(st), at = live.indexOf(st.at || ''), it = decideCurrent(st);
-  $('.dc-count', root)!.textContent = it ? `${at + 1} of ${live.length}` : '';
+  const stage = decideWalkName(st);
+  $('.dc-count', root)!.textContent = it ? `${stage ? stage + ' · ' : ''}${at + 1} of ${live.length}` : stage;
   ($('[data-dc="prev"]', root) as HTMLButtonElement).disabled = !it || at <= 0;
   ($('[data-dc="next"]', root) as HTMLButtonElement).disabled = !it || at >= live.length - 1;
   const thumbs = !!it && it.kind === 'ask' && !!it.ask?.may.includes('thumbs');
@@ -271,10 +367,13 @@ function decideRender(st: DecState) {
   root.classList.toggle('dc-empty', !it);
   if (!it) {
     $('.dc-thing', root)!.innerHTML = '';
-    $('.dc-side', root)!.innerHTML = '<div class="dc-done"><h2>All caught up</h2><button type="button" class="ghost" data-dc="close">Close</button></div>';
+    $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
     return;
   }
-  if (decideKind(it) === 'ok' && !st.ok.has(decideRid(it))) void decideOkLoad(st, it, false);
+  // Coming to an ask: what it shows is read once; held content from other refs (a new version came while it was off
+  // screen) is read again and marked as changed. While it is on screen, a refresh never reads it again (decideShownPage).
+  const held = decideKind(it) === 'ok' ? st.ok.get(decideOkKey(it)) : undefined;
+  if (decideKind(it) === 'ok' && (!held || decideOkStale(held, it))) void decideOkLoad(st, it, !!held);
   decidePaintBody(st);
   decidePaintSide(st);
 }
@@ -285,7 +384,7 @@ function decidePaintBody(st: DecState) {
   const kind = decideKind(it);
   let html = '';
   if (kind === 'ok') {
-    const v = st.ok.get(decideRid(it));
+    const v = st.ok.get(decideOkKey(it));
     html = !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
@@ -303,7 +402,7 @@ function decidePaintBody(st: DecState) {
   browserView.stopIn(host);
   host.innerHTML = html;
   host.querySelectorAll<HTMLElement>('[data-dc-browser]').forEach(slot => { decideBrowserMount(st, it, slot); });
-  const v = kind === 'ok' ? st.ok.get(decideRid(it)) : null;
+  const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
 }
@@ -337,16 +436,26 @@ function decidePaintSide(st: DecState) {
   const kind = decideKind(it), asker = decideAsker(it);
   const stage = decideStageName(it.task?.stage_id);
   const typed = kind === 'question' ? it.ask?.typed : undefined;
-  const head = `<h3 class="dc-q">${esc(typed?.question || it.line)}</h3><p class="dc-sub">${[asker ? esc(actorLabel(asker)) : '', esc(stage)].filter(Boolean).join(' · ')}</p>`;
+  // A page's OK is about the task's page: its title heads it, with the version under it. The stage's own line ("OK Chris
+  // (version 3)") names the person asked, so only what it says before that (Jev's reason, a send back) is kept.
+  const page = it.ask?.page, title = page ? it.task?.title || '' : '';
+  const said = title ? it.line.replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
+  const sub = [asker ? esc(actorLabel(asker)) : '', esc(stage), page ? `Version ${esc(String(page.version))}` : ''].filter(Boolean).join(' · ');
+  const head = `<h3 class="dc-q">${esc(title || typed?.question || it.line)}</h3><p class="dc-sub">${sub}</p>`
+    + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
   let body = '';
   if (st.sheet) body = decideSheetHTML(st, it);
   else if (kind === 'ok') {
-    const v = st.ok.get(decideRid(it)), may = it.ask?.may || [];
+    const v = st.ok.get(decideOkKey(it)), may = it.ask?.may || [];
     const ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
+    // A bot's OK of Product's Validate page, its page first (backend/validate_gate.py): OK or Not validated with a note,
+    // which sends the work back to In development. An OK bound to an action or a person's own keeps Approve and Send back.
+    const checked = !page && it.task?.stage_id === 'product-validate' && decideAsker(it).startsWith('bot:')
+      && /^page:/.test(it.ask?.shows?.[0] || '');
     body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" rows="3" maxlength="4000"></textarea></label>
-      <div class="dc-acts">${decideBtn('approve', 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
+      <div class="dc-acts">${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
   } else if (typed) {
     body = decideTypedHTML(typed, it.ask?.choices || [], st.busy);
   } else if (kind === 'question') {
@@ -365,6 +474,12 @@ function decidePaintSide(st: DecState) {
   // What was typed stays through a redraw of the same item (busy, then a refusal in the server's words).
   const held = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
+  // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
+  if (!st.sheet && decideLive(st).length > 1) {
+    const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
+    const skip = decideBtn('skip', 'Skip', false, busy);
+    if (row) row.insertAdjacentHTML('beforeend', skip); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${skip}</div>`);
+  }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
   decideNeedsText($('.decide')!);
@@ -435,11 +550,12 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
 // ---- an OK: what it shows
 /** Reads what an OK is for, once, and holds it. `changed`: read again after the engine said it changed. */
 async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
-  const rid = decideRid(it);
-  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [], page: decidePage(it)};
-  const before = st.ok.get(rid);
+  const rid = decideRid(it), key = decideOkKey(it);
+  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [],
+    page: decidePage(it), shows: decideShows(it)};
+  const before = st.ok.get(key);
   if (before) decideOkLet(before);
-  st.ok.set(rid, v);
+  st.ok.set(key, v);
   if (DEC === st && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
   try {
     // No grant (404): a stage's OK, which shows what its requirement names.
@@ -466,7 +582,7 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     }
     v.state = shown ? 'ready' : 'none';
   } catch (e) { v.state = 'failed'; v.error = errorMessage(e, 'It did not load.'); }
-  if (DEC === st && st.ok.get(rid) === v && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
+  if (DEC === st && st.ok.get(key) === v && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
 }
 /** Lets go of the bytes an OK's view held. */
 function decideOkLet(v: AskOkView) {
@@ -553,10 +669,13 @@ async function decideSupportHTML(content: unknown): Promise<string> {
   return `<pre class="dc-raw">${esc(c.message)}</pre>${ids ? `<p class="dc-line">${ids}</p>` : ''}`;
 }
 /** A page at the exact version an OK of it is for (`page:<id>@<n>`, a page requirement): its HTML read from that version
-    and drawn sandboxed, as the page viewer draws it. */
+    and drawn sandboxed, as the page viewer draws it. A version that is not HTML (one attached before pages for an OK had
+    to be, often Markdown) is drawn as Markdown, so it reads as a document rather than one run-on paragraph. */
 async function decidePageHTML(fid: string, version: number): Promise<string> {
   const file = await viewFile(fid, 'page.html', version);
-  const doc = htmlPreviewDoc(await file.blob.text());
+  const text = await file.blob.text();
+  if (!text.replace(/^[\uFEFF\s]+/, '').startsWith('<')) return `<div class="md dc-page-md">${md(text)}</div>`;
+  const doc = htmlPreviewDoc(text);
   return `<iframe class="html-view dc-page" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Version ${version}" srcdoc="${esc(doc)}"></iframe>`;
 }
 /** A stage's OK shows what the requirement names: pages in full (a page requirement's at its pinned version), an email
@@ -603,7 +722,7 @@ const decidePage = (it: NeedsEntry): string => it.ask?.page ? `${it.ask.page.fil
 /** The page on screen, which an answer is for. A refresh that brought another page leaves the screen as it was read:
     that page is read and shown with "It changed. Look again." and nothing is sent (null). */
 async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | undefined | null> {
-  const v = st.ok.get(decideRid(it));
+  const v = st.ok.get(decideOkKey(it));
   if (!v || v.page === decidePage(it)) return v?.page || undefined;
   await decideOkLoad(st, it, true);
   return null;
@@ -612,7 +731,7 @@ const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.a
 const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null);
 /** Approve: the person's own OK of exactly what is on screen. A change since it was read is shown, never OK'd. */
 async function decideApprove(st: DecState, it: NeedsEntry) {
-  const rid = decideRid(it), v = st.ok.get(rid), taskId = it.task_id;
+  const rid = decideRid(it), v = st.ok.get(decideOkKey(it)), taskId = it.task_id;
   if (!v || !taskId || st.busy) return;
   if (v.state === 'none') {
     const page = await decideShownPage(st, it);
@@ -642,11 +761,13 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
-  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip]');
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip], [data-dc-walk]');
   if (!b || (b as HTMLButtonElement).disabled) return;
+  if (b.dataset.dcWalk) { await decideStageOpen(b.dataset.dcWalk); return; }
   const what = b.dataset.dc || '';
   if (what === 'close') { decideStop(); return; }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
+  if (what === 'skip') { decideSkip(st); return; }
   if (what === 'undo') return;            // the bar's own handler
   const it = decideCurrent(st);
   if (!it) return;

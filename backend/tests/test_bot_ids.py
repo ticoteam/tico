@@ -14,7 +14,7 @@ import unittest.mock
 import uuid
 from pathlib import Path
 
-from backend import bot_tools, files, migrations, pipeline_settings, store, status_values
+from backend import bot_tools, cloud_machines, files, migrations, pipeline_settings, store, status_values
 from backend import hubdb as H
 from backend.config import Settings
 
@@ -128,7 +128,8 @@ def _insert_child_row(conn, table, bot):
 
 def _store_tables(conn):
     """The tables the app creates after the migrations (Store.initialize), with the final bot references."""
-    for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA):
+    # cloud_machines: a bot with no computer reads its cloud machine when a task is entered (task_wakes._computer_cause).
+    for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA, cloud_machines.SCHEMA):
         conn.executescript(schema)
 
 

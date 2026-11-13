@@ -354,3 +354,33 @@ def test_computer_filing_leaves_the_same_ids_only_audit(api, computer):
         "count": 1,
         "via": "automation:" + aid,
     }
+
+
+def test_the_loop_requeues_a_server_lease_its_stuck_worker_never_reported(api, live):
+    """AC-6: the lease's upkeep is the loop's (automations.tick, without draining), not the stuck worker's."""
+    (mid,) = queued(api, "archive")
+    store = api.app.state.store
+    lease = M._claim_workspace_mail(store, mid)  # the worker took it, then stopped answering
+    assert lease and next(r for r in rows(api) if r["id"] == mid)["state"] == "claimed"
+    M.tick(store, drain=False)
+    assert next(r for r in rows(api) if r["id"] == mid)["state"] == "claimed", "its lease still holds"
+    with later(M.MAIL_LEASE_MINUTES + 1):
+        M.tick(store, drain=False)
+        assert next(r for r in rows(api) if r["id"] == mid)["state"] == "queued"
+        # Its next pass takes it again; the stuck worker's result, should it come, finds the lease gone.
+        assert M.drain_workspace_mail(store) == 1
+    row = next(r for r in rows(api) if r["id"] == mid)
+    assert (row["state"], row["attempts"]) == ("done", 2) and len(live["writes"]) == 1
+
+
+def test_the_loop_fails_a_lease_that_ran_out_on_its_last_try(api, live):
+    (mid,) = queued(api, "archive")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE automation_mail_actions SET attempts=? WHERE id=?", (M.MAIL_TRIES - 1, mid))
+    assert M._claim_workspace_mail(store, mid)
+    with later(M.MAIL_LEASE_MINUTES + 1):
+        M.tick(store, drain=False)
+    row = next(r for r in rows(api) if r["id"] == mid)
+    assert row["state"] == "failed" and "no result after" in json.loads(row["result"])["detail"]
+    assert live["writes"] == []

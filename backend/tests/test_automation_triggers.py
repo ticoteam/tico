@@ -524,30 +524,6 @@ def test_a_mail_message_runs_once_even_after_its_row_is_swept_and_exported_again
     assert len(runs(api, aid)["runs"]) == 1
 
 
-def test_a_run_is_found_by_its_automation_and_trigger_ref_through_an_index(api):
-    with api.app.state.store.read() as c:
-        plan = " ".join(
-            row[-1]
-            for row in c.execute(
-                "EXPLAIN QUERY PLAN SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=?",
-                ("aut_x", "mail:ana@acme.example:m1"),
-            )
-        )
-    assert "automation_runs_trigger" in plan
-
-
-def test_the_claim_counts_an_automations_slots_through_its_indexes(api):
-    """The per-automation count the claim makes reads only that automation's active runs and holds, by index."""
-    with api.app.state.store.read() as c:
-        plan = " ".join(
-            row[-1]
-            for row in c.execute(
-                "EXPLAIN QUERY PLAN " + automations.OCCUPIED, {"aid": "aut_x", "cutoff": "2026-10-28T11:30:00Z"}
-            )
-        )
-    assert "automation_runs_active" in plan and "automation_holds_of" in plan
-
-
 def test_a_long_mailbox_keeps_each_message_distinct_and_each_runs_once(api):
     """A 194-character mailbox leaves the 200-character ref no room for the message id: the stored ref keeps a digest
     of the whole, so two messages from it are two runs, and a message offered again is still one."""
@@ -593,11 +569,12 @@ def test_an_automation_has_ten_runs_in_flight_and_the_rest_wait_queued(api):
     assert None not in claimed and len(set(claimed)) == 10
     assert hub.claim() is None  # ten in flight: the other two wait, queued
     with store.transaction() as c:
-        c.execute("UPDATE automation_runs SET status='ok' WHERE id=?", (claimed[0],))
+        c.execute("UPDATE automation_runs SET status='ok' WHERE id=?", (claimed[0].id,))
     assert hub.claim() is not None  # one finished: one more starts
     with store.transaction() as c:
         c.execute(
-            "UPDATE automation_runs SET status='waiting', wake_at=? WHERE id=?", (H.shift(H.now(), days=1), claimed[1])
+            "UPDATE automation_runs SET status='waiting', wake_at=? WHERE id=?",
+            (H.shift(H.now(), days=1), claimed[1].id),
         )
     assert hub.claim() is not None  # waiting for a batch time holds no place
     assert hub.claim() is None

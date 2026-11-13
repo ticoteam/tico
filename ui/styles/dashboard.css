@@ -57,12 +57,11 @@ a.dash-big:hover strong{text-decoration:underline}
 .dash-big strong small{font-size:var(--t-base);font-weight:500;color:var(--muted)}
 .dash-big .muted{font-size:var(--t-sm)}
 .dash-bad{color:var(--fail)}
-.dash-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.dash-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .dash-stat{display:flex;flex-direction:column;gap:2px;padding:8px;border-radius:8px;background:var(--surface2);color:inherit;text-decoration:none;min-width:0}
 .dash-stat:hover{text-decoration:none;outline:1px solid var(--line)}
 .dash-stat strong{font-size:var(--t-xl);font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
 .dash-stat span{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dash-pin[data-size=small] .dash-stats,.bot-pin .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 .dash-bars{display:block;width:100%;height:72px;margin-top:10px}
 .dash-bars rect{fill:color-mix(in srgb,var(--accent) 45%,transparent)}
 .dash-bars rect.now{fill:var(--accent)}
@@ -120,11 +119,21 @@ a.dash-big:hover strong{text-decoration:underline}
   .dash-grid{grid-template-columns:minmax(0,1fr);padding:0 12px 24px;gap:10px}
   .dash-pin,.dash-pin[data-size]{grid-column:1/-1}
   .dash-error{margin:0 16px 8px}
-  .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   /* Sole task and question actions in Home cards need a full finger-height hit area. */
   .dash-list{gap:4px}
   .dash-list li>a{display:flex;align-items:center;min-height:40px}
+  a.dash-big{min-height:40px}
+  /* So are the page's own controls: the Mine/Dashboard tabs, Edit, + Card, + Page, Done, the grips and the card menu. */
+  .dash-head .dash-tabs a{display:inline-flex;align-items:center;min-height:40px}
+  .dash-actions button{min-height:40px}
   .dash-more{width:40px;height:40px}
-  .dash-grip{width:32px;height:32px}
+  .dash-grip{width:40px;height:40px}
+  .dash-menu button{display:flex;align-items:center;min-height:40px}
   .overview-tabs{padding:10px 12px}
+  /* Factories adds a period control and + Factory to the row: the Company tabs take their own full-width row below. */
+  .of-page .overview-tabs{flex-wrap:wrap}
+  .of-page .overview-tabs>.dash-tabs{order:9;flex-basis:100%;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .of-page .overview-tabs>.dash-tabs::-webkit-scrollbar{display:none}
+  /* Six tabs (Share included) fit one 390 px row at this size; a narrower screen scrolls the row, never the page. */
+  .of-page .overview-tabs>.dash-tabs a{flex:none;white-space:nowrap;padding:4px 6px;font-size:var(--t-sm)}
 }

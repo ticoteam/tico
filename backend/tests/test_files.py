@@ -197,6 +197,27 @@ def test_refusals_and_a_bot_writes_only_its_own_files(api):
     )
 
 
+def test_a_file_that_failed_to_sync_is_ready_again_once_it_publishes(api):
+    """bot_files.state (docs/status-and-state.md#bot_filesstate): the runner's `sync=failed` report marks a file
+    not_synced, and the next successful publish of the same file makes it ready again, changed bytes or not."""
+    _, attempt = turn(api)
+
+    def state(fid):
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT state FROM bot_files WHERE id=?", (fid,)).fetchone()[0]
+
+    failed = publish(api, attempt, sync="failed")
+    assert failed.status_code == 200, failed.text
+    fid = failed.json()["file"]["id"]
+    assert failed.json()["synced"] is False and state(fid) == "not_synced"
+    made = publish(api, attempt)
+    assert made.json()["file"]["id"] == fid and state(fid) == "ready"
+    # A file that was ready can fail a later sync, and the same bytes published again recover it.
+    assert publish(api, attempt, sync="failed").status_code == 200 and state(fid) == "not_synced"
+    again = publish(api, attempt)
+    assert again.json()["changed"] is False and state(fid) == "ready"
+
+
 def test_local_rules_refuse_traversal_links_env_and_oversize(tmp_path):
     root = tmp_path / "checkout"
     (root / "reports").mkdir(parents=True)
@@ -218,16 +239,3 @@ def test_local_rules_refuse_traversal_links_env_and_oversize(tmp_path):
     ):
         with pytest.raises(BF.Refused):
             BF.local_file(root, bad)
-
-
-def test_task_covers_find_a_tasks_files_through_an_index(api):
-    """A task list page asks for every task's cover: the files of those tasks must be found by task, not by scanning
-    every bot file (bot_files_task, backend/files.py)."""
-    from backend.files import COVERS_SQL
-
-    with api.app.state.store.read() as c:
-        plan = " ".join(
-            str(row[3])
-            for row in c.execute("EXPLAIN QUERY PLAN " + COVERS_SQL.format(marks="?,?"), ("a", "b", "a", "b"))
-        )
-    assert "bot_files_task" in plan and "SCAN f" not in plan

@@ -16,7 +16,7 @@ Inputs: the task, whose opening quotes the owner's words, and the record it poin
    are a week short of pace." Org changes are a short list, each with the bet it serves.
 4. **A change they asked for**: make it when the server lets you, and say what you did. What is the owner's to confirm
    (a target, the vision, the strategy draft: `Boundaries` in `AGENT.md`) is a proposal or a Confirm card, never
-   a direct write; a goal the owner agreed in their Assistant chat by a plain yes to a read-back is saved by that Assistant, as them, and you never write one; the strategy goes through `playbooks/draft-the-strategy.md`. A proposal you filed waits for their
+   a direct write; a goal the owner agreed in their Assistant chat by their yes to a read-back is saved by that Assistant, as them, and you never write one; the strategy goes through `playbooks/draft-the-strategy.md`. A proposal you filed waits for their
    confirmation and is not live until then: say so in one line. A refusal says why, in one line, and you never work around it.
 5. **A "no" to something you suggested** is a rejected suggestion with their words as its reason
    (`playbooks/goals-make-sense.md`), never a note of your own.

@@ -590,7 +590,7 @@ def page_copy_readable(c, read, viewer=None, auth=None):
     from . import teammate_access
 
     copied = page_copies(c).get(read.get("task_id"))
-    row = copied["page"] if copied else F.restricted_pages(c).get(read["file_id"])
+    row = copied["page"] if copied else F.restricted_page_rows(c, [read["file_id"]]).get(read["file_id"])
     if not row:
         return True
     if row["state"] == "deleted":

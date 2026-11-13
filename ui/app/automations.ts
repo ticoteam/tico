@@ -362,7 +362,7 @@ function auHoldLine(a: AuRow) {
 async function auHoldAct(action: string) {
   auHave(AU);
   const a = AU.cur, state = AU;
-  if (!a?.hold || (action === 'drop' && !confirm(`Drop ${a.hold.held} held runs of ${a.name}?`))) return;
+  if (!a?.hold || (action === 'drop' && !(await askConfirm(`Drop ${a.hold.held} held runs of ${a.name}?`)))) return;
   try {
     const out = auNormal(await post(`${auApi(a.id)}/held`, {action}));
     if (AU !== state) return;
@@ -469,7 +469,7 @@ async function auOnSwitch(e: Event) {
   const id = listId || AU.cur?.id, row = (AU.list || []).find(x => x.id === id) || AU.cur;
   if (!row) return;
   // A built-in is paused only by the top of the org (the server decides), and never without saying what stops.
-  if (!t.checked && row.builtin && !confirm(`${row.name} is built in. Turning it off stops it for everyone.`)) { t.checked = true; return; }
+  if (!t.checked && row.builtin && !(await askConfirm(`${row.name} is built in. Turning it off stops it for everyone.`))) { t.checked = true; return; }
   const state = AU;
   try {
     const out = auNormal(await patch(auApi(id as string), {enabled: t.checked}));
@@ -527,7 +527,7 @@ async function auMoreAct(what: string | undefined) {
   if (what === 'versions') { auEdOpen({kind: 'versions'}); return; }
   if (what === 'run') { auSure(a, 'the open automation'); auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due_at)}); return; }
   if (what === 'apply') { auApplyTemplate(); return; }
-  if (what !== 'delete' || !auIs(a, 'the open automation') || a.builtin || !confirm(`Delete ${a.name}?`)) return;
+  if (what !== 'delete' || !auIs(a, 'the open automation') || a.builtin || !(await askConfirm(`Delete ${a.name}?`))) return;
   try {
     await writeRequest('DELETE', auApi(a.id));
     if (AU !== state || !state.list) return;   // G: the ⋯ menu is drawn on a read list

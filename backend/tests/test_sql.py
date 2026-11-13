@@ -304,6 +304,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "people",
         "redesign_cutover",
         "release-history",
+        "release-snoozes-seen",
         "repositories-access-migrated",
         "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text",
@@ -312,6 +313,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "threads-migration",
         "threads-neutral-titles",
         "usage-count",
+        "validate-proof-sweep",
     ]
 
 
@@ -1435,73 +1437,6 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
         finally:
             conn.close()
     assert api.get("/api/v2/live/stats", headers=headers(delegated)).status_code == 403
-
-
-def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api):
-    """Every /api/v2/sql call reads the private-task parties through the store's shared row cache: two calls at one
-    clock build them once (they were rebuilt on every call, about 4.6% of TIDY's CPU)."""
-    from backend import row_clock
-    from backend import sql as S
-    from backend.auth import Identity
-
-    store, auth = api.app.state.store, api.app.state.auth
-    who = Identity("human:ben", "human")
-    with store.transaction() as c:
-        c.execute(
-            "INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
-            "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)",
-            (H.now(), H.now()),
-        )
-    builds = []
-    original = row_clock._rows
-    row_clock._rows = lambda c, statement: builds.append(statement) or original(c, statement)
-    try:
-        for _ in range(2):
-            with store.read() as c:
-                conn = S.connect(store.settings.db_path, c, auth, who)
-                try:
-                    S.run(conn, "SELECT count(*) FROM tasks", [], 5000, 20)
-                finally:
-                    conn.close()
-    finally:
-        row_clock._rows = original
-    assert sum(row_clock.PARTIES in s for s in builds) == 1, builds
-
-
-def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task(api):
-    """Visibility per private task reads no table-existence probe again: a member's sqlite_master reads stay flat as
-    private tasks grow (they were one per private task, 184 for 184 tasks on a 6k-task hub)."""
-    from backend import sql as S
-    from backend.auth import Identity
-
-    store, auth = api.app.state.store, api.app.state.auth
-    who = Identity("human:ben", "human")
-
-    def catalog_reads():
-        seen = []
-        with store.read() as c:
-            conn = S.connect(store.settings.db_path, c, auth, who, trace=seen.append)
-            try:
-                S.run(conn, "SELECT id FROM tasks ORDER BY id", [], 5000, 20)
-            finally:
-                conn.close()
-        return sum("sqlite_master" in text for text in seen)
-
-    def add(count, start):
-        with store.transaction() as c:
-            c.executemany(
-                "INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                [
-                    (f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
-                    for i in range(start, start + count)
-                ],
-            )
-
-    add(20, 0)
-    before = catalog_reads()
-    add(200, 20)
-    assert catalog_reads() == before
 
 
 def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(api):

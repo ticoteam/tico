@@ -103,6 +103,12 @@ def task_context(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
+        "after": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
+            "each has merged. Build and review go ahead side by side",
+        },
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -151,6 +157,9 @@ def task_create(api, args):
             body[field] = args[field]
     if args.get("private") is not None:
         body["private"] = args["private"]
+    after = _after(args)
+    if after:
+        body["relations"] = [{"task": other, "kind": "after"} for other in after]
     roles = _roles(api, args)
     if roles:
         body["roles"] = roles
@@ -220,6 +229,8 @@ def turn_line(turn, actors=None):
     if not turn:
         return ""
     who, line = turn.get("who"), str(turn.get("line") or "")
+    if str(turn.get("requirement_id") or "").startswith("merge_order:"):  # it merges after a task: the line names it
+        return f"{line} ({who})" if who else line
     if isinstance(who, str) and who and ":" not in who:  # a task's id: the line is its title
         return f"waits on {line or 'a filed task'} ({who})" + (f", until {turn['until']}" if turn.get("until") else "")
     head = _who(who, actors) or str(turn.get("state") or "")
@@ -279,7 +290,21 @@ def task_text(task, actors=None):
     for filed in task.get("filed") or []:
         title = filed.get("title") or "(not yours to read)"
         lines.append(f"Filed: {filed.get('id')} {title} ({filed.get('status')})")
+    lines += order_lines(task)
     return "\n".join(lines)
+
+
+def order_lines(task):
+    """The tasks it merges after and before (relations of kind `after`): "After #40 add the B6 line · Merge"."""
+    out = []
+    for entry in (task.get("relations") or {}).get("after") or []:
+        word = "After" if entry.get("direction") == "out" else "Before"
+        where = entry.get("stage") if entry.get("status") == "open" else entry.get("status")
+        ref = f"#{entry['number']}" if entry.get("number") else str(entry.get("id") or "")[:8]
+        out.append(
+            f"{word} {ref} {entry.get('title') or ''}" + (f" · {where}" if where else "") + f" ({entry.get('id')})"
+        )
+    return out
 
 
 @tool(
@@ -389,6 +414,10 @@ def task_close(api, args):
         "owner": _s("The new owner: a bot slug, a person id, or `me`"),
         "why": WHY,
         "version": VERSION,
+        "set_anyway": {
+            "type": "boolean",
+            "description": "A person gives it all the same when a stage rule refused this owner (a bot is refused)",
+        },
         "on_behalf_of": ASKED,
     },
     required=("id", "owner"),
@@ -397,6 +426,8 @@ def task_close(api, args):
 def task_reassign(api, args):
     version = _seen(args)
     body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
+    if args.get("set_anyway"):
+        body["set_anyway"] = True
     return _asked(api, args).post(f"tasks/{args['id']}/owner", body, key=_key(args))
 
 
@@ -590,12 +621,18 @@ def task_give(api, args):
         "due": _s("ISO-8601 date-time with timezone"),
         "labels": {"type": "array", "items": {"type": "string"}, "description": "Lower-case labels"},
         "private": {"type": "boolean", "description": "Only its requester, owner and readers see it"},
+        "after": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
+            "each has merged. Build and review go ahead side by side",
+        },
     },
     required=("parent", "title"),
     writes=True,
 )
 def task_file(api, args):
-    fields = ("parent", "title", "pipeline", "due", "labels", "private", "operation_id")
+    fields = ("parent", "title", "pipeline", "due", "labels", "private", "after", "operation_id")
     # A task has a body: with none given, its title is its body, as for a sub-task made with tico_task_child_create.
     body = args.get("body") or args["title"]
     return task_create(
@@ -632,7 +669,7 @@ def task_file(api, args):
         "all": {
             "type": "boolean",
             "default": False,
-            "description": "Every task and every bot you may see, as `{tasks, bots}`",
+            "description": "Every task (snoozed ones too) and every bot you may see, as `{tasks, bots}`",
         },
         "snoozed": {
             "type": "string",
@@ -657,6 +694,8 @@ def task_list(api, args):
         for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage")
         if args.get(name)
     }
+    if args.get("all") and not args.get("snoozed"):
+        more["snoozed"] = "all"  # every task you may see: the snoozed ones too
     if args.get("waiting_on"):
         more["waiting_on"] = _target(api, args["waiting_on"])
     paged = args.get("limit") is not None or args.get("offset") is not None
@@ -720,6 +759,14 @@ def task_update(api, args):
 RELATION_KINDS = ("related", "duplicate_of", "follow_up")
 
 
+def _after(args):
+    """The tasks a new task merges after: the tool's list, or the CLI's repeated or comma-separated `--after`."""
+    values = args.get("after") or []
+    if isinstance(values, str):
+        values = [values]
+    return [part.strip().lstrip("#") for value in values for part in str(value).split(",") if part.strip()]
+
+
 BLOCKING_GONE = (
     'A task does not wait on another by a relation: file a sub-task (tico task file --parent <id> "title") or ask a '
     "person (tico task ask)."
@@ -770,6 +817,28 @@ def task_queue(api, args):
 def task_release(api, args):
     body = {"version": _seen(args), **({"tag": args["tag"]} if args.get("tag") else {})}
     return _asked(api, args).post(f"tasks/{args['id']}/release", body, key=_key(args))
+
+
+@tool(
+    "tico_task_after",
+    "Say this task merges after another one (`id` after `task`): when two tasks change the same lines. Build and "
+    "review go ahead side by side; in Merge its PRs are not queued until `task` has merged, then Tico queues them (or "
+    "says to rebase onto it when they conflict). `remove` takes the order off. Refused for a loop, or a task that has "
+    "ended. The reply's `readback` says what was stored, from both ends.",
+    {
+        "id": TASK_ID,
+        "task": {**TASK_ID, "description": "The task it merges after: its id or 8+ leading characters"},
+        "remove": {"type": "boolean", "default": False},
+    },
+    required=("id", "task"),
+    writes=True,
+)
+def task_after(api, args):
+    return api.post(
+        f"tasks/{args['id']}/relations",
+        {"task": str(args["task"]).lstrip("#"), "kind": "after", "remove": bool(args.get("remove"))},
+        key=_key(args),
+    )
 
 
 @tool("tico_task_followers", "Who follows a task, at what level.", {"id": TASK_ID}, required=("id",))

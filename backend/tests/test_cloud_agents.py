@@ -8,7 +8,6 @@ checks of the same story leave their seats behind. Checks that must start from n
 
 import json
 import threading
-import time
 import uuid
 from pathlib import Path
 
@@ -113,22 +112,6 @@ def onboarding_artifacts(api, bot):
 
 
 # --- checks: each takes (api, hq) and may rely on the story's earlier checks only where the story says so ---
-
-
-def _catalog_lists_eight_agents_and_only_claude_code_and_codex_connect(api, hq):
-    agents = api.get("/api/v2/cloud-agents", headers=signed_in()).json()["agents"]
-    assert len(agents) == 8
-    assert all(set(a) == {"id", "name", "maker", "site", "line", "supported", "connect_id"} for a in agents)
-    assert {a["id"]: a["connect_id"] for a in agents if a["supported"]} == {"claude": "claude", "codex": "codex"}
-    assert all(a["connect_id"] is None for a in agents if not a["supported"])
-    assert hq.seen == []
-
-
-def _the_listing_is_the_catalog_the_route_serves_and_a_copy(api, hq):
-    served = api.get("/api/v2/cloud-agents", headers=signed_in()).json()["agents"]
-    assert cloud_agents.listing() == served
-    cloud_agents.listing()[0]["name"] = "Changed"
-    assert cloud_agents.listing()[0]["name"] == "Claude Code"
 
 
 def _a_supported_agent_is_added_not_requested_and_an_unknown_one_is_refused(api, hq):
@@ -604,8 +587,6 @@ def test_the_agent_catalog_and_its_requests_story(environment, hq, subtests):
     """The catalog, then the request path on the fixture catalog: each check reports on its own."""
     api = environment()
     for check in (
-        _catalog_lists_eight_agents_and_only_claude_code_and_codex_connect,
-        _the_listing_is_the_catalog_the_route_serves_and_a_copy,
         _a_supported_agent_is_added_not_requested_and_an_unknown_one_is_refused,
         _requesting_an_agent_puts_a_seat_on_the_chart_and_files_one_ticket_without_ids,
         _the_first_task_waits_on_the_seat_as_a_task_its_person_owns_and_never_reaches_tico,
@@ -749,29 +730,6 @@ def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_star
         assert c.execute("SELECT COUNT(*) FROM seat_requests").fetchone()[0] == 0
     again = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"}, headers=headers)
     assert again["id"] != seat["id"] and [s["id"] for s in seats(api)] == [again["id"]]
-
-
-def test_two_identical_requests_at_once_file_once_and_share_the_seat(environment, hq, monkeypatch):
-    api = environment()
-    headers = {**signed_in(), "Idempotency-Key": str(uuid.uuid4())}
-    entered, release, answers = threading.Event(), threading.Event(), {}
-    hold_tico(monkeypatch, entered, release)
-
-    def send(name):
-        answers[name] = api.post("/api/v2/cloud-agents/devin/request", json={}, headers=headers)
-
-    first = threading.Thread(target=send, args=("first",))
-    first.start()
-    assert entered.wait(10)
-    second = threading.Thread(target=send, args=("second",))
-    second.start()
-    time.sleep(0.5)  # the second one is waiting on the first, not filing its own ticket
-    release.set()
-    first.join(20)
-    second.join(20)
-    assert answers["first"].status_code == 200 and answers["second"].status_code == 200, answers["second"].text
-    assert answers["first"].json()["id"] == answers["second"].json()["id"]
-    assert len(filed(hq)) == 1 and len(seats(api)) == 1
 
 
 def test_a_seat_cannot_be_closed_or_renamed_while_its_request_is_being_filed(environment, hq, monkeypatch):

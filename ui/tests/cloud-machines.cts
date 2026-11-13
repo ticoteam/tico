@@ -31,7 +31,7 @@ declare const BOT: {slug?: string} | null;
 declare const SETTINGS_DATA: {models?: unknown[]};
 declare const S: {emps: {name: string; cloud_machine: CloudMachine | null}[]; me: {role: string; bot_admin: boolean}};
 
-interface CloudSize { name: string; cpu?: number; memory_gb?: number; usd_per_hour?: number; disk_gb?: number }
+interface CloudSize { name: string; cpu?: number; memory_gb?: number; usd_per_hour?: number; disk_gb?: number; available?: boolean; reason?: string }
 interface CloudMachine {
   mode: string; placement: string; size: string; always_on: boolean; pause_minutes: number; grow_storage: boolean;
   grow_note: string; resizing: boolean; state: string; machine_size: string | null; cost_month_usd: number;
@@ -157,6 +157,13 @@ interface Call { bot: string | null; what: string; body: unknown }
       box.innerHTML = cloudSizeOptions(CLOUD_SIZES!, 'large', 'large');
       return [...(box.options as unknown as HTMLOptionElement[])].filter(o => o.disabled).map(o => o.value);
     }), ['small', 'default']);
+    // A size HQ says the company's plan cannot start is shown, greyed out, with its reason: never hidden, never picked.
+    assert.deepEqual(await page.evaluate(() => {
+      const box = document.createElement('select');
+      const sizes = CLOUD_SIZES!.map(size => size.name === 'xlarge' ? {...size, available: false, reason: 'Needs a higher plan'} : size);
+      box.innerHTML = cloudSizeOptions(sizes, 'large', 'default');
+      return [...(box.options as unknown as HTMLOptionElement[])].map(o => [o.value, o.disabled, o.textContent!.endsWith('— needs a higher plan')]);
+    }), [['small', false, false], ['default', false, false], ['large', false, false], ['xlarge', true, true]]);
     if (process.env.TICO_UI_SHOTS) {
       fs.mkdirSync(process.env.TICO_UI_SHOTS, {recursive: true});
       const grow = editor.locator('[data-bot-cloud-grow]');

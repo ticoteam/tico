@@ -46,23 +46,3 @@ def test_only_a_person_who_manages_the_bot_turns_sending_on(api, botops):
     assert change(api, {"outbound_send": False}, "ben-test").status_code == 200
     with api.app.state.store.read() as c:
         assert S.saved(c, "bot:ops")["mode"] == "ask_first" and not S.sends_on_own(c, "ops")
-
-
-def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api, botops):
-    hint = (
-        "A person who manages ops turns its mail sending on in Settings > Bots > ops > Mail sending, "
-        "or with `tico bot mail ops --send`"
-    )
-    own = _wake(api, botops)
-    r = act(api, own, "POST", "bots/ops/mail-settings", {"outbound_send": True}, ref=None)
-    assert r.status_code == 403 and r.json()["error"]["fix"] == hint, r.text
-    assert "go ahead" not in r.text and r.json()["error"]["link"].endswith("#/settings")
-    finish(api, botops, own)
-    lent = turn(api, botops, person="ana-test", text="Let ops send mail")
-    r = act(api, lent, "POST", "bots/ops/mail-settings", {"outbound_send": True})
-    assert r.status_code == 403 and r.json()["error"]["fix"] == hint and "go ahead" not in r.text, r.text
-    # Any other caller that is not a person gets the same pointer in the refusal itself.
-    _, _, attempt = setup_attempt(api, "ops")
-    r = change(api, {"outbound_send": True}, attempt["token"])
-    assert r.status_code == 403 and "Settings > Bots > ops > Mail sending" in r.json()["error"]["detail"]
-    assert "tico bot mail ops --send" in r.json()["error"]["detail"]

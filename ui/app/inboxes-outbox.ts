@@ -149,7 +149,7 @@ function lettersOutActivity(row: LettersOutRow) {
     <span>${sender ? esc(actorLabel(sender)) : 'Person'}</span><strong>${lettersOutMoney(row.total_micros)}</strong>
     ${['none', 'void', 'reversed'].includes(row.billing!) ? '<span>Not charged</span>' : ''}</div>
     ${row.status === 'needs_review' ? '<p class="muted">Submission needs an admin’s review. The total stays reserved until the outcome is confirmed.</p>' : ''}
-    <div class="lo-letter-actions">${row.redacted ? '' : lettersOutProof(row)}${!row.redacted && row.status === 'waiting_for_ok' ? '<a href="#/foryou">Review</a>' : ''}
+    <div class="lo-letter-actions">${row.redacted ? '' : lettersOutProof(row)}${!row.redacted && row.status === 'waiting_for_ok' ? `<a href="${NEEDS_YOU}">Review</a>` : ''}
       ${canCancel ? `<button class="ghost small" type="button" data-lo-cancel="${esc(row.id)}">Cancel</button>` : ''}
       ${row.redacted ? '<p class="muted">Recipient and proof are private.</p>' : `<details><summary>Details</summary><dl class="lo-facts"><dt>Recipient</dt><dd>${esc(lettersOutAddress(row.recipient))}</dd>
       <dt>Return address</dt><dd>${esc(lettersOutAddress(row.return_address))}</dd><dt>Print</dt><dd>${row.color ? 'Color' : 'Black and white'} · ${row.duplex ? 'Duplex' : 'Single sided'}</dd>

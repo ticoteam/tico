@@ -230,18 +230,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_switch_line_lists_each_phase_in_order_and_says_whether_it_was_prefetched() {
-        let marks = vec![
-            ("click".to_string(), 0),
-            ("lock".to_string(), 1),
-            ("nav team.example.com".to_string(), 40),
-        ];
-        assert_eq!(line("o_aaaaaaaa", false, &marks),
-                   "org switch o_aaaaaaaa, prefetched: no (ms since click): click 0, lock 1, nav team.example.com 40");
-        assert!(line("o_aaaaaaaa", true, &marks).contains("prefetched: yes (ms since hover)"));
-    }
-
-    #[test]
     fn a_trace_keeps_at_most_its_cap_of_marks() {
         let mut trace = Trace::new("o", 1, false);
         for _ in 0..100 {

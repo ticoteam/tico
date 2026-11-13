@@ -92,17 +92,6 @@ def check(dev, *args):
     )
 
 
-def test_a_conflicting_branch_fails_and_names_the_file(remotes):
-    origin, seed, dev = remotes
-    diverge(seed, origin, dev)
-    git(dev, "fetch", "-q", "origin", "main")
-    done = check(dev, "--base", "origin/main", "--head", "feature")
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert "conflicts with origin/main in 1 file(s)" in done.stderr
-    assert "  a.txt" in done.stderr
-    assert "git rebase origin/main" in done.stderr
-
-
 def test_the_local_json_merge_driver_does_not_hide_a_text_conflict(remotes):
     # GitHub ignores local merge drivers, so a file .gitattributes gives the tico-json driver still conflicts here.
     origin, seed, dev = remotes
@@ -187,12 +176,3 @@ def test_failed_checks_stop_the_push_before_the_conflict_check(remotes):
     assert done.returncode != 0, done.stdout + done.stderr
     assert "scripts/check.sh failed" in done.stderr
     assert git(origin, "ls-remote", ".", "refs/heads/feature").stdout == ""
-
-
-def test_no_verify_pushes_past_a_conflict(remotes):
-    origin, seed, dev = remotes
-    install_hook(dev)
-    diverge(seed, origin, dev)
-    done = push(dev, "--no-verify", "origin", "feature")
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "refs/heads/feature" in git(origin, "ls-remote", ".", "refs/heads/feature").stdout

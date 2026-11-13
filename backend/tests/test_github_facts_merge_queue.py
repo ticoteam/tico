@@ -5,15 +5,18 @@ backend/tests/helpers/fake_github.py; nothing here reaches the real one."""
 import hashlib
 import hmac
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from backend import github as G
 from backend import heartbeat as HB
 from backend.item_sources import github as MQ
 from backend import never_stuck as NS
 from backend import task_engine as E
 from backend.item_sources import github as F
 from backend import task_requirements as R
+from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.fake_github import FakeGitHub
@@ -182,7 +185,6 @@ def test_a_re_run_in_the_same_suite_is_the_same_check_and_its_newest_run_counts(
     ("states", "want"),
     [
         (("skipped",), SKIPPED),
-        (("skipped", "skipped"), SKIPPED),
         (("success", "skipped"), PASSED),
         (("skipped", "failure"), (R.NOT_MET, B, "Checks failed on acme/app#1: check-2")),
         (("skipped", "pending"), (R.WAITING, "github", "Checks running")),
@@ -199,17 +201,88 @@ def test_a_skipped_check_fails_nothing_but_alone_it_is_not_passing(c, states, wa
 
 
 def test_neutral_and_skipped_runs_read_as_skipped_and_a_tico_run_does_not_rescue_them(c):
-    assert [F.check_state("completed", r) for r in ("success", "neutral", "skipped", "cancelled")] == [
+    assert [F.check_state("completed", r) for r in ("success", "neutral", "skipped")] == [
         "success",
         "skipped",
         "skipped",
-        "failure",
     ]
     engineering(c)
     task_id = new(c, 1)
     checks = [{"name": "lint", "state": "skipped"}, {"name": "t", "state": "success", "tico": True}]
     F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": checks}, 1)
     assert line(c, task_id, "checks_pass") == SKIPPED
+
+
+CANCELLED = (
+    R.NOT_MET,
+    B,
+    "Checks on acme/app#1 were cancelled, not failed: checks. Re-run them; there is no code to fix",
+)
+
+
+def test_a_cancelled_or_stale_run_is_not_a_failure_and_a_failed_or_timed_out_one_is():
+    """Nov 12 stress run, I38: a run GitHub cancelled (a concurrency group's duplicate) read as a failed check."""
+    states = ("cancelled", "stale", "failure", "timed_out", "action_required", "startup_failure")
+    assert [F.check_state("completed", r) for r in states] == ["cancelled", "cancelled"] + ["failure"] * 4
+
+
+@pytest.mark.parametrize(
+    ("runs", "want"),
+    [
+        # A concurrency group cancels the older duplicate run; the newer one, in its own suite, is the check.
+        ((("cancelled", 1), ("success", 2)), PASSED),
+        ((("cancelled", 1), ("pending", 2)), (R.WAITING, "github", "Checks running")),
+        ((("cancelled", 1), ("failure", 2)), FAILED),
+        # The newest run was cancelled with none after it: say so, so the owner re-runs it instead of fixing code.
+        ((("cancelled", 1),), CANCELLED),
+        ((("success", 1), ("cancelled", 2)), CANCELLED),
+        ((("stale", 1),), CANCELLED),
+        # A red run of the same name in another suite is never hidden behind a newer cancel.
+        ((("failure", 1), ("cancelled", 2)), FAILED),
+        ((("timed_out", 1),), FAILED),
+    ],
+)
+def test_a_cancelled_run_is_not_a_failed_check(c, runs, want):
+    engineering(c)
+    task_id = new(c, 1)
+    gh = FakeGitHub()
+    head = gh.open_pr(REPO, 1)
+    for conclusion, suite in runs:
+        gh.run(REPO, head, "checks", F.check_state("completed", conclusion), suite=suite)
+    read(c, gh)
+    assert line(c, task_id, "checks_pass") == want
+
+
+def test_a_cancelled_run_wakes_its_owner_to_re_run_it_and_a_newer_run_supersedes_it(c, monkeypatch):
+    engineering(c)
+    new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": []}, 1)
+
+    def hook(run_id, suite, conclusion):
+        run = {
+            "id": run_id,
+            "name": "checks",
+            "head_sha": "h1",
+            "status": "completed",
+            "conclusion": conclusion,
+            "app": {"slug": "github-actions"},
+            "check_suite": {"id": suite},
+        }
+        F.webhook(c, "check_run", {"check_run": run, "repository": {"full_name": REPO}})
+        return F.pr(c, REPO, 1)["checks_state"]
+
+    assert hook(10, 1, "cancelled") == "cancelled"
+    after = F.pr(c, REPO, 1)
+    assert F.CHECKS_DONE.count("cancelled") == 1 and F.runs_checks(c, REPO)
+    told: list[str] = []
+    monkeypatch.setattr(F, "snooze_news", lambda conn, task_id, key, lead: told.append(lead) or True)
+    assert F.checks_news(c, ["t"], after, None) == 1
+    assert told == [
+        "The checks on acme/app#1 were cancelled at h1, not failed: checks. Re-run them; there is no code to fix."
+    ]
+    assert hook(11, 2, "success") == "success"  # the newer run of `checks`, in its own suite
+    assert hook(10, 1, "cancelled") == "success"  # the cancelled one, delivered again late, stays superseded
+    assert [x["state"] for x in F.pr(c, REPO, 1)["checks"]] == ["success"]
 
 
 def test_check_run_webhooks_keep_two_suites_apart_and_a_late_older_run_changes_nothing(c):
@@ -296,6 +369,14 @@ def test_with_many_prs_the_first_unmet_in_link_order_gives_the_line(c):
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
 
 
+def test_a_failed_pr_is_the_line_before_an_earlier_pr_whose_checks_still_run(c):
+    engineering(c)
+    task_id = new(c, 1, 2)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": [{"name": "u", "state": "pending"}]}, 1)
+    F.save_pr(c, REPO, 2, {"state": "open", "head_sha": "b", "checks": [{"name": "e2e", "state": "failure"}]}, 1)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
+
+
 def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     engineering(c)
     task_id = new(c, 1)
@@ -315,8 +396,11 @@ def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     assert (found.state, found.line) == (R.MET, "This repo doesn't publish releases")  # C31
     F.save_release(c, REPO, {"tag": "v2.0.0-rc.1", "commit_sha": "r1", "published_at": H.now()}, 4)
     rc = F.releases(c, REPO, prereleases=True)[0]
+    F.save_included(c, rc["id"], "m", False)
+    found = R.KINDS["item"](c, row, req, None)
+    assert (found.state, found.line) == (R.WAITING, "Waiting for the next release of acme/app")
     F.save_included(c, rc["id"], "m", True)
-    assert R.KINDS["item"](c, row, req, None).line == "Waiting for the next release of acme/app"  # a dash: pre-release
+    assert R.KINDS["item"](c, row, req, None).line == "In v2.0.0-rc.1"  # pre-releases count by default
     found = R.KINDS["item"](c, row, {**req, "settings": {"prereleases": True}}, None)
     assert (found.state, found.line) == (R.MET, "In v2.0.0-rc.1")
     found = R.KINDS["item"](c, row, {**req, "settings": {"release_repo": "acme/server"}}, None)
@@ -447,7 +531,8 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         woken = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
         assert len(woken) == 1 and woken[0].startswith(f"{task_id}:")
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (woken[0],)).fetchone()[0]
-        assert "e2e" in body and "https://ci/9" in body and f"tico task queue {task_id}" in body
+        assert "e2e" in body and "https://ci/9" in body and "Fixes 2" in body
+        assert f"tico task queue {task_id}" not in body  # a check that really failed is not queued again as it is
         assert X.events(c, task_id).count("pr_queue_removed") == 1
         assert effects(c, task_id) == [("act", "done")]
     gh.push(REPO, 1)  # a fix pushed in Merge: the task stays in Merge and nothing queues it by itself
@@ -455,6 +540,36 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
     with company.transaction() as c:
         assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("act", "done")]
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
+
+
+def test_a_drop_of_one_pr_is_the_line_while_another_pr_of_the_task_is_still_queued(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1, 2)
+    MQ.run(company, gh)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
+    gh.push(REPO, 2)  # a new commit on the second-linked PR: GitHub takes it out; PR 1 stays queued
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert gh.prs[(REPO, 1)]["queue_state"] == "queued"
+        assert line(c, task_id, "pr_merged") == (
+            R.NOT_MET,
+            RM,
+            "Dropped from the merge queue: A new commit was pushed",
+        )
+        assert W.turns(c, E.task(c, task_id)) == {RM}
+
+
+def test_links_made_in_the_same_millisecond_keep_the_order_they_were_made_in(c):
+    engineering(c)
+    task_id = new(c, 9, 3)
+    same = "SELECT MIN(created_at) FROM task_links WHERE task_id=?"
+    c.execute(f"UPDATE task_links SET created_at=({same}) WHERE task_id=?", (task_id, task_id))
+    # Ids are random: make the first link's sort after the second's, as a tie broken by id may do
+    c.execute("UPDATE task_links SET id=CASE WHEN url LIKE '%/9' THEN 'z' ELSE 'a' END WHERE task_id=?", (task_id,))
+    assert [pr["number"] for pr in F.prs_of(c, task_id)] == [9, 3]
 
 
 def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_person(company):
@@ -487,6 +602,218 @@ def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_perso
         moved_back = E.move(c, task_id, "Build", X.ANA, "Needs the Builder")
         E.move(c, task_id, "Merge", X.ANA, "Again", seen_version=moved_back["version"])
         assert MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"]) == 0  # a new visit counts afresh
+
+
+QUEUE_FAILED = "Checks failed in the merge queue"
+REAL_LEG = "browser-2: Run selected tests"
+
+
+def queue_removal_bodies(c, task_id):
+    keys = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
+    return [c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0] for key in keys]
+
+
+def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, QUEUE_FAILED, check=REAL_LEG, url="https://ci/1")
+    F.refresh(company, gh, later(10))
+    with company.transaction() as c:
+        (first,) = queue_removal_bodies(c, task_id)
+        assert REAL_LEG in first and "Fixes 2" in first and f"tico task queue {task_id}" not in first
+        version = E.task(c, task_id)["version"]
+        detail = refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert REAL_LEG in detail and "Fixes 2" in detail
+        assert stage(c, task_id) == "Merge"
+    head = gh.push(REPO, 1)  # a fix pushed: a bot may not queue that commit, a person may
+    F.refresh(company, gh, later(30))
+    with company.transaction() as c:
+        assert "Fixes 2" in refused(
+            lambda: MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"]), "task_requirement"
+        )
+        owed = MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])
+        assert [e["pinned"] for e in owed] == [head]
+
+
+@pytest.mark.parametrize("check", [MQ.CANCELLED_FROM_OUTSIDE, None])
+def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to_fixes(company, check):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, QUEUE_FAILED, check=check, url="https://ci/1")
+    F.refresh(company, gh, later(10))
+    with company.transaction() as c:
+        (first,) = queue_removal_bodies(c, task_id)
+        assert f"tico task queue {task_id}" in first
+        MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])  # once, after the outside cancel
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, QUEUE_FAILED, check=check, url="https://ci/2")  # the same head is taken out again
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        later_bodies = queue_removal_bodies(c, task_id)
+        assert len(later_bodies) == 2
+        (second,) = [body for body in later_bodies if body != first]
+        assert "Fixes 2" in second and "Queue it again" not in second
+        version = E.task(c, task_id)["version"]
+        assert "Fixes 2" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert stage(c, task_id) == "Merge"
+
+
+def job(name, conclusion, failed_steps=(), url=None):
+    """One job of a merge queue run as the Actions API lists it: its steps, the failed ones given by name."""
+    steps = [{"name": "Set up", "conclusion": "success"}] + [{"name": s, "conclusion": "failure"} for s in failed_steps]
+    return {
+        "name": name,
+        "conclusion": conclusion,
+        "html_url": url or f"https://ci/{name}",
+        "check_run_url": "https://api.github.com/repos/acme/app/check-runs/77",
+        "steps": steps,
+    }
+
+
+FAIL_FAST = [job("checks", "failure"), job("python-1", "cancelled"), job("browser-1", "cancelled")]
+
+
+def test_a_removal_names_the_leg_that_failed_and_not_the_legs_a_fail_fast_cancelled():
+    jobs = [
+        FAIL_FAST[0],
+        job("python-1", "cancelled"),
+        job("browser-2", "failure", ["Run selected tests"], "https://ci/b2"),
+    ]
+
+    def no_line(_checks):
+        raise AssertionError("the checks line is read only when no leg failed")
+
+    assert MQ.failing_leg(jobs + [job("browser-1", "cancelled")], no_line) == (REAL_LEG, "https://ci/b2")
+
+
+def test_every_failed_leg_is_named_with_its_failed_steps_and_a_timed_out_leg_counts():
+    jobs = [
+        job("checks", "failure"),
+        job("python-1", "failure", ["pytest"]),
+        job("browser-2", "failure", ["Run selected tests", "Upload"]),
+        job("e2e", "timed_out"),
+    ]
+    assert MQ.failing_leg(jobs, lambda _checks: None) == (
+        "python-1: pytest; browser-2: Run selected tests, Upload; e2e",
+        "https://ci/python-1",
+    )
+
+
+def test_a_startup_failure_is_the_runners_not_a_failing_leg():
+    runner = job("python-5", "startup_failure")
+    checks = job("checks", "failure")
+    assert MQ.failing_leg([checks, runner], lambda _checks: None) == (MQ.CANCELLED_FROM_OUTSIDE, "https://ci/checks")
+    real = job("browser-2", "failure", ["Run selected tests"], "https://ci/b2")
+    assert MQ.failing_leg([checks, runner, real], lambda _checks: None) == (REAL_LEG, "https://ci/b2")
+
+
+@pytest.mark.parametrize(
+    "line, want",
+    [
+        (
+            "Failed: browser-2: Run selected tests. Fail fast then cancelled the other legs.",
+            REAL_LEG,
+        ),
+        (
+            "Failed: python-1: pytest; browser-2: Run selected tests. Fail fast then cancelled the other legs.",
+            "python-1: pytest; browser-2: Run selected tests",
+        ),
+        (
+            "No step failed: the run was cancelled from outside (a superseded queue group, or by hand).",
+            MQ.CANCELLED_FROM_OUTSIDE,
+        ),
+        (None, MQ.CANCELLED_FROM_OUTSIDE),
+    ],
+)
+def test_with_no_failed_leg_the_checks_line_names_it_or_the_run_was_cancelled_from_outside(line, want):
+    assert MQ.failing_leg(FAIL_FAST, lambda _checks: line) == (want, "https://ci/checks")
+
+
+def test_no_jobs_means_the_run_is_not_known():
+    assert MQ.failing_leg([], lambda _checks: "Failed: x: y. Fail fast") is None
+
+
+class Answers:
+    """The GitHub App's HTTP service for `AppGitHub._queue_failure`: each path answers (status, json) and `asked` keeps
+    the paths read."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked = []
+
+    def mint(self, repos, permissions):
+        return "token", None
+
+    def _call(self, method, path, **kwargs):
+        self.asked.append(path)
+        status, body = self.answers.get(path, (404, {}))
+        return SimpleNamespace(status_code=status, json=lambda: body)
+
+
+RUNS = "/repos/acme/app/actions/runs"
+JOBS = "https://api.github.com/repos/acme/app/actions/runs/9/jobs"
+ANNOTATIONS = "https://api.github.com/repos/acme/app/check-runs/77/annotations"
+
+
+def queue_failure(jobs, notes=None, notes_status=200, runs=None):
+    """(what `AppGitHub._queue_failure` names for PR 1, the paths it read) for a merge queue run with these jobs and the
+    checks job's annotations."""
+    if runs is None:
+        runs = [
+            {
+                "head_branch": "gh-readonly-queue/main/pr-1-abc123",
+                "created_at": "2026-11-10T10:00:00Z",
+                "jobs_url": JOBS,
+            }
+        ]
+    service = Answers(
+        {
+            RUNS: (200, {"workflow_runs": runs}),
+            JOBS: (200, {"jobs": jobs}),
+            ANNOTATIONS: (notes_status, [{"message": line} for line in notes or []]),
+        }
+    )
+    return G.AppGitHub(service)._queue_failure("acme/app", 1, ""), service.asked
+
+
+def test_the_app_names_the_failed_leg_and_reads_no_annotation():
+    jobs = [
+        job("checks", "failure"),
+        job("python-1", "cancelled"),
+        job("browser-2", "failure", ["Run selected tests"], "https://ci/b2"),
+    ]
+    named, asked = queue_failure(jobs)
+    assert named == (REAL_LEG, "https://ci/b2")
+    assert ANNOTATIONS not in asked
+
+
+def test_the_app_reads_the_checks_line_only_when_no_leg_failed():
+    jobs = [job("checks", "failure"), job("python-1", "cancelled")]
+    named, asked = queue_failure(jobs, ["Failed: python-1: pytest. Fail fast then cancelled the other legs."])
+    assert named == ("python-1: pytest", "https://ci/checks")
+    assert ANNOTATIONS in asked
+
+
+def test_the_app_says_cancelled_from_outside_when_the_checks_line_says_no_step_failed():
+    jobs = [job("checks", "failure"), job("python-1", "cancelled")]
+    named, _ = queue_failure(jobs, ["No step failed: the run was cancelled from outside (by hand)."])
+    assert named == (MQ.CANCELLED_FROM_OUTSIDE, "https://ci/checks")
+
+
+def test_the_app_still_names_the_run_when_its_annotations_cannot_be_read():
+    jobs = [job("checks", "failure"), job("python-1", "cancelled")]
+    named, _ = queue_failure(jobs, notes_status=500)
+    assert named == (MQ.CANCELLED_FROM_OUTSIDE, "https://ci/checks")
+
+
+def test_the_app_names_no_run_when_none_was_queued_for_the_pr():
+    named, asked = queue_failure([], runs=[])
+    assert named is None
+    assert JOBS not in asked
 
 
 def test_a_queue_entry_that_vanishes_without_a_word_is_a_drop(company):
@@ -695,14 +1022,19 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     F.refresh(company, gh, later())
     with company.transaction() as c:
         version = E.task(c, task_id)["version"]
-        go = lambda by=RM, v=version: MQ.requeue(c, task_id, by, seen_version=v)  # noqa: E731
+        go = lambda by=X.ANA, v=version: MQ.requeue(c, task_id, by, seen_version=v)  # noqa: E731
         assert refused(go, "task_requirement") == "The checks on acme/app#1 are still running"
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "failure"}]}, F.version_now())
         assert refused(go, "task_requirement") == "Checks failed on acme/app#1: unit"
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "success"}]}, F.version_now())
-        refused(lambda: go(v=version - 1), "task_changed")
+        refused(lambda: go(by=RM, v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
-        owed = go()
+        # The new commit changes other lines than the one the person OK'd: the Release Owner sends the task back to
+        # Fixes 2, where Reviewer 2 reads them; it may not queue it as it is (an OK on an old commit never merges a
+        # new one).
+        assert refused(lambda: go(by=RM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
+        assert refused(lambda: go(by=EM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
+        owed = go()  # a person queues it as it is now: that is their OK of the new commit
         assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
         assert effects(c, task_id) == [("act", "moot"), ("act", "owed")]
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "Queuing the PR")
@@ -711,6 +1043,30 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     with company.transaction() as c:
         assert F.pr(c, REPO, 1)["queue_state"] == "queued"
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
+
+
+def test_a_rebase_after_the_ok_is_queued_again_by_the_release_owner(company):
+    """C22, velocity: a rebase onto a newer main (or a conflict fixed without changing the PR's own lines) changes the
+    same lines as the commit the person OK'd. The Release Owner queues it again; until Tico has read what the new commit
+    changes, it is asked to try again."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    head = gh.rebase(REPO, 1)
+    gh.set_checks(REPO, head, "success")
+    with company.transaction() as c:
+        seen(c, gh, 1)
+        version = E.task(c, task_id)["version"]
+        go = lambda: MQ.requeue(c, task_id, RM, seen_version=version)  # noqa: E731
+        assert refused(go, "task_requirement") == MQ.COMPARING.format(ref=REF)
+    F.refresh(company, gh, later())
+    assert [call[0] for call in gh.calls].count("pr_diff") == 2, "the queued commit and the new one, once each"
+    with company.transaction() as c:
+        owed = MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])
+        assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
+    F.refresh(company, gh, later(20))
+    assert [call[0] for call in gh.calls].count("pr_diff") == 2, "each commit is read once"
 
 
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):
@@ -1103,3 +1459,227 @@ def test_a_task_restored_from_the_trash_lands_before_merge(c):
     assert task_delete.delete_tasks(c, [task_id], apply=True, keep_work=True)["applied"]
     assert task_delete.restore_tasks(c, [task_id], X.ANA)["restored"]
     assert stage(c, task_id) == "Build" and effects(c, task_id) == []
+
+
+# ----------------------------------------------------------------------------- a snooze on Merge waits for GitHub
+def dropped(company, gh):
+    """A task in Merge whose PR GitHub took out of the queue, with green checks: the Release Owner's turn, its removal
+    wake had its run."""
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, "It conflicts with its base branch")
+    with company.transaction() as c:
+        seen(c, gh)
+        X.settled(c)
+    return task_id
+
+
+def snoozed(c, task_id, why, by=RM):
+    E.snooze(c, task_id, by, why, later(90), seen_version=E.task(c, task_id)["version"])
+
+
+def news(c, task_id):
+    """(wake key, body) of each wake that GitHub news on the Merge stage gave the Release Owner."""
+    return [(k, b) for k, b in owner_wakes(c, task_id, RM) if f":{MQ.WAKE_NEWS}:" in k]
+
+
+def test_checks_finishing_on_the_prs_newest_commit_end_a_bots_snooze_once(company):
+    """Tico Team, Nov 11: after rebasing its PR the Release Owner snoozed 25 minutes "re-queue once checks pass"; the
+    checks took 6. Their end ends a bot's snooze on Merge and wakes it once; reading them again wakes nobody."""
+    gh = FakeGitHub()
+    task_id = dropped(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "re-queue once checks pass")
+        assert news(c, task_id) == []
+        assert W.headline(c, task_id).state == W.SNOOZED  # the task's line says so while it sleeps
+        gh.set_checks(REPO, head, "success")
+        seen(c, gh)
+        assert E.task(c, task_id)["snooze"] is None
+        ended = c.execute("SELECT ended_by_id FROM snoozes WHERE task_id=?", (task_id,)).fetchone()[0]
+        assert ended == E.SYSTEM
+        ((key, body),) = news(c, task_id)
+        assert key.endswith(f"checks:{REF}:{head}:success")
+        assert f"The checks on {REF} passed" in body and "re-queue once checks pass" in body
+        snoozed(c, task_id, "the queue is busy; re-queue later")
+        seen(c, gh)  # the same checks read again, as a sweep does
+        hooked(c, "synchronize", gh)
+        assert E.task(c, task_id)["snooze"] and len(news(c, task_id)) == 1
+
+
+def test_a_move_of_main_ends_a_bots_snooze_once_per_commit_and_a_named_pr_waits_for_its_merge(company):
+    """Tico Team, Nov 11: the Release Owner snoozed "until 04:30, waiting for #3417 to merge". #3417 merged at 03:01
+    and nothing woke it. A snooze that names a PR ends when that PR merges into the base; one that names none ends
+    when the base moves, once per base commit however many webhooks report it."""
+    from backend import github as G
+
+    gh = FakeGitHub()
+    task_id = dropped(company, gh)
+    with company.transaction() as c:
+        snoozed(c, task_id, "until 04:30, waiting for #3417 to merge; then re-queue #1 unchanged")
+        G.base_moved(c, REPO, "main", "a" * 40, default_branch="main")  # the push: no PR named
+        G.base_moved(c, REPO, "main", "b" * 40, default_branch="main", merged_number=3400)  # another PR
+        assert E.task(c, task_id)["snooze"] and news(c, task_id) == []
+        G.base_moved(c, REPO, "main", "c" * 40, default_branch="main", merged_number=3417)
+        ((key, body),) = news(c, task_id)
+        assert E.task(c, task_id)["snooze"] is None and f"{REPO}#3417 merged." in body
+
+        snoozed(c, task_id, "re-queue once main has the fix")
+        G.base_moved(c, REPO, "main", "c" * 40, default_branch="main", merged_number=3417)  # the same merge again
+        assert E.task(c, task_id)["snooze"] and len(news(c, task_id)) == 1
+        G.base_moved(c, REPO, "main", "d" * 40, default_branch="main")
+        G.base_moved(c, REPO, "main", "d" * 40, default_branch="main", merged_number=3418)  # the same move again
+        assert E.task(c, task_id)["snooze"] is None and len(news(c, task_id)) == 2
+        snoozed(c, task_id, "re-queue once main has the fix")
+        G.base_moved(c, REPO, "main", "d" * 40, default_branch="main")  # a webhook delivered again
+        G.base_moved(c, REPO, "release", "e" * 40, default_branch="main")  # another branch
+        assert E.task(c, task_id)["snooze"] and len(news(c, task_id)) == 2
+
+
+def test_a_persons_snooze_on_merge_is_never_ended_by_github(company):
+    from backend import github as G
+
+    gh = FakeGitHub()
+    task_id = dropped(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "hold it for the launch", by=X.ANA)
+        gh.set_checks(REPO, head, "failure")
+        seen(c, gh)
+        G.base_moved(c, REPO, "main", "a" * 40, default_branch="main", merged_number=9)
+        assert E.task(c, task_id)["snooze"]["by_id"] == X.ANA and news(c, task_id) == []
+
+
+def test_a_removal_a_conflict_and_a_merge_end_a_bots_snooze(company):
+    from backend import github as G
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        snoozed(c, task_id, "in the queue; look again at 04:30")
+    gh.drop(REPO, 1, "It conflicts with its base branch")
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert E.task(c, task_id)["snooze"] is None  # the removal's own wake is not held by it
+        assert len([k for k, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in k]) == 1
+        X.settled(c)
+        snoozed(c, task_id, "rebase after lunch")
+        pr = {"number": 1, "html_url": f"https://github.com/{REPO}/pull/1", "state": "open", "mergeable": False}
+        pr["head"] = {"sha": gh.prs[(REPO, 1)]["head_sha"], "ref": "feature"}
+        G.pull_request(c, {"action": "refresh", "pull_request": pr}, read_refresh=True)
+        ((_, body),) = news(c, task_id)
+        assert E.task(c, task_id)["snooze"] is None and f"{REF} conflicts with its base branch now." in body
+        G.pull_request(c, {"action": "refresh", "pull_request": pr}, read_refresh=True)  # read again: no news
+        assert len(news(c, task_id)) == 1
+        snoozed(c, task_id, "waiting for the queue")
+        version = E.task(c, task_id)["version"]
+    gh.prs[(REPO, 1)]["queue_state"] = "queued"
+    gh.merge(REPO, 1)
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release" and E.task(c, task_id)["version"] > version
+
+
+# ----------------------------------------------------------------------------- a snooze before Merge waits for GitHub too
+def failing_in_build(company, gh):
+    """A task in Build whose PR's checks failed: the Builder's turn."""
+    with company.transaction() as c:
+        engineering(c)
+        task_id = new(c, 1)
+        gh.set_checks(REPO, gh.open_pr(REPO, 1), "failure")
+        seen(c, gh)
+        assert stage(c, task_id) == "Build"
+    return task_id
+
+
+def builder_news(c, task_id):
+    return [(k, b) for k, b in owner_wakes(c, task_id, B) if f":{MQ.WAKE_NEWS}:" in k]
+
+
+def bot_snoozes(c, task_id):
+    return int(E.task(c, task_id)["visit"].get("bot_snoozes") or 0)
+
+
+def merged_hook(c, number, merged=True):
+    """GitHub's webhook for a PR no task links being closed, merged or not."""
+    pr = {"number": number, "html_url": f"https://github.com/{REPO}/pull/{number}", "state": "closed"}
+    pr |= {"merged": merged, "merge_commit_sha": "f" * 40 if merged else None, "base": {"ref": "main"}}
+    repository = {"full_name": REPO, "default_branch": "main"}
+    G.pull_request(c, {"action": "closed", "pull_request": pr, "repository": repository})
+
+
+def test_a_snooze_before_merge_that_names_a_pr_ends_when_that_pr_merges(company):
+    """Tico Team, Nov 12: the Builder snoozed in Fixes 1 "until 08:00Z, waiting for #3417 to land, then rerun checks";
+    #3417 merged at 03:01 and nothing woke it for five hours. On any stage a bot's snooze that names a PR ends when that
+    PR merges or closes, once; a move of main that names no PR wakes nobody before Merge, and the snooze count stays."""
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        snoozed(c, task_id, "until 08:00Z, waiting for #3417 to land, then rerun checks", by=B)
+        count = bot_snoozes(c, task_id)
+        G.base_moved(c, REPO, "main", "a" * 40, default_branch="main")  # a push: on Build it is noise
+        merged_hook(c, 3400)  # a PR the snooze does not name
+        assert E.task(c, task_id)["snooze"] and builder_news(c, task_id) == []
+        merged_hook(c, 3417)
+        ((key, body),) = builder_news(c, task_id)
+        assert key.endswith(f"named:{REPO}#3417:merged") and f"{REPO}#3417 merged." in body
+        assert "waiting for #3417 to land" in body
+        assert E.task(c, task_id)["snooze"] is None and bot_snoozes(c, task_id) == count
+        snoozed(c, task_id, "still waiting for #3417 to land", by=B)
+        merged_hook(c, 3417)  # the webhook delivered again
+        G.merged_by_tico(c, REPO, 3417)
+        assert E.task(c, task_id)["snooze"] and len(builder_news(c, task_id)) == 1
+        merged_hook(c, 3418, merged=False)  # nor does a close of a PR it does not name end it
+        assert E.task(c, task_id)["snooze"]
+
+
+def test_checks_finishing_before_merge_end_a_bots_snooze_once(company):
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "rerun checks at 05:00", by=B)
+        gh.set_checks(REPO, head, "failure")
+        seen(c, gh)
+        ((key, body),) = builder_news(c, task_id)
+        assert key.endswith(f"checks:{REF}:{head}:failure") and f"Checks failed on {REF}" in body
+        assert E.task(c, task_id)["snooze"] is None
+        snoozed(c, task_id, "rerun checks at 06:00", by=B)
+        seen(c, gh)  # read again, as a sweep does
+        assert E.task(c, task_id)["snooze"] and len(builder_news(c, task_id)) == 1
+
+
+def test_a_persons_snooze_before_merge_is_never_ended_by_github(company):
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "hold until #3417 lands", by=X.ANA)
+        gh.set_checks(REPO, head, "failure")
+        seen(c, gh)
+        merged_hook(c, 3417)
+        assert E.task(c, task_id)["snooze"]["by_id"] == X.ANA and builder_news(c, task_id) == []
+
+
+def test_a_conflict_before_merge_ends_a_bots_snooze_so_its_wake_is_not_held(company):
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        X.settled(c)
+        before = len(X.wakes(c, task_id, B))
+        snoozed(c, task_id, "rebase after lunch", by=B)
+        pr = {"number": 1, "html_url": f"https://github.com/{REPO}/pull/1", "state": "open", "mergeable": False}
+        pr["head"] = {"sha": gh.prs[(REPO, 1)]["head_sha"], "ref": "feature"}
+        G.pull_request(c, {"action": "refresh", "pull_request": pr}, read_refresh=True)
+        assert E.task(c, task_id)["snooze"] is None and len(X.wakes(c, task_id, B)) == before + 1

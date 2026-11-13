@@ -285,7 +285,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tasks-pane{overflow:visible;padding:14px 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
   .tl{margin:0 -12px}
   .tl-ghead{top:0;padding:0 8px 0 6px}
-  .tl-row{min-height:40px;padding:4px 10px 4px 0;gap:6px;flex-wrap:wrap;row-gap:0}
+  .tl-row{min-height:44px;padding:4px 10px 4px 0;gap:6px;flex-wrap:wrap;row-gap:0}
   .tl-open{flex:1 1 0;height:auto;min-height:30px}
   .tl-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:var(--lh-tight)}
   .tl-fill{display:none}
@@ -369,7 +369,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add{order:-1;margin:0;width:16px;height:16px;background:none;color:inherit}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add::after{content:"";position:absolute;inset:0}
 .tsec-empty :is(.tf-strip,.tf-empty){display:none}
-@media (max-width:760px){.tsec-empty:not(:has(form:not([hidden]))) .rail-h{height:40px;padding:0 12px 0 8px}}
+@media (max-width:760px){.tsec-empty:not(:has(form:not([hidden]))) .rail-h{height:44px;padding:0 12px 0 8px}}
 .task-layout>.task-chat>h3{display:flex;align-items:center;min-height:22px;margin:0 0 4px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .task-layout .tcomment{background:none;padding:6px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);border-radius:0}
 .task-layout .tcomment.sys{border-bottom:0}
@@ -386,12 +386,14 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .prop-link .prop-txt{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--muted) 50%,transparent);text-underline-offset:2px}
 @media (max-width:760px){
   .tmodal:has(.task-layout) .tmodal-head{position:sticky;top:0;z-index:2;background:var(--surface)}
-  .tmodal:has(.task-layout) .tmodal-head .peek-btn,.tmodal:has(.task-layout) .tmodal-x{min-width:40px;min-height:40px}
-  .tmodal:has(.task-layout) .tmodal-act{min-height:40px}
+  .tmodal:has(.task-layout) .tmodal-head .peek-btn,.tmodal:has(.task-layout) .tmodal-x{min-width:44px;min-height:44px}
+  .tmodal:has(.task-layout) .tmodal-act{min-height:44px}
   .tmodal:has(.task-layout) .tmodal-head .peek-pos{display:none}
   .tmodal-body.task-layout{align-items:stretch}
-  .sub-owner{width:40px;height:40px}
-  .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
+  .sub-owner{width:44px;height:44px}
+  .task-layout .rail-h .prop-add,.tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add,.task-links .prop-add,.task-related .prop-add{width:44px;height:44px}
+  /* the comment box's Send: 44 px to tap, the same 34 px circle drawn inside it (as the Ask box's) */
+  .tmodal .p-send-icon{width:44px;height:44px;border:5px solid transparent}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
 /* Release now on the Pending Release column (ui/app/settings-release.ts) */
@@ -424,3 +426,31 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .pull-spin.spinning{transition:transform var(--dur) var(--ease)}
 .pull-spin.spinning span{animation:treespin .8s linear infinite}
 @media (prefers-reduced-motion:reduce){.pull-spin.spinning span{animation:none;border-color:var(--ink)}}
+
+/* ---- a phone (S17): every control on the Tasks page has a 44 px hit area; the header wraps rather than clip. */
+@media (max-width:760px){
+  .tl-head{flex-wrap:wrap;row-gap:6px;--ctl:44px}
+  /* the search's line is drawn inside it, so its field is the whole 44 px */
+  .tl-head .tl-search{border-width:0;box-shadow:inset 0 0 0 1px var(--line)}
+  .tl-head .tl-search:focus-within{box-shadow:inset 0 0 0 1px var(--focus)}
+  /* folded to an icon it is drawn like Filter beside it, with its line back only while it holds a search */
+  .tl-head .tl-search:not(:focus-within){box-shadow:none}
+  .tl-head .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){box-shadow:inset 0 0 0 1px var(--line)}
+  .tl-head .tl-search input{height:44px}
+  /* the icon buttons and the folded search are 30 px wide above; a thumb needs 44 both ways */
+  .tl-head{--add-w:44px}
+  .tl-ib{width:44px}
+  .tl-head .tl-search:not(:focus-within){width:44px}
+  .tl-pair button{min-width:44px}
+  .tl-pair{height:auto;min-height:44px;box-sizing:border-box}
+  .tl-pair button{min-height:44px}
+  /* a phone shows a pipeline one stage at a time whatever the layout: list or columns changes nothing there */
+  .tl-head #task-layout{display:none}
+  .tl-bar{--ctl:44px}
+  .tl-chip{height:44px}
+  .tl-chip-x{width:44px}
+  .tl-ghead{height:44px}
+  .tl-gtoggle,.tl-gact{height:44px}
+  .tl-gact{width:44px}
+  .tl-row > .tl-status{height:44px}
+}

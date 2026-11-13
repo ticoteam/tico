@@ -26,30 +26,62 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def serve(accepts):
-    """A loopback server: 200 for the runner's token when `accepts`, 401 otherwise."""
+@pytest.fixture
+def serve():
+    """Starts loopback servers: 200 for the runner's token when `accepts`, 401 otherwise. Each is shut down and its
+    thread joined when the test ends."""
+    started = []
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            ok = accepts and self.headers.get("Authorization") == f"Bearer {TOKEN}"
-            self.send_response(200 if ok else 401)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b"[]" if ok else b'{"error":"unauthorized"}')
+    def start(accepts):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                ok = accepts and self.headers.get("Authorization") == f"Bearer {TOKEN}"
+                self.send_response(200 if ok else 401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"[]" if ok else b'{"error":"unauthorized"}')
 
-        def log_message(self, *args):
-            pass
+            def log_message(self, *args):
+                pass
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        started.append((httpd, thread))
+        return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    yield start
+    for httpd, thread in started:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join()
 
 
-def closed_url():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    return f"http://127.0.0.1:{port}"  # nothing listens here any more
+@pytest.fixture
+def silent_url():
+    """An address that never answers: it takes each connection and hangs up without a word. The test owns the port
+    for as long as it runs, so no other process can start answering there."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+
+    def hang_up():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:  # closed: the test is over
+                return
+            connection.close()
+
+    thread = threading.Thread(target=hang_up, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{listener.getsockname()[1]}"
+    try:
+        listener.shutdown(socket.SHUT_RDWR)  # wakes accept() on Linux; closing alone does on macOS
+    except OSError:
+        pass
+    listener.close()
+    thread.join()
 
 
 @pytest.fixture
@@ -86,7 +118,7 @@ def run_join(home, fake_runner, url):
     )
 
 
-def test_a_server_that_moved_is_followed_and_the_rest_of_the_file_is_kept(home, fake_runner):
+def test_a_server_that_moved_is_followed_and_the_rest_of_the_file_is_kept(home, fake_runner, serve):
     old, _ = serve(True)
     new, new_url = serve(True)
     config = enrolled(home, f"http://127.0.0.1:{old.server_address[1]}")
@@ -100,9 +132,9 @@ def test_a_server_that_moved_is_followed_and_the_rest_of_the_file_is_kept(home, 
 
 
 @pytest.mark.parametrize("answers", ["rejects", "does not answer"])
-def test_a_new_url_that_refuses_or_is_silent_leaves_the_file_alone(home, fake_runner, answers):
+def test_a_new_url_that_refuses_or_is_silent_leaves_the_file_alone(home, fake_runner, serve, silent_url, answers):
     old, old_url = serve(True)
-    other = serve(False)[1] if answers == "rejects" else closed_url()
+    other = serve(False)[1] if answers == "rejects" else silent_url
     config = enrolled(home, old_url)
     before = config.read_bytes()
     result = run_join(home, fake_runner, other)

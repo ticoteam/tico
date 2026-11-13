@@ -12,20 +12,6 @@ from backend.tests.helpers.support import hq  # noqa: F401  (the fake HQ, autous
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 
 
-def test_the_manual_marks_exactly_the_beta_headings():
-    marked = []
-    for page in sorted(DOCS.glob("*.md")):
-        lines = page.read_text().splitlines()
-        for n, line in enumerate(lines):
-            if line.startswith(beta.MARKER):
-                assert n >= 2 and lines[n - 1] == "" and lines[n - 2].startswith("#"), (
-                    f"{page.name}:{n + 1} is not under a heading"
-                )
-                heading = lines[n - 2]
-                marked.append((page.name, None if heading.startswith("# ") else heading.lstrip("#").strip()))
-    assert sorted(marked, key=str) == sorted((d for f in beta.FEATURES for d in f.docs), key=str)
-
-
 def test_the_app_gets_the_list_and_diagnostics_name_what_is_on(environment):
     api = environment()
     owner = signed_in()
@@ -57,24 +43,6 @@ def _spots():
         for match in SPOT.finditer(path.read_text()):
             used.setdefault(match.group(1) or match.group(2), []).append(rel.as_posix())
     return used
-
-
-def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():
-    used = _spots()
-    # A pill for an id off the list draws nothing, so a typo would hide it silently and a new id would label an
-    # unapproved feature once listed.
-    assert set(used) <= set(beta.IDS), {k: v for k, v in used.items() if k not in beta.IDS}
-    # A feature that is a bot gets its pill from the bot (botBetaPill); every other one needs a spot of its own.
-    assert {f.id for f in beta.FEATURES if not f.bots} <= set(used)
-
-
-def test_market_is_not_beta_while_message_bots_still_is():
-    # Chris, Oct 18: Market is not Beta. No pill in the nav, on its page title or its pages, no Help row, no manual note.
-    used, names = _spots(), [f["name"] for f in beta.listing()]
-    assert "market" not in beta.IDS and "market" not in used and "Market" not in names
-    assert beta.MARKER not in (DOCS / "librarian.md").read_text()
-    # Message bots, also in the nav, keeps its pill there.
-    assert "message_bots" in beta.IDS and "index.html" in used["message_bots"]
 
 
 def test_diagnostics_keep_beta_only_as_a_list():

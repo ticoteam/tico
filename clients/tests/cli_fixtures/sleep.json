@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "sleep"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "sleep",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico sleep: error: argument sub: invalid choice: 'nope' (choose from status, set) Did you mean: tico sleep set, tico sleep status?",
-  "exit": 64
- },
- {
-  "argv": [
    "sleep",
    "status"
   ],

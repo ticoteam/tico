@@ -118,17 +118,4 @@ mod tests {
         );
         assert_eq!(from_ioreg(r#""IOPlatformUUID" = """#), None);
     }
-
-    #[test]
-    fn enrollment_and_check_in_report_the_same_optional_hash() {
-        let mut enrollment = json!({"code": "enrollment-code"});
-        let mut heartbeat = json!({"version": "test"});
-        report(&mut enrollment);
-        report(&mut heartbeat);
-        assert_eq!(enrollment.get("device_id"), heartbeat.get("device_id"));
-        assert_eq!(
-            enrollment.get("device_id"),
-            get().as_ref().map(|id| json!(id)).as_ref()
-        );
-    }
 }

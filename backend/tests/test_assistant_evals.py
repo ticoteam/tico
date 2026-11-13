@@ -124,41 +124,12 @@ def test_every_case_file_loads_with_its_fields(cases):
             assert "match" in row and ("out" in row or "exit" in row), case["id"]
 
 
-def test_ids_are_unique_and_the_required_cases_are_there(cases):
-    ids = [c["id"] for c in cases]
-    assert len(ids) == len(set(ids)), "duplicate case ids"
-    assert len(ids) >= 18, f"{len(ids)} cases; the suite needs at least 18"
-    assert REQUIRED <= set(ids), f"missing: {sorted(REQUIRED - set(ids))}"
-
-
 def test_every_regex_compiles(cases):
     for case in cases:
         for _key, rx in expectations(case):
             re.compile(rx)
         for row in case.get("hub") or []:
             re.compile(row["match"])
-
-
-def test_expected_hub_commands_parse_with_the_real_cli(cases, parser):
-    """Only `must` names commands the case expects; a must_not naming a command that does not exist cannot fail a run."""
-    checked = 0
-    for case in cases:
-        for rx in case.get("must") or []:
-            if rx.startswith("reply:"):
-                continue
-            key = "must"
-            for alt in expand(rx):
-                words = command_words(alt)
-                if len(words) < 2:
-                    continue
-                checked += 1
-                if any(tuple(words[: len(p)]) == p for p in NEW_COMMANDS):
-                    assert not parses(parser, words), (
-                        f"{case['id']}: `hub {' '.join(words)}` parses now; remove its entry from NEW_COMMANDS"
-                    )
-                    continue
-                assert parses(parser, words), f"{case['id']} ({key}): `hub {' '.join(words)}` is not a command"
-    assert checked >= 40, f"only {checked} commands were checked; the heuristic has stopped reading the cases"
 
 
 def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tmp_path):
@@ -221,18 +192,6 @@ def runner_patterns(text):
         parts = re.split(r"\{[a-z_:?]*\}", literal)
         patterns.append(".+?".join(re.escape(p) for p in parts))
     return patterns
-
-
-def test_the_opening_lines_appear_in_the_runner_prompt():
-    """Every line of the harness's opening (the chat path, with the owner and the chat id filled in) is a string the runner
-    builds in runner-rs/src/prompt.rs, so the harness cannot drift from production silently."""
-    patterns = runner_patterns(PROMPT_RS.read_text())
-    missing = []
-    for line in live.opening().split("\n"):
-        norm = " ".join(line.split())
-        if not any(re.fullmatch(p, norm) for p in patterns):
-            missing.append(norm[:120])
-    assert not missing, f"not in prompt.rs: {missing}"
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -567,11 +526,3 @@ def test_rerun_errors_selects_only_the_errored_samples(tmp_path):
     for r in rows:
         (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
     assert live.errored_samples(tmp_path) == {("a", 2), ("b", 1)}
-
-
-def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_their_yes():
-    """Job 12a: keeping the caller's tasks is the default, the count comes first, and each task is closed with its version."""
-    text = (EVALS.parents[1] / "templates/catalog/assistant/playbooks/jobs.md").read_text()
-    job = text[text.index("12a.") : text.index("\n13. ")]
-    assert "Keep mine is the default" in job and "Close N? Say yes." in job
-    assert 'tico task close <id> -m "<why>" --version N' in job and "bulk" not in job

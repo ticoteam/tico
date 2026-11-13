@@ -125,15 +125,6 @@ def test_bad_changes_do_not_reach_server(api, changes):
     assert not api.calls
 
 
-def test_goal_help_explains_plain_yes(capsys):
-    assert hubcli.main(['goal', '--help']) == 0
-    text = ' '.join(capsys.readouterr().out.split())
-    assert 'read-back' in text and 'Saves nothing without a plain yes' in text
-    assert hubcli.main(['goal', 'read-back', '--help']) == 0
-    text = ' '.join(capsys.readouterr().out.split())
-    assert 'body' in text and 'not_agreed' in text
-
-
 def test_mcp_discovery_call_refusal_and_missing_command(api):
     protocol = hubtools.Protocol(api, api_error=APIError, kind='assistant')
 

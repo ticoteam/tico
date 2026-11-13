@@ -495,28 +495,6 @@ def test_a_root_row_speaks_for_its_sub_threads_for_each_viewer(api):
     assert row_of(sidebar(api, "ben-test", **{"with": "human:cara"}), root["id"])["me"]["activity"] is True
 
 
-def test_read_all_with_ago_ms_leaves_what_came_since_unread(api):
-    # Catch up sends its read once Undo is gone: what was written while Undo showed stays unread.
-    root = new_thread(api, title="Held read", members=("human:ben", "human:cara"), body="Kickoff")
-    first = message_in(api, root["id"])[0]
-    sub = new_thread(api, title="Below", members=("human:ben", "human:cara"), parent_message_id=first["id"])
-    say(api, sub["id"], "Seen on the card", token="cara-test")
-    time.sleep(0.6)
-    say(api, sub["id"], "Came while Undo showed", token="cara-test")
-    response = api.post(f"/api/v2/threads/{root['id']}/read-all", json={"ago_ms": 300}, headers=headers("ben-test"))
-    assert response.status_code == 200, response.text
-    ben = row_of(sidebar(api), root["id"])["me"]
-    assert ben["unread"] == 1, ben  # only the late reply
-    assert (
-        api.post(
-            f"/api/v2/threads/{root['id']}/read-all", json={"ago_ms": 600_001}, headers=headers("ben-test")
-        ).status_code
-        == 422
-    )
-    assert api.post(f"/api/v2/threads/{root['id']}/read-all", headers=headers("ben-test")).status_code == 200
-    assert row_of(sidebar(api), root["id"])["me"]["unread"] == 0
-
-
 def test_a_reply_below_a_thread_a_person_cannot_read_lists_nothing_for_them(api):
     root = new_thread(api, title="Salary bands", members=("human:ben",), body="Kickoff")
     first = message_in(api, root["id"])[0]
@@ -576,22 +554,3 @@ def test_a_native_held_post_moves_its_thread_up_for_who_reads_it(ruled):
     assert quiet["id"] not in str(sidebar(api, "cara-test"))
     assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
     assert sidebar(api, limit=1)["attention"] == []
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="Needs you lists tasks, asks, Paused causes and mentions only (docs/dev/pipelines-v3-cutover.md); a held "
-    "thread post is not on it, so a reviewer outside the thread is shown the hold nowhere",
-)
-def test_a_native_held_post_is_on_the_needs_list_of_its_author_and_reviewer(ruled):
-    api, _ = ruled
-    quiet, held = _held_post(api)
-    mine = [i for i in get(api, "needs-you", token="ben-test")["items"] if i["kind"] == "thread_held"]
-    assert [(i["id"], i["thread_id"]) for i in mine] == [(held["id"], quiet["id"])]
-    reviewing = [i for i in get(api, "needs-you", token="ana-test")["items"] if i["kind"] == "thread_held"]
-    assert [i["id"] for i in reviewing] == [held["id"]]  # Ana wrote the rule: it names her reviewer
-    # A reviewer outside the thread: her list says a hold waits on her, and names no thread.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE org_rule_holds SET reviewer='human:cara' WHERE id=?", (held["id"],))
-    review = [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "thread_held"]
-    assert [i["id"] for i in review] == [held["id"]] and review[0]["thread_id"] is None

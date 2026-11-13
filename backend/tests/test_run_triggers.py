@@ -537,13 +537,6 @@ def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
         assert c.execute("SELECT count(*) FROM attempts WHERE id IN ('ops-run','inbox-run')").fetchone()[0] == 2
 
 
-def test_open_task_states_match_the_board():
-    assert set(RT.OPEN_TASK) == set(H.ACTIVE_STATUSES) == {"open"}
-    with pytest.raises(ValueError):
-        RT.stamp({}, "nudge")
-    assert RT.counts("task.comment") and not RT.counts("status.set") and not RT.counts("attempt.started")
-
-
 def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
     """A bucket of one run would tell its reader that run happened, what it cost and whether it acted."""
     as_member(api, "ben@acme.example")

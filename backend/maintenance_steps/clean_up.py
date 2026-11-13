@@ -32,7 +32,7 @@ def _prune_history(c, now):
 
 def run(c, ctx):
     store, now = ctx["store"], ctx["now"]
-    from .. import api_tools, automations, events, flight, performance, presence, rules, triggers
+    from .. import api_tools, automations, calendar_store, events, flight, performance, presence, rules, triggers
     from .. import webhook_delivery
     from .. import system_routines as SR
 
@@ -50,6 +50,7 @@ def run(c, ctx):
         automations.prune(tx, now)  # automation runs: step detail keeps 30 days
         _prune_history(tx, now)
         presence.sweep(tx, now)
+        calendar_store.purge_cancelled(tx, now)  # cancelled calendar events keep 90 days
     sweep_idempotency(store, now)
     sweep_mail(store, now)
     sweep_deltas(store, now)  # finished runs' streamed text pieces keep a day

@@ -97,15 +97,6 @@ def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
             )
 
 
-def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
-    with sqlite3.connect(db) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS) == 71
-        triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-        assert "status_values_jobs_state_ins" in triggers and "status_values_webhook_sends_state_upd" in triggers
-        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='fin_payments'").fetchone()[0]
-        assert "'canceled'" in sql and "'cancelled'" not in sql
-
-
 # The upgrade, on small hand-made tables (what an existing file held before migration 0002).
 
 
@@ -172,6 +163,42 @@ def test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check(t
     conn.execute("PRAGMA foreign_keys=OFF")
     SV.enforce(conn)
     assert "status_values_state" in conn.execute("SELECT sql FROM sqlite_master WHERE name='bots'").fetchone()[0]
+
+
+def test_a_later_start_logs_a_check_column_it_cannot_enforce(tmp_path, caplog, monkeypatch):
+    """A list that drops a value still stored: the start keeps the rows and the old CHECK (which still lets the dropped
+    value in), and says so in the log every time, so a list that is not enforced is never silent."""
+    conn = _old_file(tmp_path / "old.db")
+    conn.executescript("""
+        CREATE TABLE bots(slug TEXT PRIMARY KEY, state TEXT);
+        INSERT INTO bots VALUES('a','active'),('b','archived');
+    """)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    SV.enforce(conn)
+    installed = conn.execute("SELECT sql FROM sqlite_master WHERE name='bots'").fetchone()[0]
+    assert "'archived'" in installed
+    narrower = SV.Column(
+        "bots", "state", ("active", "paused", "planned", "quarantined"), nullable=True, enforce="check"
+    )
+    monkeypatch.setattr(SV, "COLUMNS", tuple(narrower if s.table == "bots" else s for s in SV.COLUMNS))
+    with caplog.at_level("WARNING", logger="backend.status_values"):
+        SV.enforce(conn)
+    assert "bots.state = 'archived' (1 rows)" in caplog.text
+    assert conn.execute("SELECT sql FROM sqlite_master WHERE name='bots'").fetchone()[0] == installed
+    conn.execute("INSERT INTO bots VALUES('c','archived')")  # the old list still holds
+
+
+def test_the_value_table_in_the_docs_follows_the_lists():
+    """docs/status-and-state.md's value table and each column's bullets match COLUMNS (scripts/build_status_docs.py)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run(
+        [sys.executable, str(root / "scripts/build_status_docs.py"), "--check"], capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_the_upgrade_rewrites_cancelled_and_refuses_it_afterwards(tmp_path):

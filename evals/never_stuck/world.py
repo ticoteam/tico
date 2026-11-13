@@ -169,6 +169,18 @@ class RigConnection(sqlite3.Connection):
         return super().executescript(sql)
 
 
+def settle_stopped(c: sqlite3.Connection) -> int:
+    """Tico's own recovery of a run that stopped with nothing done (execution.auto_reconcile: a run that used no tool
+    and no OK is safe to repeat, and is settled on the next sweep). The rig's bots do nothing in a run that crashes, so
+    its job is settled before each never-stuck pass instead of being held for a person (task_wakes.RUN_HELD); settled
+    as left, so the ladder wakes the bot again ("cut off"). A run held for a check (`job.held`) waits for its review,
+    as on a hub. Returns how many it settled."""
+    return c.execute(
+        "UPDATE jobs SET state='canceled' WHERE state='uncertain' AND NOT EXISTS (SELECT 1 FROM events e "
+        "WHERE e.action='job.held' AND e.target=jobs.attempt_id)"
+    ).rowcount
+
+
 def ts(at: dt.datetime) -> str:
     return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 

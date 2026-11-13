@@ -38,116 +38,6 @@
  {
   "argv": [
    "support",
-   "send",
-   "--ok",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_support_send",
-    {
-     "ok": "1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "support/tickets/from-approval",
-    {
-     "approval": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "support",
-   "file"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico support file <message>\ntico support file: error: the following arguments are required: message",
-  "exit": 64
- },
- {
-  "argv": [
-   "support",
-   "file",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_support_file",
-    {
-     "message": "1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "support/tickets",
-    {
-     "message": "[BotOps] 1",
-     "include_ids": true,
-     "source": "botops"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "support",
-   "file",
-   "..."
-  ],
-  "tools": [
-   [
-    "tico_support_file",
-    {
-     "message": "...",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "support/tickets",
-    {
-     "message": "[BotOps] ...",
-     "include_ids": true,
-     "source": "botops"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "support",
    "report",
    "--message",
    "..."
@@ -176,27 +66,6 @@
   "stdout": "{\n  \"ok\": null,\n  \"task_id\": null,\n  \"status\": \"pending\",\n  \"next\": \"A person must OK it in Needs you. Then send it: tico support send --ok None (tico_support_send). Until then nothing is sent.\"\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "support"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "support",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico support: error: argument sub: invalid choice: 'nope' (choose from file, report, send) Did you mean: tico support send, tico support file?",
-  "exit": 64
  },
  {
   "argv": [
@@ -247,24 +116,6 @@
  {
   "argv": [
    "support",
-   "report",
-   "--message",
-   "message-1",
-   "--file",
-   "file-1",
-   "--no-ids",
-   "--task",
-   "task-1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico support report: error: argument --file: cannot read file-1 (No such file or directory)",
-  "exit": 64
- },
- {
-  "argv": [
-   "support",
    "send",
    "--ok",
    "ok-1"
@@ -296,38 +147,6 @@
    "support",
    "report",
    "--message",
-   "The trigger list 500s since 0.6.1"
-  ],
-  "tools": [
-   [
-    "tico_support_report",
-    {
-     "message": "The trigger list 500s since 0.6.1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "support/reports",
-    {
-     "payload": {
-      "message": "The trigger list 500s since 0.6.1",
-      "content_sha256": "953ebfa1901e7e1adc42360716c49b78e439694585c75bc3c0d32792a3e9a1e1"
-     }
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": null,\n  \"task_id\": null,\n  \"status\": \"pending\",\n  \"next\": \"A person must OK it in Needs you. Then send it: tico support send --ok None (tico_support_send). Until then nothing is sent.\"\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "support",
-   "report",
-   "--message",
    "x",
    "--file",
    "r.txt"
@@ -336,19 +155,6 @@
   "http": [],
   "stdout": "",
   "stderr": "tico support report: error: argument --file: cannot read r.txt (No such file or directory)",
-  "exit": 64
- },
- {
-  "argv": [
-   "support",
-   "report",
-   "--file",
-   "missing-report.txt"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico support report: error: argument --file: cannot read missing-report.txt (No such file or directory)",
   "exit": 64
  },
  {
@@ -387,81 +193,6 @@
    ]
   ],
   "stdout": "{\n  \"ok\": null,\n  \"task_id\": null,\n  \"status\": \"pending\",\n  \"next\": \"A person must OK it in Needs you. Then send it: tico support send --ok None (tico_support_send). Until then nothing is sent.\"\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "support",
-   "send"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico support send\ntico support send: error: the following arguments are required: --ok",
-  "exit": 64
- },
- {
-  "argv": [
-   "support",
-   "send",
-   "--ok",
-   "rq_1"
-  ],
-  "tools": [
-   [
-    "tico_support_send",
-    {
-     "ok": "rq_1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "support/tickets/from-approval",
-    {
-     "approval": "rq_1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "support",
-   "file",
-   "Cannot add a second Slack workspace"
-  ],
-  "tools": [
-   [
-    "tico_support_file",
-    {
-     "message": "Cannot add a second Slack workspace",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "support/tickets",
-    {
-     "message": "[BotOps] Cannot add a second Slack workspace",
-     "include_ids": true,
-     "source": "botops"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
  }

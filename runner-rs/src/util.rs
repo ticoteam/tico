@@ -291,42 +291,6 @@ pub fn write_script(path: &std::path::Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// Test benches count the bytes a call asks the allocator for (its buffers, clones and growth). Per thread, so the
-/// tests running beside a bench do not count in it.
-#[cfg(test)]
-pub mod alloc_probe {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    thread_local! {
-        static REQUESTED: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub struct Counting;
-
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            REQUESTED.with(|r| r.set(r.get() + layout.size() as u64));
-            unsafe { System.alloc(layout) }
-        }
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(ptr, layout) }
-        }
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            REQUESTED.with(|r| r.set(r.get() + new_size as u64));
-            unsafe { System.realloc(ptr, layout, new_size) }
-        }
-    }
-
-    #[global_allocator]
-    static GLOBAL: Counting = Counting;
-
-    /// Bytes this thread has asked the allocator for so far.
-    pub fn requested() -> u64 {
-        REQUESTED.with(|r| r.get())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

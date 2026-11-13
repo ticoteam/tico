@@ -1388,7 +1388,8 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
     last, ai_last, cfgs = last_runs(c), last_ai_runs(c), config(c)
     from . import task_rules
 
-    chart = {d["name"].lower(): d["name"] for d in task_rules.departments(settings)}
+    known = task_rules.departments(settings)
+    chart = {d["name"].lower(): d["name"] for d in known}
     hidden = set() if everything else not_applying(c, settings)
     rows = []
     for job in JOBS:
@@ -1472,6 +1473,8 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
     return {
         "jobs": rows,
         "departments": list(chart.values()),
+        # id + name: the webhook endpoint editor's Departments filter, which saves ids (webhooks.clean_filter)
+        "task_rule_departments": known,
         "now": _stamp(now),
     }
 

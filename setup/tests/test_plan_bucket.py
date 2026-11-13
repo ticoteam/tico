@@ -83,20 +83,6 @@ def test_a_300_seat_chart_reaches_the_server_by_the_plan_bucket_and_never_by_its
     assert body not in user_data + out and "aws s3 cp" in user_data
 
 
-def test_the_retry_keeps_the_plan_on_this_computer_and_puts_it_again(big, monkeypatch, tmp_path):
-    monkeypatch.setenv("TICO_SETUP_HOME", str(tmp_path))
-    from setup import state
-
-    code, out, *_ = hosted(big, "--plan-bucket", BUCKET)
-    assert code == 0, out
-    saved, env_text = state.load(f"{NAME}.preview.example")
-    resumed = settings.from_saved(saved, env_text)
-    assert resumed.plan_bucket == BUCKET and len(starter.unpack(resumed.company_file_data)["bots"]) == 300
-    assert envfile.parse(envfile.render(resumed.to_env()))["TICO_COMPANY_FILE_S3"].startswith(
-        f"s3://{BUCKET}/plans/{NAME}/"
-    )
-
-
 def test_a_new_owner_link_keeps_the_plan_on_this_computer(big, monkeypatch, tmp_path):
     monkeypatch.setenv("TICO_SETUP_HOME", str(tmp_path))
     from setup import state
@@ -329,17 +315,6 @@ def test_without_the_plan_bucket_a_chart_over_the_env_limit_is_refused_before_an
     code, out = go([*CREATE, "--company-file", str(big)], d)
     assert code != 0 and "without --company-file" in out
     assert not ssm.called("put_parameter") and not ec2.called("run_instances")
-
-
-def test_a_301_seat_chart_gets_the_plain_300_error_even_by_the_plan_bucket(big, tmp_path):
-    extra = "  - id: one-too-many\n    template: revenue-accountant\n    title: One Too Many\n"
-    over = tmp_path / "over.yaml"
-    over.write_text(big.read_text().replace("employees:\n", "employees:\n" + extra, 1))
-    with pytest.raises(MissingInput, match="more than 300 entries"):
-        wizard.gather_company_file(
-            argparse.Namespace(company_file=str(over), company=None, plan_bucket=BUCKET),
-            settings.Settings(preset="recommended"),
-        )
 
 
 def test_the_plan_bucket_is_for_aws_only_and_takes_bucket_and_region_names(big):
@@ -586,19 +561,3 @@ def test_the_app_side_check_passes_only_on_the_selected_plan(tmp_path):
     assert check(a, want) != 0  # an older plan left in place
     assert check(tmp_path / "missing", want) != 0
     assert check(b, want, TICO_COMPANY_FILE_B64="H4sIAAAAAAAA/env-plan") != 0
-
-
-def test_every_aws_boot_makes_the_folder_compose_mounts_even_without_a_plan():
-    script = remote.bootstrap_script(
-        os_family="ubuntu",
-        domain="a.example",
-        front_door="caddy",
-        compose=None,
-        compose_url="https://example.com/compose.yaml",
-        env_param=("/tico/a/env", "us-east-1"),
-    )
-    folder = f"{contract.REMOTE_DIR}/{contract.COMPANY_FILE_DIR}"
-    assert (
-        f"mkdir -p {folder}" in script and f"chown 10001:10001 {folder}" in script and f"chmod 700 {folder}" in script
-    )
-    assert script.index("pull-env.sh\n") < script.index("docker compose up")

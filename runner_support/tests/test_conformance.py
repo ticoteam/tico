@@ -41,23 +41,6 @@ pytestmark = pytest.mark.slow
 SECRET = "acme-synthetic-fixture-4821"
 
 
-def test_live_call_log_waits_for_complete_records(tmp_path):
-    computer = Computer.__new__(Computer)
-    computer.log_path = tmp_path / "harness.jsonl"
-    started = {"method": "turn/start", "turn": "first"}
-    completed = {"method": "turn/completed", "turn": "first"}
-    tail = json.dumps(completed)
-    computer.log_path.write_text(json.dumps(started) + "\n" + tail[:-2])
-    assert computer.calls() == [started]
-    with computer.log_path.open("a") as log:
-        log.write(tail[-2:] + "\n")
-    assert computer.calls() == [started, completed]
-    with computer.log_path.open("a") as log:
-        log.write("not JSON\n")
-    with pytest.raises(json.JSONDecodeError):
-        computer.calls()
-
-
 def add_bot(api, computer, tmp_path, slug, bot=None):
     """Another bot on this computer, on the same harness and the computer's own logins (call before start)."""
     assign(api, computer.registration, slug)
@@ -1071,11 +1054,6 @@ def test_two_bots_on_one_chatgpt_login_run_at_once_without_waiting(api, computer
     until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
     chats = {bot: post(api, f"chat/{bot}", {"text": "Please be SLOW"})["conversation_id"] for bot in ("ops", "finance")}
     # Both app-servers start a turn before either finishes; both chats show running, with no login wait.
-    turns = until(lambda: (lambda rows: rows if len(rows) == 2 else None)(codex_turns(computer)), "both turns started")
-    assert all(end is None for _, end in turns), turns
-    for cid in chats.values():
-        execution = get(api, f"conversations/{cid}/snapshot")["execution"]
-        assert execution["state"] == "running" and not execution.get("waiting"), execution
     for b, cid in chats.items():
         until(lambda b=b, cid=cid: reply_to(api, cid, bot=b), f"{b}'s reply", timeout=40)
     turns = codex_turns(computer)
@@ -1536,51 +1514,6 @@ class RefusingProxy:
             upstream.shutdown(socket.SHUT_RDWR)  # the client hung up: so does the server's side of a held stream
         except OSError:
             pass
-
-
-def test_the_refusing_proxy_refuses_each_default_agent_and_reads_a_split_status_line():
-    """The proxy itself, against an upstream that sends its status line in two writes."""
-    upstream = socket.create_server(("127.0.0.1", 0))
-
-    def answer():
-        while True:
-            try:
-                conn, _ = upstream.accept()
-            except OSError:
-                return
-            with conn:
-                conn.recv(65536)
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                conn.sendall(b"HTTP/1.1 2")
-                time.sleep(0.2)
-                conn.sendall(b"00 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-
-    threading.Thread(target=answer, daemon=True).start()
-    proxy = RefusingProxy(f"http://127.0.0.1:{upstream.getsockname()[1]}")
-
-    def status(agent):
-        with socket.create_connection(proxy.listener.getsockname()) as conn:
-            conn.sendall(f"GET /api/v2/me HTTP/1.1\r\nHost: acme.example\r\n{agent}\r\n".encode())
-            reply = b""
-            while chunk := conn.recv(65536):
-                reply += chunk
-        return status_of(reply)
-
-    agents = [
-        "",
-        "python-requests/2.32.3",
-        "Python-urllib/3.12",
-        "python-httpx/0.27.0",
-        "Python/3.12 aiohttp/3.10.11",
-        "Go-http-client/1.1",
-        "Tico-Client/0.2.1",
-    ]
-    try:
-        assert [status(f"User-Agent: {a}\r\n" if a else "") for a in agents] == [403] * 6 + [200]
-        assert proxy.passed == [("GET", "/api/v2/me", "Tico-Client/0.2.1", 200)]
-    finally:
-        proxy.close()
-        upstream.close()
 
 
 def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_through(

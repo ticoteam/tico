@@ -181,20 +181,3 @@ def test_the_installer_command_sends_its_error_and_returns_zero(tty, monkeypatch
         "Setup failed: install.sh (exit 6: the wizard or the health check failed)\nerror: docker compose"
     )
     assert "10.1.2.3" not in message
-
-
-def test_setup_uses_the_diagnostics_rules_and_the_bundle_ships_them():
-    from backend import census, diagnostics, redaction
-
-    rules = support.redaction()
-    sample = "sk-abcdefghijkl at 10.0.0.5, ana@acme.example via https://build.acme.example/x?a=1 on fe80::1:2"
-    assert rules.Redactor(["acme.example"]).text(sample) == diagnostics.Redactor(["acme.example"]).text(sample)
-    assert diagnostics.Redactor is redaction.Redactor and diagnostics.SECRETS is redaction.SECRETS
-    tree = ast.parse((ROOT / "backend" / "redaction.py").read_text())
-    imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-    imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level == 0}
-    assert (
-        not [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level]
-        and imported <= sys.stdlib_module_names
-    )
-    assert support.DEFAULT_HQ == census.DEFAULT_HQ

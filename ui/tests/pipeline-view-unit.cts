@@ -2,6 +2,8 @@
 // scripts are compiled with esbuild's transform and run in one vm context, with the few shared globals they read stubbed:
 // - the pipeline view's hook draws columns, the list and the phone's tabs from the tasks the page gives it, with each
 //   stage's count out of its limit, and a stage header that opens settings only for whoever may change the pipeline;
+// - against a limit the count is the tasks that hold a slot; those waiting only on a person (`on_person`) show beside it
+//   as a person mark and their number, the words only in its label and title (S8: no other words);
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
 // - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
 //   no factory under Other with no count;
@@ -34,6 +36,7 @@ const ctx = vm.createContext({
   errorMessage: (_e: unknown, fallback: string) => fallback,
   TL_ICON: {plus: '+'},
   taskOwnerOptions: () => '',
+  needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
 for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
@@ -87,6 +90,32 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal((phone.match(/role="tab"/g) || []).length, 3, 'a tab per stage');
   assert.match(phone, /class="pv-tab on" data-pv-tab="ideas"/, 'the first stage with tasks shows first');
   assert.match(phone, /pv-is-phone/);
+}
+
+// ---- a limited stage counts bot work; tasks waiting only on a person's OK hold no slot and are counted beside it
+{
+  const waiting = Array.from({length: 15}, (_, i) => task(`w${i}`, `Spec ${i}`, 'spec', {pipeline_id: 'spec20', on_person: true,
+    turn: {state: 'person', who: 'human:chris', line: 'OK the spec', ask: true}}));
+  const working = Array.from({length: 5}, (_, i) => task(`b${i}`, `Draft ${i}`, 'spec', {pipeline_id: 'spec20'}));
+  const twenty = rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec', {task_limit: 20}), stage('dev', 'In development')]});
+  const html = view.html(twenty, [...waiting, ...working], opts());
+  // A person mark and the number; the words are its label and title only, never drawn (S8, C27).
+  const mark = (n: number, words: string) =>
+    new RegExp(`<span class="pv-stage-person tnum" role="img" aria-label="${words}" title="${words}"><svg [^>]*aria-hidden="true"[^>]*>(?:(?!</svg>).)*</svg>${n}</span>`);
+  assert.match(html, /<span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum">5\/20<\/span><span class="pv-stage-person/, 'Spec 5/20, then the mark');
+  assert.match(html, mark(15, '15 wait on a person'), 'a person mark and 15, with the words in its label and title');
+  assert.doesNotMatch(html.replace(/<[^>]*>/g, ' '), /wait on a person/, 'no words are drawn in the header');
+  assert.equal((html.match(/class="tk-card"/g) || []).length, 20, 'every task is still drawn');
+  const list = view.html(twenty, [...waiting, ...working], opts({layout: 'list'}));
+  assert.match(list, mark(15, '15 wait on a person'));
+  const phone = view.html(twenty, [...waiting, ...working], opts({phone: true}));
+  assert.match(phone, /data-pv-tab="spec"[^>]*>Spec <span class="tnum">5\/20<\/span>/, 'the phone tab counts bot work too');
+  assert.match(phone, new RegExp(`</div>${mark(15, '15 wait on a person').source}`), 'and the stage shown has the mark');
+  assert.doesNotMatch(phone.replace(/<[^>]*>/g, ' '), /wait on a person/, 'no words on the phone head either');
+  const one = view.html(twenty, [waiting[0], ...working], opts());
+  assert.match(one, mark(1, '1 waits on a person'));
+  const open = view.html(rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec')]}), [...waiting, ...working], opts());
+  assert.match(open, /<span class="pv-stage-n tnum">20<\/span><\/button>/, 'without a limit every task counts and no pill is drawn');
 }
 
 // ---- a refused move
@@ -156,7 +185,7 @@ const factories = (async () => {
   const release = ctx.peReqHTML(state, state.draft.stages[1]!.requirements[0]!, 1, 0);
   assert.match(release, /data-pe-rf="release_repo"/);
   assert.match(release, /data-pe-rf="release_with"[^>]*placeholder="workflow:release.yml or tag"/);
-  assert.match(release, /data-pe-rs="prereleases"[^>]*> Pre-releases count/);
+  assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>
@@ -170,6 +199,11 @@ const factories = (async () => {
     {prereleases: true, release_repo: 'ticoteam/tico', release_with: 'workflow:release.yml'});
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', false));
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', false));
+  const saved = plain(ctx.peOut(state.draft));
+  assert.equal(saved.stages[1]!.requirements[0]!.settings.prereleases, false, 'an opt-out is explicit in the save payload');
+  assert.doesNotMatch(ctx.peReqHTML({...state, draft: saved}, saved.stages[1]!.requirements[0]!, 1, 0),
+    /data-pe-rs="prereleases"[^>]* checked/, 'the saved opt-out renders off');
 
   const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
   assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="act:github.queue">Queue PRs<\/option>/,

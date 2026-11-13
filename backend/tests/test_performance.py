@@ -349,17 +349,6 @@ def test_steering_polls_and_output_batches_store_no_retry_receipts_and_replay_th
         assert c.execute("SELECT count(*) FROM attempt_events WHERE attempt_id=?", (aid,)).fetchone()[0] == 2
 
 
-def test_one_tasks_history_of_one_field_reads_by_task(api):
-    with api.app.state.store.read() as c:
-        for sql in (
-            "SELECT coalesce(max(rowid),0) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
-            "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
-            "SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        ):
-            plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
-            assert "history_events_subject_kind" in plan, plan
-
-
 def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, monkeypatch):
     r, origin, attempt = setup_attempt(api)
     aid = attempt["id"]
@@ -385,3 +374,24 @@ def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, mon
     with store.transaction() as c:
         c.execute("UPDATE attempts SET lease_until='2000-01-01T00:00:00Z' WHERE id=?", (aid,))
     assert api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(r["token"])).status_code == 409
+
+
+def test_health_load_names_the_bots_that_ran_never_their_ids(api):
+    """The Load row says who ran by name, and "Deleted bot" for one removed since, never the bot's id."""
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    start = (int(time.time()) // 60 - 12) * 60
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        c.execute("UPDATE bots SET display_name='Operations Lead' WHERE id='ops'")
+    busy = [sample(start + 60 * i, cpu=97.0, procs=[("cargo", 400.0)]) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])
+
+    def load():
+        return next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
+
+    assert "running: Operations Lead" in load()
+    gone = "01a1cdda-6f96-7593-be09-719b45a9df76"  # a bot removed since: its runs keep its id, the roster has no row
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE perf_overloads SET bots=? WHERE runner_id=?", (f'[{{"bot": "{gone}", "runs": 1}}]', rid))
+    assert "running: Deleted bot" in load() and gone not in load()

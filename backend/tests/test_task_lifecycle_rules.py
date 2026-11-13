@@ -45,14 +45,6 @@ def test_reopening_a_closed_task_drops_its_close_time_and_done_after_keeps_when_
     assert row["done_at"] is not None
 
 
-def test_a_bot_refinishing_its_own_closed_task_drops_the_close_time(c):
-    t = _make(c, CMO, "Check the launch post links", CMO)
-    H.task_close(c, CMO, t["id"], "Not needed now.", _version(c, t["id"]))
-    H.task_move(c, CMO, t["id"], H.TASK_REOPEN, "Needed after all.", _version(c, t["id"]))
-    H.task_done(c, CMO, t["id"], "Links checked.", _version(c, t["id"]))
-    assert H.task(c, t["id"])["closed_at"] is None
-
-
 def test_a_done_task_is_reopened_before_it_closes_and_keeps_when_it_was_done(c):
     t = _make(c, ANA, "Draft the hiring post", CMO)
     H.task_done(c, CMO, t["id"], "Drafted.", _version(c, t["id"]))

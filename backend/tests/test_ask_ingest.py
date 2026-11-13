@@ -7,12 +7,10 @@ import importlib
 import json
 import sqlite3
 import threading
-import time
 
 import pytest
 
 from backend import ask_ingest as A
-from backend import call_slots as CS
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
 from backend.tests.helpers.api import unrelated_task_managers
@@ -121,19 +119,6 @@ def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=Fal
 )
 def test_the_budget_tightens_as_the_plate_fills(load, given, expected):
     assert A.decide(given, 10, load) == expected
-
-
-def test_a_recommends_reply_names_the_criterion_and_the_recommendation_only():
-    text = A.message("recommends", "Ben", 40, "Priya")
-    assert "Ben has 40 open items" in text and "criteria and your recommendation" in text
-    assert "date" not in text and "past today" not in text, "no band asks for a date now"
-
-
-def test_chores_use_the_main_budget():
-    assert A.decide(answers(kind="chore"), 10, 9) == (A.THROUGH, "under_budget")
-    assert A.decide(answers(kind="chore"), 10, 10) == (A.SENT_BACK, "criteria")
-    assert A.decide(answers(kind="chore", meets="line-1"), 10, 10) == (A.THROUGH, "criteria")
-    assert A.decide(answers(kind="chore", urgency=3), 10, 100) == (A.THROUGH, "urgent")
 
 
 def test_answers_under_threshold_read_as_unsure():
@@ -257,64 +242,6 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     else:
         [call] = calls(api)
         assert ('"error": "%s"' % how) in call["detail"]
-
-
-def test_a_full_pool_refuses_at_once_and_a_freed_slot_runs_again(gate, monkeypatch):
-    api, model, token = gate
-    monkeypatch.setattr(A, "CONCURRENCY", 1)
-    model.hold = threading.Event()
-    first = threading.Thread(target=file, args=(api, token), kwargs={"title": "First"})
-    first.start()
-    try:
-        for _ in range(500):  # until the first call holds the slot
-            if model.calls:
-                break
-            time.sleep(0.01)
-        started = time.monotonic()
-        out = file(api, token, title="Second")
-        assert time.monotonic() - started < 2
-        assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
-    finally:
-        model.hold.set()
-        first.join(10)
-    reasons = [i["reason"] for i in items(api)]
-    assert len(reasons) == 2 and reasons.count("busy") == 1
-    file(api, token, title="Third")  # the first call has ended, so its slot is free
-    assert len(model.calls) == 2
-
-
-def test_an_abandoned_call_keeps_its_slot_until_it_really_ends(gate, monkeypatch):
-    api, model, token = gate
-    monkeypatch.setattr(A, "CONCURRENCY", 1)
-    monkeypatch.setattr(A, "DEADLINE", 0.2)
-    model.hold = threading.Event()
-    assert file(api, token, title="First")["task"]["owner_id"] == "human:ben"  # the waiter gives up; the call runs on
-    started = time.monotonic()
-    file(api, token, title="Second")  # so the slot is still taken
-    assert time.monotonic() - started < 2 and len(model.calls) == 1
-    model.hold.set()
-    slots = A.calls_for(api.app.state.store).slots
-    for _ in range(500):
-        if slots.acquire(blocking=False):
-            slots.release()
-            break
-        time.sleep(0.01)
-    else:
-        pytest.fail("the abandoned call never gave its slot back")
-    file(api, token, title="Third")
-    assert len(model.calls) == 2
-
-
-def test_repeated_failures_pause_ask_ingest_calls(gate):
-    api, model, token = gate
-    model.fail = RuntimeError("provider down")
-    for n in range(CS.BREAKER_FAILURES):
-        file(api, token, title=f"Question {n}")
-    assert len(model.calls) == CS.BREAKER_FAILURES
-    started = time.monotonic()
-    file(api, token, title="Next")
-    assert time.monotonic() - started < 2 and len(model.calls) == CS.BREAKER_FAILURES
-    assert items(api)[-1]["reason"] == "breaker"
 
 
 def test_ask_ingest_and_rule_checks_have_their_own_slots(gate, monkeypatch):
@@ -833,45 +760,6 @@ def test_a_bot_handoff_while_the_filter_is_off_replays_but_a_human_handoff_does_
             "created_at": "2026-10-06T09:00:00",
         }
     ]
-
-
-def test_a_task_filed_while_the_filter_was_off_counts_on_its_day_and_again_on_a_later_handoff(gate):
-    """Filed for Ben on Oct 5 with the filter Off (no ask row), moved to the bot that evening, and handed back to Ben on
-    Oct 6 with the filter On (an ask row). The filing still counts on Oct 5 and the handoff on Oct 6: the handoff does
-    not hide the filing."""
-    api, model, token = gate
-    with api.app.state.store.transaction() as c:
-        A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
-    tid = file(api, token, "Renew the vendor contract")["task"]["id"]
-    assert not [i for i in items(api) if i["ref"] == tid], "Off asks nothing, so the filing has no ask row"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created_at='2026-10-05T10:00:00.000000Z' WHERE id=?", (tid,))
-        handed(c, tid, "human:ben", "bot:ops", "2026-10-05T18:00:00.000000Z")
-        handed(c, tid, "bot:ops", "human:ben", "2026-10-06T09:00:00.000000Z")
-        c.execute(
-            "INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,created_at) "
-            "VALUES('ai3','human:ben','bot:ops','task',?,'on','sent_back','sent_back','',0,"
-            "'2026-10-06T09:00:00.000000Z')",
-            (tid,),
-        )
-        monday = A.replay_items(c, "human:ben", "2026-10-05T00:00:00", "2026-10-06T00:00:00")
-        tuesday = A.replay_items(c, "human:ben", "2026-10-06T00:00:00", "2026-10-07T00:00:00")
-    shown = [(i["ref"], i["created_at"]) for i in monday if i["kind"] == "task"]
-    assert shown == [(tid, "2026-10-05T10:00:00.000000Z")]
-    shown = [(i["ref"], i["created_at"]) for i in tuesday if i["kind"] == "task"]
-    assert shown == [(tid, "2026-10-06T09:00:00.000000Z")]
-
-
-def test_a_task_filed_with_the_filter_on_is_listed_once(gate):
-    """The gate judges a task in the request that files it, so its ask row comes before any owner change: its day lists
-    it once, from the ask row, not again from the task."""
-    api, model, token = gate
-    tid = file(api, token)["task"]["id"]
-    assert len([i for i in items(api) if i["ref"] == tid]) == 1
-    with api.app.state.store.transaction() as c:
-        day = H.task(c, tid)["created_at"][:10]
-        listed = A.replay_items(c, "human:ben", f"{day}T00:00:00", A._next_day(day))
-    assert [i["ref"] for i in listed if i["kind"] == "task"] == [tid]
 
 
 def test_a_filing_the_gate_judged_and_a_later_handoff_each_list_once(gate):

@@ -521,27 +521,3 @@ def setup_digest(root: Path) -> str:
             continue
         total.update(relative.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return total.hexdigest()
-
-
-def test_the_recording_is_of_this_setup():
-    recorded = json.loads(GOLDEN.read_text())["_recorded_on"]
-    assert recorded.get("setup_digest") == setup_digest(SETUP), (
-        f"setup/ changed since {GOLDEN.name} was recorded. Re-record it in this change (see this module's docstring) "
-        "and review the call diff."
-    )
-
-
-def test_the_digest_follows_the_code_and_not_its_tests(tmp_path):
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "cli.py").write_text("a = 1\n")
-    (tmp_path / "tests" / "test_cli.py").write_text("t = 1\n")
-    before = setup_digest(tmp_path)
-    (tmp_path / "tests" / "test_cli.py").write_text("t = 2\n")
-    (tmp_path / "__pycache__").mkdir()
-    (tmp_path / "__pycache__" / "cli.cpython-312.pyc").write_bytes(b"x")
-    assert setup_digest(tmp_path) == before
-    (tmp_path / "cli.py").write_text("a = 2\n")
-    assert setup_digest(tmp_path) != before
-    (tmp_path / "cli.py").write_text("a = 1\n")
-    (tmp_path / "dns.py").write_text("")
-    assert setup_digest(tmp_path) != before

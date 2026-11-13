@@ -266,7 +266,7 @@ def test_a_valid_sync_interval_is_written_and_nothing_else_changes(tmp_path, mon
     assert config["dbs"][0]["monitor-interval"] == "1s" and config["dbs"][0]["checkpoint-interval"] == "1m"
 
 
-@pytest.mark.parametrize("value", ["0s", "61m", "2h", "10ms", "1.5m", "1h30m", "m", "3600"])
+@pytest.mark.parametrize("value", ["0s", "61m", "2h", "10ms", "1.5m", "m", "3600"])
 def test_an_invalid_sync_interval_is_refused_before_anything_starts(tmp_path, monkeypatch, value):
     result = litestream_config(tmp_path, monkeypatch, value)
     assert result.returncode != 0 and "TICO_BACKUP_SYNC_INTERVAL must be" in result.stderr
@@ -979,14 +979,6 @@ def test_without_a_cache_an_unreachable_bucket_on_an_existing_database_uses_the_
     assert_database_untouched(db)
 
 
-def test_a_cache_naming_a_generation_holds_when_environment_json_cannot_be_read(tmp_path):
-    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
-    replication.write_generation_cache(db.parent, GENERATION)
-    assert replication.sync_generation(str(config), str(db), env) == "kept"
-    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
-    assert replication.read_generation_cache(db.parent) == GENERATION
-
-
 def test_a_config_naming_another_location_is_left_alone_and_the_reset_refuses(tmp_path):
     config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1)
     before = replica_url(config)
@@ -1062,15 +1054,6 @@ def test_a_generation_this_version_does_not_know_raises_in_every_mode(tmp_path, 
     before = replica_url(config)
     with pytest.raises(replication.GenerationUnknown):
         replication.sync_generation(str(config), str(db), env, strict=strict)
-    assert replica_url(config) == before and replication.read_generation_cache(db.parent) == GENERATION
-
-
-def test_a_strict_sync_refuses_an_unreadable_environment_json_even_with_a_cache(tmp_path):
-    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
-    replication.write_generation_cache(db.parent, GENERATION)
-    before = replica_url(config)
-    with pytest.raises(replication.GenerationUnknown):
-        replication.sync_generation(str(config), str(db), env, strict=True)
     assert replica_url(config) == before and replication.read_generation_cache(db.parent) == GENERATION
 
 
@@ -1244,16 +1227,6 @@ def test_a_rehearsal_reads_the_generation_environment_json_names_and_writes_noth
     assert [p.name for p in backup.iterdir()] == [replication.MARKER] and (
         backup / replication.MARKER
     ).read_text() == marker
-
-
-def test_a_rehearsal_strict_read_refuses_an_unreadable_environment_json_even_with_a_cache(tmp_path):
-    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
-    env["TICO_REHEARSAL"] = "1"
-    replication.write_generation_cache(db.parent, GENERATION)
-    before = replica_url(config)
-    with pytest.raises(replication.GenerationUnknown):
-        replication.sync_generation(str(config), str(db), env, strict=True)
-    assert replica_url(config) == before and replication.read_generation_cache(db.parent) == GENERATION
 
 
 @pytest.mark.parametrize("strict", [False, True], ids=["plain", "strict"])

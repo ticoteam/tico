@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "subscription"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "subscription",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico subscription: error: argument sub: invalid choice: 'nope' (choose from list) Did you mean: tico subscription list?",
-  "exit": 64
- },
- {
-  "argv": [
    "subscription",
    "list"
   ],
@@ -55,7 +34,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"subscriptions\": [],\n  \"cannot_take_one\": [],\n  \"detail\": \"Give one to a computer: tico settings set models.computer_subscription\"\n}\n",
+  "stdout": "{\n  \"subscriptions\": [],\n  \"people_plans\": [],\n  \"cannot_take_one\": [],\n  \"detail\": \"Give one, or a person's plans (`person`), to a computer: tico settings set models.computer_subscription\"\n}\n",
   "stderr": "",
   "exit": 0
  }

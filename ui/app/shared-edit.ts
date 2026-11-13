@@ -93,6 +93,9 @@ function sharedPlaceStart(state: SharedPlaceState, options: SharedPlaceOptions):
   const {id, place, topic, filter, changed, gone, present} = options;
   if (state.shared?.place === place) return;
   sharedPlaceStop(state);
+  // A bot's read-only view (backend/app_view.py) says nowhere that it is here and follows no live changes: the page
+  // stays as it was read, for a screenshot. Its refused heartbeat must not read as losing the place.
+  if (S.me?.read_only_view) return;
   const shared: SharedPlaceHandle = state.shared = {id, place, session: newRequestId()};
   const current = () => state.shared === shared;
   const lost = (error: unknown) => {

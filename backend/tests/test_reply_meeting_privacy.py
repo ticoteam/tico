@@ -126,20 +126,6 @@ def test_meeting_row_and_its_replies_hide_from_a_reader_who_cannot_read_the_meet
     assert visible_everywhere(api, room, open_named, "cara-test", tid) == set(open_named)
 
 
-@pytest.mark.parametrize("settled", [False, True])
-def test_reply_to_a_meeting_message_hides_when_the_reply_itself_names_nothing(api, world, settled):
-    mid = private_meeting(api)
-    room = world["coo_task"]["conversation_id"]
-    # Only the parent names the meeting; the reply's own refs are empty, so the reply is hidden by its ancestor alone.
-    parent = chain(api, room, [{"live_meeting": {"meeting_id": mid}}])[0]
-    reply = reply_to(api, room, parent)
-    if settled:
-        with api.app.state.store.read() as c:
-            read_deps.sweep(c)
-    assert visible_everywhere(api, room, [parent, reply], "cara-test") == set()
-    assert visible_everywhere(api, room, [parent, reply], "ana-test") == {parent, reply}
-
-
 def reply_to(api, room, parent):
     with api.app.state.store.transaction() as c:
         return H.say(

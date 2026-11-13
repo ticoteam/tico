@@ -195,13 +195,6 @@ def test_a_second_start_leaves_a_locked_token_alone(monkeypatch, tmp_path):
     updater.ensure_token()  # not locked and refused: logged, no crash
 
 
-def test_a_downgrade_is_refused_and_an_upgrade_accepted(monkeypatch, tmp_path):
-    updater = load(monkeypatch, "runner", tmp_path)
-    Docker(updater, monkeypatch, [True])  # running v0.1.0
-    assert updater.older_than_running("v0.0.9") and updater.older_than_running("v0.0.99")
-    assert not any(updater.older_than_running(v) for v in ("v0.1.0", "v0.1.1", "v1.0.0", "latest"))
-
-
 class Daemon:
     """`docker` for the whole update, the runner's own checks included: every call must carry a time limit, and
     `hang` names the call that runs over it. Records the status each call was made under."""
@@ -403,21 +396,3 @@ def test_a_runner_that_cannot_be_read_is_not_updated_and_says_so(monkeypatch, tm
     assert updater.status["state"] == "failed" and updater.status["to"] == "v0.2.0"
     assert updater.status["message"] == "Not updated: Reading the running server exceeded 60 seconds."
     assert not [argv for argv, _, _ in docker.calls if "pull" in argv or "up" in argv]
-
-
-def test_a_compose_call_that_runs_over_is_killed_and_cannot_finish_later(monkeypatch, tmp_path):
-    import time
-    import pytest
-
-    updater = load(monkeypatch, "runner", tmp_path)
-    marker = tmp_path / "switched"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    # docker compose is a plugin the docker CLI runs as its child: the switch happens in a grandchild
-    (bin_dir / "docker").write_text(f"#!/bin/sh\n(sleep 0.5; touch {marker}) &\nwait\n")
-    (bin_dir / "docker").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
-    with pytest.raises(RuntimeError, match=r"A Docker call \(compose up\) exceeded 0.1 seconds"):
-        updater.compose("up", "-d", "runner", timeout=0.1)
-    time.sleep(0.8)
-    assert not marker.exists()

@@ -7,19 +7,23 @@ A row says `from_task` stands in `kind` to `to_task`:
 - `related`: the two belong together. No direction: stored once, lower id first (a CHECK).
 - `duplicate_of`: from duplicates to.
 - `follow_up`: from was split off or followed up from to.
+- `after`: from merges after to. The one relation a task waits on, and only in a stage that queues PRs (Merge): it is
+  not queued until `to` has merged (backend/merge_order.py). A loop, or an order on a task that has ended, is refused;
+  the writer must be able to change `from` and read `to`.
 
 `relate` is the only writer of the other three (the task page, `tico task relate` and the MCP tool all come here),
 so the rules live in one place: who may change which end, and a history row on both tasks. A task does not wait on a
-relation: what a task waits on is its requirements and the tasks it filed (backend/waiting_on.py). Reads filter the other end through the reader's task visibility, so a task someone
+relation, except `after` in Merge: what a task waits on is its requirements, the tasks it filed and that one
+(backend/waiting_on.py). Reads filter the other end through the reader's task visibility, so a task someone
 cannot open is never named to them. Goals keep their own `parent_id`; this is tasks only.
 
 This module imports nothing from hubdb at load, so hubdb can import it; the writers reach hubdb
 through `_H()`.
 """
 
-KINDS = ("parent", "related", "duplicate_of", "follow_up")
+KINDS = ("parent", "related", "duplicate_of", "follow_up", "after")
 # The kinds `relate` writes: a parent is set when the task is filed and never changed.
-RELATED = ("related", "duplicate_of", "follow_up")
+RELATED = ("related", "duplicate_of", "follow_up", "after")
 
 # Directed kinds read differently from each end; `related` reads the same from both.
 FIELDS = {  # kind -> (history field on from_task, history field on to_task)
@@ -27,12 +31,13 @@ FIELDS = {  # kind -> (history field on from_task, history field on to_task)
     "related": ("related", "related"),
     "duplicate_of": ("duplicate_of", "duplicated_by"),
     "follow_up": ("follow_up_of", "follow_ups"),
+    "after": ("after", "before"),
 }
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_relations(
   from_task TEXT NOT NULL REFERENCES tasks(id), to_task TEXT NOT NULL REFERENCES tasks(id),
-  kind TEXT NOT NULL CHECK (kind IN ('parent','blocks','related','duplicate_of','follow_up')),
+  kind TEXT NOT NULL CHECK (kind IN ('parent','blocks','related','duplicate_of','follow_up','after')),
   created_by TEXT, created_at TEXT NOT NULL,
   PRIMARY KEY(from_task, to_task, kind),
   CHECK (from_task <> to_task), CHECK (kind <> 'related' OR from_task < to_task));
@@ -192,6 +197,9 @@ def grouped(conn, task_ids, visible_sql="1"):
                 "owner_id": row["owner_id"],
                 "direction": row["direction"],
             }
+            if row["kind"] == "after":
+                # An order reads "After #40 · Merge": the other task's number and the stage it is in.
+                entry.update(_place(conn, row["id"]))
             out[row["here"]].setdefault(row["kind"], []).append(entry)
         if visible_sql == "1":
             continue
@@ -216,6 +224,14 @@ def grouped(conn, task_ids, visible_sql="1"):
                 }
             ]
     return out
+
+
+def _place(conn, task_id):
+    """{number, stage}: a task's number and the name of the stage it is in."""
+    found = conn.execute(
+        "SELECT t.number, s.name FROM tasks t LEFT JOIN stages s ON s.id=t.stage_id WHERE t.id=?", (task_id,)
+    ).fetchone()
+    return {"number": found[0], "stage": found[1]} if found else {"number": None, "stage": None}
 
 
 def for_prompt(conn, task_id, readable):
@@ -346,8 +362,14 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
         H.refuse(conn, actor, "kind", "a task cannot be related to itself")
     mover = _mover(conn, actor, mover)
     rows = [_task(conn, actor, tid) for tid in (from_id, to_id)]
-    for row in rows:
+    # An order is the later task's: whoever may change it sets it, and the earlier task need only be readable (the
+    # caller has read it). Every other relation changes both ends.
+    for row in rows[:1] if kind == "after" else rows:
         H._task_link_allowed(conn, actor, row, mover)
+    if kind == "after" and not remove and not _exists(conn, from_id, to_id, kind):
+        from . import merge_order
+
+        merge_order.check(conn, actor, rows[0], rows[1])
     if remove:
         if not _delete(conn, from_id, to_id, kind):
             H.refuse(conn, actor, "not-found", f"{to_id} is not {kind.replace('_', ' ')} of {from_id}")
@@ -359,6 +381,11 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
         _insert(conn, actor, from_id, to_id, kind, H.now())
     _history(conn, actor, from_id, to_id, kind, not remove, note)
     H.event(conn, actor, "task.unrelate" if remove else "task.relate", from_id, {"task": to_id, "kind": kind})
+    if kind == "after" and remove:
+        # Taking an order off may end a hold in Merge: the later task is queued now (merge_order.release).
+        from . import merge_order
+
+        merge_order.release_one(conn, from_id, actor)
     return True
 
 
@@ -368,6 +395,7 @@ SAYS = {
     "related": ("is related to", "is related to"),
     "duplicate_of": ("duplicates", "is duplicated by"),
     "follow_up": ("follows up", "is followed up by"),
+    "after": ("merges after", "merges before"),
 }
 
 

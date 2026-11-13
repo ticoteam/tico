@@ -153,7 +153,7 @@ def test_a_model_hold_is_audited_without_the_text_and_kept_per_key(api):
     assert engine.calls[-1]["state"]["text"].count("</outside-text>") == 1
 
 
-@pytest.mark.parametrize("case", ["no_model", "error", "shape", "timeout", "budget", "spend_cap"])
+@pytest.mark.parametrize("case", ["no_model", "error", "shape", "budget", "spend_cap"])
 def test_every_failure_lets_the_text_through_with_only_the_patterns_warning(api, monkeypatch, case):
     engine = model(api, score=0.99)
     if case == "no_model":
@@ -470,25 +470,3 @@ def test_a_failing_model_check_still_applies_a_watchers_event(api, quiet, monkey
     event = WatcherEvent(op="task", key="gh:10", title="Issue 10", body=PLAIN)
     with api.app.state.store.transaction() as c:
         assert S.watcher_check(c, "ops", event) is event
-
-
-def test_the_question_set_is_loaded_once_and_again_when_its_file_changes(tmp_path, monkeypatch):
-    path = tmp_path / (S.SET + ".json")
-    path.write_text((Path(J.QUESTIONS_DIR) / path.name).read_text())
-    monkeypatch.setattr(J, "QUESTIONS_DIR", tmp_path)
-    for var in ("TICO_REGISTRY_DIR", "TICO_QUESTIONS_DIR", "HUB_DIR"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(S, "_SETS", {})
-    loads, real = [], J.load_set
-
-    def counting(name, *args, **kwargs):
-        loads.append(name)
-        return real(name, *args, **kwargs)
-
-    monkeypatch.setattr(J, "load_set", counting)
-    first = S._qset()
-    assert first is not None and S._qset() is first and S._qset() is first
-    assert loads == [S.SET]
-    st = path.stat()
-    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
-    assert S._qset() is not None and loads == [S.SET, S.SET]

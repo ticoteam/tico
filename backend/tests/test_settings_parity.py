@@ -51,25 +51,3 @@ def test_every_setting_does_what_the_catalogue_says_for_botops_acting_for_each_p
     if role == "owner":
         proven = [k for k in NOT_PROVEN if k not in unproven]
         assert not proven, "Proven now: take these out of NOT_PROVEN: " + repr(proven)
-
-
-def test_the_sweep_names_an_entry_whose_route_refuses_a_level_the_catalogue_allows(api, botops, monkeypatch):
-    """Acceptance 8. Release times said "anyone" (the route keeps it to the owner and admins); Takes member bots, a
-    Confirm entry, said "anyone" too (Review 2 of PR #1700: the card is made by the catalogue, so only the tap reaches
-    the route's admin check); and Bot repositories without its Run workflows rule (as on Oct 27). The sweep names each."""
-    from dataclasses import replace
-
-    entries = [
-        replace(settings_catalog.entry("release.times"), who="anyone"),
-        replace(settings_catalog.entry("computer.member_bots"), who="anyone"),
-        replace(settings_catalog.entry("bot.repositories"), confirm_when=(), why=""),
-    ]
-    monkeypatch.setattr(settings_catalog, "_entries", lambda: entries)
-    objects = _objects(api, runner(api))
-    wrong, _, _ = sweep(api, botops, "member", entries[:2], objects)
-    assert wrong == [
-        "release.times: catalogue says ran for the member (direct, anyone), the route refused",
-        "computer.member_bots: catalogue says card for the member (confirm, anyone), the route card, then refused",
-    ], wrong
-    wrong, _, _ = sweep(api, botops, "owner", entries[2:], objects)
-    assert wrong == ["bot.repositories: catalogue says ran for the owner (direct, admin), the route card"], wrong

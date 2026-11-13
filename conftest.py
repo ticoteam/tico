@@ -254,6 +254,19 @@ def company(tmp_path, api_database):
     store.close()
 
 
+@pytest.fixture
+def inside_one_half_hour():
+    """Spend windows and daily caps are real half hours, days, weeks and months, each read from the real clock where
+    it is used. A test that spends and then reads its window must do both inside one: this starts it clear of the
+    next edge (every longer window ends on a half hour), waiting out the few seconds before one."""
+    import time
+    from datetime import datetime, timezone
+
+    left = 1800 - datetime.now(timezone.utc).timestamp() % 1800
+    if left < 20:
+        time.sleep(left + 0.05)
+
+
 @pytest.fixture(scope="session")
 def api_database(tmp_path_factory, request):
     """One initialized, fictional database per worker and invocation; never a cache across code changes.

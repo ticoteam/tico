@@ -37,8 +37,9 @@ TAGS = {
     "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
-    "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
-    "ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera.",
+    "Calls": "Calls in a thread (docs/meet.md): a Google Meet, or a Tico Meet call with audio and screen share, a live "
+    "transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for "
+    "audio and screen share only, never a camera; joining a Google Meet hands back its link.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
@@ -79,12 +80,14 @@ EVENTS_DESCRIPTION = (
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
     "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
+    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), each stage's count (`stages`), counts by kind (`by_kind`), "
     "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `calendar`: `calendar` (the calendar row id, `human:<id>` for time away, `google:<id>` for a Google write), "
+    "`id` and `kind` (event, away, google); refetch the calendar window on screen.\n"
     "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
@@ -214,6 +217,31 @@ STABLE = [
         "setBotBrowserExit",
         "Browse through a computer that shares its internet with this bot, or null for its own",
         "BotBrowserExitView",
+    ),
+    (
+        "/api/v2/bots/{bot}/app-view",
+        "get",
+        "Bots",
+        "getBotAppView",
+        "Whether the bot may view the app read only, for its own screenshots, and who turned that on",
+        None,
+    ),
+    (
+        "/api/v2/bots/{bot}/app-view",
+        "post",
+        "Bots",
+        "setBotAppView",
+        "Turn Can view the app (read only) on or off for a bot: an owner or admin, as themselves. Off ends its open views",
+        None,
+    ),
+    (
+        "/api/v2/app-view",
+        "post",
+        "Bots",
+        "openAppView",
+        "A bot, from inside its run, opens a read-only view of the app: a token for 15 minutes that reads as the bot and "
+        "is refused every write",
+        None,
     ),
     (
         "/api/v2/bots/{bot}/subscription",
@@ -729,10 +757,11 @@ STABLE = [
         "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and "
         "why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since "
         "filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), "
-        "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
-        "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
+        "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by "
+        "ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
         "answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in "
-        "full. A full read has an ETag: If-None-Match answers 304 when nothing changed",
+        "full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is "
+        "not one of these filters answers 422 `filter` naming it (owner=, not assignee=)",
         "TaskList",
     ),
     ("/api/v2/tasks", "post", "Tasks", "createTask", "Create a task", "TaskResult"),
@@ -1026,8 +1055,8 @@ STABLE = [
         "post",
         "Tasks",
         "relateTask",
-        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up), or take the relation off "
-        "with remove. A task waits on no relation",
+        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after), or take the relation "
+        "off with remove. A task waits on no relation but after, in Merge: its PRs are not queued until task merged",
         "TaskResult",
     ),
     (
@@ -1828,11 +1857,12 @@ STABLE = [
         "post",
         "Goals",
         "readBackGoalChanges",
-        "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of up to 20 "
+        "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of the whole plan (up to 500 "
         "changes to goals, measures and "
-        "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
-        "within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited "
-        "with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. "
+        "suggestions) as its reply and stores the exact saves. The owner's reply agreeing to the newest read-back (in "
+        "any words, or a yes to some by number) lets exactly those saves through (each step's method, path and body, "
+        "sent as it is), cited with X-Tico-On-Behalf-Of, until a newer read-back replaces it or the owner says stop; "
+        "anything else is 403 not_agreed. "
         "A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click",
         None,
     ),
@@ -2295,7 +2325,8 @@ GRANOLA_ERROR_DETAIL = {
 
 
 def items(schema):
-    return {"type": "array", "items": schema}
+    """An array schema of one item schema, written like an obj field: "s|i|b|o|n|a|f" or {schema}."""
+    return {"type": "array", "items": _t(schema) if isinstance(schema, str) else schema}
 
 
 ref = lambda name: {"$ref": "#/components/schemas/" + name}
@@ -2643,11 +2674,17 @@ SCHEMAS = {
         },
         relations={
             "type": "object",
-            "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up): "
-            "each {id, title, status, owner, direction}. A task waits on no relation. Sub-tasks are in the task's "
-            "children.",
+            "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up, "
+            "after): each {id, title, status, owner, direction}; an `after` entry also has the other task's number and "
+            "stage (out: this task merges after it; in: it merges after this one). A task waits on no relation but "
+            "after, in Merge. Sub-tasks are in the task's children.",
             "additionalProperties": items(
-                obj({"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"})
+                obj(
+                    {"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"},
+                    ["id", "title", "status", "owner_id", "direction"],
+                    number={"type": ["integer", "null"]},
+                    stage={"type": ["string", "null"]},
+                )
             ),
         },
         body={
@@ -2684,6 +2721,10 @@ SCHEMAS = {
             "ask": "b",
         },
         required=["state", "who", "line", "requirement_id", "since", "until", "ask"],
+        href={
+            "type": ["string", "null"],
+            "description": "A paused bot's cause: the app page that shows it (#/settings/computers, #/settings/billing)",
+        },
         running={
             "type": "boolean",
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
@@ -2938,6 +2979,7 @@ SCHEMAS = {
                             "resume_company",
                             "unlock_cloud",
                             "add_credit",
+                            "open_computers",
                             None,
                         ]
                     },
@@ -3200,6 +3242,10 @@ SCHEMAS = {
         {
             "tasks": items(ref("Task")),
             "next_offset": {"type": ["integer", "null"]},
+            "next_after": {
+                "type": ["string", "null"],
+                "description": "Opaque: pass as after for the next keyset page (search and filters kept); null at the end",
+            },
             "cursor": {
                 "type": "string",
                 "description": "Opaque: pass as changed_after to read only what changed since",
@@ -3552,6 +3598,12 @@ SCHEMAS = {
                     "additionalProperties": {"type": "integer"},
                     "description": "With limit or cursor: how many items in the whole list each bot is behind",
                 },
+                stages={
+                    "type": "object",
+                    "additionalProperties": {"type": "integer"},
+                    "description": "With limit or cursor: how many asks, tasks and mentions in the whole list wait in "
+                    "each stage (by stage id), for a stage's review",
+                },
                 restart={
                     "type": "boolean",
                     "description": "The cursor was from an older version: this page is the first",
@@ -3577,6 +3629,7 @@ SCHEMAS = {
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
             "snoozed": "b",
             "pushed_past": "b",
+            "on_person": "b",
         }
     ),
     "GranolaStatus": obj(
@@ -4519,8 +4572,17 @@ SCHEMAS = {
     "UsageFigures": obj(
         {
             "runs": "i",
-            "input_tokens": {"type": "integer", "description": "Uncached input tokens"},
+            "input_tokens": {
+                "type": "integer",
+                "description": "Uncached input tokens, without cache writes (a run whose runner did not count cache "
+                "writes apart includes them)",
+            },
             "cached_tokens": {"type": "integer", "description": "Input tokens read from the provider's cache"},
+            "cache_write_tokens": {
+                "type": "integer",
+                "description": "Input tokens written to the provider's prompt cache (Claude, Cursor, pi); 0 for runtimes "
+                "that report none (Codex, Gemini, Antigravity, Muse Code) and for runs from before they were counted apart",
+            },
             "output_tokens": "i",
             "est_cost_usd": {
                 "type": ["number", "null"],
@@ -9201,7 +9263,7 @@ STABLE.extend(
             'get',
             'Model subscriptions',
             'listComputerSubscriptions',
-            'Which subscription each computer uses per runtime, and the computers that can take one',
+            "Which subscription each computer uses per runtime (for a person's plans: the plan in use and why), the people who own plans per runtime, and the computers that can take one",
             'ComputerSubscriptionList',
         ),
         (
@@ -9209,7 +9271,7 @@ STABLE.extend(
             'put',
             'Model subscriptions',
             'setComputerSubscription',
-            'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true',
+            "Give a computer a subscription for one runtime, or a person's plans for it (`person`: used in turn, the soonest weekly reset with usage left first), switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
             'ComputerSubscriptionResult',
         ),
     ]
@@ -9237,6 +9299,8 @@ SCHEMAS['ModelSubscription'] = obj(
                         'cost_usd_month': NUM_N,
                         'resets_at': 'n',
                         'reason': {'type': ['string', 'null']},
+                        'weekly_resets_at': 'n',
+                        'weekly_used_pct': NUM_N,
                     },
                     required=['window', 'used_pct', 'cost_usd_month'],
                 ),
@@ -9249,6 +9313,8 @@ SCHEMAS['ModelSubscription'] = obj(
         'owner_name': 's',
         'created_at': 's',
         'updated_at': 's',
+        'order': {'type': ['integer', 'null']},
+        'in_use_on': items({'type': 'string'}),
     },
     required=[
         'id',
@@ -9269,6 +9335,8 @@ SCHEMAS['ModelSubscription'] = obj(
         'owner_name',
         'created_at',
         'updated_at',
+        'order',
+        'in_use_on',
     ],
 )
 SCHEMAS['ModelSubscriptionList'] = obj(
@@ -9292,10 +9360,23 @@ SCHEMAS['ModelSubscriptionList'] = obj(
 SCHEMAS['ModelSubscriptionDeleted'] = obj(
     {'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'}
 )
+_SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
+_PERSON_SET = obj({'person': 's', 'person_name': 's', 'plans': 'i', 'on': 'n', 'on_name': 'n', 'why': _SET_WHY})
 SCHEMAS['ComputerSubscriptionList'] = obj(
     {
-        'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
+        'assignments': items(
+            obj(
+                {
+                    'runner_id': 's',
+                    'runtime': {'enum': ['claude', 'codex']},
+                    'subscription_id': 's',
+                    'person': 's',
+                    'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
+                }
+            )
+        ),
         'capable': items({'type': 'string'}),
+        'people': items(obj({'id': 's', 'name': 's', 'claude': 'i', 'codex': 'i'}, required=['id', 'name'])),
     }
 )
 SCHEMAS['ComputerSubscriptionResult'] = obj(
@@ -9303,6 +9384,7 @@ SCHEMAS['ComputerSubscriptionResult'] = obj(
         'runner_id': 's',
         'runtime': {'enum': ['claude', 'codex']},
         'subscription_id': 'n',
+        'person': 's',
         'stopped': 'i',
         'sessions_reset': 'i',
     }
@@ -9436,6 +9518,23 @@ SCHEMAS['BotDreamView'] = obj(
     }
 )
 
+# The methods that write. Each /api/v2 write declares the Idempotency-Key header, required unless an exception says not.
+WRITE_METHODS = ("post", "put", "patch", "delete")
+# PUTs whose handlers never pass through Store.mutate, so they accept a write without the key.
+PUT_WITHOUT_KEY = frozenset(
+    {
+        "/api/v2/bots/{bot}/github-repos",
+        "/api/v2/bots/{bot}/repositories",
+        "/api/v2/finance/bills-address",
+        "/api/v2/hooks/wake-url",
+        "/api/v2/inbound/inboxes/{ident}/audience",
+        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+        "/api/v2/postal/settings",
+        "/api/v2/repositories/settings",
+        "/api/v2/repositories/{owner}/{repo}",
+    }
+)
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
@@ -9500,6 +9599,12 @@ SCHEMAS.update(
                     "description": "Its root is pinned for everyone "
                     "who reads it; `me.pinned` is whether it is pinned for the viewer",
                 },
+                "live_call": {
+                    "type": ["object", "null"],
+                    "description": "The thread's live call, or null",
+                    "properties": {"id": {"type": "string"}, "live_count": {"type": "integer"}},
+                    "required": ["id", "live_count"],
+                },
             },
             required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq", "pinned_for_everyone"],
         ),
@@ -9547,6 +9652,16 @@ SCHEMAS.update(
         ),
         "ThreadBrowse": obj(
             {"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}), "next_cursor": "n"}
+        ),
+        "ThreadMatch": obj(
+            {
+                "threads": items(ref("ThreadView")),
+                "dm": {
+                    "type": ["string", "null"],
+                    "description": "The viewer's open DM with the one person or bot named, or null",
+                },
+            },
+            required=["threads", "dm"],
         ),
         "ThreadCatchUp": obj(
             {
@@ -9758,6 +9873,16 @@ STABLE.extend(
             "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
             "Following one puts it in the rail",
             "ThreadBrowse",
+        ),
+        (
+            "/api/v2/threads/match",
+            "get",
+            "Threads",
+            "matchThreads",
+            "New message: the open threads the viewer may read whose members, the viewer left out, are exactly the "
+            "`actor` teammates (human:<id>, bot:<slug>, group:<id>), newest activity first, at most 5; `dm` is the "
+            "viewer's open DM with the one person or bot named, or null",
+            "ThreadMatch",
         ),
         (
             "/api/v2/threads/archived",
@@ -10011,7 +10136,8 @@ STABLE.extend(
         ),
     ]
 )
-# Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
+# Calls (docs/meet.md): a call belongs to a thread. Joining a Tico Meet call hands back a token for audio and screen share
+# only; joining a Google Meet hands back its link.
 STABLE.extend(
     [
         (
@@ -10027,8 +10153,17 @@ STABLE.extend(
             "post",
             "Calls",
             "startCall",
-            "Start a call in a thread you can write to",
+            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, "
+            "else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings",
             "Call",
+        ),
+        (
+            "/api/v2/calls/ringing",
+            "get",
+            "Calls",
+            "listRingingCalls",
+            "The live calls ringing you now, in threads you can read",
+            "CallRinging",
         ),
         (
             "/api/v2/calls/{call_id}",
@@ -10043,7 +10178,8 @@ STABLE.extend(
             "post",
             "Calls",
             "joinCall",
-            "Join a call: its media URL and a token good for 5 minutes",
+            "Join a call. Tico Meet: its media URL and a token good for 5 minutes. Google Meet: the Meet link as you "
+            "open it, no token",
             "CallJoin",
         ),
         (
@@ -10051,7 +10187,7 @@ STABLE.extend(
             "post",
             "Calls",
             "refreshCallToken",
-            "A fresh token for a call you have joined",
+            "A fresh token for a Tico Meet call you have joined; 409 not_tico_meet for a Google Meet",
             "CallToken",
         ),
         ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
@@ -10080,27 +10216,74 @@ STABLE.extend(
             "Call",
         ),
         ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
+        (
+            "/api/v2/calls/{call_id}/recorder",
+            "post",
+            "Calls",
+            "claimCallRecorder",
+            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins, if you are in the call",
+            "CallRecorderSource",
+        ),
+        (
+            "/api/v2/calls/{call_id}/recorder",
+            "delete",
+            "Calls",
+            "releaseCallRecorder",
+            "Stop your Recorder being the call's recording source",
+            "CallRecorderSource",
+        ),
+        (
+            "/api/v2/calls/{call_id}/presence",
+            "post",
+            "Calls",
+            "reportCallPresence",
+            "The recording source's Recorder reports the names in the Meet; kept only while Google gives no status",
+            "Call",
+        ),
     ]
 )
 SCHEMAS.update(
     {
-        "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n"}),
+        "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n", "in_call": "b"}),
+        "CallProvider": obj(
+            {
+                "provider": {"enum": ["tico", "google_meet"]},
+                "meet_uri": {"type": ["string", "null"], "description": "The Google Meet link Google gave"},
+                "join_url": {
+                    "type": ["string", "null"],
+                    "description": "The Meet link with authuser=<your Google address> when known; null for Tico Meet",
+                },
+                "live_count": {"type": "integer", "description": "People in the call now, as its status source says"},
+                "status_source": {"enum": ["google", "recorder", None], "description": "Where live status comes from"},
+                "seen_at": {"type": ["string", "null"], "description": "When anyone was first seen in the Meet"},
+                "duration_s": {"type": ["integer", "null"], "description": "An ended call's length"},
+                "ring": {"type": "boolean", "description": "The call rings you: rung, not joined, still live"},
+                "card_message_id": "n",
+                "transcript_message_id": "n",
+                "recorder": obj({"source": "n", "installed": "b"}),
+            }
+        ),
         "CallHold": obj(
             {"kind": {"enum": ["transcript", "action_items"]}, "reason": "s", "detail": "s", "created_at": "s"}
         ),
-        "CallSummary": obj(
-            {
-                "id": "s",
-                "thread_id": "s",
-                "title": "s",
-                "state": {"enum": ["live", "ended"]},
-                "connector": "s",
-                "started_at": "s",
-                "ended_at": "n",
-                "end_reason": "n",
-            }
-        ),
-        "Call": obj(
+        "CallSummary": {
+            "allOf": [
+                obj(
+                    {
+                        "id": "s",
+                        "thread_id": "s",
+                        "title": "s",
+                        "state": {"enum": ["live", "ended"]},
+                        "connector": "s",
+                        "started_at": "s",
+                        "ended_at": "n",
+                        "end_reason": "n",
+                    }
+                ),
+                ref("CallProvider"),
+            ]
+        },
+        "CallBase": obj(
             {
                 "id": "s",
                 "thread_id": "s",
@@ -10125,8 +10308,23 @@ SCHEMAS.update(
                 "on this call; off unless the call asked. Spoken replies are not sent yet",
             },
         ),
-        "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
-        "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
+        "Call": {"allOf": [ref("CallBase"), ref("CallProvider")]},
+        "CallList": obj(
+            {
+                "calls": items(ref("CallSummary")),
+                "next_before": "n",
+                "available": "b",
+                "providers": items({"enum": ["google_meet", "tico"]}),
+            }
+        ),
+        "CallRinging": obj({"calls": items(ref("Call"))}),
+        "CallRecorderSource": obj(
+            {"source": "b", "meeting_id": "s", "title": "s", "source_actor": "n", "has_transcript": "b"}
+        ),
+        "CallJoin": obj(
+            {"call": ref("Call"), "url": "n", "expires_in": "i", "token": "s"},
+            required=["call", "url"],
+        ),
         "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
     }
 )
@@ -10579,14 +10777,15 @@ def spec(app):
         granola = path.startswith("/api/v2/meetings/granola")
         if inbound:
             op["security"] = [{"serviceKey": []}]
-        if method in ("post", "patch", "delete") and path.startswith("/api/v2/"):
+        if method in WRITE_METHODS and path.startswith("/api/v2/"):
+            keyless = method == "put" and path in PUT_WITHOUT_KEY
             parameters = op.setdefault("parameters", [])
             parameters[:] = [p for p in parameters if (p.get("name"), p.get("in")) != ("Idempotency-Key", "header")]
             parameters.append(
                 {
                     "name": "Idempotency-Key",
                     "in": "header",
-                    "required": not (inbound or granola or connection),
+                    "required": not (inbound or granola or connection or keyless),
                     "schema": {"type": "string"},
                     "description": (
                         "Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header "
@@ -10596,6 +10795,8 @@ def spec(app):
                         if connection
                         else "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                         if granola
+                        else "Optional: this write does not check the header."
+                        if keyless
                         else "1-200 characters. Reusing a key with the same body replays the first answer."
                     ),
                 }
@@ -12179,6 +12380,199 @@ STABLE.extend(
             "Skills",
             "installSkillForTargets",
             "Install a skill for several bots or people at once, all or nothing",
+            None,
+        ),
+    ]
+)
+
+
+# Calendar (docs/dev/calendar-contract.md, HTTP): one way in for Google, Tico and derived calendars.
+TAGS["Calendar"] = (
+    "Calendars of people, bots, shared calendars and teams: Google read live, Tico events, runs, due dates and time "
+    "away merged into one list of occurrences (docs/dev/calendar-contract.md)."
+)
+_CAL_OBJ = obj({"ref": "s", "type": "s", "id": "s", "name": "s"})
+_CAL_ERRORS = items(obj({"ref": "s", "reason": "s"}))
+SCHEMAS.update(
+    {
+        "CalendarOccurrence": obj(
+            {
+                "occurrence_id": "s",
+                "event_id": "n",
+                "calendar": _CAL_OBJ,
+                "home": {"type": "string", "enum": ["google", "tico", "derived"]},
+                "kind": {"type": "string", "enum": ["event", "run", "due", "away"]},
+                "title": "s",
+                "start": "s",
+                "end": "s",
+                "all_day": "b",
+                "time_zone": "n",
+                "attendees": "a",
+                "response": "n",
+                "busy_only": "b",
+                "recurring": "b",
+                "status": "s",
+                "meeting_url": "n",
+                "open_url": "n",
+                "links": obj({"thread": "n", "meeting": "n", "task": "n", "automation": "n", "attempt": "n"}),
+                "can": obj({"join": "b", "edit": "b"}),
+            }
+        ),
+        "CalendarView": obj(
+            {
+                "ref": "s",
+                "type": "s",
+                "id": "s",
+                "name": "s",
+                "home": "n",
+                "time_zone": "n",
+                "work_starts": "n",
+                "work_ends": "n",
+                "work_days": "n",
+                "can_write": "b",
+            }
+        ),
+        "CalendarEvents": obj(
+            {
+                "from": "s",
+                "to": "s",
+                "calendars": items(ref("CalendarView")),
+                "occurrences": items(ref("CalendarOccurrence")),
+                "errors": _CAL_ERRORS,
+            },
+            month_counts=items(obj({"bot_id": "s", "date": "s", "count": "i"})),
+        ),
+        "CalendarList": obj({"calendars": items(ref("CalendarView")), "errors": _CAL_ERRORS}),
+        "CalendarSearch": obj({"occurrences": items(ref("CalendarOccurrence")), "partial": "b", "errors": _CAL_ERRORS}),
+        "CalendarFree": obj({"slots": items(obj({"start": "s", "end": "s"})), "errors": _CAL_ERRORS}),
+        "CalendarSettingsView": obj(
+            {
+                "time_zone": "s",
+                "time_zone_set": "b",
+                "work_starts": "s",
+                "work_ends": "s",
+                "work_days": "s",
+                "record_on_join": "b",
+            }
+        ),
+    }
+)
+STABLE.extend(
+    [
+        (
+            "/api/v2/calendar/events",
+            "get",
+            "Calendar",
+            "listCalendarEvents",
+            "Occurrences on the calendars in `who` (default you) from `from` to `to`, at most 62 days; `kinds` "
+            "narrows to event, run, due, away. Over 7 days runs come as `month_counts`. A calendar that could not be "
+            "read is in `errors`, never shown as free",
+            "CalendarEvents",
+        ),
+        (
+            "/api/v2/calendar/events",
+            "post",
+            "Calendar",
+            "createCalendarEvent",
+            "Add an event (bots and the Assistant; a person only on their own Tico calendar). A bot booking a "
+            "person needs their book rule; a connected person on it puts it on Google",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "get",
+            "Calendar",
+            "getCalendarEvent",
+            "One event as the caller sees it (404 when they cannot see it)",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "patch",
+            "Calendar",
+            "changeCalendarEvent",
+            "Change an event: `scope` this, following (Tico only) or all",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "delete",
+            "Calendar",
+            "cancelCalendarEvent",
+            "Cancel an event (`scope` query: this, following or all)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}/response",
+            "post",
+            "Calendar",
+            "respondToCalendarEvent",
+            "Accept, decline or tentatively accept an event you attend",
+            None,
+        ),
+        (
+            "/api/v2/calendar/calendars",
+            "get",
+            "Calendar",
+            "listCalendars",
+            "Every calendar you can open: people, bots, shared, teams and your other Google calendars (`q` narrows)",
+            "CalendarList",
+        ),
+        (
+            "/api/v2/calendar/search",
+            "get",
+            "Calendar",
+            "searchCalendar",
+            "Search events, runs and recorded meetings (`q` with with:, bot:, kind:, before:, after:, "
+            "has:transcript, automation:, trigger:, longer:); Google has 3 seconds, past that the answer is `partial`",
+            "CalendarSearch",
+        ),
+        (
+            "/api/v2/calendar/free",
+            "get",
+            "Calendar",
+            "findCalendarFreeTimes",
+            "Times everyone in `who` is free for `minutes` within `within` (such as 5d), in working hours",
+            "CalendarFree",
+        ),
+        (
+            "/api/v2/calendar/settings",
+            "get",
+            "Calendar",
+            "getCalendarSettings",
+            "Your zone, hours and recording",
+            "CalendarSettingsView",
+        ),
+        (
+            "/api/v2/calendar/settings",
+            "put",
+            "Calendar",
+            "setCalendarSettings",
+            "Change your zone, working hours or Record calls I join (send only what changes)",
+            "CalendarSettingsView",
+        ),
+        (
+            "/api/v2/calendar/shared",
+            "post",
+            "Calendar",
+            "createSharedCalendar",
+            "Make a shared calendar (admins)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/shared/{calendar_id}/access",
+            "put",
+            "Calendar",
+            "setSharedCalendarAccess",
+            "Give a person, bot or team read or read_write on a shared calendar, or take it away (admins)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/absences",
+            "post",
+            "Calendar",
+            "addAbsence",
+            "Record days away (yours; admins anyone's)",
             None,
         ),
     ]

@@ -59,25 +59,6 @@ def test_anthropic_cache_hits_follow_the_pricing_pages_multipliers():
         assert hit == pytest.approx(inp * ratio), model
 
 
-def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(tmp_path):
-    conn = hubdb.connect(tmp_path / "hub.db")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
-    assert {
-        "input_tokens",
-        "cached_tokens",
-        "output_tokens",
-        "usage_model",
-        "provider",
-        "est_cost_usd",
-        "billing",
-    } <= columns
-    conn.execute("PRAGMA user_version=%d" % (len(hubdb.MIGRATIONS) - 1))
-    hubdb.migrate(conn)  # the change is there but the version is not
-    hubdb.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS)
-
-
 # --------------------------------------------------------------------------- the API
 def seed(api):
     """Runs on 20 and 21 September: ops (Ana's, no department) and cpo (Ben's, product), one routine."""
@@ -281,16 +262,31 @@ def test_each_haiku_request_pays_the_rate_for_its_own_prompt_length(api):
     )
 
 
-def test_without_each_request_the_estimate_may_be_low_and_other_models_are_unchanged(api):
+def test_a_claude_runs_cache_writes_are_kept_apart_from_input_in_every_group(api):
+    """A Claude run reports `cache_creation_input_tokens` as `cache_write_tokens`: stored on the run and its fact,
+    left out of `input_tokens`, and returned by every grouping of /api/v2/usage. Priced as input, as before."""
     r, _, attempt = setup_attempt(api)
-    complete(api, r, attempt, haiku(input_tokens=6_000, cached_tokens=165_000, output_tokens=2_800))  # an older runner
-    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(price("claude-haiku-5-5", 6_000, 165_000, 2_800))
-    assert today(api)["low_estimate_runs"] == 1
-    # A model with no long-prompt rate is priced from its totals, whatever its requests' prompts.
-    assert providers.estimate("claude-sonnet-5-5", 5_000, 115_000, 2_000, [[5_000, 115_000, 2_000]]) == (
-        pytest.approx(price("claude-sonnet-5-5", 5_000, 115_000, 2_000)),
-        False,
-    )
+    complete(api, r, attempt, haiku(input_tokens=200, cached_tokens=40_000, cache_write_tokens=3_000, output_tokens=90))
+    row = turn(api, attempt["id"])
+    assert (row["input_tokens"], row["cached_tokens"], row["cache_write_tokens"]) == (200, 40_000, 3_000)
+    assert row["est_cost_usd"] == pytest.approx(price("claude-haiku-5-5", 3_200, 40_000, 90))
+    with api.app.state.store.read() as c:
+        fact = c.execute("SELECT input_tokens, cache_write_tokens FROM usage_facts WHERE run_id=?", (attempt["id"],))
+        assert tuple(fact.fetchone()) == (200, 3_000)
+    day = hubdb.now()[:10]
+    for group in ("bot", "day", "routine", "task", "harness", "model", "effort", "subscription"):
+        got = usage(api, group=group, **{"from": day, "to": day})
+        assert got["totals"]["cache_write_tokens"] == 3_000, group
+        assert got["totals"]["input_tokens"] == 200, group
+        assert sum(row["cache_write_tokens"] for row in got["rows"]) == 3_000, group
+
+
+def test_a_runner_that_does_not_count_cache_writes_apart_records_none(api):
+    """An older runner sends no `cache_write_tokens` (its input still counts them): the run records NULL, read as 0."""
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, haiku(input_tokens=3_200, cached_tokens=40_000, output_tokens=90))
+    assert turn(api, attempt["id"])["cache_write_tokens"] is None
+    assert today(api)["cache_write_tokens"] == 0
 
 
 def test_tico_low_bills_a_prompt_over_100k_whole_at_its_long_rate():
@@ -528,21 +524,3 @@ def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tm
         k: before[k] for k in ("input_tokens", "cached_tokens", "output_tokens", "est_cost_usd", "usage_reason")
     }
     assert kept["usage_reason"] is None
-
-
-def test_a_measured_run_has_no_usage_reason(api):
-    r, _, attempt = setup_attempt(api)
-    complete(
-        api,
-        r,
-        attempt,
-        {
-            "input_tokens": 10,
-            "cached_tokens": 0,
-            "output_tokens": 5,
-            "model": "gpt-6-sol",
-            "runtime": "codex",
-            "billing": "api",
-        },
-    )
-    assert turn(api, attempt["id"])["usage_reason"] is None

@@ -104,7 +104,9 @@ mod source_resume;
 mod state;
 mod subscription_refresh;
 mod tls;
+mod turn_limits;
 mod turn_users;
+mod upload_pace;
 mod util;
 mod warm;
 mod watchers;
@@ -366,6 +368,9 @@ fn main() {
     }
     if argv.get(1).is_some_and(|a| a == reap::FLAG) {
         std::process::exit(reap::main(&argv[2..]));
+    }
+    if argv.get(1).is_some_and(|a| a == turn_limits::FLAG) {
+        std::process::exit(turn_limits::main(&argv[2..]));
     }
     if argv.get(1).is_some_and(|a| a == "--release") {
         // The release this binary was built for (build.rs; "dev" for a source build). `--version` stays the protocol version.

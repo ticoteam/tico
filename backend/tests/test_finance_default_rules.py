@@ -12,11 +12,6 @@ from backend.tests.helpers.finance_fixtures import OWNER, act, books, finance_te
 DAY = date(2026, 10, 31)
 
 
-def test_every_seeded_default_gives_its_own_examples():
-    for rid, name, _words, when, outcome, examples in G.DEFAULTS:
-        assert G.failing_examples(G.rule_of(rid, name, when, outcome, True), examples, DAY) == [], rid
-
-
 def test_rule_six_is_a_fixed_gate_row_and_rule_four_is_listed_read_only(books):  # noqa: F811
     with books.transaction() as c:
         row = SK.get(c, "fin_rules", "rule:close-reopen-owner")

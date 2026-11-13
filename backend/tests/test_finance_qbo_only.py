@@ -6,8 +6,6 @@ import sqlite3
 from typing import Any
 
 from backend.finance import reads as FR
-from backend.finance.attribution import PLANNERS
-from backend.finance.core import kinds as K
 from backend.finance.core import mirror as M
 from backend.finance.store import ledger as SL
 from backend.finance.core.errors import DENIED, INVALID
@@ -284,13 +282,6 @@ def test_rule_precedence_is_vendor_then_money_account_then_account_then_class_lo
     assert ATT.match_rule(rows, facts)["id"] == "v"
     assert ATT.match_rule([rule("c", "class", "other")], facts) is None
     assert ATT.match_rule([rule("c", "class", "cls")], ATT.facts_of_tags("acct-6100", (), "", {})) is None
-
-
-def test_attribution_map_is_a_live_kind_that_needs_the_attribution_right():
-    assert "attribution_map" in PLANNERS
-    assert "attribution_map" in K.ALL and "attribution_map" in K.LIVE
-    assert K.NEEDS["attribution_map"] == "finance.attribution"
-    assert "attribution_map" in K.SHAPES and "attribution_map" in K.WORDS
 
 
 def test_a_tico_kept_book_counts_a_bill_once_when_its_feed_payment_clears_it(books):

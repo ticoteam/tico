@@ -105,6 +105,10 @@ ASSISTANT_WRITES = {
     "tico_settings_set",
     "tico_rules_read",
     "tico_rules_ask",
+    # People view; the Assistant books for them (decision 13).
+    "tico_calendar_add",
+    "tico_calendar_move",
+    "tico_calendar_cancel",
 }
 
 
@@ -289,6 +293,10 @@ AUDIENCE = {
     "tico_file_delete": ("owner", "botops"),
     "tico_page_archive": PEOPLE + BOTS,
     "tico_page_access": PEOPLE + BOTS,
+    # A bot's read-only view of the app (backend/app_view.py): an owner or admin turns it on, as themselves; the bot
+    # takes its own screenshots with it.
+    "tico_bot_app_view": PEOPLE,
+    "tico_bot_app_shot": BOTS,
     # Reads that go over POST, which the Assistant may not make on its own.
     **{
         name: NOT_ASSISTANT

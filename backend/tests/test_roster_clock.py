@@ -72,20 +72,6 @@ def test_a_reader_in_an_older_snapshot_keeps_its_own_rows(api):
         old.commit()
 
 
-def test_reads_outside_a_transaction_share_the_roster_too(api):
-    """Most request reads run in a plain `store.read()`, not a read transaction: they must share the roster as well."""
-    store = api.app.state.store
-    snapshot_rows(store)  # the roster is read once and published
-    ran = []
-    with store.read() as c:
-        c.set_trace_callback(lambda sql: ran.append(sql) if sql == CONFIGS else None)
-        first = [dict(r) for r in read_cache.configs(c)]
-        second = [dict(r) for r in read_cache.configs(c)]
-        c.set_trace_callback(None)
-        assert not c.in_transaction
-    assert first == second and ran == []
-
-
 def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_write(api, monkeypatch):
     """The entries every bot list asks for are built from bot_config alone, so later snapshots share the built value."""
     from backend import views

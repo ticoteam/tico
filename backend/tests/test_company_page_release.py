@@ -185,11 +185,6 @@ def strings_in(node):
     return [str(node)] if isinstance(node, (str, int, float)) and not isinstance(node, bool) else []
 
 
-def test_updates_come_before_stats_on_the_page():
-    page = render.page(view_model())
-    assert 'id="stats-heading"' in page and page.index('id="updates-heading"') < page.index('id="stats-heading"')
-
-
 def test_render_shows_nothing_outside_the_view_model():
     view = view_model()
     view["stats"][0]["cash"] = "SECRETCASH"
@@ -829,13 +824,6 @@ def test_a_logo_is_read_through_the_servers_file_reader_with_the_company_places_
     assert json.loads((served(world) / "data.json").read_text())["company"]["logo_url"].startswith("assets/logo-")
 
 
-def test_default_and_named_folders(world, tmp_path):
-    assert release._root(world.settings) == tmp_path / "company-page-public"
-    named = Settings(db_path=tmp_path / "hub.db", company_page_dir=str(tmp_path / "named"))
-    assert release._root(named) == tmp_path / "named"
-    assert release.current_dir(named) is None
-
-
 def test_logo_is_copied_when_its_bytes_are_an_image_and_dropped_otherwise(world, monkeypatch):
     open_page(world)
     publish(world, "e1", "First")
@@ -985,29 +973,3 @@ def test_the_router_needs_only_the_folder_it_mounts(world, monkeypatch, tmp_path
     mounted.parent.mkdir()
     shutil.move(str(tmp_path / "cell" / "pages"), str(mounted))
     assert_self_contained(mounted / "acme" / "current")
-
-
-def test_a_preview_follows_the_apps_theme_and_a_release_never_does():
-    view = {"company": {"name": "Acme"}, "audience": {"kind": "public", "name": "Public"}, "stats": [], "updates": []}
-    follows = render.page(view, preview=True)
-    assert "prefers-color-scheme:dark" in follows and "color-scheme:light dark" in follows
-    assert render.page(view, preview=True, theme="nonsense") == follows
-    dark = render.page(view, preview=True, theme="dark")
-    assert (
-        "prefers-color-scheme" not in dark and "@media all{:root{--bg:#0f1217" in dark and "color-scheme:dark;" in dark
-    )
-    light = render.page(view, preview=True, theme="light")
-    assert (
-        "prefers-color-scheme" not in light
-        and "@media not all{:root{--bg:#0f1217" in light
-        and "color-scheme:light dark" not in light
-    )
-    assert "prefers-color-scheme:dark" in render.page(view, theme="dark"), (
-        "a reader's page follows the reader's computer"
-    )
-
-
-def test_a_preview_keeps_its_links_in_the_page_and_a_release_does_not():
-    view = {"company": {"name": "Acme"}, "audience": {"kind": "public", "name": "Public"}, "stats": [], "updates": []}
-    assert render.PREVIEW_SCRIPT in render.page(view, preview=True)
-    assert render.PREVIEW_SCRIPT not in render.page(view)

@@ -163,37 +163,62 @@ function settingsAgentPair(slug: string) {
   close.onclick = () => dialog.close();
   const preview = dialog.querySelector('[data-pair-preview]');
   if (!preview) return;
-  let previewCode = '', pendingPreview: number | undefined;
-  const loadPreview = async () => {
-    const code = form.code.value.trim();
-    if (code.replace(/[^a-z0-9]/gi, '').length !== 8) { preview.textContent = ''; previewCode = ''; return; }
-    const shown = await get<{profile?: string; host?: string; harness?: string}>(`/v2/agents/pairing-preview?code=${encodeURIComponent(code)}`);
-    if (form.code.value.trim() !== code) return;
-    previewCode = code;
+  // The same phases as Upload statement (finance-statement-upload.ts): Pair approves only the code whose preview is shown
+  // (phase 'reviewed'), as captured then. Each preview request takes the next revision; an edit or a newer request makes
+  // an older reply stale, and a stale reply shows nothing and approves nothing. The code box is read-only while pairing.
+  let phase: 'empty' | 'previewing' | 'reviewed' | 'pairing' | 'error' = 'empty', revision = 0, reviewed = '';
+  let pendingPreview: number | undefined;
+  const forget = (): number => { clearTimeout(pendingPreview); reviewed = ''; preview.textContent = ''; phase = 'empty'; return ++revision; };
+  // Shows the preview of `code`; true when it is now the reviewed code.
+  const loadPreview = async (code: string): Promise<boolean> => {
+    const mine = forget();
+    if (code.replace(/[^a-z0-9]/gi, '').length !== 8) return false;
+    phase = 'previewing';
+    let shown: {profile?: string; host?: string; harness?: string};
+    try { shown = await get(`/v2/agents/pairing-preview?code=${encodeURIComponent(code)}`); }
+    catch (error) { if (mine === revision) { phase = 'error'; preview.textContent = errorMessage(error, ''); } return false; }
+    if (mine !== revision) return false;
+    reviewed = code; phase = 'reviewed';
     preview.textContent = `${shown.profile || 'Profile'} · ${shown.host || 'Computer'} · ${settingsHarnessName(shown.harness) || shown.harness}${e.agent?.credential ? ' · replaces current credential' : ''}`;
+    return true;
   };
   form.code.oninput = () => {
-    clearTimeout(pendingPreview); previewCode = '';
-    pendingPreview = setTimeout(() => void loadPreview().catch(error => { preview.textContent = error.message; }), 250);
+    if (phase === 'pairing') return;
+    forget();
+    pendingPreview = setTimeout(() => void loadPreview(form.code.value.trim()), 250);
   };
   form.onsubmit = async event => {
     event.preventDefault();
-    const button = form.querySelector<HTMLButtonElement>('button[type=submit]'); if (!button) return;
-    button.disabled = true; status.textContent = 'Pairing…';
+    const button = form.querySelector<HTMLButtonElement>('button[type=submit]'); if (!button || phase === 'pairing') return;
+    const code = form.code.value.trim();
+    status.textContent = '';
+    if (phase !== 'reviewed' || reviewed !== code) {
+      // Nothing shown for this code yet: show it, and Pair again approves it.
+      button.disabled = true;
+      const shown = await loadPreview(code);
+      button.disabled = false;
+      if (shown) status.textContent = 'Check the profile above, then Pair.';
+      else if (phase !== 'error' && form.code.value.trim() === code) status.innerHTML = '<span class="err">Type the 8-character code the profile printed.</span>';
+      return;
+    }
+    phase = 'pairing'; button.disabled = true; form.code.readOnly = true; status.textContent = 'Pairing…';
     try {
-      if (previewCode !== form.code.value.trim()) await loadPreview();
-      const done: {profile?: string; host?: string} = await post('/v2/agents/pairings/approve', {code: form.code.value.trim(), bot: slug});
+      const done: {profile?: string; host?: string} = await post('/v2/agents/pairings/approve', {code, bot: slug});
       toast(`Paired ${done.profile || 'the profile'}${done.host ? ` on ${done.host}` : ''}`);
       dialog.close();
-    } catch (error) { status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`; button.disabled = false; }
+    } catch (error) {
+      // The code stays reviewed: Pair again sends the same approval.
+      phase = 'reviewed'; form.code.readOnly = false; button.disabled = false;
+      status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
+    }
   };
-  dialog.onclose = () => { clearTimeout(pendingPreview); dialog.remove(); void loadSettings(); };
+  dialog.onclose = () => { forget(); dialog.remove(); void loadSettings(); };
   document.body.appendChild(dialog); dialog.showModal(); form.code.focus();
 }
 async function settingsAgentCredential(slug: string) {
   const e: DeviceBot | undefined = S.emps.find(row => row.id === slug); if (!e) return;
   const rotating = !!e.agent?.credential;
-  if (rotating && !confirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`)) return;
+  if (rotating && !(await askConfirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`))) return;
   let issued: AgentCredentialIssued;
   try { issued = await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential`, {}); }
   catch (error) { toast(errorMessage(error, ''), true); return; }
@@ -275,7 +300,7 @@ function settingsTokenShow(issued: PersonalTokenIssued) {
   document.body.appendChild(dialog); dialog.showModal();
 }
 async function settingsTokenRevoke(id: string | undefined, label: string | undefined) {
-  if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
+  if (!(await askConfirm(`Revoke the token ${label}? Anything using it stops at once.`))) return;
   try { await post(`/v2/me/tokens/${encodeURIComponent(String(id))}/revoke`, {}); toast(`Token ${label} revoked`); }
   catch (error) { toast(errorMessage(error, ''), true); }
   await renderSettingsTokens();
@@ -285,7 +310,7 @@ function agentConfigYaml(setup: AgentSetup) {
 }
 async function settingsAgentRevoke(slug: string | undefined) {
   const e = S.emps.find(row => row.id === slug); if (!e) return;
-  if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
+  if (!(await askConfirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`))) return;
   try { await post(`/v2/bots/${encodeURIComponent(String(slug))}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
   catch (error) { toast(errorMessage(error, ''), true); }
 }
@@ -610,6 +635,17 @@ function renderSettingsMachines() {
       <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
   const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
+  // A cloud machine not enrolled yet: its name and what it is doing (being made, starting, out of credit, failed), with
+  // Add credit or Replace machine when that is the way on.
+  const coming = (SETTINGS_DATA.cloudComing || []).map(row => {
+    const replace = row.replace && settingsIsAdmin()
+      ? ` <button type="button" class="ghost" data-cloud-coming-replace="${esc(row.key)}">Replace machine</button>` : '';
+    const credit = row.status === 'out_of_credit' ? cloudCreditLinkHTML() : '';
+    const dot = row.status === 'failed' || row.status === 'out_of_credit' ? 'failed' : '';
+    return `<tr class="machine-card" data-cloud-coming="${esc(row.key)}">
+      <td class="machine-cell"><span class="machine-head"><span class="machine-status"><span class="dot ${dot}" aria-hidden="true"></span></span><strong>${esc(row.label)}</strong></span><span class="settings-cell-note" data-cloud-coming-status>${esc(row.words)}${credit}${replace}</span></td>
+      <td class="num tnum machine-bot-count">—</td>${'<td></td>'.repeat(pickers.length + others.length + 1)}</tr>`;
+  }).join('');
   el.onchange = async (event: Event & {target: Element}) => {
     const pick = event.target.closest<HTMLSelectElement>('[data-subs-pick]');
     if (pick) { await subsPick(pick); return; }
@@ -688,6 +724,18 @@ function renderSettingsMachines() {
     }
     const login = event.target.closest<HTMLElement>('[data-machine-copy-login]');
     if (login) { void copyText(login.dataset.machineCopyLogin!).then(() => toast('Command copied')); return; }
+    const again = event.target.closest<HTMLButtonElement>('[data-cloud-coming-replace]');
+    if (again) {
+      const key = again.dataset.cloudComingReplace!;
+      if (!await settingsConfirm({title: 'Replace machine?', ok: 'Replace machine', text: 'Deletes this machine and its disk. The next task starts a fresh one.'})) return;
+      again.disabled = true;
+      try {
+        await (key === '_shared' ? writeRequest('DELETE', '/v2/cloud-machines/shared') : post(`/v2/bots/${encodeURIComponent(key)}/cloud-machine/replace`, {}));
+        await loadSettings();
+        toast('Machine replaced');
+      } catch (error) { toast(errorMessage(error, ''), true); again.disabled = false; }
+      return;
+    }
     const remove = event.target.closest<HTMLButtonElement>('[data-computer-remove]');
     if (remove) {
       const machine: DeviceMachine | undefined = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
@@ -718,7 +766,8 @@ function renderSettingsMachines() {
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen_at ? `<span class="muted"> · ${esc(ago(agent.last_seen_at))}</span>` : ''}</span></td></tr>`).join('');
   const empty = !SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.';
-  const list = `${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
+  const rows = coming + cards;
+  const list = `${rows ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
     ${revoked ? `<label class="settings-cell-note machine-show-revoked"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked (${revoked})</label>` : ''}
     ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
   // Only the list is redrawn; the Add computer dialog (and the code it shows) keeps what was typed.

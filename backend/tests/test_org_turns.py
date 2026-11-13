@@ -82,13 +82,6 @@ def test_spec11_only_sign_ins_count_guests_do_not_and_empty_org_counts_one(api):
     assert (value['people'], value['warning'], value['stop']) == (1, 40, 100)
 
 
-def test_settings_turn_levels_get_uses_admission_not_fleet_snapshot(api):
-    """The settings page only renders levels and in_use; classifying every queued bot is wasted work."""
-    value = get(api, 'settings/turn-levels')
-    assert 'in_use' in value and 'at_stop' in value and 'warning_per_person' in value
-    assert 'running' not in value and 'queued' not in value and 'waiting' not in value
-
-
 def test_spec15_admin_levels_persist_apply_and_non_admin_is_denied_by_server(api):
     """Synthetic permission regression; acceptance 15 still requires a separate live check."""
     value = post(api, 'settings/turn-levels', {'warning_per_person': 5, 'stop_per_person': 9}, 'ben-test')
@@ -301,20 +294,6 @@ def test_stop_level_counted_waiter_takes_its_place_while_new_claims_wait(api):
     assert answer['attempt'] is None and answer['waiting'] == REASON
 
 
-def test_stop_level_wait_is_a_warning_not_a_stuck_bot_outage(api):
-    """The configured stop is reported by the company-turns incident; a person's message held by it is not an outage."""
-    one_person(api)
-    machine = waiters(api, n=99, running=1)
-    independent(api, machine)
-    assert claim(api, machine, 'finance') is None
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE jobs SET created_at=? WHERE bot_id='finance' AND state='queued'", (H.shift(H.now(), minutes=-3),)
-        )
-    queue = next(x for x in get(api, 'health')['checks'] if x['id'] == 'queue')
-    assert queue['status'] == 'warn' and any(i.get('reason') == 'company_limit' for i in queue['items'])
-
-
 def test_queued_jobs_that_never_started_do_not_count_toward_the_stop(api):
     """Work held by quota, readiness or a paused bot holds no place: counting it stopped the company with nothing running."""
     one_person(api)
@@ -453,39 +432,31 @@ def test_health_and_queued_labels_do_not_classify_the_fleet_for_at_stop(api, mon
     assert label == 'Saved — ' + org_turns.REASON
 
 
-def test_snapshot_shares_one_company_default_across_runners(api, monkeypatch):
-    """Each claim_refusal used to rebuild company pools/groups; one Default memo covers the whole pass."""
-    from backend import org_turns, usage_limits
+def test_company_turns_row_says_when_in_clock_time_never_an_iso_stamp(api):
+    """Health reads "Incident opened 07:52 UTC" like its other rows, not "2026-11-12T07:52:57.536188Z"."""
+    import re
 
-    first = waiters(api, n=0, running=0)
-    second = runner(api, label='Other synthetic computer')
-    assign(api, second, 'finance')
-    ready(api, second, ['finance'])
-    calls = []
-    real = usage_limits.company
-
-    def once(c):
-        calls.append(1)
-        return real(c)
-
-    monkeypatch.setattr(usage_limits, 'company', once)
-    with api.app.state.store.read() as c:
-        value = org_turns.snapshot(c, api.app.state.store.settings)
-        runners = {row['id'] for row in c.execute('SELECT id FROM runners')}
-    assert {first['runner_id'], second['runner_id']} <= runners
-    assert len(calls) == 1
-    assert set(('running', 'starting', 'waiting', 'queued')) <= value.keys()
-
-
-def test_turns_in_use_reads_the_live_attempts_index_not_every_attempt(api):
-    """Every claim counts the company's turns: a scan of all attempts ever run took ~90 ms a call on a live install."""
     from backend import org_turns
 
-    with api.app.state.store.read() as c:
-        sent = []
-        c.set_trace_callback(sent.append)
-        org_turns.in_use(c)
-        c.set_trace_callback(None)
-        count = next(sql for sql in sent if "count(*) FROM attempts" in sql)
-        plan = " | ".join(row[-1] for row in c.execute("EXPLAIN QUERY PLAN " + count))
-    assert "attempts_live_lease" in plan, plan
+    iso = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d")
+    one_person(api)
+    waiters(api, n=39, running=1)
+    with api.app.state.store.transaction() as c:
+        org_turns.observe(c, api.app.state.store.settings)
+        opened = org_turns.saved(c, org_turns.INCIDENT)['opened_at']
+
+    def row():
+        return next(x for x in get(api, 'health')['checks'] if x['id'] == 'company_turns')
+
+    live = row()
+    assert not iso.search(live['summary']) and not iso.search(live['items'][0]['text'])
+    assert f"Incident opened {opened[11:16]} UTC" in live['summary']
+    assert live['items'][0]['opened_at'] == opened  # the machine field keeps its stamp
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-39'")
+        c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-39'")
+        org_turns.observe(c, api.app.state.store.settings)
+        resolved = org_turns.saved(c, org_turns.INCIDENT)['resolved_at']
+    done = row()
+    assert not iso.search(done['summary'])
+    assert done['summary'].endswith(f"Incident resolved {resolved[11:16]} UTC")

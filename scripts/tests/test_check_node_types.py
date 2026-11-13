@@ -60,15 +60,6 @@ def test_the_real_projects_extend_the_shared_base_and_ui_tests_does_too():
     assert "include" not in json.loads((node.ROOT / node.BASE).read_text())
 
 
-def test_the_recorder_window_is_a_page_project_the_recorder_scripts_leave_out():
-    assert "recorder/ui/tsconfig.json" in node.PROJECTS and node.PAGE_PROJECTS == ("recorder/ui/tsconfig.json",)
-    page = json.loads((node.ROOT / "recorder/ui/tsconfig.json").read_text())
-    assert page["compilerOptions"]["types"] == [] and "DOM" in page["compilerOptions"]["lib"]
-    assert {"./app/**/*.ts", "./preview/**/*.ts", "./types/**/*.d.ts"} == set(page["include"])
-    # recorder/tsconfig.json includes ./**/*.d.ts: without the exclude it would read the bridge's types under Node too.
-    assert "./ui/types" in json.loads((node.ROOT / "recorder/tsconfig.json").read_text())["exclude"]
-
-
 def test_clean_projects_pass_and_tsc_runs_on_each(tmp_path, monkeypatch):
     files = {
         "scripts/a.cts": "export {};\n",

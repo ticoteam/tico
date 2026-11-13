@@ -69,8 +69,8 @@ window.mountSlackChannels = async function (host) {
   };
   host.querySelectorAll<HTMLTableRowElement>('tr[data-channel]').forEach(tr => {
     const channel = tr.dataset.channel;
-    tr.querySelector('[data-slack-remove]')?.addEventListener('click', () => {
-      if (confirm(`Take ${channel} off the list?`)) change('/v2/slack/channels/remove', {channel});
+    tr.querySelector('[data-slack-remove]')?.addEventListener('click', async event => {
+      if (await askConfirm(`Take ${channel} off the list?`, eventElement(event))) change('/v2/slack/channels/remove', {channel});
     });
     tr.querySelectorAll<HTMLElement>('[data-slack-unread]').forEach(b => {
       b.addEventListener('click', () => change('/v2/slack/channels/remove', {channel, reader: b.dataset.slackUnread}));

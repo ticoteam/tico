@@ -166,3 +166,39 @@ def test_a_hub_from_before_ok_accounts_gets_the_same_bodies_without_it(tmp_path,
     assert [path for path, _ in hub.posts] == paths  # and accepted once it was sent without it
     assert all("ok_accounts" not in body for _, body in hub.posts)
     assert [body["service"] for _, body in hub.posts[1:]] == ["calendar", "mail"]
+
+
+class DaysHub(Hub):
+    """A hub that asks for the start of today plus `days`, beside the `hours` an older computer reads."""
+
+    def get(self, path):
+        answer = super().get(path)
+        return {**answer, "days": 14} if path == "connectors/calendar/targets" else answer
+
+
+def test_a_hub_naming_days_gets_two_weeks_and_an_older_hub_its_24_hours(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    no_key(monkeypatch, tmp_path)
+    asked = []
+    made = publisher(tmp_path, DaysHub(), fetch=lambda *window: asked.append(window) or [], mail=fake_mail())
+    made.tick()
+    assert asked == [(ANA, 24, 14), (BEN, 24, 14)]
+    made = publisher(tmp_path / "old", Hub(), fetch=lambda *window: asked.append(window) or [], mail=fake_mail())
+    made.tick()
+    assert asked[2:] == [(ANA, 24), (BEN, 24)]
+
+    runs = []
+    rows = [{"occurrence_id": str(n), "title": "t", "start": "s", "end": "e", "extra": 1} for n in range(600)]
+
+    def run(args, **kwargs):
+        runs.append(args)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"events": rows}), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    two_weeks = made.calendar(ANA, 24, 14)
+    assert runs[-1][-3:] == ["--days", "14", "--json"] and len(two_weeks) == 500 and "extra" not in two_weeks[0]
+    one_day = made.calendar(ANA, 24)
+    assert runs[-1][-3:] == ["--hours", "24", "--json"] and len(one_day) == 200

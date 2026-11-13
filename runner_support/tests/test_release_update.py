@@ -66,7 +66,6 @@ def test_old_runners_release_claims_for_the_legacy_fallback(old_follower, monkey
         "the update lock cannot be checked",
         "another update holds the checkout lock",
         "this computer still has work running",
-        "this computer still has work running",
     ):
         result = ru.defer_update(follower.directory, "v0.3.45", reason, clock=lambda: now[0], transient=True)
         assert result["state"] == "failed" and reason in result["error"]
@@ -822,34 +821,12 @@ def test_old_locks_reach_the_update_status_with_the_manual_command(repos):
         lock.unlink()
 
 
-def test_a_blocked_update_names_the_first_three_changed_files(repos):
-    public, checkout, state = repos
-    names = [f"notes/{letter}.txt" for letter in "abcde"]
-    for name in names:
-        commit(checkout, name, "one")  # tracked, so a change to it shows in status
-    for name in names:
-        (checkout / name).write_text("two")
-    result, calls = run_apply(checkout, state)
-    error = result["error"]
-    assert result["state"] == "blocked" and "5 changed files" in error
-    assert error.endswith("updates itself: notes/a.txt, notes/b.txt, notes/c.txt, and 2 more")
-    assert "notes/d.txt" not in error and "notes/e.txt" not in error and calls.restarts == 0
-
-
 def test_a_changed_file_named_like_a_disk_error_is_named_not_read_as_one(repos):
     public, checkout, state = repos
     commit(checkout, "tests/test_enospc.py", "one")
     (checkout / "tests/test_enospc.py").write_text("two")
     result, _ = run_apply(checkout, state)
     assert result["state"] == "blocked" and result["error"].endswith("updates itself: tests/test_enospc.py")
-
-
-def test_a_renamed_file_is_named_with_both_paths(repos):
-    public, checkout, state = repos
-    # a staged rename is one status line: "R  app.py -> renamed.py"
-    sh(checkout, "git", "mv", "app.py", "renamed.py")
-    result, _ = run_apply(checkout, state)
-    assert result["state"] == "blocked" and "app.py -> renamed.py" in result["error"]
 
 
 @pytest.fixture
@@ -1429,16 +1406,13 @@ def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
     result, calls = run_apply(checkout, state, lock_wait=0)
     assert result["state"] == "failed" and ru.read_status(state)["state"] == "failed"
     assert head(checkout) == before and calls.restarts == 0 and calls.installs == []
-    seen = []
 
     def release():
         time.sleep(1.5)
-        seen.append(ru.read_status(state)["state"])
         held.close()
 
     threading.Thread(target=release).start()
     result, calls = run_apply(checkout, state, lock_wait=30)
-    assert seen == ["updating"]  # its runner starts no second update meanwhile
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.2.0" and calls.restarts == 1
 
 

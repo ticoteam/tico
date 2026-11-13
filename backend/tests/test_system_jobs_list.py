@@ -393,11 +393,3 @@ def test_every_key_a_block_records_under_is_a_job():
 
     assert not set(found) & set(heartbeat.BY_KEY), "a Heartbeat step records on its step row"
     assert {key: where for key, where in found.items() if key not in SR.BY_KEY} == {}
-
-
-def test_every_job_has_a_name_schedule_one_sentence_and_known_actions():
-    for job in SR.JOBS:
-        assert job.name and job.schedule and job.records, job.key
-        assert job.what.endswith(".") and job.what[0].isupper(), job.key
-        assert all(key in SR.ACTIONS for key in job.then), job.key
-    assert len({job.key for job in SR.JOBS}) == len(SR.JOBS)

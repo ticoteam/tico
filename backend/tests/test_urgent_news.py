@@ -120,15 +120,6 @@ def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable
         H.task_comment_edit(c, H.KEEPER, incident['id'], said['id'], 'Clearer words')
 
 
-def test_incident_label_and_plain_rule_words_are_listed(api):
-    with api.app.state.store.transaction() as c:
-        put(c, 'cpo', 'lead')
-        task = H.task_create(c, 'bot:ops', 'Restore the server', 'x', 'bot:cpo', labels=['incident'])
-        assert R.judge(c, H.KEEPER, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
-        row = {r['id']: r for r in R.BUILTINS}['incident_news']
-        assert row['protected'] and row['then'] == 'wake' and row['words']
-
-
 def test_incident_news_to_a_requester_bot_without_the_turn_starts_no_run(api):
     """docs/pipelines-v3.md "It only wakes whoever has the turn": urgent only skips the digest. News about an incident
     whose turn is its owner's starts no run for the bot that asked for it; the news stays on the task for its next

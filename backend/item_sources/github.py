@@ -20,14 +20,18 @@ Every function takes the caller's open write transaction and never commits, exce
 short ones around reads made with no transaction held.
 """
 
+import hashlib
 import json
 import logging
 import re
+import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from .. import item_metadata as IM
+from .. import merge_order as MO
 from .. import source_actions as SA
 from . import github_release as GR
 
@@ -37,7 +41,9 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 
 PR_STATES = ("open", "closed", "merged")
-CHECK_STATES = ("none", "pending", "success", "skipped", "failure")  # skipped: every check that counts was skipped
+# skipped: every check that counts was skipped. cancelled: the newest run of a check was cancelled (or went stale) with
+# no run after it, and nothing failed: it is re-run, there is no code to fix.
+CHECK_STATES = ("none", "pending", "success", "skipped", "cancelled", "failure")
 QUEUE_STATES = ("none", "queued", "auto_merge", "removed")
 QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on where the repo has no queue
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
@@ -75,6 +81,11 @@ class GitHub(Protocol):
         """Whether `commit_sha` is in the history of `release_sha` (GitHub's compare: behind or identical)."""
         ...
 
+    def pr_diff(self, repo: str, number: int, sha: str) -> str | None:
+        """What the PR changes at commit `sha`, as one id (`diff_id`): the diff from where `sha` branched off the PR's
+        base branch to `sha` (GitHub's compare, `<base>...<sha>`). None when GitHub cannot give the whole diff."""
+        ...
+
     def ready(self, repo: str, number: int) -> None:
         """Mark a draft PR ready for review, as GitHub queues and merges no draft. A PR that is not a draft (or is
         gone, closed or merged) is left as it is."""
@@ -83,7 +94,9 @@ class GitHub(Protocol):
     def enqueue(self, repo: str, number: int, head_sha: str) -> Row:
         """Put the PR in the merge queue at exactly `head_sha`, or turn on auto-merge where the repo has no queue, or
         merge it where it has neither. {ok, how: queued|auto_merge|merged, reason}. A head that moved, a draft, or a
-        PR the base branch's rules refuse (a required review or check) is not ok, with GitHub's reason."""
+        PR the base branch's rules refuse (a required review or check) is not ok, with GitHub's reason; one that
+        conflicts with its base branch is not ok with `CONFLICTS`. Raises `MERGEABLE_UNKNOWN` while GitHub has not
+        worked out whether it merges cleanly."""
         ...
 
     def dequeue(self, repo: str, number: int) -> Row:
@@ -111,9 +124,16 @@ class GitHub(Protocol):
         ...
 
 
+_last_version = [0]
+_version_lock = threading.Lock()
+
+
 def version_now() -> int:
-    """Metadata version for a read or webhook that begins now: the time in ms."""
-    return time.time_ns() // 1_000_000
+    """Metadata version for a read or webhook that begins now: the time in ms, never the same twice in this process.
+    Two of Tico's own reads are ordered by when they began; only GitHub's same-second stamps tie (item_metadata.save)."""
+    with _version_lock:
+        _last_version[0] = max(time.time_ns() // 1_000_000, _last_version[0] + 1)
+        return _last_version[0]
 
 
 def sent_version(payload: Row, arrived: int) -> int:
@@ -238,11 +258,13 @@ def save_pr(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, v
         "failing_check_url": merged.get("failing_check_url") if queue == "removed" else None,
     }
     key = str(old["repo"]) if old else repo
-    return IM.save(conn, SOURCE, PR, pr_key(key, number), values, version, final=values["state"] != "open")
+    # Only a merge is for good: a closed PR can be reopened, so it stays read again while a task waits on it.
+    return IM.save(conn, SOURCE, PR, pr_key(key, number), values, version, final=values["state"] == "merged")
 
 
 def _checks_state(checks: list[Row]) -> str:
-    """failure if any of the checks that count failed, else pending if any runs, else success if at least one passed;
+    """failure if any of the checks that count failed, else pending if any runs, else cancelled if one's newest run was
+    cancelled (`latest_checks` already left out a cancel a newer run superseded), else success if at least one passed;
     skipped when every one was skipped (or neutral): nothing ran and passed, so that is not passing. none when there
     are none. Tico's own check runs (`tico`) never count."""
     states = [str(check.get("state") or "") for check in checks if not check.get("tico")]
@@ -252,6 +274,8 @@ def _checks_state(checks: list[Row]) -> str:
         return "failure"
     if "pending" in states:
         return "pending"
+    if "cancelled" in states:
+        return "cancelled"
     if "success" in states:
         return "success"
     return "skipped"
@@ -271,14 +295,26 @@ def check_key(check: Row) -> str:
 
 def latest_checks(checks: list[Row]) -> list[Row]:
     """One row per check (`check_key`), the newest run of each by its GitHub id (ids only grow); a row with an equal or
-    unknown id replaces the one before it. First-seen order is kept."""
+    unknown id replaces the one before it. First-seen order is kept. A cancelled run is left out when a newer run of
+    the same name and App exists in another suite: a concurrency group cancels the older duplicate of a workflow run,
+    and the newer one is the check (Nov 12 stress run, I38). Only a cancel is superseded so: a red run in one suite is
+    never hidden behind another suite's newer run."""
     out: dict[str, Row] = {}
     for check in checks:
         key = check_key(check)
         old = out.get(key)
         if old is None or int(check.get("id") or 0) >= int(old.get("id") or 0):
             out[key] = check
-    return list(out.values())
+    newest: dict[tuple[str, str], int] = {}
+    for check in out.values():
+        named = (str(check.get("app") or ""), str(check.get("name") or "Checks"))
+        newest[named] = max(newest.get(named, 0), int(check.get("id") or 0))
+    return [
+        check
+        for check in out.values()
+        if check.get("state") != "cancelled"
+        or int(check.get("id") or 0) >= newest[(str(check.get("app") or ""), str(check.get("name") or "Checks"))]
+    ]
 
 
 def run_check(run: Row, app_slug: str | None) -> Row:
@@ -338,6 +374,146 @@ def heads(conn: "sqlite3.Connection", task_id: str) -> dict[str, str | None]:
     return out
 
 
+# ----------------------------------------------------------------------------- what a commit changes (C22)
+# After a person's OK, a new commit that changes the same lines as the OK'd one (a rebase onto a newer base, or a
+# conflict fixed without changing the PR's own lines) keeps the OK; one that changes other lines is read by a bot first
+# (task_requirements._after_ok). What each commit changes is read from GitHub once (`pr_diff`), only for the PRs of a task
+# a person OK'd whose commits moved since (`_refresh_diffs`), and kept in `github_pr_diffs`.
+DIFF_FILES_MAX = 300  # GitHub's compare lists at most this many files: a PR at the limit may have more
+OK_HEADS_SQL = (
+    "SELECT v.task_id, a.heads FROM answers a JOIN visits v ON v.id = a.visit_id JOIN tasks t ON t.id = v.task_id "
+    "JOIN requirements r ON r.id = a.requirement_id WHERE t.status = 'open' AND r.kind = 'page' AND a.answer = 'ok' "
+    "AND a.undone_at IS NULL AND a.heads IS NOT NULL AND a.by_id LIKE 'human:%' "
+    "AND (r.who_oks = 'people_only' OR r.person_id IS NOT NULL) ORDER BY a.created_at, a.id"
+)
+
+
+def diff_id(files: object) -> str | None:
+    """One id for what a PR changes, from GitHub's compare `files`: per file (by name) its status, old and new name, and
+    its added and removed lines without whitespace, line numbers or context, as `git patch-id` reads a patch. A file
+    GitHub gives no patch for (binary, or too large) counts by its contents at the commit (`sha`). None when GitHub left
+    part of the diff out: DIFF_FILES_MAX files or more, or a file with neither patch nor contents."""
+    if not isinstance(files, list):
+        return None
+    listed = cast("list[object]", files)
+    if len(listed) >= DIFF_FILES_MAX:
+        return None
+    parts: list[str] = []
+    rows = [cast("Row", f) for f in listed if isinstance(f, dict)]
+    for found in sorted(rows, key=lambda f: str(f.get("filename") or "")):
+        status = str(found.get("status") or "")
+        patch = found.get("patch")
+        if isinstance(patch, str):
+            body = "\n".join("".join(line.split()) for line in patch.splitlines() if line[:1] in ("+", "-"))
+        elif status == "removed":
+            body = ""
+        elif found.get("sha"):
+            body = f"contents {found['sha']}"
+        else:
+            return None
+        parts.append("\0".join((status, str(found.get("previous_filename") or ""), str(found.get("filename")), body)))
+    return hashlib.sha256("\0\0".join(parts).encode()).hexdigest()
+
+
+def save_diff(conn: "sqlite3.Connection", repo: str, sha: str, diff: str | None) -> None:
+    """Keep what commit `sha` of a PR in `repo` changes (`diff_id`; None: GitHub could not give it all)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO github_pr_diffs (repo, sha, diff_id, read_at) VALUES (?,?,?,?)",
+        (repo.lower(), sha, diff, _h().now()),
+    )
+
+
+def _diff(conn: "sqlite3.Connection", repo: str, sha: str) -> tuple[bool, str | None]:
+    """(read, diff id) of a commit: read False while Tico has not asked GitHub yet."""
+    found = conn.execute("SELECT diff_id FROM github_pr_diffs WHERE repo=? AND sha=?", (repo.lower(), sha)).fetchone()
+    return (True, found[0]) if found else (False, None)
+
+
+def same_changes(conn: "sqlite3.Connection", before: dict[str, object], after: dict[str, object]) -> bool | None:
+    """Whether the PRs at the commits `after` ({pr ref: commit}) change the same lines as at `before`: the same PRs, and
+    each moved one's diff the same (`diff_id`). None while a commit's diff is not read yet (`_refresh_diffs`)."""
+    if set(before) != set(after):
+        return False
+    unknown = False
+    for ref, sha in after.items():
+        if before[ref] == sha:
+            continue
+        repo = ref.rsplit("#", 1)[0]
+        (read_a, a), (read_b, b) = _diff(conn, repo, str(before[ref])), _diff(conn, repo, str(sha))
+        if read_a and read_b and (a is None or a != b):
+            return False
+        unknown = unknown or not (read_a and read_b)
+    return None if unknown else True
+
+
+def _diffs_wanted(conn: "sqlite3.Connection") -> list[tuple[str, str, int, str]]:
+    """(task, repo, number, commit) whose diff is not read yet, of each open task where they differ: the commits a
+    person's newest OK was given at and the newest ones; in a stage that queues PRs, the commit each was queued at and
+    the newest one."""
+    newest: dict[str, str] = {}
+    for task_id, kept in conn.execute(OK_HEADS_SQL).fetchall():
+        newest[str(task_id)] = str(kept)
+    for task_id, on_enter in conn.execute(
+        "SELECT t.id, s.on_enter FROM tasks t JOIN stages s ON s.id = t.stage_id WHERE t.status = 'open' "
+        "AND s.on_enter IS NOT NULL"
+    ).fetchall():
+        if queues_prs({"on_enter": on_enter}):
+            newest.setdefault(str(task_id), "{}")
+    out: list[tuple[str, str, int, str]] = []
+    for task_id, kept in newest.items():
+        try:
+            before: Row = json.loads(kept) or {}
+        except ValueError:
+            continue
+        now = {ref: sha for ref, sha in heads(conn, task_id).items() if sha}
+        pinned: dict[str, str] = {}
+        visit = conn.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (task_id,)).fetchone()
+        if visit and queues_now(conn, task_id):
+            for ref in now:
+                first = effects(conn, str(visit[0]), ref)
+                if first and first[0].get("pinned"):
+                    pinned[ref] = str(first[0]["pinned"])
+        for ref, sha in now.items():
+            older = {str(x) for x in (before.get(ref), pinned.get(ref)) if x and x != sha}
+            if not older:
+                continue
+            repo, number = ref.rsplit("#", 1)
+            for commit in sorted(older | {sha}):
+                if not _diff(conn, repo, commit)[0]:
+                    out.append((task_id, repo, int(number), commit))
+    return out
+
+
+def _refresh_diffs(store: Any, github: GitHub) -> int:
+    """Read from GitHub what each wanted commit changes (`_diffs_wanted`), at most REREAD_BATCH a pass, then move on each
+    task that now knows (a rebase keeps the person's OK) and wake the bot asked to read new commits. A call GitHub fails
+    is asked again on the next pass. Returns how many were read."""
+    from .. import task_wakes
+
+    with store.read() as conn:
+        wanted = _diffs_wanted(conn)[:REREAD_BATCH]
+    read: dict[tuple[str, str], str | None] = {}
+    tasks: list[str] = []
+    for task_id, repo, number, sha in wanted:
+        if (repo, sha) not in read:
+            try:
+                read[(repo, sha)] = github.pr_diff(repo, number, sha)
+            except Exception as exc:  # noqa: BLE001 - asked again on the next pass
+                LOG.warning("Reading what %s changes at %s failed: %s", pr_ref(repo, number), sha[:12], exc)
+                continue
+        tasks.append(task_id)
+    if not read:
+        return 0
+    with store.transaction() as conn:
+        for (repo, sha), diff in read.items():
+            save_diff(conn, repo, sha, diff)
+        moved = sorted(set(tasks))
+        _nudge(conn, moved)
+        for task_id in moved:
+            task_wakes.review_new(conn, task_id)
+    return len(read)
+
+
 def linked_tasks(conn: "sqlite3.Connection", repo: str, number: int) -> list[str]:
     """The open tasks on the engine that link this PR, oldest link first."""
     return IM.tasks_of(conn, SOURCE, PR, pr_key(repo, number))
@@ -350,7 +526,9 @@ def _nudge(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
 
 def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, version: int) -> int:
     """`save_pr`, then what changed metadata causes: a queue removal's one wake, the Merge stage's own reactions
-    (metadata_changed) and a nudge of every open task that links the PR. 1 when the metadata was saved, else 0."""
+    (metadata_changed, and the news that ends a bot's snooze there: finished checks, a merge), the end of a bot's
+    snooze that names this PR once it merges or closes (`named_pr_done`), and a nudge of every open task that links
+    the PR. 1 when the metadata was saved, else 0."""
     before = pr(conn, repo, number)
     if not save_pr(conn, repo, number, metadata, version):
         return 0
@@ -361,7 +539,17 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
         removed(conn, after)
     tasks = linked_tasks(conn, repo, number)
     metadata_changed(conn, tasks, after, before)
+    checks_news(conn, tasks, after, before)
+    if after["state"] == "merged" and (not before or before.get("state") != "merged"):
+        for row in _on_queueing_stage(conn, tasks):
+            # A snoozed task does not move on: the merge ends a bot's snooze, so the nudge moves it.
+            _end_bot_snooze(conn, row, f"{pr_ref(repo, number)} merged")
+    if after["state"] in ("merged", "closed") and (not before or before.get("state") != after["state"]):
+        named_pr_done(conn, repo, number, str(after["state"]))
     _nudge(conn, tasks)
+    if after["state"] == "merged" and (not before or before.get("state") != "merged"):
+        # A task that goes after one of these is queued now, or its owner told (merge_order.release).
+        MO.released_on_merge(conn, tasks, _engine().SYSTEM)
     if before and before.get("head_sha") and after.get("head_sha") != before["head_sha"] and after["state"] == "open":
         review_again(conn, tasks, after)
     return 1
@@ -370,8 +558,9 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
 def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row) -> int:
     """A new commit on a PR whose review page was for an older one: the page no longer counts ("New commits since the
     review"), so the stage's owner bot is woken now, once per commit, instead of by the two-minute wake for an owner
-    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. Returns
-    how many wakes were added."""
+    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. On a stage
+    where a person OKs a page that is not a review, the bot asked to review the new commits is woken too
+    (task_wakes.review_new). Returns how many wakes were added."""
     from .. import task_requirements as R
     from .. import task_wakes
 
@@ -394,6 +583,10 @@ def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row)
         key = f"{task_id}:{visit['id']}:review_again:{ref}:{head}"
         if task_wakes.add(conn, row, str(owner), visit, body, wake_key=key):
             added += 1
+    for task_id in task_ids:
+        # Before a person OKs a page that is not a review (Fixes 2): the new commit is the last reviewer's to read.
+        if task_wakes.review_new(conn, task_id):
+            added += 1
     return added
 
 
@@ -411,6 +604,12 @@ REMOVAL_WORDS = {
     "invalid_merge_commit": "GitHub could not build the merge",
 }
 MERGED_REASONS = ("merge", "merged", "already_merged")
+# What `enqueue` answers for a PR GitHub says conflicts with its base branch (`mergeable` CONFLICTING, or
+# `mergeStateStatus` DIRTY): it is not queued, since the queue would only take it out again.
+CONFLICTS = REMOVAL_WORDS["merge_conflict"]
+# What `enqueue` raises while GitHub has not worked out whether the PR merges cleanly (`mergeable` UNKNOWN): a failed
+# call, so the queue action reads it again after source_actions.RETRY_S instead of queuing on a guess.
+MERGEABLE_UNKNOWN = "GitHub has not worked out yet whether it merges cleanly"
 
 
 def removal_words(reason: object) -> str:
@@ -425,9 +624,59 @@ def removal_words(reason: object) -> str:
     return words[:1].upper() + words[1:].lower() if words.isupper() else words[:1].upper() + words[1:]
 
 
+# What failed in a merge queue run, for a removal's `failing_check`. The workflow's `checks` job (pr-checks.yml) names the
+# same legs in its error line, "Failed: <job>: <step>. Fail fast then cancelled the other legs.", or says "No step failed"
+# when the run was cancelled from outside (a superseded queue group, or by hand).
+CHECKS_JOB = "checks"
+# A leg that failed or hung (timed out) names the change. A fail-fast cancel and a startup failure (the runner's, not the
+# change's) do not: they read as cancelled from outside.
+LEG_FAILURES = ("failure", "timed_out")
+CANCELLED_FROM_OUTSIDE = "no step failed: the run was cancelled from outside"
+FAILED_LINE = "Failed: "
+FAIL_FAST = ". Fail fast"
+
+
+def failing_leg(jobs: list[Row], checks_line: Callable[[Row], str | None]) -> tuple[str, str | None] | None:
+    """What made a merge queue run fail, as a removal names it: the legs that ended in failure (each job, with the steps
+    that failed in it), never a leg a fail-fast cancel stopped. With none, the checks job's "Failed: ..." line, which
+    `checks_line` reads and is called only then. Else that no step failed. Returns (name, url) with the url of the first
+    failing leg, or of the checks job; None when the run's jobs are not known."""
+    if not jobs:
+        return None
+    legs: list[str] = []
+    leg_url: str | None = None
+    checks: Row = {}
+    for job in jobs:
+        if job.get("name") == CHECKS_JOB:
+            checks = job
+            continue
+        job_steps: list[Row] = job.get("steps") or []
+        steps = [str(step.get("name") or "") for step in job_steps if step.get("conclusion") == "failure"]
+        if job.get("conclusion") not in LEG_FAILURES and not steps:
+            continue
+        name = str(job.get("name") or "A check")
+        legs.append(f"{name}: {', '.join(steps)}" if steps else name)
+        leg_url = leg_url or job.get("html_url") or None
+    if legs:
+        return "; ".join(legs)[:200], leg_url
+    checks_url = checks.get("html_url") or None
+    line = checks_line(checks) or ""
+    if line.startswith(FAILED_LINE):
+        return line.removeprefix(FAILED_LINE).split(FAIL_FAST, 1)[0][:200], checks_url
+    return CANCELLED_FROM_OUTSIDE, checks_url
+
+
+def real_failure(check: object) -> bool:
+    """Whether a removal's `failing_check` names a check that really failed in the queue's run. The cancelled-from-outside
+    line does not, and nor does a removal whose run was not read (no name): those keep the count (`requeue`)."""
+    return isinstance(check, str) and check not in ("", CANCELLED_FROM_OUTSIDE)
+
+
 def check_state(status: object, conclusion: object) -> str:
-    """A check run's or status's state as metadata keeps it: pending, success, skipped or failure. A neutral run is
-    skipped: it fails nothing, and it is not a check that ran and passed."""
+    """A check run's or status's state as metadata keeps it: pending, success, skipped, cancelled or failure. A neutral
+    run is skipped: it fails nothing, and it is not a check that ran and passed. A cancelled (or stale) run failed
+    nothing either: GitHub cancels a duplicate run of a concurrency group, or someone did by hand. A failed or timed-out
+    run is a failure."""
     if str(status or "completed") not in ("completed", "success", "failure", "error"):
         return "pending"
     result = str(conclusion or status or "")
@@ -435,6 +684,8 @@ def check_state(status: object, conclusion: object) -> str:
         return "success"
     if result in ("neutral", "skipped"):
         return "skipped"
+    if result in ("cancelled", "stale"):
+        return "cancelled"
     if result in ("pending", "queued", "in_progress", "requested", "waiting", ""):
         return "pending"
     return "failure"
@@ -542,7 +793,7 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
     out: list[int] = []
     for (key,) in conn.execute(
         "SELECT item_key FROM item_metadata WHERE source=? AND json_extract(fields, '$.head_sha')=? "
-        "AND final_at IS NULL AND item_type=? ORDER BY created_at, id",
+        "AND final_at IS NULL AND json_extract(fields, '$.state')='open' AND item_type=? ORDER BY created_at, id",
         (SOURCE, sha, PR),
     ).fetchall():
         found_repo, number = split_key(str(key))
@@ -554,8 +805,8 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
     """The PRs an open task waits on whose metadata is missing or older than REREAD_S, oldest read first, at most
     `limit`.
-    A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
-    An open PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
+    A merged PR is final, so it is not read again; a closed one can be reopened, so it is read like an open one.
+    A PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
     merged its PR anyway (Tico's dequeue said merged) so leaves no metadata saying "open, queued" for ever.
     """
     return [split_key(key) for key in IM.due_reads(conn, SOURCE, PR, now, limit)]
@@ -577,8 +828,8 @@ def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
     """The 5-minute re-read: each of `due_reads` read through `github` with no transaction held, then saved with the
     version taken before its read. Also re-reads the releases of every release repo an open task waits on, and asks
     GitHub whether each waiting merge is in each newer release. A call GitHub fails is logged and left for the next
-    pass: the metadata stays as it was, so what waits on it keeps waiting on GitHub. Returns how many PRs' metadata
-    changed."""
+    pass: the metadata stays as it was, so what waits on it keeps waiting on GitHub. Then reads what new commits after a
+    person's OK change (`_refresh_diffs`). Returns how many PRs' metadata changed."""
     H = _h()
     at: str = now or H.now()
     with store.transaction() as conn:
@@ -598,6 +849,7 @@ def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
         with store.transaction() as conn:
             changed += save_and_settle(conn, repo, number, vanished(pr(conn, repo, number), metadata), version)
     changed += _refresh_releases(store, github, at)
+    _refresh_diffs(store, github)
     return changed
 
 
@@ -637,7 +889,7 @@ def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
                         "repo": release_repo(setting, str(link["repo"])),
                         "sha": str(metadata["merged_sha"]),
                         "at": metadata.get("merged_at"),
-                        "prereleases": bool(setting.get("prereleases")),
+                        "prereleases": setting.get("prereleases", True) is not False,
                     }
                 )
     return out
@@ -833,18 +1085,38 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
 #   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
 #   visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
-#   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person.
+#   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person. A second removal for failed
+#   checks at the same head is not queued again: its wake says to send the task back to Fixes 2, and `requeue` refuses it.
+# - A PR that conflicts with its base branch is never queued: `enqueue` reads GitHub's `mergeable` first and answers
+#   CONFLICTS (the action fails at once; the owner is told to send it back to Fixes 2, where the Builder rebases), or
+#   raises while GitHub still works it out (UNKNOWN: read again after RETRY_S). `requeue` refuses while the PR's link
+#   says it conflicts, and a removal for a conflict wakes the owner with the same send-back (SENT_BACK_FOR_CONFLICT).
 # - The owner (Release Owner, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
 #   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
 #   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
-#   Merge: nothing sends it back through Review; the merge queue's checks are the gate. The manager hears of the new
-#   commit once (`changed_after_ok`, C22).
+#   Merge. When it changes the same lines as the commit the task came in with (a rebase, `same_changes`), the owner
+#   queues it again; when it changes others, a bot sends the task back to Fixes 2, where Reviewer 2 reads the new
+#   commits and the person's OK stands on its OK (`SENT_BACK_FOR_NEW`, task_requirements._after_ok). A person may queue
+#   it as it is. The manager hears of the new commit once (`changed_after_ok`).
+# - A task that goes after another one (backend/merge_order.py) is not queued while that one is open and has not
+#   merged: `queue` and `metadata_changed` ask `merge_order.stops_queue`, `requeue` refuses a bot (`HELD_FOR`) and
+#   queues for a person; `merge_order.release` queues it when the earlier task merges or moves on, and a conflict then
+#   names the task to rebase onto (`SENT_BACK_AFTER`).
 # - The task is closed or sent back while a PR is queued: `pull` owes the `undo`
 #   (`undo:github.queue:<visit>:<ref>@<head sha>`), carried out with `dequeuePullRequest` (auto-merge off), and
-#   `tico/merge-ok` on that head turns to failure. A PR GitHub merged first stays merged ("merged anyway" note to the
+#   `tico/merge-ok` on that head turns to failure. The undo is moot while an open visit (the task's next one, or
+#   another task's) still wants the PR queued at that head (`undo_moot`); one that took the PR out anyway owes that
+#   visit's queue again (`_wanted_again`). A PR GitHub merged first stays merged ("merged anyway" note to the
 #   manager, keyed `<task>:<visit>:merged_anyway:<ref>`).
 # - History: `pr_queued` (asked again, and GitHub accepted), `pr_dequeued`, `pr_queue_removed`.
+# - A bot's snooze waits for GitHub, never for a clock time it guessed: it ends, as SYSTEM, and whoever has the turn is
+#   woken once (`snooze_news`, keyed `<task>:<visit>:merge_news:<what>`). On any stage of a pipeline: when the checks on
+#   the newest commit of the task's PR finish, the PR starts or stops conflicting (backend/github.py; before Merge a
+#   conflict's wake is pr_conflicts'), or a PR the snooze's reason names ("waiting for #3417") merges or closes
+#   (`named_pr_done`). On this stage also when GitHub takes the PR out of the queue (`removed`, whose own wake it is) or
+#   merges it (the task then moves on), or the PR's base branch moves (`base_moved`; elsewhere every merge into main
+#   would be noise). A person's snooze is never ended this way.
 #
 # The actions are `effects` rows (owed, done, failed, moot) of source `github`, action `queue`, item type `pr`.
 # Every function takes the caller's open write transaction and never commits, except `run`.
@@ -856,7 +1128,35 @@ WAKE_REMOVED = "queue_removed"  # the stage owner's one wake per removal
 WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
+WAKE_NEWS = "merge_news"  # GitHub news that ends a bot's snooze (`snooze_news`); the name predates other stages
+CHECKS_DONE = ("success", "failure", "skipped", "cancelled")
+# "#3417" or "owner/repo#3417" in a snooze's reason: a PR it waits on. A bare number is in the task's own repository.
+PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
+# Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
+SENT_BACK_FOR_NEW = (
+    "{ref} has new changes since the person's OK. Move the task back to Fixes 2, where Reviewer 2 reads them."
+)
+# Why nobody queues a PR GitHub says conflicts with its base branch (`requeue`, a refused queue, a removal): the queue
+# would only take it out again. The Builder rebases it in Fixes 2.
+SENT_BACK_FOR_CONFLICT = (
+    "{ref} conflicts with its base branch, so it is not queued: the merge queue would only take it out again. Move the "
+    'task back to Fixes 2 for the Builder to rebase it: `tico task move {task} "Fixes 2" -m "{ref} conflicts with its '
+    'base branch: rebase it" --version N`.'
+)
+# GitHub's removal reasons for a check that failed in the queue's run, as `removal_words` words them. Taken out this way
+# twice at one head in one visit, that head is not queued again: the task goes back to Fixes 2.
+FAILED_CHECKS = frozenset(removal_words(reason) for reason in ("failed_checks", "checks_failed"))
+COMPARING = "Tico is still reading what {ref}'s new commits change. Try again in a minute."
+# The same send-back for a task that goes after another one (backend/merge_order.py), once that one merged: the Builder
+# rebases onto it.
+SENT_BACK_AFTER = (
+    "{ref} conflicts with its base branch now that {earlier}, which it goes after, has merged, so it is not queued. "
+    'Move the task back to Fixes 2 for the Builder to rebase it onto {earlier}: `tico task move {task} "Fixes 2" -m '
+    '"{ref} conflicts now that {earlier} merged: rebase it onto {earlier}" --version N`.'
+)
+# Why a bot may not queue a task that goes after another one still open (merge_order.held). A person may.
+HELD_FOR = "Waits for {earlier} to merge. A person may queue it anyway."
 
 
 def removed_wake_key(task_id: str, visit_id: str, ref: str, removed_at: str) -> str:
@@ -920,15 +1220,35 @@ def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
     visit = task.get("visit")
     if not visit or not queues_prs(task.get("stage")):
         return []
+    if MO.stops_queue(conn, task):
+        return []  # it goes after a task that has not merged (merge_order.release queues it then), or one that closed
     owed = [_owe_queue(conn, str(visit["id"]), link) for link in prs_of(conn, str(task["id"]))]
     return [e for e in owed if e]
 
 
-def failing_names(metadata: Row) -> str:
-    """The names of the checks that failed on a PR's newest commit, Tico's own left out."""
+def failing_names(metadata: Row, state: str = "failure") -> str:
+    """The names of the checks that failed (or, with `state`, were cancelled) on a PR's newest commit, Tico's own left
+    out, each once."""
     checks: list[Row] = metadata.get("checks") or []
-    names = [str(c.get("name")) for c in checks if c.get("state") == "failure" and not c.get("tico")]
-    return ", ".join(names) or "a check"
+    names = [str(c.get("name")) for c in checks if c.get("state") == state and not c.get("tico")]
+    return ", ".join(dict.fromkeys(names)) or "a check"
+
+
+def cancelled_line(metadata: Row, at: str = "") -> str:
+    """What to say of a PR whose checks were cancelled, not failed: the owner re-runs them instead of fixing code."""
+    where = f" at {at}" if at else ""
+    return f"were cancelled{where}, not failed: {failing_names(metadata, 'cancelled')}. Re-run them; there is no code to fix"
+
+
+def conflicts(conn: "sqlite3.Connection", task_id: str, repo: str, number: int) -> bool:
+    """Whether GitHub last said the task's open PR conflicts with its base branch: its link's `mergeable` (kept by
+    backend/github.py from webhooks and its read of PRs whose base moved; a new commit sets it back to unknown)."""
+    found = conn.execute(
+        "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft') AND mergeable='conflict' "
+        "AND lower(repo)=lower(?) AND number=?",
+        (task_id, repo, int(number)),
+    ).fetchone()
+    return found is not None
 
 
 def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: int | None = None) -> list[Row]:
@@ -936,8 +1256,15 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     Owes a new `queue` for each such PR at its newest saved head: the old action is moot, and one for that same head
     is owed again. Refuses `task_stage` (not on a stage whose on_enter queues PRs), `task_requirement` when no PR was
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
-    running") or failing ("Checks failed on <ref>: <names>"), and when the caller may not; `task_changed` (a bot's
-    stale `seen_version`), `task_ended`. Who may: the stage owner, the pipeline's manager, any person."""
+    running") or failing ("Checks failed on <ref>: <names>"), while GitHub says it conflicts with its base branch
+    (`SENT_BACK_FOR_CONFLICT`), and when the caller may not; `task_changed` (a bot's stale `seen_version`),
+    `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it back to Fixes 2). Who
+    may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest commit changes other
+    lines than the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was for that one. A rebase
+    that changes the same lines (`same_changes`) it may; while Tico has not read what the new commit changes yet, it is
+    asked to try again (`COMPARING`). A task that goes after one that has not merged (merge_order.held) is refused to a
+    bot (`HELD_FOR`) and queued for the first time for a person ("Queued before #40 merged" in its history); one whose
+    earlier task closed without merging is queued for the first time for whoever may queue it."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row:
@@ -956,6 +1283,12 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         refuse("task_requirement", "Only the stage owner, the pipeline's manager or a person can queue it again")
     if not queues_prs(row.get("stage")):
         refuse("task_stage", f"{row['stage']['name']} doesn't queue PRs")
+    # It goes after a task that has not merged (merge_order.held): a bot waits; a person may queue it anyway, and its
+    # history says so. One whose earlier task closed without merging is its owner's to queue for the first time.
+    earlier = MO.held(conn, row)
+    if earlier and not E.is_human(by):
+        refuse("task_requirement", HELD_FOR.format(earlier=MO.ref(earlier)))
+    first = bool(earlier) or MO.closed_before(conn, row) is not None
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []
     for link in prs_of(conn, task_id):
@@ -966,23 +1299,56 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         last = newest(conn, visit_id, ref)
         if last and last["state"] == "owed":
             continue  # already queuing again
-        if metadata["queue_state"] == "removed" or (last and last["state"] == "failed"):
+        if metadata["queue_state"] == "removed" or (last and last["state"] == "failed") or (first and not last):
             again.append({**link, "ref": ref})
     if not again:
         refuse("task_requirement", "Nothing was taken out of the merge queue")
     for link in again:
         metadata, ref = link["metadata"], link["ref"]
+        first = effects(conn, visit_id, ref)
+        pinned = first[0].get("pinned") if first else None
+        if not E.is_human(by) and pinned not in (None, metadata["head_sha"]):
+            # The person OK'd the commit the task came into Merge with. A newer one that changes the same lines (a
+            # rebase, a conflict fixed without changing the PR's own lines) keeps the OK; one that changes others is
+            # Reviewer 2's to read in Fixes 2 first. A person may queue it as it is.
+            same = same_changes(conn, {ref: pinned}, {ref: metadata["head_sha"]})
+            if same is None:
+                refuse("task_requirement", COMPARING.format(ref=ref))
+            if not same:
+                refuse("task_requirement", SENT_BACK_FOR_NEW.format(ref=ref))
+        if conflicts(conn, task_id, str(link["repo"]), int(link["number"])):
+            refuse("task_requirement", MO.conflict_line(conn, row, ref))
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":
             refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
+        if metadata["checks_state"] == "cancelled":
+            refuse("task_requirement", f"The checks on {ref} {cancelled_line(metadata)}")
+        removals = failed_checks_removals(conn, task_id, visit_id, str(metadata["head_sha"]))
+        named = [removal for removal in removals if removal.get("real")]
+        if named:
+            refuse(
+                "task_requirement",
+                f"GitHub took {ref} out of the merge queue for failed checks ({named[0].get('check')}). Send the task back "
+                "to Fixes 2 instead.",
+            )
+        if len(removals) >= 2:
+            refuse(
+                "task_requirement",
+                f"GitHub took {ref} out of the merge queue for failed checks twice at this commit. Send the task back "
+                "to Fixes 2 instead.",
+            )
     ts = _h().now()
     owed: list[Row] = []
     for link in again:
         ref, head = link["ref"], str(link["metadata"]["head_sha"])
         key = pr_key(str(link["repo"]), int(link["number"]))
         owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
-        E._event(conn, task_id, by, "pr_queued", None, ref, "Queue again", {"ref": ref, "head": head, "again": True})
+        if earlier:
+            note, data = MO.QUEUED_ANYWAY.format(ref=MO.ref(earlier)), {"before_merged": earlier["id"]}
+        else:
+            note, data = "Queue again", {}
+        E._event(conn, task_id, by, "pr_queued", None, ref, note, {"ref": ref, "head": head, "again": True, **data})
     conn.execute("UPDATE tasks SET version=?, updated_at=? WHERE id=?", (int(row.get("version") or 0) + 1, ts, task_id))
     E.changed(conn, task_id, by)
     return owed
@@ -1033,6 +1399,9 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             (task_id, key),
         ).fetchone():
             continue
+        head = str(metadata.get("head_sha") or "")
+        failed = metadata.get("removed_reason") in FAILED_CHECKS
+        real = failed and real_failure(metadata.get("failing_check"))
         data = {
             "key": key,
             "visit": visit["id"],
@@ -1040,12 +1409,16 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             "reason": metadata.get("removed_reason"),
             "check": metadata.get("failing_check"),
             "url": metadata.get("failing_check_url"),
+            "head": head,
+            "checks_failed": failed,
+            "real": real,
         }
         E._event(conn, task_id, E.SYSTEM, "pr_queue_removed", None, ref, removed_line(metadata), data)
         E.changed(conn, task_id, E.SYSTEM)
         owner = row.get("owner_id")
         if not E.is_bot(owner):
             continue  # a person owner has it in Needs you
+        _end_bot_snooze(conn, row, removed_line(metadata))  # a snoozed task's wake would wait for the snooze
         drops = drops_in_visit(conn, task_id, str(visit["id"]))
         if drops >= DROPS:
             _up_the_ladder(
@@ -1053,15 +1426,188 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             )
             continue
         link = f" {metadata['failing_check_url']}" if metadata.get("failing_check_url") else ""
-        lead = (
-            f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
-            f"`tico task queue {task_id}`, push a fix to the PR branch and then queue it again, or move it back."
-        )
+        if failed and real:
+            lead = (
+                f"GitHub took {ref} out of the merge queue for failed checks. {removed_line(metadata)}.{link} It is not "
+                "queued again as it is: send the task back to Fixes 2 with the failing step and the run link."
+            )
+        elif failed and len(failed_checks_removals(conn, task_id, str(visit["id"]), head)) >= 2:
+            lead = (
+                f"GitHub took {ref} out of the merge queue for failed checks again at the same commit. It is not queued "
+                f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
+            )
+        elif metadata.get("removed_reason") == CONFLICTS:
+            lead = f"GitHub took {ref} out of the merge queue. {MO.conflict_line(conn, row, ref)}"
+        else:
+            lead = (
+                f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
+                f"`tico task queue {task_id}`, push a fix to the PR branch and then queue it again, or move it back."
+            )
         fresh: Row = E.task(conn, task_id) or row
         body = task_wakes.body(conn, fresh, lead, to=str(owner))
         if task_wakes.add(conn, fresh, str(owner), visit, body, wake_key=key):
             added += 1
     return added
+
+
+def _end_bot_snooze(conn: "sqlite3.Connection", row: Row, why: str) -> bool:
+    """End the task's snooze as SYSTEM when a bot set it; a person's snooze stays. True when one ended."""
+    E = _engine()
+    snoozed: Row = row.get("snooze") or {}
+    if not E.is_bot(snoozed.get("by_id")):
+        return False
+    E.unsnooze(conn, str(row["id"]), E.SYSTEM, why)
+    return True
+
+
+def snooze_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str, same: tuple[str, ...] = ()) -> bool:
+    """GitHub news a bot's snooze on a pipeline stage may wait on (`what`, unique per event: the PR, its commit, the new
+    state). The snooze ends, as SYSTEM, and whoever has the turn is woken once with `lead`, instead of sleeping to the
+    clock time the bot guessed. The bot's snooze count in the stage stays as it was. Nothing happens to a person's
+    snooze, a task outside a pipeline, news that woke the task already in this visit (a sweep that reads it again; a
+    snooze set since waits for other news; `same` names other news that is this news, told another way), or while nobody
+    but GitHub has the turn (the PR is in the merge queue). True when the task was woken."""
+    from .. import task_wakes
+
+    E = _engine()
+    row: Row | None = E.task(conn, task_id)
+    if not row or row["status"] != "open" or not row.get("visit"):
+        return False
+    snoozed: Row = row.get("snooze") or {}
+    if not E.is_bot(snoozed.get("by_id")):
+        return False
+    key, *others = (f"{task_id}:{row['visit']['id']}:{WAKE_NEWS}:{w}" for w in (what, *same))
+    if any(conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (k,)).fetchone() for k in (key, *others)):
+        return False
+    if not E._turn_of(conn, {**row, "snooze": None})[0]:
+        return False
+    _end_bot_snooze(conn, row, lead)
+    fresh: Row = E.task(conn, task_id) or row
+    target, _ = E._turn_of(conn, fresh)
+    if not target:
+        return False
+    why = str(snoozed.get("why") or "").strip()
+    text = f"{lead} Tico ended your snooze" + (f": {why}" if why else ".")
+    body = task_wakes.body(conn, fresh, text, to=target)
+    return bool(task_wakes.add(conn, fresh, target, fresh["visit"], body, wake_key=key))
+
+
+def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> int:
+    """The checks on a PR's newest commit finished (passed, failed, were cancelled or were all skipped), or finished again another way:
+    `snooze_news` for each task that links it. Returns how many were woken."""
+    state, head = str(after.get("checks_state") or ""), str(after.get("head_sha") or "")
+    if after["state"] != "open" or state not in CHECKS_DONE or not head:
+        return 0
+    if before and (before.get("head_sha"), before.get("checks_state")) == (head, state):
+        return 0
+    ref = pr_ref(str(after["repo"]), int(after["number"]))
+    if state == "success":
+        lead = f"The checks on {ref} passed at {head[:12]}."
+    elif state == "failure":
+        lead = f"Checks failed on {ref} at {head[:12]}: {failing_names(after)}."
+    elif state == "cancelled":
+        lead = f"The checks on {ref} {cancelled_line(after, head[:12])}."
+    else:
+        lead = f"Every check on {ref} was skipped at {head[:12]}."
+    return sum(snooze_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
+
+
+def mergeable_news(conn: "sqlite3.Connection", task_id: str, ref: str, head: str, mergeable: str) -> bool:
+    """GitHub says a task's PR now conflicts with its base branch, or merges cleanly again (backend/github.py reads
+    it): `snooze_news`, once per PR, commit and state. Before the Merge stage a new conflict is pr_conflicts' to tell (it
+    says how to rebase): a bot's snooze only ends here, so that wake is not held behind it, and this returns False."""
+    if mergeable == "conflict" and not queues_now(conn, task_id):
+        row: Row | None = _engine().task(conn, task_id)
+        if row and row.get("visit"):
+            _end_bot_snooze(conn, row, f"{ref} conflicts with its base branch now.")
+        return False
+    if mergeable == "conflict":
+        lead = f"{ref} conflicts with its base branch now."
+    else:
+        lead = f"{ref} merges cleanly with its base branch again."
+    return snooze_news(conn, task_id, f"mergeable:{ref}:{head}:{mergeable}", lead)
+
+
+def base_moved(
+    conn: "sqlite3.Connection",
+    repo: str,
+    branch: str,
+    sha: str = "",
+    *,
+    default_branch: str = "",
+    merged_number: int | None = None,
+) -> int:
+    """`branch` of `repo` moved to `sha` (a merge into it, the merge queue's, a push; backend/github.py `base_moved`),
+    `merged_number` the PR that merged when that is known. For each task a bot snoozed on the Merge stage whose open PR
+    is based on it: `snooze_news`, once per task and base commit. Not while a PR of the task is in the queue or its
+    checks run (their own news wakes it), and not on another stage, where every merge into main would wake it. A snooze
+    whose reason names other PRs ("waiting for #3417 to merge") waits for one of those (`named_pr_done`), not for any
+    move. Returns how many were woken."""
+    if merged_number is not None:
+        named_pr_done(conn, repo, int(merged_number), "merged")
+    if not repo or not branch or not (sha or merged_number):
+        return 0
+    found = conn.execute(
+        "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id "
+        "JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL AND z.by_id LIKE 'bot:%' "
+        "WHERE l.kind='pr' AND l.state IN ('open','draft') AND lower(l.repo)=? AND t.status='open' "
+        "AND t.pipeline_id IS NOT NULL AND coalesce(json_extract(l.detail,'$.base_ref'), ?)=? ORDER BY l.task_id",
+        (repo.lower(), default_branch, branch),
+    ).fetchall()
+    woken = 0
+    for (task_id,) in found:
+        if not queues_now(conn, str(task_id)):
+            continue
+        own = prs_of(conn, str(task_id))
+        numbers = {int(p["number"]) for p in own if str(p["repo"]).lower() == repo.lower()}
+        if merged_number is not None and int(merged_number) in numbers:
+            continue  # its own PR merged: the task moves on
+        facts: list[Row] = [p["metadata"] for p in own if p["metadata"] and p["metadata"]["state"] == "open"]
+        if any(f["queue_state"] in QUEUED or f["checks_state"] == "pending" for f in facts):
+            continue
+        snoozed = conn.execute("SELECT why FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()
+        if named_prs(conn, str(task_id), str((snoozed and snoozed[0]) or "")):
+            continue
+        what = f"base:{repo.lower()}:{branch}:{sha or '#' + str(merged_number)}"
+        merged = f"{repo}#{merged_number} merged into {branch}." if merged_number is not None else ""
+        # The merge may have woken it already as the PR its earlier snooze named (`named_pr_done`).
+        same = (f"named:{repo.lower()}#{int(merged_number)}:merged",) if merged_number is not None else ()
+        woken += snooze_news(conn, str(task_id), what, merged or f"{branch} moved to {sha[:12]}.", same)
+    return woken
+
+
+def named_prs(conn: "sqlite3.Connection", task_id: str, why: str) -> set[tuple[str, int]]:
+    """The PRs a snooze's reason names, other than the task's own: {(repo, number)}, lower-case repo. A bare "#3417" is
+    in each repository the task has a PR in, or in any ("") when it has none."""
+    own = prs_of(conn, task_id)
+    mine = {(str(p["repo"]).lower(), int(p["number"])) for p in own}
+    repos = {repo for repo, _ in mine} or {""}
+    out: set[tuple[str, int]] = set()
+    for repo, number in PR_NAMED.findall(why):
+        out |= {(repo.lower(), int(number))} if repo else {(r, int(number)) for r in repos}
+    return out - mine
+
+
+def named_pr_done(conn: "sqlite3.Connection", repo: str, number: int, state: str) -> int:
+    """`repo`#`number` merged or was closed without merging (`state`). Each open pipeline task a bot snoozed with a
+    reason naming it ("waiting for #3417 to land") gets `snooze_news`, on any stage, once per PR and state. Returns how
+    many were woken."""
+    if not repo or state not in ("merged", "closed"):
+        return 0
+    found = conn.execute(
+        "SELECT z.task_id, z.why FROM snoozes z JOIN tasks t ON t.id = z.task_id "
+        "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status='open' AND t.pipeline_id IS NOT NULL "
+        "AND z.why LIKE ? ORDER BY z.task_id",
+        (f"%#{int(number)}%",),
+    ).fetchall()
+    ref = pr_ref(repo, number)
+    lead = f"{ref} merged." if state == "merged" else f"{ref} was closed without merging."
+    woken = 0
+    for task_id, why in found:
+        names = named_prs(conn, str(task_id), str(why or ""))
+        if (repo.lower(), int(number)) in names or ("", int(number)) in names:
+            woken += snooze_news(conn, str(task_id), f"named:{repo.lower()}#{int(number)}:{state}", lead)
+    return woken
 
 
 def drops_in_visit(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> int:
@@ -1073,6 +1619,18 @@ def drops_in_visit(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> i
         (task_id, visit_id),
     ).fetchone()
     return int(found[0]) if found else 0
+
+
+def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: str, head: str) -> list[Row]:
+    """The removals of the task's PRs for failed checks at `head` during this visit, one `pr_queue_removed` row each
+    (`removed` writes them): `check` is the check named there and `real` whether it really failed."""
+    found = conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' "
+        "AND json_valid(data) AND json_extract(data, '$.visit')=? AND json_extract(data, '$.head')=? "
+        "AND json_extract(data, '$.checks_failed')=1",
+        (task_id, visit_id, head),
+    ).fetchall()
+    return [cast(Row, json.loads(row[0])) for row in found]
 
 
 def _up_the_ladder(conn: "sqlite3.Connection", task_id: str, drops: int, why: str) -> None:
@@ -1106,7 +1664,7 @@ def metadata_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row
     ref = pr_ref(repo, number)
     for row in _on_queueing_stage(conn, task_ids):
         visit_id = str(row["visit"]["id"])
-        if not effects(conn, visit_id, ref):
+        if not effects(conn, visit_id, ref) and not MO.stops_queue(conn, row):
             _owe_queue(conn, visit_id, {"repo": repo, "number": number, "metadata": after})
         head = after.get("head_sha")
         if before and before.get("head_sha") and head and head != before["head_sha"] and after["state"] == "open":
@@ -1139,6 +1697,42 @@ def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
         return GR.found_already(conn, effect)
     metadata = pr(conn, *_pr_of(effect))
     return metadata is not None and metadata["state"] == "merged"
+
+
+def undo_moot(conn: "sqlite3.Connection", effect: Row) -> bool:
+    """An `undo` of a visit that left Merge takes the PR out of the queue for good, whoever else queued it: it is moot
+    while an open visit (the task's next one, or another task's on the same PR) has queued that PR at the same head
+    (`queued_by_tico`, done). A queue still only owed does not count: it may be mooted unrun, which owes no undo, and
+    the PR would stay queued; it runs after this older undo anyway. Against another head the undo is carried out, and
+    `recorded` queues the wanted head again."""
+    if effect["action"] != QUEUE or not effect.get("pinned"):
+        return False
+    return queued_by_tico(conn, *_pr_of(effect), str(effect["pinned"]), states=("done",))
+
+
+def _wanted_again(conn: "sqlite3.Connection", effect: Row) -> None:
+    """An old visit's `undo` took the PR out of the queue: each `queue` an open visit had carried out on it (and not
+    taken back) is owed again, so the queue holds what the stage wants now. Only after Tico's own dequeue: a PR GitHub
+    took out (failed checks) answers `absent` and still waits for an explicit queue-again. (A visit leaves Merge only
+    back or closed, which owes its undo, or past a merged PR, so `left_at` is a belt to the undo's braces.)"""
+    found = _rows(
+        conn,
+        "SELECT e.visit_id, e.item_type, e.item_key, e.pinned FROM effects e JOIN visits v ON v.id = e.visit_id "
+        "WHERE e.source=? AND e.action=? AND e.kind=? AND e.state='done' AND lower(e.item_key)=lower(?) "
+        "AND e.visit_id<>? AND v.left_at IS NULL AND NOT EXISTS (SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id "
+        "AND u.source = e.source AND u.action = e.action AND u.kind=? AND lower(u.item_key) = lower(e.item_key))",
+        (SOURCE, QUEUE, SA.ACT, str(effect["item_key"]), str(effect["visit_id"]), SA.UNDO),
+    )
+    for row in found:
+        LOG.warning(
+            "merge queue: old undo %s dequeued %s; visit %s is owed its queue again",
+            effect["id"],
+            row["item_key"],
+            row["visit_id"],
+        )
+        SA.owe_again(
+            conn, str(row["visit_id"]), SOURCE, QUEUE, str(row["item_type"]), str(row["item_key"]), row["pinned"]
+        )
 
 
 MERGE_OK = "tico/merge-ok"  # the check only the server posts (docs/pipelines-v3.md "GitHub": "tico/merge-ok")
@@ -1187,13 +1781,14 @@ def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
     if row and row["status"] == "open" and visit.get("id") == effect["visit_id"]:
         ref = pr_ref(*_pr_of(effect))
         E.changed(conn, str(row["id"]), E.SYSTEM)
-        E.tell_owner(
-            conn,
-            str(row["id"]),
-            f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
-            "it can merge, or move it back.",
-            f"{WAKE_REFUSED}:{ref}:{effect['pinned']}",
-        )
+        if reason == CONFLICTS:
+            text = MO.conflict_line(conn, row, ref)
+        else:
+            text = (
+                f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
+                "it can merge, or move it back."
+            )
+        E.tell_owner(conn, str(row["id"]), text, f"{WAKE_REFUSED}:{ref}:{effect['pinned']}")
 
 
 def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, version: int) -> bool:
@@ -1225,6 +1820,7 @@ def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, ver
     elif how == "dequeued":
         save_and_settle(conn, repo, number, {"queue_state": "none"}, version)
         E._event(conn, task_id, E.SYSTEM, "pr_dequeued", ref, None, None, {"ref": ref})
+        _wanted_again(conn, effect)
     return False
 
 
@@ -1262,17 +1858,20 @@ def _merged_anyway(conn: "sqlite3.Connection", task_id: str, visit_id: str, ref:
 
 
 # ----------------------------------------------------------------------------- the merge queue's own commit
-def queued_by_tico(conn: "sqlite3.Connection", repo: str, number: int, head_sha: str) -> bool:
+def queued_by_tico(
+    conn: "sqlite3.Connection", repo: str, number: int, head_sha: str, states: tuple[str, ...] = ("owed", "done")
+) -> bool:
     """Whether Tico's Merge stage queues the PR at exactly `head_sha`: a `queue` action at that head, done or still
     owed (GitHub may ask for the group's checks before the enqueue's answer is recorded), in the open visit of an open
-    task, and not taken back."""
+    task, and not taken back. `states` narrows it (`undo_moot`: done only)."""
+    marks = ",".join("?" * len(states))
     found = conn.execute(
         "SELECT 1 FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
-        "WHERE e.source=? AND e.action=? AND e.kind=? AND e.state IN ('owed','done') AND lower(e.item_key)=lower(?) "
+        f"WHERE e.source=? AND e.action=? AND e.kind=? AND e.state IN ({marks}) AND lower(e.item_key)=lower(?) "
         "AND lower(e.pinned)=lower(?) AND v.left_at IS NULL AND t.status='open' AND NOT EXISTS (SELECT 1 FROM effects u "
         "WHERE u.visit_id = e.visit_id AND u.source = e.source AND u.action = e.action AND u.kind=? "
         "AND lower(u.item_key) = lower(e.item_key))",
-        (SOURCE, QUEUE, SA.ACT, pr_key(repo, number), head_sha, SA.UNDO),
+        (SOURCE, QUEUE, SA.ACT, *states, pr_key(repo, number), head_sha, SA.UNDO),
     ).fetchone()
     return found is not None
 
@@ -1402,8 +2001,9 @@ def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[
 
 
 def _first(requirement: Row, found: list[Standing]) -> Standing:
-    """The first unmet standing of many PRs', else the first met one."""
-    return next((s for s in found if not s.met), found[0])
+    """The standing of many PRs' the task shows, in link order: the first that is someone's turn (a PR dropped from the
+    queue while another still waits in it), else the first that waits, else the first met one."""
+    return next((s for s in found if s.state == NOT_MET), None) or next((s for s in found if not s.met), found[0])
 
 
 def _reading(requirement: Row) -> Standing:
@@ -1462,6 +2062,8 @@ def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
         return Standing(
             requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {failing_names(metadata)}"
         )
+    if state == "cancelled":
+        return Standing(requirement, NOT_MET, task.get("owner_id"), f"Checks on {ref} {cancelled_line(metadata)}")
     if state == "skipped":
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks ran on {ref}: every check was skipped")
     if state == "pending":
@@ -1483,12 +2085,12 @@ def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
 
 
 def runs_checks(conn: "sqlite3.Connection", repo: str) -> bool:
-    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed or skipped), not counting
+    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed, cancelled or skipped), not counting
     Tico's own. Read from saved PRs, so it costs no call to GitHub; a repo's first PR has none to go by (C13 then)."""
     prefix = repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "#%"
     found = conn.execute(
         "SELECT 1 FROM item_metadata WHERE source=? AND item_type=? AND item_key LIKE ? ESCAPE '\\' "
-        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped') LIMIT 1",
+        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped', 'cancelled') LIMIT 1",
         (SOURCE, PR, prefix),
     ).fetchone()
     return found is not None
@@ -1524,6 +2126,13 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     if effect:
         return Standing(requirement, WAITING, SOURCE, "In the merge queue")
     if queues:
+        earlier = MO.held(conn, task)
+        if earlier:
+            # It goes after a task that has not merged: merge_order's own standing is its turn; this says why.
+            return Standing(requirement, WAITING, SOURCE, f"Not queued until {MO.ref(earlier)} merges")
+        closed = MO.closed_before(conn, task)
+        if closed:
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 
@@ -1550,7 +2159,7 @@ def _release_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: 
         return Standing(requirement, WAITING, SOURCE, "Reading releases")
     if not publishes:
         return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
-    for release in reversed(releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
+    for release in reversed(releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)):
         if included(conn, release["id"], str(metadata["merged_sha"])):
             return Standing(requirement, MET, line=f"In {release['tag']}")
     return GR.standing(conn, task, requirement, repo, metadata)  # who cuts it, and what became of the ask
@@ -1581,7 +2190,7 @@ CONDITIONS = {
     "checks_pass": Condition("checks_pass", "Checks pass", PR, checks_pass),
     "pr_merged": Condition("pr_merged", "PR merged", PR, pr_merged, can_push_past="never"),
     # `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and `prereleases`
-    # (a pre-release counts, D3; off by default); `release_with`, how Tico cuts a release when the Release Owner asks
+    # (a pre-release counts, default on); `release_with`, how Tico cuts a release when the Release Owner asks
     # (`workflow:<file>`, `tag`, or empty: the repo releases on its own; github_release.py).
     "in_release": Condition(
         "in_release",

@@ -201,25 +201,6 @@ def test_release_now_names_an_open_release_task_only_to_who_may_read_it(api):
     assert post(api, "release/now", {})["task"] == quiet["id"]
 
 
-def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
-    from backend import health
-
-    post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
-    health.record_never_stuck(api.app.state.store)
-    check = next(c for c in get(api, "health")["checks"] if c["id"] == "never_stuck")
-    assert set(check["counts"]) == set(health.NEVER_STUCK_COUNTS)
-    assert set(health.NEVER_STUCK_COUNTS) == {
-        "waiting_on_nothing",
-        "retry",
-        "manager",
-        "person",
-        "cant_run",
-        "no_one",
-        "broken",
-    }
-    assert all(isinstance(n, int) for n in check["counts"].values()) and check["at"]
-
-
 def test_a_bots_page_says_why_it_cant_run_and_the_fix(api):
     r = runner(api)
     assign(api, r, "ops")

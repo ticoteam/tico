@@ -12,7 +12,9 @@ signed-in person as they commit, filtered to what that person may read:
   filed) logs the task, so a task list can also be caught up from a change number (backend/task_reads.py). One change
   to more than FAN_CAP tasks (a tag edit) is a single `bulk: true`: read task lists in full.
 - `messages`: a message as a conversation page shows it, a deleted one, or a chat goal change.
-- `runs`: a bot run's output step, or its state moving (queued, started, finished).
+- `runs`: a bot run's output step, or its state moving (queued, started, finished). `output=compact` (the web app)
+  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents; the
+  whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
 - `bots`: a bot's status line, as `GET /api/v2/status` shows it.
 - `threads`: every thread the viewer reads, whatever is on screen: `conversation=` and `thread=` narrow `messages` and
   `runs` only, so the sidebar stays live while a thread is open (docs/dev/threads-contract.md §9).
@@ -28,7 +30,8 @@ reconnect misses nothing; a client further behind than the log keeps (24 h), or 
 (a slow consumer), is sent `reset` and reads its page in full. So is one that leaves a read's frames unread for STALL_SECONDS:
 what waits for it is the socket's buffer and no more, and it is sent `reset` and the newest change number instead of
 the backlog once it reads again. One read sends at most READ_BYTES of events and leaves
-the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
+the rest for the next read, so one poll's work and its payload stay bounded however busy the team is: it checks and
+builds only the changes that budget can carry, estimated from their stored sizes first (_within_budget).
 
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
 after a write that logged changes commits; one shared reader per event loop also looks for
@@ -59,7 +62,7 @@ from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters")
+TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters", "calendar")
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24  # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5  # the shared look for changes another process wrote
@@ -74,6 +77,8 @@ STALL_SECONDS = (
     5.0  # a read's frames the client took longer than this to take: a slow consumer, reset rather than replayed
 )
 READ_BYTES = 256 * 1024  # event bytes one read sends; the rest of its changes wait for the next read
+ROW_BYTES = 512  # what one change's event carries besides a run output's stored payload, as a read estimates it
+SIZE_CHUNK = 16  # run outputs whose stored sizes a read looks up at a time, only as far as its budget goes
 LIFETIME_SECONDS = 900  # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15  # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
@@ -358,6 +363,44 @@ TRIGGERS = [
     ),
     ("changes_proposal_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id", "proposed_task_id")),
     ("changes_proposal_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id", "proposed_task_id")),
+    # Calendar (backend/calendar_api.py): a Tico event, an attendee's reply, a person's time away. The row names the
+    # calendar row (or `human:<id>` for time away); a reader refetches the window it shows. A Google write adds its
+    # own row (calendar_api._record_google): Google itself pushes nothing.
+    *(
+        (
+            f"changes_calendar_events_{event.lower()}",
+            event,
+            "calendar_events",
+            None,
+            _row("calendar", "event", "NEW.id", ref="NEW.calendar_id"),
+        )
+        for event in ("INSERT", "UPDATE")
+    ),
+    *(
+        (
+            f"changes_calendar_attendees_{event.lower()}",
+            event,
+            "calendar_event_attendees",
+            None,
+            _row(
+                "calendar",
+                "event",
+                f"{side}.calendar_event_id",
+                ref=f"(SELECT calendar_id FROM calendar_events WHERE id={side}.calendar_event_id)",
+            ),
+        )
+        for event, side in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    ),
+    *(
+        (
+            f"changes_calendar_absences_{event.lower()}",
+            event,
+            "absences",
+            None,
+            _row("calendar", "away", f"{side}.id", ref=f"'human:'||{side}.human_id"),
+        )
+        for event, side in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    ),
     (
         "changes_presences_insert",
         "INSERT",
@@ -844,6 +887,18 @@ RUNNER_TRIGGERS = [
         _bot_runner("work", "NEW.bot"),
     ),
     ("changes_runner_bot_control_delete", "DELETE", "bot_control", None, _bot_runner("work", "OLD.bot")),
+    # A chat goal set, replaced, paused, stopped or edited: the bot's running turn reads its goal again at once
+    # (runner-rs/src/drive.rs compares the id and updated_at). `work` naming the bot, the notice that also tells a running
+    # turn a follow-up was queued for it; a runner too old to read the bot asks for new work, not for everything.
+    ("changes_runner_chat_goals_insert", "INSERT", "chat_goals", None, _bot_runner("work", "NEW.bot")),
+    (
+        "changes_runner_chat_goals_update",
+        "UPDATE",
+        "chat_goals",
+        _changed("id", "updated_at", "status"),
+        _bot_runner("work", "NEW.bot"),
+    ),
+    ("changes_runner_chat_goals_delete", "DELETE", "chat_goals", None, _bot_runner("work", "OLD.bot")),
     # Which bots it runs, and how they are configured (runners/assignments carries the config).
     (
         "changes_runner_assignments_insert",
@@ -1441,6 +1496,14 @@ for _name in (
     "changes_roles_meeting_delete",
 ):
     NEEDS[_name] = (*NEEDS.get(_name, ()), "meeting_task_links")
+
+
+for _name in (
+    "changes_calendar_attendees_insert",
+    "changes_calendar_attendees_update",
+    "changes_calendar_attendees_delete",
+):
+    NEEDS[_name] = ("calendar_events",)
 
 
 for _name in ("changes_proposal_task_access", "changes_proposal_roles_insert", "changes_proposal_roles_delete"):
@@ -2332,13 +2395,27 @@ def _messages(view, rows, shared=None):
     return out
 
 
-def _threads(view, rows):
+def _viewed_roots(c, threads_scope):
+    """The roots of the threads a stream follows (`thread=`): the ones whose bots' status rows it is on screen for."""
+    roots = set()
+    for part in H.chunks(sorted(set(threads_scope))):
+        roots.update(
+            root
+            for (root,) in c.execute(
+                "SELECT COALESCE(root_id,id) FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part
+            )
+        )
+    return roots
+
+
+def _threads(view, rows, threads_scope=()):
     """The `threads` topic (contract §9): one event per thread and kind, as it stands now. A `read` row goes only to
     the reader it names; a thread the viewer cannot read sends nothing, and an `activity` row only for a message the
-    viewer reads. A call's `call.*` rows go to the people who may read the call's thread."""
+    viewer reads. A call's `call.*` rows go to the people who may read the call's thread. A `bot_status` row carries
+    its root's `bots` only to a stream following a thread under that root: only the open thread shows them."""
     from . import calls, threads
 
-    out, last, activity = [], {}, {}
+    out, last, activity, viewed = [], {}, {}, None
     for row in rows:
         if str(row["kind"]).startswith("call."):
             # Tico Meet call changes (backend/calls.py): the call's thread decides who hears each one, and each is sent once.
@@ -2429,7 +2506,10 @@ def _threads(view, rows):
             if root is None or threads.legacy_reader_only(view.c, view.reader, root):
                 continue
             entry["thread_id"] = entry["root_id"]
-            entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
+            if viewed is None:
+                viewed = _viewed_roots(view.c, threads_scope) if threads_scope else set()
+            if entry["root_id"] in viewed:
+                entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
         elif kind == "routed":
             message = H.message(view.c, ref) if ref else None
             if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
@@ -2492,7 +2572,49 @@ def _readable_before_deletion(view, message):
         return False
 
 
-def _runs(view, rows):
+# A compact run step (`output=compact`, what the web app asks for): which step moved, never its contents. Its screens only
+# note that a run moved and read their own summaries; the whole step stays stored and is read on demand
+# (GET /api/v2/runs/{run_id}/steps/{seq}, `run_step`), under the same checks as the stream.
+COMPACT_STEP = ("id", "attempt_id", "seq", "kind", "created_at")
+
+
+def _step_shown(view, bot, event, watched):
+    """Run step `event` (an attempt_events row) of `bot`'s run, which this reader may read, as `_step_output` takes it:
+    its payload decoded once (None when it is not a JSON object or list), or None when the reader may not be sent it."""
+    # The intact stored text is decoded once: the page and task checks and the event sent read that value. The
+    # meeting check reads the row as stored, as every other reader of run output does (run_view, turns).
+    value = H._json(event["payload"], None)
+    decoded = dict(event) | {"payload": value} if isinstance(value, (dict, list)) else None
+    if not view.privacy.content_readable(view.c, view.principal, event, decoded):
+        return None
+    if event["kind"] in ("delta", "message"):
+        # A reply is not live for a bot org rules apply to: it shows once checked and delivered.
+        if bot not in watched:
+            from .org_rule_check import watched as rules_watch
+
+            watched[bot] = rules_watch(view.c, bot)
+        if watched[bot]:
+            return None
+    return (decoded,)
+
+
+def _step_output(event, compact, shown):
+    """A run step as a `runs` event's `output`: the whole stored step, or its compact signal (still truthy). `shown` is
+    what `_step_shown` gave for it."""
+    if compact:
+        return {
+            **{key: event[key] for key in COMPACT_STEP},
+            "bytes": len((event["payload"] or "").encode()),
+            "compact": True,
+        }
+    (decoded,) = shown
+    event = dict(event)
+    stored = event.pop("payload")
+    event["payload"] = decoded["payload"] if decoded is not None else H._json(stored, {})
+    return event
+
+
+def _runs(view, rows, compact=False):
     c, privacy = view.c, view.privacy
     # Each output step is its own event; a run's state is sent once per read, as it stands now.
     picked, states = [], {}
@@ -2531,21 +2653,10 @@ def _runs(view, rows):
         entry = {"run_id": aid, "conversation_id": cid, "bot_id": bot}
         if row["kind"] == "output":
             event = outputs.get(str(row["ref"]))
-            if event is None:
+            shown = None if event is None else _step_shown(view, bot, event, watched)
+            if shown is None:
                 continue
-            event = dict(event)
-            if not privacy.content_readable(c, view.principal, event):
-                continue
-            if event["kind"] in ("delta", "message"):
-                # A reply is not live for a bot org rules apply to: it shows once checked and delivered.
-                if bot not in watched:
-                    from .org_rule_check import watched as rules_watch
-
-                    watched[bot] = rules_watch(c, bot)
-                if watched[bot]:
-                    continue
-            event["payload"] = H._json(event.pop("payload"), {})
-            entry["output"] = event
+            entry["output"] = _step_output(event, compact, shown)
         elif row["kind"] == "job":
             job = c.execute(
                 "SELECT j.*, m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id "
@@ -2562,6 +2673,28 @@ def _runs(view, rows):
             entry.update(job_id=attempt["job_id"], state=runs.state(attempt["state"]))
         out.append((row, entry))
     return out
+
+
+def run_step(c, auth, who, run_id, seq):
+    """One stored run step, whole, as the full `runs` stream would have sent its `output`: for a reader the stream
+    would send it to (the bot's activity and the run readable, the content readable, a reply of a bot org rules apply
+    to only once delivered). None otherwise, the same as a step that does not exist."""
+    attempt = c.execute(
+        "SELECT bot_id, " + _RUN_CONVERSATION.format(aid="?") + " AS conversation_id FROM attempts WHERE id=?",
+        (run_id, run_id),
+    ).fetchone()
+    if attempt is None:
+        return None
+    view = _Viewer(c, auth, who)
+    if attempt["conversation_id"] and not view.conversation(attempt["conversation_id"]):
+        return None
+    if not view.bot_readable(attempt["bot_id"]) or not view.privacy.attempt_readable(c, view.principal, run_id):
+        return None
+    event = c.execute("SELECT * FROM attempt_events WHERE attempt_id=? AND seq=?", (run_id, seq)).fetchone()
+    shown = None if event is None else _step_shown(view, attempt["bot_id"], event, {})
+    if shown is None:
+        return None
+    return _step_output(event, False, shown)
 
 
 def _bots(view, rows):
@@ -2594,7 +2727,7 @@ def needs_baseline(c, auth, who, task_view):
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_items, needs_kinds, needs_marks
+    from .views import needs_bots, needs_items, needs_kinds, needs_marks, needs_stages
 
     items = needs_items(view.c, view.auth, view.who, task_view)
     if held is None:
@@ -2611,6 +2744,7 @@ def _needs_list(view, rows, task_view, held=None):
         "changed": None if many else changed,
         "removed": None if many else removed,
         "bots": needs_bots(items, view.who.actor),
+        "stages": needs_stages(items),
         "by_kind": needs_kinds(items),
     }  # whole-list facts, even on a page
     held.update(marks=marks, version=version)
@@ -2676,11 +2810,8 @@ class _Snapshot:
             topic = row["topic"]
             if (
                 topic not in topics
-                or conversations
-                and topic == "runs"
-                and row["conversation_id"] not in conversations
                 or (conversations or threads_scope)
-                and topic == "messages"
+                and topic in ("messages", "runs")
                 and row["conversation_id"] not in conversations
                 and not self._in_scope(row["conversation_id"], threads_scope)
                 or bots
@@ -2709,10 +2840,7 @@ class _Snapshot:
         self, who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings=(), places=()
     ):
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
-        if conversations:
-            clauses.append("(topic<>'runs' OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
-            args += list(conversations)
-        followed = []  # the messages on screen: these conversations' and these threads' subtrees
+        followed = []  # the messages and runs on screen: these conversations' and these threads' subtrees
         if conversations:
             followed.append("conversation_id IN (%s)" % ",".join("?" * len(conversations)))
             args += list(conversations)
@@ -2726,7 +2854,7 @@ class _Snapshot:
             )
             args += list(threads_scope)
         if followed:
-            clauses.append("(topic<>'messages' OR %s)" % " OR ".join(followed))
+            clauses.append("(topic NOT IN ('messages','runs') OR %s)" % " OR ".join(followed))
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)
@@ -2741,6 +2869,40 @@ class _Snapshot:
             clauses.append("(topic!='needs' OR subject_id=?)")
             args.append(who.actor)
         return _change_rows(self.c, clauses, args, limit)
+
+
+def _within_budget(c, rows):
+    """The leading `rows` whose events one read can send, decided before any is checked or built, so a reader behind
+    on large run outputs has only what READ_BYTES carries prepared, not the whole batch on every read. A run output
+    counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
+    or task still relies on read_in's final byte cut. The first row always goes, however large; a row
+    this viewer may not see still counts, as its size is known before its check. A compact stream (`output=compact`)
+    is sized the same way: it is sent none of a step's payload, but its read still loads and decodes each one for the
+    content check (_step_shown)."""
+    outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
+    if not outputs:
+        return rows
+    sizes, looked, spent = {}, 0, 0
+    for n, row in enumerate(rows):
+        spent += ROW_BYTES
+        if row["topic"] == "runs" and row["kind"] == "output":
+            ref = str(row["ref"])
+            if ref not in sizes and looked < len(outputs):
+                part = outputs[looked : looked + SIZE_CHUNK]
+                looked += len(part)
+                sizes.update({ref: None for ref in part})
+                sizes.update(
+                    (str(found[0]), found[1])
+                    for found in c.execute(
+                        "SELECT id, length(CAST(payload AS BLOB)) FROM attempt_events WHERE id IN (%s)"
+                        % ",".join("?" * len(part)),
+                        part,
+                    )
+                )
+            spent += sizes.get(ref) or 0
+        if n and spent > READ_BYTES:
+            return rows[:n]
+    return rows
 
 
 def _between_viewers(c):
@@ -2782,6 +2944,7 @@ def read(
     meetings=(),
     places=(),
     watch=None,
+    compact_runs=False,
 ):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
@@ -2811,6 +2974,7 @@ def read(
             meetings=meetings,
             places=places,
             watch=watch,
+            compact_runs=compact_runs,
         )
     finally:
         if c.in_transaction:
@@ -2839,6 +3003,7 @@ def read_in(
     meetings=(),
     places=(),
     watch=None,
+    compact_runs=False,
 ):
     """`read` inside a transaction its caller holds, with that transaction's _Snapshot."""
     newest, first = snapshot.newest, snapshot.first
@@ -2853,6 +3018,9 @@ def read_in(
         who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places
     )
     more = len(rows) >= limit
+    kept = _within_budget(c, rows)
+    if len(kept) < len(rows):  # the rest are neither checked nor built here: the next read starts at them
+        rows, more = kept, True
     cursor = rows[-1]["seq"] if more else newest
     if not rows:
         return [], cursor, False, False
@@ -2895,13 +3063,13 @@ def read_in(
             visuals(c, who, [e["message"] for _, e in found if not isinstance(e, _SameForAll) and "message" in e])
         picked += [("messages", r, e) for r, e in found]
     if by_topic.get("runs"):
-        picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"])]
+        picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"], compact_runs)]
     if by_topic.get("bots"):
         picked += [("bots", r, e) for r, e in _bots(view, by_topic["bots"])]
     if by_topic.get("needs"):
         picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
     if by_topic.get("threads"):
-        picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
+        picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"], threads_scope)]
     if by_topic.get("letters"):
         from . import letters
 
@@ -2918,6 +3086,10 @@ def read_in(
                     picked.append(("letters", change, {"id": ident, "gone": True}))
                 continue
             picked.append(("letters", change, {"id": ident, "letter": letters.public(letter)}))
+    for row in by_topic.get("calendar", []):
+        # Which calendar moved, never what is on it: the reader refetches through /api/v2/calendar/events, which
+        # decides what this viewer may see (a private event is Busy).
+        picked.append(("calendar", row, {"calendar": row["ref"], "id": row["subject_id"], "kind": row["kind"]}))
     for topic in ('meeting_items', 'presence'):
         for row in by_topic.get(topic, []):
             picked.append(
@@ -3063,6 +3235,19 @@ def install(app, store, auth, task_views, task_view):
     shared = hydrated(store)
     served = rounds(store)
 
+    @app.get("/api/v2/runs/{run_id}/steps/{seq}")
+    def run_output_step(request: Request, run_id: str, seq: int):
+        """A run step a compact `runs` event named, whole (`run_step`)."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role not in ("human", "owner"):
+            raise Problem("forbidden", "Run steps are read by people's pages", 403)
+        with store.read() as c:
+            step = run_step(c, auth, who, run_id, seq)
+        if step is None:
+            raise Problem("not_found", "No such run step", 404)
+        return {"output": step}
+
     @app.get("/api/v2/events")
     async def events(
         request: Request,
@@ -3076,6 +3261,7 @@ def install(app, store, auth, task_views, task_view):
         thread: str | None = None,
         meeting: str | None = None,
         place: str | None = None,
+        output: str | None = None,
     ):
         """Server-sent events for people's pages: see the module docstring."""
         who = request.state.identity
@@ -3104,6 +3290,9 @@ def install(app, store, auth, task_views, task_view):
         if needs not in (None, "", "list", "changes"):
             raise Problem("validation", "needs is list or changes", 422)
         held = {} if needs == "changes" and "needs" in wanted else None
+        # `output=compact`: each run step as its compact signal (_step_output), what the web app asks for.
+        if output not in (None, "", "full", "compact"):
+            raise Problem("validation", "output is full or compact", 422)
 
         def start():
             with store.read() as c:
@@ -3145,6 +3334,7 @@ def install(app, store, auth, task_views, task_view):
                 meetings=meetings,
                 places=places,
                 watch=watch,
+                compact_runs=output == "compact",
             )
 
         def newest():

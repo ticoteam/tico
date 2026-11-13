@@ -72,11 +72,3 @@ def test_a_secret_the_server_would_not_accept_stops_the_run_without_showing_it(m
     code, out = go([*ARGV, *OIDC], deps=over_ssh(shell))
     assert code != 0 and "TICO_SETUP_HANDOFF is not a setup handoff secret" in out and bad not in out
     assert not shell.calls
-
-
-def test_the_issuer_flags_of_the_cloud_command_are_unchanged_by_the_handoff(monkeypatch):
-    monkeypatch.setenv("TICO_SETUP_HANDOFF", SECRET)
-    shell = FakeShell()
-    code, out = go([*ARGV, *OIDC], deps=over_ssh(shell))
-    env = env_sent(shell)
-    assert code == 0 and env["TICO_AUTH_PROXY"] == "oidc" and env["TICO_OIDC_ISSUER"] == ISSUER

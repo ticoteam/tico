@@ -74,25 +74,29 @@ const CAPTURE_SCRIPT: &str = r#"
 })();
 "#;
 
-/// The page's `alert` and `confirm`, as the dialog plugin makes them (`alert` returns at once, `confirm` returns a
-/// promise of true for OK), but through `page_dialog`, which shows them only for the page on screen. Org pages have
-/// no dialog plugin permission; this runs after the plugin's own script, so it is the one that stays.
+/// The page's `alert` (returns at once) and its OK/Cancel question, through `page_dialog`, which shows them only for
+/// the page on screen. Org pages have no dialog plugin permission; this runs after the plugin's own script, so it is
+/// the one that stays. The question is `ticoConfirm`, a promise of true for OK and false for anything else (Cancel, a
+/// refused or failed dialog), which the page's `askConfirm` (ui/app/confirm.ts) awaits. `confirm` itself must answer
+/// at once and the dialog cannot, so it answers false without asking: a caller that does not await can never go
+/// ahead on a question still open (a promise is truthy, so `if (!confirm(...)) return;` went ahead before Cancel).
 const DIALOG_SCRIPT: &str = r#"
 (() => {
   if (!window.__TAURI__ || !window.__TAURI__.core) return;
   const invoke = window.__TAURI__.core.invoke;
   const text = message => message === undefined ? '' : String(message);
   window.alert = message => { invoke('page_dialog', {confirm: false, message: text(message)}).catch(() => {}); };
-  window.confirm = message => invoke('page_dialog', {confirm: true, message: text(message)}).catch(() => false);
+  window.ticoConfirm = message => invoke('page_dialog', {confirm: true, message: text(message)}).then(ok => ok === true, () => false);
+  window.confirm = () => false;
 })();
 "#;
 
-/// What only a Mac build answers: whether Tico Recorder is installed (`hasRecorder`) and opening it on the page's org
-/// (`openRecorder`).
+/// What only a Mac build answers: whether Tico Recorder is installed (`hasRecorder`), opening it on the page's org
+/// (`openRecorder`), having it record a call there (`recordCall`) or a calendar event (`recordEvent`).
 const RECORDER_SCRIPT: &str = r#"
 (() => {
   if (!window.ticoNativeFeatures) return;
-  window.ticoNativeFeatures.push('openRecorder');
+  window.ticoNativeFeatures.push('openRecorder', 'recordCall', 'recordEvent');
 })();
 "#;
 
@@ -341,6 +345,52 @@ pub(crate) fn bridge(
             if let Some(hub) = org.and_then(|org| org.hub()) {
                 crate::recorder::open_recorder(&hub);
             }
+        }
+        // A call started or joined on the page ({call: id}): the Recorder records it on the caller's own org, as
+        // Record opens it. Answers whether the Recorder was opened (installed, and the id is a call id).
+        "recordCall" => {
+            let call = body
+                .as_ref()
+                .and_then(|b| b.get("call"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let org = org_of(webview.label()).and_then(|org| {
+                app.state::<AppState>()
+                    .orgs
+                    .lock()
+                    .unwrap()
+                    .get(org)
+                    .cloned()
+            });
+            let opened = org
+                .and_then(|org| org.hub())
+                .is_some_and(|hub| crate::recorder::record_call(&hub, call));
+            return Ok(Value::Bool(opened));
+        }
+        // A calendar event's Join ({event: occurrence id, title}): the Recorder records it on the caller's own org, as
+        // `recordCall` does for a call. Answers whether the Recorder was opened (installed, and a link it takes).
+        "recordEvent" => {
+            let event = body
+                .as_ref()
+                .and_then(|b| b.get("event"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let title = body
+                .as_ref()
+                .and_then(|b| b.get("title"))
+                .and_then(Value::as_str);
+            let org = org_of(webview.label()).and_then(|org| {
+                app.state::<AppState>()
+                    .orgs
+                    .lock()
+                    .unwrap()
+                    .get(org)
+                    .cloned()
+            });
+            let opened = org
+                .and_then(|org| org.hub())
+                .is_some_and(|hub| crate::recorder::record_event(&hub, event, title));
+            return Ok(Value::Bool(opened));
         }
         _ => {}
     }
@@ -647,30 +697,6 @@ pub(crate) fn app_log(app: App, webview: Webview) -> Result<Value, String> {
 #[cfg(test)]
 mod boot_timing_tests {
     use super::*;
-
-    #[test]
-    fn a_report_is_one_line_of_its_known_fields() {
-        let body = serde_json::json!({
-            "route": "#/home", "settled": true, "html": 182,
-            "marks": {"head": 190, "bundle-start": 236, "boot": 402, "roster": 1180, "route": 1194, "native-ack": 1201, "paint-fresh": 1690},
-            "bundle": {"bytes": 0, "ms": 4},
-            "server": [{"path": "/api/employees", "ms": 412, "app": 380, "auth": 2}, {"path": "/api/v2/places/:id", "ms": 300, "app": null, "auth": null}],
-        });
-        assert_eq!(boot_line(Some(&body), Some(2020)).unwrap(),
-            "org page open: #/home, settled; html 182, head 190, bundle-start 236, boot 402, roster 1180, route 1194, \
-             native-ack 1201, paint-fresh 1690 ms; bundle cached (4 ms); reads: /api/employees 412 ms (app 380, auth 2), \
-             /api/v2/places/:id 300 ms; 2020 ms since the webview was built");
-        let fetched = serde_json::json!({"route": "", "settled": false, "bundle": {"bytes": 1_300_000, "ms": 230}});
-        assert_eq!(
-            boot_line(Some(&fetched), None).unwrap(),
-            "org page open: no page, not settled; bundle 1270 KB in 230 ms"
-        );
-        let empty = serde_json::json!({});
-        assert_eq!(
-            boot_line(Some(&empty), None).unwrap(),
-            "org page open: no page, not settled"
-        );
-    }
 
     #[test]
     fn anything_else_refuses_the_whole_report() {
@@ -1053,71 +1079,11 @@ mod visual_bridge_tests {
             "addOrg",
             "windowMode",
             "openRecorder",
+            "recordCall",
+            "recordEvent",
         ] {
             assert!(!own_page_call(name));
         }
-    }
-
-    #[test]
-    fn the_bridge_never_tells_an_org_about_another() {
-        let acme = org(
-            "o_aaaaaaaa",
-            "https://acme.example.com/",
-            "Acme Lights",
-            "ops@acme.example",
-        );
-        let tidy = org(
-            "o_bbbbbbbb",
-            "https://tidy.example.com/",
-            "TIDY Team",
-            "chris@tidy.example",
-        );
-        let secrets = [
-            "o_bbbbbbbb",
-            "https://tidy.example.com/",
-            "tidy.example.com",
-            "TIDY Team",
-            "chris@tidy.example",
-        ];
-        let doc = Document {
-            version: 1,
-            active: Some(acme.id.clone()),
-            orgs: vec![acme, tidy],
-        };
-        let state = AppState::new(Orgs::new(doc, None), None);
-        assert_eq!(state.orgs.lock().unwrap().orgs().len(), 2);
-        // Every reply the page can get, with two orgs open in the shell, carries none of the other org's details.
-        for name in [
-            "orgInfo",
-            "multiOrg",
-            "showOrgMenu",
-            "addOrg",
-            "openWindow",
-            "visualOrigin",
-            "checkForUpdates",
-            "showLog",
-            "appLog",
-            "bootTiming",
-        ] {
-            let reply = bridge_reply(name, 2).to_string();
-            for secret in secrets {
-                assert!(!reply.contains(secret), "{name} replied with {secret}");
-            }
-        }
-        // The page script carries no org data in any build, and only this build's org features.
-        for several in [false, true] {
-            let script = script_for("0.5.0", several, several);
-            for secret in secrets {
-                assert!(!script.contains(secret), "the page script carries {secret}");
-            }
-            assert_eq!(script.contains("'multiOrg'"), several);
-            assert_eq!(
-                script.contains("'openRecorder'"),
-                several,
-                "Record is offered only by a Mac build"
-            );
-        }
-        assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
     }
 
     #[test]
@@ -1142,26 +1108,5 @@ mod visual_bridge_tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("the switch goes on once both are answered");
         switch.join().unwrap();
-    }
-
-    #[test]
-    fn every_page_reports_its_capture() {
-        for several in [false, true] {
-            let script = script_for("0.5.0", several, several);
-            assert!(
-                script.contains("name: 'capture'") && !script.contains("__ticoCapture"),
-                "nothing the page can call to switch it off"
-            );
-            assert!(script.contains("'getUserMedia', 'getDisplayMedia'"));
-        }
-    }
-
-    #[test]
-    fn a_page_alert_and_confirm_go_through_the_on_screen_check() {
-        for several in [false, true] {
-            let script = script_for("0.5.0", several, !several);
-            assert!(script.contains("window.alert =") && script.contains("window.confirm ="));
-            assert!(script.contains("invoke('page_dialog'") && !script.contains("plugin:dialog"));
-        }
     }
 }

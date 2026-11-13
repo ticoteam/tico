@@ -246,7 +246,8 @@ DERIVED = {
         SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
-               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0) + coalesce(cache_write_tokens, 0))
+                 AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
                sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
@@ -260,7 +261,8 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
         FROM (SELECT CASE WHEN trigger IS NULL THEN coalesce(started_at, created_at) ELSE created_at END AS started_at,
-                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
+                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, cache_write_tokens,
+                     output_tokens,
                      outcome, did_nothing, rotated
               FROM {attempts})
         GROUP BY 1, 2, 3, 4""",
@@ -272,7 +274,8 @@ DERIVED = {
         """
         SELECT date(created_at, '-6 days', 'weekday 1') AS week, bot_id AS bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
-               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0) + coalesce(cache_write_tokens, 0))
+                 AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
                sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
@@ -1106,8 +1109,9 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         index = ReadIndex(Source(), who, rooms=True)
         from .files import (
             page_audience_visible,
-            page_event_readable,
             page_blob_visible,
+            page_event_readable,
+            page_graph,
             restricted_pages,
             readable_page_refs,
         )
@@ -1135,7 +1139,8 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                 1,
                 lambda refs: privacy.page_message_readable(source, privacy.actor(who), H._json(refs, {}) or {}),
             ),
-            "page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
+            # These run once per row of the whole query: read every page once rather than look up each row's.
+            "page_refs": (1, lambda refs: page_graph(source) or readable_page_refs(source, auth, who, refs)),
             "file": (1, visible_file),
             "page_manager": (1, manages_page),
             "message": (4, index.message),
@@ -1146,12 +1151,16 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                 4,
                 lambda target, actor, ts, detail: (
                     target not in unseen_targets
+                    and not page_graph(source)
                     and page_event_readable(source, auth, who, target, detail)
                     and index.event(target, actor, ts, detail)
                 ),
             ),
             "tag": (2, index.tag),
-            "blob": (1, lambda bid: index.blob(bid) and page_blob_visible(source, auth, who, bid)),
+            "blob": (
+                1,
+                lambda bid: index.blob(bid) and not page_graph(source) and page_blob_visible(source, auth, who, bid),
+            ),
             "task": (1, lambda tid: tid not in index.denied),
             "content": (-1, lambda *parts: index.content(list(parts))),
         }

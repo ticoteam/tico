@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "goal"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico goal: error: argument sub: invalid choice: 'nope' (choose from read-back, save, list, show, create, status, update, refresh, checkin, checkin-list, needs-you, company, strategy-bot, strategy-bot-merge, strategy-bot-level3-offer, strategy-bot-decide, strategy-bot-log) Did you mean: tico goal update, tico goal show?",
-  "exit": 64
- },
- {
-  "argv": [
    "goal",
    "read-back",
    "changes-1"
@@ -36,88 +15,9 @@
    ]
   ],
   "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: changes must be a JSON array of 1 to 20 change objects\"\n}\n",
+  "stdout": "{\n  \"error\": \"ValueError: changes must be a JSON array of 1 to 500 change objects\"\n}\n",
   "stderr": "",
   "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "read-back"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal read-back <changes>\ntico goal read-back: error: the following arguments are required: changes",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
-   "save",
-   "POST",
-   "missing-file.txt",
-   "Hello all",
-   "--on-behalf-of",
-   "on-behalf-of-1"
-  ],
-  "tools": [
-   [
-    "tico_goal_save",
-    {
-     "body": "Hello all",
-     "method": "POST",
-     "on_behalf_of": "on-behalf-of-1",
-     "operation_id": null,
-     "path": "missing-file.txt"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: path must be a goal read-back save step\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "save",
-   "POST",
-   "missing-file.txt",
-   "Hello all",
-   "--created-goal",
-   "created-goal-1",
-   "--on-behalf-of",
-   "on-behalf-of-1"
-  ],
-  "tools": [
-   [
-    "tico_goal_save",
-    {
-     "body": "Hello all",
-     "created_goal": "created-goal-1",
-     "method": "POST",
-     "on_behalf_of": "on-behalf-of-1",
-     "operation_id": null,
-     "path": "missing-file.txt"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: path must be a goal read-back save step\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "save"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal save {POST} <path> <body>\ntico goal save: error: the following arguments are required: method, path, body, --on-behalf-of",
-  "exit": 64
  },
  {
   "argv": [
@@ -205,17 +105,6 @@
  {
   "argv": [
    "goal",
-   "show"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal show <id>\ntico goal show: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
    "create",
    "--owner",
    "me",
@@ -255,32 +144,6 @@
   "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "create",
-   "--owner",
-   "me",
-   "--title",
-   "Launch",
-   "--parent",
-   "parent-1",
-   "--body",
-   "Hello all",
-   "--body-file",
-   "body-file-1",
-   "--top",
-   "--bet",
-   "bet-id-1",
-   "--on-behalf-of",
-   "on-behalf-of-1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico goal create: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
-  "exit": 64
  },
  {
   "argv": [
@@ -350,17 +213,6 @@
  {
   "argv": [
    "goal",
-   "status"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal status <id> {red|yellow|green|done|dropped|auto} <note>\ntico goal status: error: the following arguments are required: id, status",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
    "update",
    "id-1"
   ],
@@ -392,46 +244,6 @@
   "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "update",
-   "id-1",
-   "--title",
-   "Launch",
-   "--body",
-   "Hello all",
-   "--body-file",
-   "body-file-1",
-   "--parent",
-   "parent-1",
-   "--owner",
-   "me",
-   "--rank",
-   "5",
-   "--top",
-   "--bet",
-   "bet-id-1",
-   "--on-behalf-of",
-   "on-behalf-of-1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico goal update: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
-   "update"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal update <id>\ntico goal update: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -574,17 +386,6 @@
  {
   "argv": [
    "goal",
-   "checkin"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal checkin <id> <body>\ntico goal checkin: error: the following arguments are required: id, body",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
    "checkin-list",
    "id-1"
   ],
@@ -607,17 +408,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "checkin-list"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal checkin-list <id>\ntico goal checkin-list: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -738,17 +528,6 @@
  {
   "argv": [
    "goal",
-   "strategy-bot-merge"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal strategy-bot-merge <person> <title> <question> <tasks>\ntico goal strategy-bot-merge: error: the following arguments are required: person, title, question, tasks",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
    "strategy-bot-level3-offer"
   ],
   "tools": [
@@ -791,42 +570,6 @@
   "stdout": "{\n  \"error\": \"ValueError: changes is a JSON list of changes: Expecting value: line 1 column 1 (char 0)\"\n}\n",
   "stderr": "",
   "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "strategy-bot-decide",
-   "reason-1",
-   "changes-1",
-   "--goal-id",
-   "goal-id-1"
-  ],
-  "tools": [
-   [
-    "tico_goal_strategy_bot_decide",
-    {
-     "changes": "changes-1",
-     "goal_id": "goal-id-1",
-     "operation_id": null,
-     "reason": "reason-1"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: changes is a JSON list of changes: Expecting value: line 1 column 1 (char 0)\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "strategy-bot-decide"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal strategy-bot-decide <reason> <changes>\ntico goal strategy-bot-decide: error: the following arguments are required: reason, changes",
-  "exit": 64
  },
  {
   "argv": [
@@ -887,33 +630,6 @@
    "goal",
    "save",
    "POST",
-   "1",
-   "1",
-   "--on-behalf-of",
-   "turn"
-  ],
-  "tools": [
-   [
-    "tico_goal_save",
-    {
-     "body": "1",
-     "method": "POST",
-     "on_behalf_of": "turn",
-     "operation_id": null,
-     "path": "1"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: path must be a goal read-back save step\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "save",
-   "POST",
    "/api/v2/goal-proposals/turned-down",
    "1",
    "--on-behalf-of",
@@ -935,32 +651,6 @@
   "stdout": "{\n  \"error\": \"ValueError: body must be a JSON object\"\n}\n",
   "stderr": "",
   "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "show",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_show",
-    {
-     "id": "1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "goals/1",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
-  "stderr": "",
-  "exit": 0
  },
  {
   "argv": [
@@ -1013,431 +703,6 @@
    ]
   ],
   "stdout": "{\n  \"goals\": [\n    {\n      \"id\": \"g1\",\n      \"title\": \"Launch\",\n      \"status\": \"green\",\n      \"owner\": \"bot:ana\",\n      \"kpis\": []\n    }\n  ]\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "list",
-   "--all",
-   "--status",
-   "green,yellow,red,done,dropped"
-  ],
-  "tools": [
-   [
-    "tico_goal_list",
-    {
-     "all": true,
-     "operation_id": null,
-     "status": "green,yellow,red,done,dropped"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "goals?all=1&status=green%2Cyellow%2Cred%2Cdone%2Cdropped",
-    null
-   ]
-  ],
-  "stdout": "[\n  {\n    \"id\": \"g1\",\n    \"title\": \"Launch\",\n    \"status\": \"green\",\n    \"owner\": \"bot:ana\",\n    \"kpis\": []\n  }\n]\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "strategy-bot-decide",
-   "1",
-   "1",
-   "--goal-id",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_strategy_bot_decide",
-    {
-     "changes": "1",
-     "goal_id": "1",
-     "operation_id": null,
-     "reason": "1"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"TypeError: 'int' object is not iterable\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "goal",
-   "checkin",
-   "1",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_checkin",
-    {
-     "body": "1",
-     "id": "1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/checkins",
-    {
-     "body": "1",
-     "signal": null,
-     "kpi_id": null,
-     "from_actor": null
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"c1\",\n  \"goal_id\": \"g1\",\n  \"text\": \"On track\",\n  \"author\": \"bot:ana\"\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "checkin-list",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_checkin_list",
-    {
-     "id": "1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "goals/1/checkins",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "checkin",
-   "1",
-   "1",
-   "--signal",
-   "on_track",
-   "--from",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_checkin",
-    {
-     "body": "1",
-     "from_actor": "1",
-     "id": "1",
-     "operation_id": null,
-     "signal": "on_track"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/checkins",
-    {
-     "body": "1",
-     "signal": "on_track",
-     "kpi_id": null,
-     "from_actor": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"c1\",\n  \"goal_id\": \"g1\",\n  \"text\": \"On track\",\n  \"author\": \"bot:ana\"\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "checkin",
-   "1",
-   "1",
-   "--signal",
-   "at_risk",
-   "--from",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_checkin",
-    {
-     "body": "1",
-     "from_actor": "1",
-     "id": "1",
-     "operation_id": null,
-     "signal": "at_risk"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/checkins",
-    {
-     "body": "1",
-     "signal": "at_risk",
-     "kpi_id": null,
-     "from_actor": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"c1\",\n  \"goal_id\": \"g1\",\n  \"text\": \"On track\",\n  \"author\": \"bot:ana\"\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "checkin",
-   "1",
-   "1",
-   "--signal",
-   "off_track",
-   "--from",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_checkin",
-    {
-     "body": "1",
-     "from_actor": "1",
-     "id": "1",
-     "operation_id": null,
-     "signal": "off_track"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/checkins",
-    {
-     "body": "1",
-     "signal": "off_track",
-     "kpi_id": null,
-     "from_actor": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"c1\",\n  \"goal_id\": \"g1\",\n  \"text\": \"On track\",\n  \"author\": \"bot:ana\"\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "list",
-   "--owner",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_list",
-    {
-     "all": false,
-     "operation_id": null,
-     "owner": "1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "goals?owner=1",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"goals\": [\n    {\n      \"id\": \"g1\",\n      \"title\": \"Launch\",\n      \"status\": \"green\",\n      \"owner\": \"bot:ana\",\n      \"kpis\": []\n    }\n  ]\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "create",
-   "...",
-   "--bet",
-   "1"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal create\ntico goal create: error: the following arguments are required: --owner, --title",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
-   "create"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico goal create\ntico goal create: error: the following arguments are required: --owner, --title",
-  "exit": 64
- },
- {
-  "argv": [
-   "goal",
-   "create",
-   "--owner",
-   "me",
-   "--title",
-   "..."
-  ],
-  "tools": [
-   [
-    "tico_goal_create",
-    {
-     "operation_id": null,
-     "owner": "me",
-     "title": "...",
-     "top": false
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "goals",
-    {
-     "owner": "bot:ana",
-     "title": "...",
-     "parent_id": null,
-     "body": "",
-     "top": false,
-     "bet_id": null
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "status",
-   "1",
-   "red",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_status",
-    {
-     "id": "1",
-     "note": "1",
-     "operation_id": null,
-     "status": "red"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/status",
-    {
-     "status": "red",
-     "note": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "status",
-   "1",
-   "yellow",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_status",
-    {
-     "id": "1",
-     "note": "1",
-     "operation_id": null,
-     "status": "yellow"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/status",
-    {
-     "status": "yellow",
-     "note": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
-   "status",
-   "1",
-   "green",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_goal_status",
-    {
-     "id": "1",
-     "note": "1",
-     "operation_id": null,
-     "status": "green"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "goals/1/status",
-    {
-     "status": "green",
-     "note": "1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
   "stderr": "",
   "exit": 0
  }

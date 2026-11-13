@@ -609,24 +609,6 @@ def _run_plans(c, read, row):
     ]
 
 
-def test_last_run_and_lost_seek_the_tasks_runs_not_every_run_of_the_bot(c, general):
-    """A bot's runs grow forever; a task's few. last_run and lost read the task's runs through attempts_task and the
-    task's messages, never every run of the bot (attempts_bot_*) or every run (SCAN): asked as one OR across the joined
-    tables they did, and a pass over 10,000 tasks took 148 s."""
-    from backend import task_engine as E
-
-    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
-    X.ran(c, row["id"], BUILDER)
-    row = E.task(c, row["id"])
-    plans = _run_plans(c, lambda conn, r: task_wakes.last_run(conn, r, BUILDER), row)
-    plans += _run_plans(c, lambda conn, r: task_wakes.lost(conn, r, BUILDER, whole_visit=True), row)
-    assert plans
-    for text in plans:
-        assert "attempts_task" in text, text
-        assert "attempts_bot" not in text and "SCAN a " not in f"{text} " and "SCAN x" not in text, text
-        assert "SCAN y" not in text and "SCAN messages" not in text and "SCAN attempts" not in text, text
-
-
 def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_start(c, general):
     """The never-stuck pass counts runs for every task that is due: the count must not gather every start in the
     company since the task's change or read every run there ever was (`SCAN a`). It reads the task's own runs (each

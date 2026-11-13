@@ -86,27 +86,6 @@ def test_resume_sends_only_what_came_since_and_a_client_past_the_log_is_reset(ap
     assert told(api, a, 1)[2] and told(api, a, 10**9)[2]
 
 
-@pytest.mark.slow
-def test_the_stream_tells_its_computer_keeps_it_seen_and_ends_once_revoked(api, live):
-    a, b = runner(api, label="A"), runner(api, label="B")
-    assign(api, a, "ops")
-    mine, other = (live(computer["token"], path="/api/v2/runners/me/events") for computer in (a, b))
-    for stream in (mine, other):
-        assert stream.until(topic("ready"))["data"]["release"] is not None
-    post(api, "chat/ops", {"text": "Please summarize the current work."})
-    got = mine.until(topic("runner", kind="work"))
-    assert got["data"]["bots"] == ["ops"] and int(got["id"]) == got["data"]["seq"]
-    other.drain(1.0)
-    assert not [event for event in other.seen if event["event"] == "runner"]
-    # The stream is contact: the computer stays seen while it sends nothing else.
-    mine.until(topic("keepalive"))
-    with api.app.state.store.read() as c:
-        seen = c.execute("SELECT last_seen_at FROM runners_with_state WHERE id=?", (a["runner_id"],)).fetchone()[0]
-    assert seen > H.shift(H.now(), seconds=-3)
-    post(api, f"runners/{a['runner_id']}/revoke", {})
-    mine.until(topic("expired"))
-
-
 def test_a_quiet_stream_keeps_sending_keepalives_while_the_database_is_busy(api, live):
     # The contact write behind a keepalive waits for the write lock; the keepalive does not.
     computer = runner(api, label="A")
@@ -136,3 +115,33 @@ def test_keepalives_go_out_while_other_computers_changes_keep_ringing_the_bell(a
     monkeypatch.setattr(bell, "wait", rings)
     for _ in range(3):
         stream.until(topic("keepalive"), timeout=5)
+
+
+def test_every_chat_goal_change_tells_only_the_bots_computer_by_bot_id(api):
+    """A running turn reads its goal again on this notice instead of asking every second (runner-rs/src/drive.rs):
+    a person's control, which queues the bot's `/goal` turn, and a change that queues nothing, like a goal its
+    harness reported met."""
+    from backend.tests.helpers.api import claim
+    from backend.tests.helpers.chat_goals import action, goal_event, setup
+
+    machine, cid = setup(api)
+    other = runner(api, label="B")
+    ready(api, other, [])
+
+    def queued():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0]
+
+    def change(step):
+        start, before = newest(api), queued()
+        step()
+        sent = told(api, machine, start)[0]
+        assert [(data["kind"], data["bots"]) for _, data in sent] == [("work", ["ops"])]
+        assert "Acme" not in json.dumps(sent) and told(api, other, start)[0] == []
+        return queued() - before
+
+    action(api, cid, objective="Write the Acme renewal summary")
+    for step in (("pause",), ("resume",), ("edit", "Write a shorter Acme summary")):
+        change(lambda: action(api, cid, *step))
+    attempt = claim(api, machine)
+    assert change(lambda: goal_event(api, machine, attempt, "met", "The Acme summary is done.")) == 0

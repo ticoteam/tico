@@ -5,7 +5,8 @@ import type {Route} from 'playwright';
 // panel; + Add rule opens Add rule with the party as Who; + Add exception searches a team, person or bot and opens the line
 // editor (direction, Up to N a day, rule). Every change writes one setting or one line; the bodies are checked here. A
 // viewer who may change nothing sees it read-only. On a phone the chart gives way to a list, then the panel full width,
-// with no sideways scroll. Every request is intercepted (the Acme fixture, fixtures/redesign-org.json).
+// with no sideways scroll. Who bots may book sits beside the mode for a bot, a team or Everyone (never a person). Every
+// request is intercepted (the Acme fixture, fixtures/redesign-org.json).
 // REACH_SHOTS=<dir> saves screenshots (1440x900 and 390x844).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -101,7 +102,8 @@ async function openReach(browser: import('playwright').Browser, {viewport = DESK
       Object.assign(l, {sender: body.sender, receiver: body.receiver, per_day: body.per_day, rule: body.rule ? {id: l.rule?.id || 'r-l' + next++, text: body.rule} : null});
       return json(l);
     }
-    if (m && method === 'DELETE') { reach.lines = reach.lines.filter(x => x.id !== m![1]!); return route.fulfill({status: 204, body: ''}); }
+    // The real route answers JSON (backend/reach.py remove_line()), never an empty 204.
+    if (m && method === 'DELETE') { reach.lines = reach.lines.filter(x => x.id !== m![1]!); return json({id: m![1]!, removed: true}); }
     return json(unrouted(p));
   });
   await page.goto(ORIGIN + '/' + hash);
@@ -283,6 +285,16 @@ async function until(fn: () => unknown, what: string) {
       await until(async () => /whole number/.test(await panel(page).locator('.ru-status').innerText()), 'bad cap refused');
       assert.equal(lastWrite(writes, 'PUT').body.tasks_per_day, undefined);
 
+      // Who bots may book: a control of its own beside the mode, Anyone until a company narrows it, shown as the mode is.
+      assert.deepEqual(await panel(page).locator('[data-ru-seg="rr-book"] button').allInnerTexts(), ['Anyone', 'Nearby', 'No one']);
+      assert.equal(await panel(page).locator('[data-ru-seg="rr-book"] [aria-pressed="true"]').innerText(), 'Anyone');
+      assert.equal(await panel(page).locator('.rr-book .rr-from').innerText(), 'default');
+      await panel(page).locator('[data-ru-seg="rr-book"] [data-v="none"]').click();
+      await until(async () => lastWrite(writes, 'PUT')?.body?.book === 'none', 'book saved');
+      assert.deepEqual(lastWrite(writes, 'PUT'), {method: 'PUT', path: '/api/v2/reach/settings/bot%3Abuilder', body: {book: 'none'}});
+      await until(async () => (await panel(page).locator('[data-ru-seg="rr-book"] [aria-pressed="true"]').innerText()) === 'No one', 'no one shown');
+      assert.equal(await panel(page).locator('.rr-book .rr-from').count(), 0, 'its own setting has no source');
+
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
       await page.locator('.ru-acts .rr-q').fill('sales');
       assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:growth-manager']);
@@ -303,6 +315,13 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await panel(page).locator('.rr-set > .rr-from').innerText(), 'from Everyone');
       await page.locator('.rr-map .rr-all').click();
       await until(async () => (await panel(page).locator('h2').innerText()) === 'Everyone', 'Everyone selected');
+      // A person has no Who bots may book: the control is for bots, teams and Everyone.
+      await page.locator('.rr-map [data-rr-party="human:cara"]').click();
+      await panel(page).locator('[data-ru-seg="rr-mode"]').waitFor();
+      await page.locator('.rr-panel[data-party="human:cara"]').waitFor();
+      assert.equal(await panel(page).locator('[data-ru-seg="rr-book"]').count(), 0);
+      await page.locator('.rr-map .rr-all').click();
+      await until(async () => (await panel(page).locator('h2').innerText()) === 'Everyone', 'Everyone again');
       await noSideways(page, 'desktop');
       assert.deepEqual(errors, []);
       await page.close();
@@ -313,6 +332,7 @@ async function until(fn: () => unknown, what: string) {
       const {page, errors} = await openReach(browser, {viewer: 'cara', mayEdit: [], hash: '#/rules?party=bot%3Abuilder'});
       await until(async () => (await panel(page).locator('h2').innerText()) === 'Builder', 'Builder');
       for (const b of await panel(page).locator('[data-ru-seg="rr-mode"] button').all()) assert.equal(await b.isDisabled(), true);
+      for (const b of await panel(page).locator('[data-ru-seg="rr-book"] button').all()) assert.equal(await b.isDisabled(), true);
       assert.equal(await panel(page).locator('[data-rr-cap="chats_per_day"]').isDisabled(), true);
       assert.equal(await panel(page).locator('[data-rr-cap="tasks_per_day"]').isDisabled(), true);
       assert.equal(await panel(page).locator('[data-rr-add-line]').count(), 0);

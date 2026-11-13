@@ -60,6 +60,8 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
   developer?: boolean;
   company_domains?: string[];
   proxy_session?: boolean;
+  /** A bot's read-only view of the app (backend/app_view.py): no email, nothing offered that writes. */
+  read_only_view?: boolean;
   sign_in_name?: string;
   member_bot_limit?: number;
   chat_bots?: string[];
@@ -382,6 +384,8 @@ interface V2State {
   needsCount?: number;
   needsNext?: string | null;
   needsBots?: Record<string, number> | null;
+  /** The server's count of asks, tasks and mentions per stage id over the whole list (a page's `stages`). */
+  needsStages?: Record<string, number> | null;
   needsPlateCount?: number | null;
   needsByKind?: Record<string, number> | null;
   needsFoldedIds?: string[] | null;

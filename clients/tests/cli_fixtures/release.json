@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "release"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "release",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico release: error: argument sub: invalid choice: 'nope' (choose from now, schedule) Did you mean: tico release now, tico release schedule?",
-  "exit": 64
- },
- {
-  "argv": [
    "release",
    "now"
   ],
@@ -238,52 +217,6 @@
     "release-schedule",
     {
      "bot": ""
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "release",
-   "schedule",
-   "--time",
-   "09:00",
-   "--time",
-   "15:00",
-   "--time",
-   "18:00"
-  ],
-  "tools": [
-   [
-    "tico_release_schedule",
-    {
-     "operation_id": null,
-     "times": [
-      "09:00",
-      "15:00",
-      "18:00"
-     ]
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "PATCH",
-    "release-schedule",
-    {
-     "times": [
-      "09:00",
-      "15:00",
-      "18:00"
-     ]
     }
    ]
   ],

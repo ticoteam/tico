@@ -15,12 +15,13 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, stage_effects, task_effects
 from . import task_requirements as R
-from . import task_wakes
+from . import task_wakes, validate_gate
 from .hubdb_core import KEEPER as SYSTEM
 
 if TYPE_CHECKING:
@@ -34,9 +35,11 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
+LOG = logging.getLogger("tico.task_engine")
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
 FIRST_TRY_S = 120  # seconds after a wake before the never-stuck check looks at a bot that stopped early
+HANDED_OVER_S = 24 * 3600  # a hand-off in Product's Ideas is its owner's turn this long, then Late (`handed_over`)
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
 
@@ -172,7 +175,9 @@ def stages(conn: "sqlite3.Connection", pipeline_id: str) -> list[Row]:
     pipelines together by `prime_stages`); a write reads them again (read_cache)."""
     from . import read_cache
 
-    return read_cache.value(conn, ("stages", pipeline_id), lambda: _stages_of(conn, [pipeline_id])[pipeline_id])
+    # Stored rows hold only plain values, so a shallow copy of each is a full one; the snapshot keeps its own.
+    found = read_cache.value(conn, ("stages", pipeline_id), lambda: _stages_of(conn, [pipeline_id])[pipeline_id], True)
+    return [dict(row) for row in found]
 
 
 def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> None:
@@ -239,20 +244,26 @@ def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) ->
 
 
 def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
-    """A stage has room when it has no limit, or holds fewer open tasks that are not snoozed than its limit. For
-    `task_row`, it also has room when the task that filed it is there (`rides_with_filer`): the stage may then hold one
-    over its limit, and takes no other task until it is under again."""
+    """A stage has room when it has no limit, or fewer of its tasks hold a slot than its limit. A task holds a slot
+    while it is open and not snoozed, unless it waits only on a person's OK or answer (`waiting_on.slots`): bots keep
+    working while people review. For `task_row`, it also has room when the task that filed it is there
+    (`rides_with_filer`): the stage may then hold one over its limit, and takes no other task until it is under
+    again."""
     limit = stage_row.get("task_limit")
     if stage_row["kind"] != "work" or not limit:
         return True
     if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
-    held = conn.execute(
+    everyone = conn.execute(
         "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
         "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL)",
         (stage_row["id"],),
     ).fetchone()[0]
-    return held + extra < limit
+    if everyone + extra < limit:
+        return True  # room even if every task held a slot: no task's waits are read
+    from . import waiting_on
+
+    return waiting_on.slots(conn, str(stage_row["id"])).held + extra < limit
 
 
 def next_stage(conn: "sqlite3.Connection", task_row: Row) -> Row | None:
@@ -275,6 +286,44 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
     if stage_row.get("owner") == "assignee":
         return assignee
     return stage_row.get("owner") or None
+
+
+def owner_ruled(
+    conn: "sqlite3.Connection", row: Row, stage_row: Row, owner: str | None, event: str = "enters"
+) -> tuple[str | None, str, Row | None]:
+    """`owner` (owner_for) for the task in `stage_row`, or None with the history line and the rule when a stage rule
+    blocks that owner (backend/stage_rules.py, e.g. Owner on the team): the stage then has nobody, as with no
+    assignee, and the pipeline's manager is woken to pick one (C25). The task still enters."""
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    found = stage_rules.owner_check(conn, row, stage_row, owner, event)
+    if not found:
+        return owner, "", None
+    return None, found[1], found[0]
+
+
+def _owner_rule(conn: "sqlite3.Connection", row: Row, owner: str | None, by: str, set_anyway: bool) -> Row | None:
+    """A stage rule on `owner_changes` that blocks `owner` (Owner on the team): a bot is refused, naming the rule; a
+    person is refused unless they Set anyway, which returns the rule they overturned. Tico's own changes (a rule's
+    action included) are not judged."""
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    if not owner or by == SYSTEM:
+        return None
+    found = stage_rules.owner_check(conn, row, row["stage"], owner, "owner_changes")
+    if not found:
+        return None
+    rule, line = found
+    if is_human(by) and set_anyway:
+        return rule
+    told = f"{line} (rule {rule['id']})"
+    if is_human(by):
+        told += ". Set anyway to give it all the same."
+    _refuse(conn, by, "task_stage_rule", told, row["id"], version=row.get("version"))
 
 
 def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
@@ -452,7 +501,7 @@ def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
     (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's."""
     from . import waiting_on as W
 
-    if row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
+    if row["status"] != "open" or row.get("snooze") or (row["stage"].get("by_hand") and not handed_over(conn, row)):
         return None, ""
     waits = W.of(conn, row)
     target = W.turn(conn, row, waits, paused=True)
@@ -496,6 +545,12 @@ def _wake_turn(
         if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
             task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)
     return out
+
+
+def wake_turn(conn: "sqlite3.Connection", row: Row) -> str | None:
+    """`_wake_turn` for the never-stuck check: the wake a turn starts with, written once per visit (its key), so a
+    sweep may call it on every pass. Returns the message id, or None when it was written already or nobody has a turn."""
+    return _wake_turn(conn, row)
 
 
 def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
@@ -553,7 +608,9 @@ def enter(
             _refuse(conn, by, "not-found", "No such task to file under", task_id)
         if depth(conn, parent) >= MAX_DEPTH:
             _refuse(conn, by, "task_too_deep", f"Sub-tasks nest at most {MAX_DEPTH} deep", task_id)
-    owner = owner_for(first, assignee)
+    owner, unable, ruled = owner_ruled(conn, {**row, "pipeline_id": pipeline_id}, first, owner_for(first, assignee))
+    if unable:
+        assignee = None
     # The rule a move into a stage keeps keeps a new task out of its first stage too: a private task never goes where
     # its owner, or someone the stage asks, cannot read it, for nobody could take it on from there.
     held = shut_out(conn, row, first, owner, new=True)
@@ -576,7 +633,22 @@ def enter(
             "INSERT INTO links (id, from_task_id, to_task_id, visit_id, kind, created_at) VALUES (?,?,?,?,?,?)",
             (H.new_id(), parent, task_id, _part(above, "visit").get("id"), link, ts),
         )
-    _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
+    _event(
+        conn,
+        task_id,
+        by,
+        "move",
+        None,
+        first["id"],
+        unable or None,
+        {"move": "new", "owner": owner, "parent": parent, **({"stage_rule": ruled["id"]} if ruled else {})},
+    )
+    if ruled:
+        from . import stage_rules as _stage_rules
+
+        stage_rules: Any = _stage_rules  # untyped module
+
+        stage_rules.record(conn, task_id, ruled, unable, SYSTEM, data={"owner": owner_for(first, assignee) or ""})
     if above:
         _drop_stale(conn, str(parent))  # the parent waits on it now: its owner's queued wake for the parent goes
     _owned(conn, row, _task(conn, task_id), by)
@@ -858,7 +930,7 @@ def move(
             # person's request that moves on by itself (`not_held_by_hand`).
             held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
             then_what = (
-                f"It holds {target['task_limit']}: move it again when one leaves."
+                f"It holds {target['task_limit']} a bot is working on: move it again when one leaves."
                 if held_here
                 else "The task moves in when there is room."
             )
@@ -894,7 +966,8 @@ def move(
     _close_visit(conn, visit, how, by, why, ts)
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
-    owner = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    wanted = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    owner, unable, ruled = owner_ruled(conn, row, target, wanted)
     task_wakes.drop(conn, task_id)  # what was queued was about the visit that just closed
     status = {"work": "open", "done": "done", "closed": "closed"}[target["kind"]]
     extra: Row = {}
@@ -904,6 +977,8 @@ def move(
         extra["closed_at"] = ts if status == "closed" else None
     if "closed_by_id" in row:
         extra["closed_by_id"] = str(by) if status == "closed" else None
+    if unable:
+        extra["assignee_id"] = None  # the manager picks who has it (reassign), as for a task with no assignee
     _write(
         conn,
         task_id,
@@ -922,14 +997,21 @@ def move(
         "move",
         row["stage_id"],
         target["id"],
-        why,
+        ". ".join(part for part in (why, unable) if part) or None,
         {
             "move": "pushed_past" if pushed else kind,
             "owner": owner,
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
+            **({"stage_rule": ruled["id"]} if ruled else {}),
         },
     )
+    if ruled:
+        from . import stage_rules as _stage_rules
+
+        stage_rules: Any = _stage_rules  # untyped module
+
+        stage_rules.record(conn, task_id, ruled, unable, SYSTEM, data={"owner": wanted or ""})
     _owned(conn, row, _task(conn, task_id), by)
     moved = _task(conn, task_id)
     if target["kind"] == "work":
@@ -938,6 +1020,11 @@ def move(
         _ended(conn, moved, by)
     if pushed:
         _tell_manager(conn, moved, f"Pushed past {', '.join(p['name'] for p in pushed)}: {why}", "pushed_past")
+    if moved["status"] != "open" or kind == "forward":
+        # A task that goes after this one may be held on it in Merge: queued now, or its owner told (merge_order).
+        from . import merge_order
+
+        merge_order.release(conn, task_id, SYSTEM)
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, kind, by, why, revision)
@@ -971,16 +1058,22 @@ def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -
 
 def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     """A task ended. If a task filed it and that was the last one open from that visit, the filing task's owner is woken
-    once with how each ended, and the filing task moves on if that was all it needed. A filed task the woken bot may
-    not be told of (task_wakes.told) is "A sub-task": that it ended, never its title."""
+    once with how each ended, and the filing task moves on if that was all it needed. When the turn is a person's (the
+    stage's OK, held while the review ran: waiting_on.of), its owner bot is still woken: it has the review's findings
+    to fold in before the person is asked (task_wakes.FILED). A filed task the woken bot may not be told of (task_wakes.told) is
+    "A sub-task": that it ended, never its title. A parent nobody is woken on is logged with why."""
     link = _h()._one(conn, "SELECT * FROM links WHERE to_task_id=?", (row["id"],))
-    if not link or not link.get("visit_id"):
+    if not link:
         return
+    if not link.get("visit_id"):
+        return _no_parent_wake("filed_in_no_visit", link["from_task_id"], row["id"])
     above = task(conn, link["from_task_id"])
-    if not above or above["status"] != "open" or _part(above, "visit").get("id") != link["visit_id"]:
-        return
+    if not above or above["status"] != "open":
+        return _no_parent_wake("parent_ended", link["from_task_id"], row["id"])
+    if _part(above, "visit").get("id") != link["visit_id"]:
+        return _no_parent_wake("parent_left_stage", above["id"], row["id"])
     if stage_effects.filed_open(conn, link["visit_id"]):
-        return
+        return _no_parent_wake("filed_still_open", above["id"], row["id"])
     # A bot that snoozed while it waited on what it filed is woken now, not on the snooze's date (Initech, Nov 11).
     above = task_effects.filed_ended(conn, above, by)
     if advance(conn, above["id"]):
@@ -993,6 +1086,12 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     _reset_ladder(conn, above["visit"], _h().now(), by)
     above = _task(conn, above["id"])
     target, _ = _turn_of(conn, above)
+    if not target and _may_wake_owner(above):
+        target = str(above["owner_id"])
+    if not target:
+        level = _part(above, "visit").get("level")
+        why = "snoozed" if above.get("snooze") else "person_level" if level == "person" else "no_bot_owner"
+        _no_parent_wake(why, above["id"], row["id"])
     if target:
         from . import waiting_on as W
 
@@ -1007,8 +1106,26 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
             target,
             above["visit"],
             task_wakes.body(conn, above, lead, to=target),
-            wake_key=f"{above['id']}:{above['visit']['id']}:filed:{row['id']}",
+            wake_key=f"{above['id']}:{above['visit']['id']}:{task_wakes.FILED}:{row['id']}",
         )
+
+
+def _may_wake_owner(row: Row) -> bool:
+    """Whether a filing task's owner bot may hear that what it filed ended, though nobody has a turn (a person's OK
+    waits): the task is open, not snoozed and not at level person (task_wakes.may_start holds those too)."""
+    return (
+        row["status"] == "open"
+        and not row.get("snooze")
+        and (_part(row, "visit").get("level") or "owner") != "person"
+        and is_bot(row.get("owner_id"))
+    )
+
+
+def _no_parent_wake(why: str, parent_id: str, filed_id: str) -> None:
+    """A filed task ended and nobody is woken on the task that filed it: the category and both ids, for the logs. A
+    person-owned parent (`no_bot_owner`) is the normal case there, so it logs at DEBUG."""
+    level = logging.DEBUG if why == "no_bot_owner" else logging.INFO
+    LOG.log(level, "parent wake skipped: %s parent=%s filed=%s", why, parent_id, filed_id)
 
 
 def tell_owner(
@@ -1094,6 +1211,51 @@ def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
     return not conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone()
 
 
+def handed_over(conn: "sqlite3.Connection", row: Row) -> bool:
+    """Work someone else handed to the owner bot in a by-hand stage that moves a person's request on (Product's
+    Ideas): a bot that is not the owner filed it there as its requester, or moved it back there. It is the owner's
+    turn, due `HANDED_OVER_S` after it entered (`handover_due`): move it on, or snooze it to park it. Past that it is
+    Late and the pipeline's manager bot is woken once (never_stuck._handoffs). An owner's own ideas, a task a person
+    put there, a person's request on its first visit (`not_held_by_hand`) and a snoozed task rest as before; so does
+    every task in a by-hand stage with the setting off (Growth's Ideas, Monitoring's Watching)."""
+    stage_row: Row = row.get("stage") or {}
+    visit: Row = row.get("visit") or {}
+    owner = row.get("owner_id")
+    if row.get("status") != "open" or not stage_row.get("by_hand") or not stage_row.get("requests_move_on"):
+        return False
+    if not visit or row.get("snooze") or not is_bot(owner) or row.get("requester_id") == owner:
+        return False
+    if not_held_by_hand(conn, row):
+        return False
+    if visit.get("entered_how") == "new":
+        by = row.get("requester_id")
+    else:
+        # Who moved it in: the one who closed the visit before this one.
+        found = conn.execute(
+            "SELECT by_id FROM visits WHERE task_id=? AND left_at IS NOT NULL AND left_at <= ? "
+            "ORDER BY left_at DESC, rowid DESC LIMIT 1",
+            (row["id"], visit["entered_at"]),
+        ).fetchone()
+        by = found[0] if found else None
+    return is_bot(by) and by != owner
+
+
+def handover_due(conn: "sqlite3.Connection", row: Row) -> str:
+    """When a hand-off (`handed_over`) is Late: `HANDED_OVER_S` after it entered the stage, plus the time it spent
+    snoozed there since."""
+    H = _h()
+    visit: Row = row["visit"]
+    snoozed = 0.0
+    for created, ended in conn.execute(
+        "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=? AND ended_at IS NOT NULL",
+        (row["id"], visit["id"]),
+    ).fetchall():
+        start, end = H.parse_ts(created), H.parse_ts(ended)
+        if start and end:
+            snoozed += max((end - start).total_seconds(), 0.0)
+    return str(H.shift(visit["entered_at"], seconds=HANDED_OVER_S + int(snoozed)))
+
+
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
     """Move every task that is ready and has room, oldest first. Run when a pipeline's settings change a limit. The
     never-stuck check does the same for every task on each pass, so a freed slot is filled within 10 seconds. Returns
@@ -1139,6 +1301,8 @@ def reassign(
     by: str,
     why: str | None = None,
     seen_version: int | str | None = None,
+    *,
+    set_anyway: bool = False,
 ) -> Row:
     """Change who owns the task for this visit. Same writer, so it is logged and raises the version. It resets the
     tries, drops the old owner's queued wakes for the task (a bot that still has a turn, named on an OK, keeps its
@@ -1155,13 +1319,18 @@ def reassign(
     if owner == row.get("owner_id"):
         return row
     _may_name(conn, by, owner, task_id)
+    overturned = _owner_rule(conn, row, owner, by, set_anyway)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     if row["stage"].get("owner") == "assignee":
         fields["assignee_id"] = owner
     _write(conn, task_id, **fields)
     _reset_ladder(conn, row["visit"], ts, by)  # the old owner's wakes go with its turn
-    revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, why, {"stage": row["stage_id"]})
+    said = ". ".join(p for p in (why, f"Overturned rule {overturned['name']}" if overturned else "") if p) or why
+    data: Row = {"stage": row["stage_id"], **({"overturned_rule": overturned["id"]} if overturned else {})}
+    revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, said, data)
+    if overturned:
+        H.event(conn, by, "stage_rule.overturned", task_id, {"rule": overturned["id"], "owner": owner})
     moved = _task(conn, task_id)
     # What follows the owner: its private default, sessions, worktree, followers, place in the new owner's queue
     # (backend/task_effects.py). Before the wake, so a task that just became private wakes only who may read it.
@@ -1195,10 +1364,10 @@ PROGRESS_SQL = (
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
     """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
     requirements and filed tasks of this visit, and where each requirement stands (so a PR that opened or a check that
-    finished is a change). A comment is not a change. Nor is a snooze or its end: setting a task aside earns no more
-    runs. Nor is the task's version: it says the row changed since someone looked, and a field edit (a new title, a
-    label) raises it. A move and a reassign start the ladder again themselves. `standings` saves reading them again
-    when the caller has them."""
+    finished is a change). A comment is not a change (a person's that wakes the owner bot restarts the ladder itself:
+    `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
+    says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
+    start the ladder again themselves. `standings` saves reading them again when the caller has them."""
     from . import read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
@@ -1238,6 +1407,25 @@ def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
     row = task(conn, task_id)
     if row and row["status"] == "open":
         _reset_ladder(conn, row["visit"], _h().now(), by)
+
+
+def person_spoke(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """A person wrote to the task's owner bot while the owner has it (a comment that wakes the bot): the ladder starts
+    again, as when an answer comes. The run the comment starts is the first of the new count, so if it stops before
+    the task is finished the bot is woken again after the first gap: never left for the hour a third try waits, and
+    never handed straight to the manager for runs spent before the person spoke. A person's own words or their token
+    count; the Assistant or BotOps acting for them do not (`hubdb.VIA`), since a bot that could restart the ladder could
+    keep a task going round it for ever. A task a person or the manager bot has keeps its level: Try again is the way
+    back from a person."""
+    H = _h()
+    if not is_human(by) or H.VIA.get():
+        return
+    row = task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze") or not row.get("visit"):
+        return
+    if (row["visit"].get("level") or "owner") != "owner":
+        return
+    _reset_ladder(conn, row["visit"], H.now(), by)
 
 
 def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
@@ -1417,6 +1605,13 @@ def snooze(
     _need_why(conn, by, why, "snooze it", task_id)
     ts = H.now()
     visit = row["visit"]
+    # A stage rule on a bot's snooze whose If is fixed conditions only (no model call inside a write) blocks it here;
+    # one with a Jev question was asked before the write (task_moves_routes, stage_rules.judge_snooze).
+    blocked = stage_rules_snooze(conn, row, by, why, until)
+    if blocked:
+        _refuse(
+            conn, by, "task_stage_rule", blocked, task_id, row=row, then=("ask", "file"), version=row.get("version")
+        )
     if is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES:
         conn.execute(
             "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
@@ -1438,10 +1633,29 @@ def snooze(
         conn.execute("UPDATE visits SET bot_snoozes = bot_snoozes + 1 WHERE id=?", (visit["id"],))
     task_wakes.drop(conn, task_id)  # nothing wakes for a snoozed task
     _event(conn, task_id, by, "snooze", None, until, why)
+    H.event(conn, by, "task.snoozed", task_id, {"until": until, "why": why or "", "stage": row["stage_id"]})
     out = _task(conn, task_id)
     if not until and is_bot(by):
         _tell_manager(conn, out, f"On ice, with no end date: {why}", f"on_ice:{out['snooze']['id']}")
     return out
+
+
+def stage_rules_snooze(conn: "sqlite3.Connection", row: Row, by: str, why: str | None, until: str | None) -> str:
+    """The refusal a fixed-condition stage rule gives a bot's snooze of `row` ("" when none): "Rule <name>: <reason>
+    (rule <id>)". Jev's rules are not asked here."""
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    found = stage_rules.judge_snooze(conn, row, by, why or "", until, fixed_only=True)
+    return refusal_line(found[0], found[1]) if found else ""
+
+
+def refusal_line(rule: Row, line: str) -> str:
+    """What a bot a stage rule blocked is told: the rule's line, its reason, and the rule's id."""
+    reason = str(rule.get("reason") or "")
+    said = line if reason and reason in line else f"{line}. {reason}".rstrip(". ")
+    return f"{said} (rule {rule['id']})"
 
 
 def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
@@ -1462,6 +1676,52 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
     return _task(conn, task_id)
 
 
+# The release production runs, as end_release_snoozes last saw it.
+RELEASE_SEEN = "release-snoozes-seen"
+# Open tasks a bot snoozed in a stage whose page names the release production runs (`with_release`: Product's
+# Validate), whose filed work has a PR in the repository this server runs (?1, `owner/name`): its production is this
+# server. Such a snooze waits for this server to run a release, so a new one ends it.
+_RELEASE_WAITS = (
+    "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id "
+    "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status = 'open' AND t.pipeline_id IS NOT NULL "
+    "AND EXISTS (SELECT 1 FROM requirements r WHERE r.stage_id = t.stage_id AND r.withdrawn_at IS NULL "
+    "AND json_extract(r.settings, '$.with_release')) "
+    "AND EXISTS (SELECT 1 FROM links l JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.source = 'github' "
+    "AND tl.item_type = 'pr' WHERE l.from_task_id = t.id "
+    "AND lower(substr(tl.item_key, 1, length(?1) + 1)) = lower(?1) || '#') "
+    "ORDER BY z.created_at, z.id"
+)
+
+
+def end_release_snoozes(conn: "sqlite3.Connection", running: str, repo: str) -> list[str]:
+    """This server runs another release (`running`, of `repo`, read at start-up): a bot's snooze ends in a stage that
+    checks the release production runs, on a task whose filed work is in `repo`, and whoever has the turn is woken once
+    with the release, instead of sleeping to the clock time it guessed. A person's snooze stays. The first start that
+    sees no earlier release only records it. Returns the tasks whose snooze ended."""
+    found = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (RELEASE_SEEN,)).fetchone()
+    conn.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (RELEASE_SEEN, running))
+    if not found or found[0] == running or not repo:
+        return []
+    ended: list[str] = []
+    for (task_id,) in conn.execute(_RELEASE_WAITS, (repo,)).fetchall():
+        snoozed: Row = (task(conn, task_id) or {}).get("snooze") or {}
+        why = str(snoozed.get("why") or "")
+        out = unsnooze(conn, task_id, SYSTEM, f"Production runs {running} now")
+        target, _ = _turn_of(conn, out)
+        if target:
+            lead = f"Production runs {running} now (it ran {found[0]}). Your snooze ended: {why}".rstrip(": ")
+            task_wakes.add(
+                conn,
+                out,
+                target,
+                out["visit"],
+                task_wakes.body(conn, out, lead, to=target),
+                wake_key=f"{task_id}:{out['visit']['id']}:release:{running}",
+            )
+        ended.append(str(task_id))
+    return ended
+
+
 # ----------------------------------------------------------------------------- a requirement on one task
 def add_requirement(
     conn: "sqlite3.Connection",
@@ -1474,11 +1734,13 @@ def add_requirement(
     choices: list[str] | None = None,
     shows: object = None,
     seen_version: int | str | None = None,
+    for_action: bool = False,
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
     `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
-    (`_stage_asks`)."""
+    (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
+    `for_action`: an OK bound to an action, task_asks.ask_ok, is that action's own)."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1500,6 +1762,8 @@ def add_requirement(
         page = _people_page(conn, row, kind, shows, choices)
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
+    if not for_action:
+        shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
     if is_bot(by) and kind == "answer" and is_human(person):
         signoff = _stage_asks(conn, row, str(person))
         if signoff:

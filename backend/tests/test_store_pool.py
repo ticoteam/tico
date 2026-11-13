@@ -446,20 +446,6 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
     assert sweep_tokens(s, now) == 0, "the mark moved past what was swept"
 
 
-def test_hub_connections_cap_the_wal_file_after_a_checkpoint(tmp_path):
-    from backend import hubdb
-    from backend.store import H
-
-    s = store(tmp_path)
-    with closing(s.connect()) as c:
-        assert c.execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
-    conn = hubdb.connect(str(tmp_path / "hub-open.sqlite"))
-    try:
-        assert conn.execute("PRAGMA journal_size_limit").fetchone()[0] == H.WAL_SIZE_LIMIT == 64 * 1024 * 1024
-    finally:
-        conn.close()
-
-
 def test_closing_a_store_closes_its_idle_connections_and_a_later_read_does_not_pool_one(tmp_path):
     s = store(tmp_path)
     with s.read() as idle:

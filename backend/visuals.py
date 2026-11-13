@@ -644,9 +644,10 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     from .counsel import is_counsel
 
     plain = is_counsel(who)
-    for message in messages:
-        from .files import readable_page_refs
+    from .files import prime_page_references, readable_page_refs
 
+    prime_page_references(c, [message for message in messages if message])
+    for message in messages:
         if message:
             shown = readable_page_refs(c, files.auth, who, message)
             if shown != message:

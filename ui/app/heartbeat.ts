@@ -103,8 +103,10 @@ function renderAccount(): void {
   if (!el) return;
   const email = el.querySelector<HTMLElement>('.account-email');
   if (!me) { if (email) email.textContent = 'Not signed in'; return; }
-  el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
-  if (email) email.textContent = me.email || 'Not signed in';
+  // A bot's read-only view of the app (backend/app_view.py) has no email: it is named, and said to be read only.
+  const who = me.email || (me.read_only_view ? `${me.name || 'Bot'} · read-only view` : '');
+  el.title = `Signed in as ${who}${me.local ? ' (local app)' : ''}`;
+  if (email) email.textContent = who || 'Not signed in';
   renderAccountStatus();
   renderInboxNav();
   renderNewVersion();

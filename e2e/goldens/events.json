@@ -13,7 +13,8 @@
           "threads",
           "meeting_items",
           "presence",
-          "letters"
+          "letters",
+          "calendar"
         ]
       },
       "event": "ready",
@@ -38,6 +39,7 @@
           "last_message_at": "<time>",
           "last_seq": 1,
           "last_unread_seq": 1,
+          "live_call": null,
           "me": {
             "activity": true,
             "can_manage": true,
@@ -184,6 +186,7 @@
           "last_message_at": "<time>",
           "last_seq": 2,
           "last_unread_seq": 2,
+          "live_call": null,
           "me": {
             "activity": true,
             "can_manage": true,
@@ -323,6 +326,7 @@
           "last_message_at": "<time>",
           "last_seq": 11,
           "last_unread_seq": 11,
+          "live_call": null,
           "me": {
             "activity": true,
             "can_manage": true,
@@ -568,6 +572,7 @@
           "last_message_at": "<time>",
           "last_seq": 6,
           "last_unread_seq": 6,
+          "live_call": null,
           "me": {
             "activity": true,
             "can_manage": true,
@@ -719,7 +724,6 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bots": [],
         "kind": "bot_status",
         "root_id": "<id12>",
         "seq": 53,
@@ -793,6 +797,7 @@
           "live_meeting_id": null,
           "note": "",
           "number": null,
+          "on_person": false,
           "organization": null,
           "origin_actor": null,
           "owner_id": "bot:ops",
@@ -851,6 +856,7 @@
           "last_message_at": "<time>",
           "last_seq": 10,
           "last_unread_seq": 10,
+          "live_call": null,
           "me": {
             "activity": true,
             "can_manage": true,
@@ -1246,6 +1252,7 @@
           "live_meeting_id": null,
           "note": "",
           "number": null,
+          "on_person": true,
           "organization": null,
           "origin_actor": null,
           "owner_id": "bot:ops",
@@ -1300,7 +1307,6 @@
       "data": {
         "actor": "bot:ops",
         "at": "<time>",
-        "bots": [],
         "kind": "bot_status",
         "root_id": "<id16>",
         "seq": 105,
@@ -1516,7 +1522,6 @@
       "data": {
         "actor": "runner:<id27>",
         "at": "<time>",
-        "bots": [],
         "kind": "bot_status",
         "root_id": "<conversation>",
         "seq": 122,

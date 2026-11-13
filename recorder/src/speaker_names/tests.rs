@@ -783,6 +783,7 @@ fn the_watch_log_reports_rows_turns_and_the_document_without_repeating_itself() 
     let mut log = watch_log::WatchLog::new("0123456789");
     let found = watch_log::PollInfo {
         found: true,
+        app: "Meet",
         browser: "com.google.Chrome".into(),
         windows: 1,
         nodes: 300,
@@ -798,7 +799,7 @@ fn the_watch_log_reports_rows_turns_and_the_document_without_repeating_itself() 
     };
     let first = log.poll(&found, &observed, &[], 0);
     assert_eq!(first.len(), 2);
-    assert!(first[0].contains("document found in com.google.Chrome"));
+    assert!(first[0].contains("Meet document found in com.google.Chrome"));
     assert!(first[1].ends_with("2 rows; local Casey Example by structure"));
     // Same rows, a turn that continues: nothing new.
     assert!(
@@ -830,29 +831,260 @@ fn the_watch_log_reports_rows_turns_and_the_document_without_repeating_itself() 
         &[],
         2250,
     );
-    assert_eq!(lost, ["meet: rec=01234567 document lost"]);
+    assert_eq!(lost, ["meet: rec=01234567 Meet document lost"]);
     let end = log.end();
     assert!(end.last().unwrap().ends_with("watch ended"));
     assert!(end.iter().any(|l| l.contains("polls in com.google.Chrome")));
 }
+
 #[test]
-fn vote_tallies_say_why_a_name_is_withheld() {
-    let mut record = record();
-    record.meeting_speakers.intervals = vec![interval(5300, 6050, "Ana Example")];
-    record.meeting_speakers.readable = vec![(0, 25_000)];
-    record.chunks.push(chunk("them", talk(0, 20, "Speaker 2")));
-    let (names, tallies) = tally(&record, &BTreeMap::new());
-    assert!(names.is_empty());
-    assert_eq!(tallies[0].outcome, Err("under 1 s of overlap"));
-    assert_eq!(tallies[0].scores["Ana Example"], 750);
-    record
-        .meeting_speakers
-        .intervals
-        .push(interval(12_300, 13_050, "Ana Example"));
-    let (_, tallies) = tally(&record, &BTreeMap::new());
+fn who_is_in_the_meet_window_is_kept_for_its_recording_only() {
+    let observed = Observation {
+        participants: vec!["Ana Ruiz".into(), "ana ruiz".into(), "Ben Ito".into()],
+        self_names: vec!["Chris".into()],
+        ..Default::default()
+    };
+    note_present("rec-1", &observed);
     assert_eq!(
-        tallies[0].outcome,
-        Err("covers under 40% of the voice's readable speech")
+        present("rec-1"),
+        Some(vec!["Chris".into(), "Ana Ruiz".into(), "Ben Ito".into()])
     );
-    assert_eq!(tallies[0].speech, 20_000);
+    assert_eq!(present("rec-2"), None, "another recording's window");
+    note_present("rec-1", &Observation::default());
+    assert_eq!(present("rec-1"), None, "nobody seen");
+}
+
+// ---- Microsoft Teams on the web: tiles modelled on a live Chrome capture (Nov 2026) ----
+
+/// A video tile as Teams draws it: an AXMenuItem whose description is the name (with state
+/// appended), the name as static text, and `overlays` empty overlay groups (`speaking` marks
+/// the one carrying the speaking class).
+fn tile(description: &str, text: &str, overlays: usize, speaking: bool) -> serde_json::Value {
+    let mut inner = vec![json!({"role":"AXGroup","children":[{"role":"AXGroup"}]})];
+    for i in 0..overlays {
+        let mut classes = vec!["fui-Flex"];
+        if speaking && i == 0 {
+            classes.push("vdi-frame-occlusion");
+        }
+        inner.push(json!({"role":"AXGroup","classes":classes}));
+    }
+    let mut name =
+        vec![json!({"role":"AXGroup","children":[{"role":"AXStaticText","label":text}]})];
+    if description.ends_with(" Unverified") {
+        name.push(json!({"role":"AXGroup","classes":["fui-Flex"],"description":"Unverified"}));
+    }
+    inner.push(json!({"role":"AXGroup","classes":["f1euv43f"],"children":name}));
+    json!({"role":"AXMenuItem","classes":["f1euv43f"],"description":description,
+        "children":[{"role":"AXGroup","children":[{"role":"AXGroup","children":inner}]}]})
+}
+/// A shared screen: an extra tile under the presenter's name, with zoom controls.
+fn share_tile(name: &str) -> serde_json::Value {
+    json!({"role":"AXMenuItem","classes":["f1euv43f"],"description":name,"children":[
+        {"role":"AXGroup","classes":["fui-Flex"],"children":[{"role":"AXGroup"}]},
+        {"role":"AXGroup","children":[{"role":"AXStaticText","label":name},
+            {"role":"AXGroup","children":[{"role":"AXToolbar","children":[
+                {"role":"AXButton","description":"Zoom out","label":"Zoom out"},
+                {"role":"AXButton","description":"Zoom in","label":"Zoom in"}]}]}]}]})
+}
+fn gallery(tiles: Vec<serde_json::Value>) -> meet::Node {
+    serde_json::from_value(json!({"role":"AXGroup","children":[
+        {"role":"AXButton","description":"Mute mic"},
+        {"role":"AXGroup","description":"Shared content view","children":tiles},
+        {"role":"AXGroup","label":"Message List","children":[
+            {"role":"AXMenuItem","classes":["f1euv43f"],"description":"Chat Person","children":[
+                {"role":"AXGroup","classes":["fui-Flex","vdi-frame-occlusion"]}]}]}]}))
+    .unwrap()
+}
+fn teams_observe(tiles: Vec<serde_json::Value>) -> Observation {
+    teams::Teams.observe(&gallery(tiles))
+}
+#[test]
+fn teams_tiles_name_remote_speakers_and_the_one_tile_without_an_overlay_is_local() {
+    let observed = teams_observe(vec![
+        tile("Casey Example", "Casey Example", 0, false),
+        tile("Ana Example", "Ana Example", 2, true),
+        tile("Ben Example", "Ben Example", 2, false),
+    ]);
+    assert_eq!(
+        observed.participants,
+        ["Ana Example", "Ben Example", "Casey Example"]
+    );
+    assert_eq!(observed.self_names, ["Casey Example"]);
+    assert_eq!(observed.active, ["Ana Example"]);
+    assert!(observed.indicators);
+    assert_eq!((observed.rows, observed.local_by), (3, "structure"));
+    // Speaking class off: silence is observed, not unknown.
+    let observed = teams_observe(vec![
+        tile("Casey Example", "Casey Example", 0, false),
+        tile("Ana Example", "Ana Example", 2, false),
+    ]);
+    assert!(observed.active.is_empty());
+    assert!(observed.indicators);
+}
+#[test]
+fn teams_names_drop_guest_and_hover_state_and_label_prefixes() {
+    let tiles = teams::tiles(&gallery(vec![
+        tile("Ana Example Unverified", "Ana Example", 2, false),
+        tile(
+            "Ben Example Unverified More options",
+            "Ben Example",
+            2,
+            false,
+        ),
+        tile(
+            "Unable to play media. Casey Example",
+            "Casey Example",
+            0,
+            false,
+        ),
+        // No name text (an avatar tile): the cleaned label stands.
+        tile("Dee Example Unverified", "", 2, false),
+        // Name text that is not the label's ending (initials) is not used.
+        tile("Eve Example", "EE", 2, false),
+    ]));
+    assert_eq!(
+        tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        [
+            "Ana Example",
+            "Ben Example",
+            "Casey Example",
+            "Dee Example",
+            "Eve Example"
+        ]
+    );
+}
+#[test]
+fn teams_share_tile_is_skipped_so_the_presenter_is_not_counted_twice() {
+    let observed = teams_observe(vec![
+        share_tile("Ana Example"),
+        tile("Casey Example", "Casey Example", 0, false),
+        tile("Ana Example", "Ana Example", 2, true),
+    ]);
+    assert_eq!(observed.rows, 2);
+    assert_eq!(observed.participants, ["Ana Example", "Casey Example"]);
+    assert_eq!(observed.self_names, ["Casey Example"]);
+    assert_eq!(observed.active, ["Ana Example"]);
+    // Zoom controls whatever the language: the toolbar alone marks it.
+    let mut share = share_tile("Ana Example");
+    share["children"][1]["children"][1]["children"][0]["children"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .for_each(|b| {
+            b["label"] = json!("Verkleinern");
+            b["description"] = json!("Verkleinern");
+        });
+    assert_eq!(teams::tiles(&gallery(vec![share])), []);
+}
+#[test]
+fn teams_without_tiles_or_a_known_local_tile_names_no_speaker() {
+    // No tiles (a chat page, or a layout not recognised): nothing at all, not even a call.
+    let observed = teams_observe(vec![]);
+    assert_eq!(observed, Observation::default());
+    assert!(!teams::Teams.in_call(&observed));
+    // Every tile has an overlay (self view hidden, or another page of tiles): local unknown.
+    let observed = teams_observe(vec![
+        tile("Ana Example", "Ana Example", 2, true),
+        tile("Ben Example", "Ben Example", 2, false),
+    ]);
+    assert!(observed.active.is_empty());
+    assert!(!observed.indicators);
+    assert_eq!(observed.local_by, "none");
+    assert_eq!(observed.participants, ["Ana Example", "Ben Example"]);
+    assert!(teams::Teams.in_call(&observed));
+    // Two tiles without an overlay: either could be this Mac's.
+    let observed = teams_observe(vec![
+        tile("Casey Example", "Casey Example", 0, false),
+        tile("Dee Example", "Dee Example", 0, false),
+        tile("Ana Example", "Ana Example", 2, true),
+    ]);
+    assert!(observed.active.is_empty());
+    assert!(!observed.indicators);
+    // A lone tile cannot say whose it is.
+    let observed = teams_observe(vec![tile("Ana Example", "Ana Example", 2, true)]);
+    assert!(observed.active.is_empty());
+    assert!(!observed.indicators);
+}
+#[test]
+fn teams_detection_takes_teams_pages_and_rejects_other_sites() {
+    for url in [
+        "https://teams.microsoft.com/light-meetings/launch?context=%7B%7D",
+        "https://teams.microsoft.com/v2/",
+        "https://teams.live.com/v2/",
+        "https://teams.cloud.microsoft/",
+    ] {
+        assert!(teams::Teams.detect_window("", url), "{url}");
+        assert!(!meet::GoogleMeet.detect_window("", url), "{url}");
+    }
+    for url in [
+        "http://teams.microsoft.com/v2/",
+        "https://teams.microsoft.com.evil.example/v2/",
+        "https://evil.example/teams.microsoft.com",
+        "https://meet.google.com/abc-defg-hij",
+        "https://www.microsoft.com/microsoft-teams",
+    ] {
+        assert!(!teams::Teams.detect_window("Microsoft Teams", url), "{url}");
+    }
+    assert!(teams::window_title(
+        "Weekly update | Microsoft Teams - Camera and microphone recording - Google Chrome"
+    ));
+    assert!(!teams::window_title("Inbox - Google Chrome"));
+    // The transport picks the adapter by the document's address.
+    let pick = |url: &str| {
+        ADAPTERS
+            .iter()
+            .find(|a| a.detect_window("", url))
+            .map(|a| a.app())
+    };
+    assert_eq!(pick("https://meet.google.com/abc-defg-hij"), Some("Meet"));
+    assert_eq!(pick("https://teams.microsoft.com/v2/"), Some("Teams"));
+    assert_eq!(pick("https://example.com/"), None);
+}
+#[test]
+fn teams_speaking_overlays_become_turns_and_the_watch_log_names_the_app() {
+    let mut samples = Samples::default();
+    let mut log = watch_log::WatchLog::new("0123456789");
+    let info = watch_log::PollInfo {
+        found: true,
+        app: "Teams",
+        browser: "com.google.Chrome".into(),
+        windows: 1,
+        ..Default::default()
+    };
+    let mut lines = vec![];
+    let mut intervals = vec![];
+    for (at, on) in [
+        (0, true),
+        (250, true),
+        (500, false),
+        (750, false),
+        (1000, false),
+    ] {
+        let observed = teams_observe(vec![
+            tile("Casey Example", "Casey Example", 0, false),
+            tile("Ana Example Unverified", "Ana Example", 2, on),
+        ]);
+        let new = samples.push(at, observed.clone());
+        lines.extend(log.poll(&info, &observed, &new, at));
+        intervals.extend(new);
+    }
+    lines.extend(log.poll(&info, &teams_observe(vec![]), &[], 2000));
+    assert_eq!(coalesce(intervals), [interval(0, 500, "Ana Example")]);
+    assert!(lines[0].contains("Teams document found in com.google.Chrome"));
+    assert!(lines[1].ends_with("2 tiles; local Casey Example by structure"));
+    // Tiles gone: said once, and the turn closes.
+    assert_eq!(
+        lines[2..],
+        [
+            "meet: rec=01234567 no video tiles (no call, or a layout not recognised); no names",
+            "meet: rec=01234567 Ana Example spoke 0.00-0.50 s (0.5 s)",
+        ]
+    );
+    let lost = log.poll(
+        &watch_log::PollInfo::default(),
+        &Observation::default(),
+        &[],
+        2250,
+    );
+    assert_eq!(lost, ["meet: rec=01234567 Teams document lost"]);
 }

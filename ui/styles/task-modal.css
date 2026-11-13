@@ -8,6 +8,10 @@
 .tlink a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis}
 .tlink .tcopy{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;display:inline-flex;align-items:center}
 .tlink.session.primary{color:var(--ink)}
+/* Sessions on a phone: Copy and Remove are 40 px tap areas (padding round the same icon) with a gap between them, so a
+   thumb that misses Copy does not land on Remove; a long session name is cut short instead of pushing them out. */
+@media (max-width:760px){.task-sessions .tlink{gap:8px;border-radius:12px}.task-sessions .tlink .tsess-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .task-sessions .tlink .tcopy,.task-sessions .tlink .x{flex:none;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0}}
 .tlink.task .linkish{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;font-size:inherit}
 .tlink.pr{border-color:color-mix(in srgb,var(--run) 45%,var(--line));color:var(--run)}
 .tlink.pr.merged,.tlink.pr.shipped{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}
@@ -24,7 +28,7 @@
 .task-run-form label{display:grid;gap:3px;min-width:0;font-size:var(--t-xs);color:var(--muted)}
 .task-run-form select{min-width:0;max-width:100%}
 .task-run-form button{justify-self:start}
-@media (max-width:760px){.task-run-form button{height:40px}}   /* as tall as the phone select beside it */
+@media (max-width:760px){.task-run-form button{height:44px}}   /* as tall as the phone select beside it */
 .tlabels,.tlinks{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .tlabels form.inline,.tlinks form.inline{display:inline-flex;margin:0}
 .tlabels form.inline input,.tlinks form.inline input{font-size:var(--t-sm);padding:2px 6px;width:auto}
@@ -118,5 +122,6 @@
 .task-edit-meta:empty { display: none; }
 [data-task-edit-body] { position: relative; }
 [data-task-body-edit] { float: right; font-size: 12px; }
+@media (max-width:760px){button.linkish[data-task-body-edit]{min-width:44px;min-height:44px}}
 textarea[data-task-field="body"] { width: 100%; min-height: 140px; resize: vertical; font: inherit; }
 [data-task-edit-current] { margin: 0 24px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

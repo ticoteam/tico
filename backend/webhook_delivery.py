@@ -6,7 +6,9 @@ doorbell wakes them after a commit that queued one, and a short poll covers a mi
 
 Delivery is at least once. A crash between the post and the record puts the send back in `ready` two minutes later,
 so a receiver may see one send twice and drops the repeat by its `webhook-id`, which is the send's id and never
-changes. `webhook-timestamp` is new on every attempt and the signature covers it (Standard Webhooks:
+changes. Each claim stamps its own token: a worker that was cut off and comes back after that (a stall past the two
+minutes) finds another claim on its send, and its answer is kept in the attempt log only. It settles nothing and
+changes neither the endpoint's health nor a task rule. `webhook-timestamp` is new on every attempt and the signature covers it (Standard Webhooks:
 `v1,<base64 HMAC-SHA256 of "id.timestamp.body">` under the decoded `whsec_` key; a second `v1,` signature while a
 replaced secret is still in its day of grace).
 
@@ -21,6 +23,7 @@ import logging
 import random
 import threading
 import time
+from typing import NamedTuple
 
 from . import egress
 from . import hubdb as H
@@ -45,6 +48,7 @@ TABLE = O.Table(
     lease="claimed_at",
     attempts="attempts",
     error="last_error",
+    token="claim_token",
 )
 GRACE_HOURS = 24
 NOTIFY_HOURS = 24
@@ -199,26 +203,26 @@ def withhold(store, now=None):
         ).rowcount
 
 
+class Claimed(NamedTuple):
+    """A send this worker holds, and the claim's token that every write about it must carry."""
+
+    id: str
+    token: str
+
+
 def claim(store, now):
-    """The next due send, now `sending` and committed, or None. Skips a host that already has PER_HOST in flight and
-    holds an endpoint past its hourly rate until its hour is over (its sends wait; none is dropped)."""
+    """The next due send, now `sending` and committed (`Claimed`), or None. Skips a host that already has PER_HOST in flight (before
+    the candidate limit, so a busy host's backlog never hides another host's due send) and holds an endpoint past its
+    hourly rate until its hour is over (its sends wait; none is dropped)."""
     with store.transaction() as c:
         rows = c.execute(
             "SELECT s.id, s.webhook_id, w.host, w.rate_per_hour, w.window_start, w.window_count FROM webhook_sends s "
             "JOIN webhooks w ON w.id=s.webhook_id WHERE s.state='ready' AND s.next_attempt_at<=? AND w.deleted_at IS NULL "
-            "AND w.enabled=1 ORDER BY s.next_attempt_at LIMIT 100",
-            (now,),
+            "AND w.enabled=1 AND w.host NOT IN (SELECT bw.host FROM webhook_sends bs JOIN webhooks bw ON bw.id=bs.webhook_id "
+            "WHERE bs.state='sending' GROUP BY bw.host HAVING count(*) >= ?) ORDER BY s.next_attempt_at LIMIT 100",
+            (now, PER_HOST),
         ).fetchall()
-        busy = {}
         for row in rows:
-            if row["host"] not in busy:
-                busy[row["host"]] = c.execute(
-                    "SELECT count(*) FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id "
-                    "WHERE s.state='sending' AND w.host=?",
-                    (row["host"],),
-                ).fetchone()[0]
-            if busy[row["host"]] >= PER_HOST:
-                continue
             start_, count = row["window_start"], row["window_count"]
             if not start_ or start_ <= H.shift(now, hours=-1):
                 start_, count = now, 0
@@ -227,25 +231,28 @@ def claim(store, now):
                     "UPDATE webhook_sends SET next_attempt_at=? WHERE id=?", (H.shift(start_, hours=1), row["id"])
                 )
                 continue
-            if not O.claim(c, TABLE, row["id"], now):
+            token = O.new_token()
+            if not O.claim(c, TABLE, row["id"], now, token):
                 continue
             c.execute(
                 "UPDATE webhooks SET window_start=?, window_count=? WHERE id=?", (start_, count + 1, row["webhook_id"])
             )
-            return row["id"]
+            return Claimed(row["id"], token)
     return None
 
 
-def deliver(store, vault, send_id, *, transport=None):
-    """Post one claimed send and record what came back."""
+def deliver(store, vault, claimed, *, transport=None):
+    """Post one claimed send and record what came back. Nothing is posted once the claim is no longer this worker's."""
+    send_id, token = claimed
     with store.read() as c:
         send = c.execute(
             "SELECT s.*, w.url, w.allow_http, w.secret, w.secret_prev, w.secret_prev_until, w.deleted_at, "
             "w.headers "
-            "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=?",
-            (send_id,),
+            "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=? AND s.state=? AND s.claim_token=?",
+            (send_id, TABLE.flight, token),
         ).fetchone()
         if not send:
+            log.warning("webhook send %s: its claim lapsed before the post; nothing was sent", send_id)
             return
         keys = []
         if send["secret"]:
@@ -260,7 +267,7 @@ def deliver(store, vault, send_id, *, transport=None):
         # A secret header whose value was cleared when the address changed: never sent without it. The send waits for
         # the value (the endpoint is paused until then, so it is not claimed again).
         with store.transaction() as c:
-            O.release(c, TABLE, send_id)
+            O.release(c, TABLE, send_id, token)
         return
     # A body queued before the API v2 rename still says attempt_id: it leaves as a run, like one queued after it.
     body = runs.public_json(send["body"]).encode()
@@ -285,7 +292,10 @@ def deliver(store, vault, send_id, *, transport=None):
 
 
 def record(store, send, timestamp, status, head, error, abort, ms):
+    """The attempt `send` (the row as its claim read it) made, logged; then settled only while that claim still holds
+    the send. True when it settled."""
     now = H.now()
+    token = send["claim_token"]
     with store.transaction() as c:
         n = (c.execute("SELECT max(n) FROM webhook_attempts WHERE send_id=?", (send["id"],)).fetchone()[0] or 0) + 1
         c.execute(
@@ -293,6 +303,17 @@ def record(store, send, timestamp, status, head, error, abort, ms):
             "VALUES(?,?,?,?,?,?,?,?,?)",
             (send["id"], send["webhook_id"], n, now, timestamp, status, ms, head[:1024], error[:300]),
         )
+        now_row = c.execute(
+            "SELECT state, attempts FROM webhook_sends WHERE id=? AND state=? AND claim_token=?",
+            (send["id"], TABLE.flight, token),
+        ).fetchone()
+        if not now_row:
+            # Deleted, or its claim lapsed and the send went back to ready (and maybe to another worker) while the post
+            # was out: the attempt stays logged and nothing else changes.
+            log.warning(
+                "webhook send %s: a late answer (status %s) from a lapsed claim was logged only", send["id"], status
+            )
+            return False
         if status is not None and 200 <= status < 300:
             c.execute(
                 "UPDATE webhooks SET failing_since=NULL WHERE id=? AND failing_since IS NOT NULL", (send["webhook_id"],)
@@ -301,9 +322,6 @@ def record(store, send, timestamp, status, head, error, abort, ms):
             c.execute(
                 "UPDATE webhooks SET failing_since=? WHERE id=? AND failing_since IS NULL", (now, send["webhook_id"])
             )
-        now_row = c.execute("SELECT state, attempts FROM webhook_sends WHERE id=?", (send["id"],)).fetchone()
-        if not now_row or now_row["state"] != TABLE.flight:
-            return  # deleted or retried by hand while the post was out; the attempt stays logged
         attempts = now_row["attempts"] + 1
         shown = error or f"HTTP {status}"
         from . import task_trigger_rules
@@ -319,6 +337,7 @@ def record(store, send, timestamp, status, head, error, abort, ms):
                 error="",
                 due_at=now,
                 extra={"last_status": status, "delivered_at": now},
+                token=token,
             )
         elif abort:
             O.finish(
@@ -330,6 +349,7 @@ def record(store, send, timestamp, status, head, error, abort, ms):
                 error="The receiver asked not to be sent this message again",
                 due_at=now,
                 extra={"last_status": status},
+                token=token,
             )
         elif O.settle_failure(
             c,
@@ -342,10 +362,12 @@ def record(store, send, timestamp, status, head, error, abort, ms):
             later=lambda at, seconds: H.shift(at, seconds=seconds),
             give_up_state="failed",
             extra={"last_status": status},
+            token=token,
         ):
             exhausted(c, send, attempts, status, shown, now)
         else:
             c.after_commit.append(ring)
+    return True
 
 
 def exhausted(c, send, attempts, status, shown, now):

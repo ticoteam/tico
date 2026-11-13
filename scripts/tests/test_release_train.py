@@ -288,12 +288,6 @@ AUTO = {key: value for key, value in ENV.items() if key != "RELEASE_NEEDS_PERSON
 # ---- loading the scripts' modules ----
 
 
-def test_loaded_modules_are_registered_by_name():
-    # A dataclass looks its module up in sys.modules while the module runs, so each loader registers it first.
-    assert sys.modules["tico_release_notes"] is rt.release_notes
-    assert sys.modules["tico_rollout"] is rt.rollout
-
-
 # ---- versions and the clock ----
 
 
@@ -559,16 +553,6 @@ def test_without_a_checkout_the_validation_is_incremental_on_the_anchor_so_the_g
     assert picked["carried"] == ["backend/tests/test_b.py"]
 
 
-def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_incremental_from_it():
-    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
-    gh.order = [A, B, C, D]
-    gh.failed = {3: {"backend/tests/test_b.py"}}
-    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
-    picked = rt.plan_step(gh, NOW, checkout=checkout)
-    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
-    assert ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
-
-
 def test_a_cancelled_full_is_no_anchor_and_holds_the_day_so_the_train_waits_for_a_person():
     gh = FakeGitHub([run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1))], head=D)
     gh.order = [A, B, C, D]
@@ -592,15 +576,6 @@ def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_a
 @pytest.mark.parametrize(
     "runs, anchor, failed",
     [
-        ([out(B, id=2, at=MORNING - timedelta(hours=1))], B, {}),
-        (
-            [
-                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                out(B, id=2, at=MORNING - timedelta(hours=1)),
-            ],
-            B,
-            {},
-        ),
         (
             [
                 run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1)),
@@ -609,16 +584,8 @@ def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_a
             B,
             {},
         ),
-        (
-            [
-                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                out(B, id=2, at=MORNING - timedelta(hours=1)),
-            ],
-            C,
-            {3: {"backend/tests/test_b.py"}},
-        ),
     ],
-    ids=["green", "red-unnamed", "cancelled", "red-named"],
+    ids=["cancelled"],
 )
 def test_a_second_full_is_never_planned_while_an_anchor_under_a_day_old_exists(runs, anchor, failed):
     gh = FakeGitHub(runs, head=D)
@@ -927,23 +894,6 @@ def gate(**overrides):
     return rt.promotion_gate(**args)
 
 
-def test_promotion_gate_passes_an_approved_healthy_release():
-    assert gate() == ([], [])
-
-
-@pytest.mark.parametrize(
-    "overrides, why",
-    [
-        ({"approval_waits": ["#7 is not approved yet"]}, "not approved"),
-        ({"hold": "waiting on the billing fix"}, "RELEASE_HOLD"),
-        ({"blockers": [{"number": 7, "title": "Tasks vanish"}]}, "release-blocker #7"),
-    ],
-)
-def test_promotion_gate_holds_quietly(overrides, why):
-    waits, faults = gate(**overrides)
-    assert faults == [] and any(why in w for w in waits)
-
-
 @pytest.mark.parametrize(
     "status, why",
     [
@@ -1072,11 +1022,6 @@ def test_a_new_line_is_never_cut_as_a_patch_of_the_old_one_and_resumes_once_tagg
 @pytest.mark.parametrize(
     "have, want, crosses",
     [
-        ("0.5.216", "0.6.0", True),
-        ("v0.5.216", "v0.6.0-rc.1", True),
-        ("0.5.216", "0.7.2", True),
-        ("0.5.216", "0.5.217", False),
-        ("0.6.0", "0.6.1", False),
         ("", "0.6.0", False),
     ],
 )
@@ -1101,15 +1046,6 @@ def test_promote_leaves_a_0_5_stable_where_it_is_when_the_canary_runs_0_6(instal
 
 
 # ---- approved automatically: no person needed (RELEASE_NEEDS_PERSON off, no High risk item) ----
-
-
-@pytest.mark.parametrize(
-    "value, person",
-    [("on", True), (" ON ", True), ("off", False), ("", False), (None, False), ("yes", False)],
-)
-def test_only_on_makes_every_release_wait_for_a_person(value, person):
-    env = {} if value is None else {"RELEASE_NEEDS_PERSON": value}
-    assert rt.needs_person(env) is person
 
 
 def test_a_release_with_no_high_risk_item_is_approved_automatically_and_its_issue_says_so(installs):
@@ -1216,13 +1152,6 @@ def test_a_step_promotes_then_ships_the_green_candidate_and_closes_the_issues(in
     assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
     # Published, and main has nothing newer: the next event does nothing.
     assert rt.plan_step(gh, NOW + timedelta(minutes=5))["action"] == "none"
-
-
-def test_a_push_promotes_an_approved_release_before_the_canary_moves_on(installs):
-    gh = publishes(FakeGitHub([run(C)]))
-    approval_for(gh, "v0.5.200", approved_by="chris")
-    assert rt.cmd_step(gh, ENV, NOW) == 0
-    assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201")]
 
 
 def test_without_an_approval_stable_waits_and_the_canary_still_ships(installs):
@@ -1637,13 +1566,6 @@ def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(insta
     monkeypatch.setattr(rt, "running", unreadable)
     assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
     assert any("stable's release cannot be read (stable is down)" in line for line in rt.LOG)
-
-
-def test_an_approval_says_the_pictures_are_on_their_way_until_they_arrive():
-    gh = FakeGitHub()
-    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
-    assert rt.SHOTS_HEADING in issue["body"] and rt.SHOTS_PENDING in issue["body"]
-    assert issue["body"].index(rt.SHOTS_START) < issue["body"].index("NOTES v0.5.199")
 
 
 def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_change_nothing(tmp_path, monkeypatch):

@@ -145,7 +145,8 @@ def idea_to_done(r: SoftRig) -> None:
     r.says(e, "In the merge queue")
 
     # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Owner is
-    # told once, the manager once. Queue again waits for the new commit's checks.
+    # told once, the manager once. No bot may queue the new commit (the OK was for the old one): it goes back to
+    # Fixes 2. A person may queue it, once its checks pass.
     r.gh.push(2)
     r.settle()
     r.at(e, "Merge")
@@ -156,10 +157,12 @@ def idea_to_done(r: SoftRig) -> None:
     changed = [w for w in r.wakes(e, EM) if w[0].startswith("changed_after_ok")]
     expect(len(changed) == 1, f"the manager was told of the change after the OK {len(changed)} times")
     out = r.queue_again(e)
+    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while checks run: {out!r}")
     expect(f"The checks on {REF_2} are still running" in out.detail, out.detail)
     r.settle(r.gh.ci_s)
-    expect(not isinstance(r.queue_again(e), Refusal), "queue again once green was refused")
+    expect(not isinstance(r.queue_again(e, ANA), Refusal), "the person's queue again once green was refused")
     r.effects()
     r.settle()
     expect(len([w for w in r.wakes(e, RELEASE) if w[0].startswith("queue_removed")]) == 1, "told again")
@@ -171,13 +174,10 @@ def idea_to_done(r: SoftRig) -> None:
     r.gh.merge(2)
     r.settle()
 
-    # 8. Release: a pre-release does not count (D3, off by default); the release does.
+    # 8. Release: a published pre-release containing the merge counts (prereleases are on by default).
     r.at(e, "Release")
     r.says(e, "Waiting for the next release of acme/app")
     r.gh.publish("v1.1.0-rc.1", prerelease=True)
-    r.settle(300)
-    r.at(e, "Release")
-    r.gh.publish("v1.1.0")
     r.settle(300)
     expect(r.row(e)["status"] == "done", f"the Engineering task is {r.row(e)['status']}: {r.lines(e)}")
 
@@ -227,7 +227,7 @@ def presets(r: SoftRig) -> None:
     expect(not on_deck["requirements"], f"On deck has {on_deck['requirements']}")
     stages = {s["name"]: s for s in [*product["stages"], *engineering["stages"]]}
     expect(stages["Ideas"]["by_hand"], "tasks do not leave Ideas by hand")
-    expect(stages["Spec"]["task_limit"] == 2 and stages["Build"]["task_limit"] == 3, "the limits")
+    expect(stages["Spec"]["task_limit"] == 20 and stages["Build"]["task_limit"] == 3, "the limits")
     owners = {name: stages[name]["owner"] for name in ("Build", "Review 1", "Review 2", "Merge", "Release")}
     want = {"Build": BUILDER, "Review 1": REVIEWER_1, "Review 2": REVIEWER_2, "Merge": RELEASE, "Release": RELEASE}
     expect(owners == want, f"owners {owners}")
@@ -314,10 +314,13 @@ def push_past_pr_merged(r: SoftRig) -> None:
     expect(r.gh.state(1)["queue_state"] == "none", f"the PR stayed queued: {r.gh.state(1)}")
 
 
-@case("spec-full", "A third idea into Spec at its limit of 2 waits; a freed slot wakes the PM once", covers=(20,))
+@case("spec-full", "A third idea into Spec at its limit of 2 waits; a freed slot tells nobody", covers=(20,))
 def spec_full(r: SoftRig) -> None:
     from backend import task_engine as E
 
+    pid = r.preset(PRODUCT)["id"]
+    with r.w.tx() as c:  # the preset gives Spec 20; a limit of 2 keeps the case small
+        c.execute("UPDATE stages SET task_limit=2 WHERE pipeline_id=? AND name='Spec'", (pid,))
     ideas = [r.idea(f"Idea {i}", by=PM) for i in range(1, 4)]  # the PM's own: held by hand
     for p in ideas[:2]:
         r.by_hand(p)
@@ -331,8 +334,8 @@ def spec_full(r: SoftRig) -> None:
     r.check()
     r.later(hours=2)
     woken = r.room_wakes(PM)
-    expect(len(woken) == 1, f"the PM was woken {len(woken)} times when Spec had room: {woken}")
-    expect(r.stage_of(third) == "Ideas", "the idea left Ideas without a hand")
+    expect(not woken, f"the PM was told {len(woken)} times that Spec had room: {woken}")  # no "has room" notice (C10)
+    expect(r.stage_of(third) == "Ideas", "the PM's own idea left Ideas without a person picking it")
 
 
 @case("close-product-while-queued", "Close the Product task while its PR is queued: the PR is pulled", covers=(24, 31))
@@ -448,13 +451,16 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     out = r.queue_again(e)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while red: {out!r}")
     expect(f"Checks failed on {REF_1}" in out.detail, out.detail)
-    # (b) the Release Owner pushes a fix; while its checks run, still refused; green, queued again.
+    # (b) a fix is pushed: the person's OK was for the old commit, so the Release Owner may not queue it (it goes
+    # back to Fixes 2); a person may, once its checks pass.
     r.gh.push(1)
     r.settle()
     out = r.queue_again(e)
+    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and f"The checks on {REF_1} are still running" in out.detail, f"{out!r}")
     r.settle(r.gh.ci_s)
-    expect(not isinstance(r.queue_again(e), Refusal), "queue again once green was refused")
+    expect(not isinstance(r.queue_again(e, ANA), Refusal), "the person's queue again once green was refused")
     r.effects()
     r.settle()
     expect(r.gh.state(1)["queue_state"] == "queued", f"not queued again: {r.gh.state(1)}")

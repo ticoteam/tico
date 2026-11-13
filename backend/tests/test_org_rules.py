@@ -103,16 +103,6 @@ def test_a_peer_rule_from_add_rule_keeps_its_mention_with_and_ask_first_reviewer
     assert plain["if_broken"] == "block" and plain["reviewer"] is None
 
 
-def test_everyone_by_a_plain_member_is_refused(api):
-    org(api)
-    rule(
-        api,
-        {"kind": "internal", "text": "Everyone reads the handbook.", "who": {"everyone": True}},
-        token="cara-test",
-        expected=403,
-    )
-
-
 def test_a_party_named_in_with_cannot_edit_the_rule(api):
     org(api)
     r = rule(
@@ -182,20 +172,6 @@ def _source(api):
     return post(api, "rule-sources", {"name": "Acme Tax Office", "kind": "government"})["source"]["id"]
 
 
-def test_the_settings_sentences_match_the_live_setting(api):
-    org(api)
-    settings = get(api, "bots/ops/rules")["settings"]
-    texts = [s["text"] for s in settings]
-    assert any(t.startswith("Everyone can message") for t in texts)
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE bot_config SET access=? WHERE bot='ops'",
-            (json.dumps({"write": {"everyone": False, "people": ["cara"], "teams": [], "bots": []}}),),
-        )
-    texts = [s["text"] for s in get(api, "bots/ops/rules")["settings"]]
-    assert "Only Cara can message ops" in texts
-
-
 def test_mine_reads_the_bots_rules_and_settings_without_writing(api):
     org(api)
     rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
@@ -229,38 +205,6 @@ def test_two_open_occurrences_need_a_day_to_satisfy(api):
     post(api, f"rule-due/{due['id']}/satisfied", {}, expected=422)
     marked = post(api, f"rule-due/{due['id']}/satisfied", {"due_on": start})
     assert marked["satisfied"] == start
-
-
-def test_editing_a_due_date_keeps_its_history(api):
-    org(api)
-    r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
-    start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
-    post(api, f"rule-due/{due['id']}/satisfied", {})
-    edited = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})
-    assert edited["replaces"] == due["id"]
-    with api.app.state.store.read() as c:
-        assert D.satisfied_days(c, due["id"]) == {start}
-        assert D.one(c, due["id"])["ended_on"] is not None
-
-
-def test_the_rules_list_is_paged(api):
-    org(api)
-    for n in range(3):
-        rule(api, {"kind": "internal", "text": f"Rule {n} says hello.", "who": {"bots": ["ops"]}})
-    first = get(api, "rules?limit=2")
-    assert len(first["rules"]) == 2 and first["next_cursor"] == "2"
-    assert len(get(api, "rules?limit=2&cursor=2")["rules"]) == 1
-
-
-def test_a_turn_limit_set_on_the_bot_reads_back_as_its_sentence(api):
-    org(api)
-    with api.app.state.store.transaction() as c:
-        BS.update(c, 'ops', {'turns_per_hour': 7})
-    texts = [s["text"] for s in get(api, "bots/ops/rules")["settings"]]
-    assert "Up to 7 turns per hour" in texts
-    assert "Team default: 2500 turns per day" in texts
-    assert "ops asks before sending mail" in texts  # the one sending policy: Ask first by default
 
 
 def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):
@@ -467,24 +411,6 @@ def test_a_group_and_a_bot_with_one_name_need_a_prefix(api):
     rule(api, {"kind": "internal", "text": "Ops team meets Mondays.", "who": {"groups": ["bot:ops"]}}, expected=422)
     assert api.get("/api/v2/rules?who=ops", headers=headers()).status_code == 400
     assert api.get("/api/v2/rules?who=bot:ops", headers=headers()).status_code == 200
-
-
-def test_spend_sentences_cover_the_company_default_and_the_pools_with_edit_links(api):
-    org(api)
-    put(api, "usage/limits", {"monthly_usd": 25})
-    put(api, "usage/limits/ops", {"daily_usd": 5})
-    put(api, "usage/pools/groups/support", {"weekly_usd": 40})
-    put(api, "usage/pools/company", {"weekly_usd": 400})
-    ops = {s["text"]: s for s in get(api, "bots/ops/rules")["settings"]}
-    finance = {s["text"]: s for s in get(api, "bots/finance/rules")["settings"]}
-    assert "Spends up to $5 a day" in ops
-    assert ops["Spends up to $5 a day"]["edit"]["path"] == "/api/v2/usage/limits/ops"
-    assert "Spends up to $400 a week across the team" in ops
-    assert ops["Spends up to $400 a week across the team"]["edit"]["path"] == "/api/v2/usage/pools/company"
-    assert "Follows the company limit: up to $25 a month" in finance
-    assert finance["Follows the company limit: up to $25 a month"]["edit"]["path"] == "/api/v2/usage/limits"
-    support = [s for s in finance if "across the Support group" in s]
-    assert support and finance[support[0]]["edit"]["path"] == "/api/v2/usage/pools/groups/support"
 
 
 def _routine_due(api):

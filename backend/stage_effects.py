@@ -6,16 +6,18 @@ merge"). It happens once
 per visit, in the move's transaction. Moving back or closing undoes it: tasks filed in that visit close with a note, and
 PRs leave the merge queue.
 
-Filing (`{"file_into": "<pipeline id>"}`, Product's In development into Engineering) files ONE task per visit,
-linked (`links.kind = handoff`). It has the filing task's title and body, and a line `Spec: page:<file id>@<version>` naming
+Filing (`{"file_into": "<pipeline id>"}`, Product's In development into Engineering) files ONE task per visit, linked
+(`links.kind = handoff`). It has the filing task's title and body, and a line `Spec: page:<file id>@<version>` naming
 the page that counted on the nearest earlier stage with a page requirement (the Spec page as it was OK'd, D10), then
-what each person said with their OK of it, marked as their notes on the spec (`sign_off_notes`). It is
-filed by the filing task's owner (the Product Owner), who is its requester. When that is refused (the Product
-Owner is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
-files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
-owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a private task:
-the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on the
-filing task.
+what each person said with their OK of it, marked as their notes on the spec (`sign_off_notes`). It is filed by the
+filing task's owner (the Product Owner), who is its requester. Where the target pipeline has a manager, the filed task
+has no assignee: a first stage owned by the task's assignee then has nobody, and that manager is woken to pick one
+(C25); a Product Owner is not a builder. General, and a target with no manager, get the filer as its assignee. When the
+filer is refused (the Product Owner is paused or still onboarding) the engine files it itself; one refused even then (the
+target was retired) files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed
+yet"), the owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a
+private task: the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on
+the filing task.
 
 A source's action (`{"act": "github.queue"}`, Engineering's Merge queues the task's PRs): owed on enter, owed back on
 undo (backend/source_actions.py).
@@ -114,11 +116,30 @@ def notes_on_the_way_in(conn: "sqlite3.Connection", task: Row) -> list[str]:
     return []
 
 
+def _sent_back(conn: "sqlite3.Connection", task: Row) -> str:
+    """Why the task just came back into this stage, as the one who moved it back said it ("Not validated: the row is
+    still clipped", validate_gate), naming the stage it came from; "" when it did not come back."""
+    from . import task_engine
+
+    found = conn.execute(
+        "SELECT stage_id, how, why FROM visits WHERE task_id=? AND left_at IS NOT NULL "
+        "ORDER BY left_at DESC, entered_at DESC LIMIT 1",
+        (task["id"],),
+    ).fetchone()
+    if not found or found[1] != "back" or not str(found[2] or "").strip():
+        return ""
+    name = (task_engine.stage(conn, str(found[0])) or {}).get("name") or "a later stage"
+    return f"Sent back from {name}: {' '.join(str(found[2]).split())}"
+
+
 def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
-    """The filed task's body: the filing task's, the `Spec:` line, and what each person said with their OK of the
+    """The filed task's body: the filing task's, why it came back when it did (`_sent_back`), the `Spec:` line, and what each person said with their OK of the
     spec, marked as theirs, so whoever builds it does not ask again what was already answered there."""
     H = _h()
     parts = [str(task.get("body") or "").rstrip()]
+    back = _sent_back(conn, task)
+    if back:
+        parts.append(back)
     page = _spec_page(conn, task)
     if page:
         parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
@@ -145,6 +166,11 @@ def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[
     body = _handoff_body(conn, task)
     last: Exception | None = None
     filer = _filer(conn, task, by)
+    from . import task_engine
+
+    # A task given to someone in General is theirs, as on any General task; elsewhere nobody picks an owner where the
+    # target has no manager. In both, the filer stays the assignee.
+    unassigned = target != "general" and bool((task_engine.pipeline(conn, target) or {}).get("manager_id"))
     for actor in dict.fromkeys((filer, str(H.KEEPER))):
         conn.execute("SAVEPOINT stage_effects_file")
         try:
@@ -157,6 +183,7 @@ def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[
                 parent_id=task["id"],
                 pipeline=target,
                 link="handoff",
+                unassigned=unassigned,
                 deduplicate=False,
                 lint=False,
             )

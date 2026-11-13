@@ -298,7 +298,9 @@ class Checker:
             return out
         self._refresh_if_stale()
         release, more = self.release, self.extras
-        if release:
+        # The check reads the newest stable release; a server on a newer prerelease (0.6.0-rc.8 against 0.5.216) knows
+        # of nothing newer than itself, so an older release is not shown as the latest. A stable build keeps it.
+        if release and not ("-" in str(current or "") and newer(current, release["tag"].lstrip("v"))):
             latest = release["tag"].lstrip("v")
             out.update(
                 latest=latest,

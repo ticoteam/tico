@@ -70,6 +70,9 @@ pub struct Context {
     pub participants: Vec<String>,
     pub items: Vec<Item>,
     pub calendar: Value,
+    /// The Tico calendar occurrence this recording was started for (Join in Tico's calendar): sent as
+    /// `calendar_event` when its live meeting is created, so Tico links the meeting to the event.
+    pub calendar_event: String,
     pub live_id: String,
     pub live_destination: String,
     pub live_state: String,
@@ -94,6 +97,9 @@ pub struct Context {
     pub kept_on_mac: bool,
     pub task_link_operations: Vec<TaskLinkOperation>,
     pub skipped_task_links: usize,
+    /// The Tico call (a Google Meet started from a thread) this recording is the source for: it records into the
+    /// call's live meeting (`live_id`), and Tico posts the transcript when the call ends, so it is never saved here.
+    pub call_id: String,
 }
 impl Store {
     pub fn context(&self, id: &str) -> Result<Context> {

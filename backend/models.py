@@ -162,8 +162,9 @@ Lane = Literal["company", "product"]
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
-# A relation is a note between two tasks. A task waits on no relation: it waits on the tasks it filed (`parent`).
-RelationKind = Literal["related", "duplicate_of", "follow_up"]
+# A relation is a note between two tasks. A task waits on no relation but `after`, and that only in Merge: it merges
+# after the other task (backend/merge_order.py). Otherwise it waits on the tasks it filed (`parent`).
+RelationKind = Literal["related", "duplicate_of", "follow_up", "after"]
 
 
 class TaskRelationRef(Contract):
@@ -315,6 +316,8 @@ class TaskOwner(Contract):
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
+    # A person overturns the stage rule that blocks this owner (Owner on the team); a bot's is refused all the same.
+    set_anyway: bool = False
 
 
 class TaskSnooze(Contract):
@@ -550,8 +553,8 @@ class TaskLink(Contract):
 
 
 class TaskRelation(Contract):
-    """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task). A note: no
-    task waits on a relation."""
+    """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
+    merges after task: in Merge its PRs are not queued until task has merged). The others are notes."""
 
     task: ID
     kind: RelationKind = "related"
@@ -733,10 +736,11 @@ class LearnedEdit(Contract):
 
 
 class GoalReadBack(Contract):
-    """Up to 20 changes the owner's Assistant reads back in their chat (backend/goal_read_back.py): each one an object
-    with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."""
+    """The whole plan the owner's Assistant reads back in their chat (backend/goal_read_back.py): each change an object
+    with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields. The
+    bound is against runaway input, not a plan size (goal_read_back.MOST)."""
 
-    changes: list[dict] = Field(min_length=1, max_length=20)
+    changes: list[dict] = Field(min_length=1, max_length=500)
 
 
 class GoalWhy(Contract):
@@ -2097,6 +2101,12 @@ class BotManagesReports(Contract):
     expected_revision: int = Field(ge=1)
 
 
+# Where a bot's conversation compacts, in tokens: the twelve sizes offered (backend/providers.py COMPACT_SIZES).
+CompactAt = Literal[
+    100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
+]
+
+
 class BotTaskChoice(Contract):
     """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
     only the task effort or only the task context length (backend/task_models.py)."""
@@ -2104,7 +2114,7 @@ class BotTaskChoice(Contract):
     harness: ID | None = None
     model: ID | None = None
     effort: ID | None = None
-    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+    compact_at: CompactAt | None = None
 
 
 class BotTaskModel(Contract):
@@ -2117,7 +2127,7 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000]
+    compact_at: CompactAt
     expected_revision: int = Field(ge=1)
 
 
@@ -2658,6 +2668,8 @@ RequestUsage = (
 
 class RunUsagePart(Contract):
     """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
+    `cache_write_tokens` is the input written to the prompt cache, apart from `input_tokens` (0 from a runtime that
+    writes none); None from a runner too old to send it, whose `input_tokens` still count cache writes.
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
     long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
     sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
@@ -2665,6 +2677,7 @@ class RunUsagePart(Contract):
 
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
+    cache_write_tokens: int | None = Field(default=None, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
     requests: list[RequestUsage] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)
@@ -2971,6 +2984,12 @@ class BrowserExitPolicy(Contract):
     sharing: bool
     bots: list[Annotated[str, Field(min_length=1, max_length=128)]] | None = Field(default=None, max_length=500)
     daily_cap_bytes: Annotated[int, Field(strict=True, ge=100_000_000, le=10_000_000_000_000)] | None = None
+
+
+class BotAppView(Contract):
+    """“Can view the app (read only)” for one bot (backend/app_view.py)."""
+
+    on: bool
 
 
 class BotBrowserExit(Contract):

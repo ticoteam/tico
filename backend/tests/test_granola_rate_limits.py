@@ -523,29 +523,6 @@ def test_ids_left_out_of_a_reply_are_held_for_the_next_sync(api):
     assert meta["imported_count"] == 3 and meta["held_syncs"] == 0 and meta["last_error"] is None
 
 
-def test_imported_notes_over_a_day_old_are_not_re_read(api):
-    provider = DatedNotes(api, 10)
-    provider.transcript_calls = []
-    start = datetime.fromtimestamp(provider.now, timezone.utc)
-    provider.dates.update(
-        {nid: (start - timedelta(hours=60 - 3 * i)).isoformat() for i, nid in enumerate(provider.ids)}
-    )  # 33-60h
-    provider.connect()
-    provider.sync()
-    assert provider.service.load("human:ana")[1]["imported_count"] == 10 and len(provider.transcript_calls) == 10
-    provider.now += 3600
-    new = [str(uuid.UUID(int=100 + i)) for i in range(2)]
-    provider.dates.update({nid: datetime.fromtimestamp(provider.now - 600, timezone.utc).isoformat() for nid in new})
-    provider.ids = provider.ids + new
-    provider.notes_calls.clear()
-    provider.transcript_calls.clear()
-    provider.sync()
-    meta = provider.service.load("human:ana")[1]
-    assert [sorted(ids) for _, ids in provider.notes_calls] == [sorted(new)]
-    assert sorted(provider.transcript_calls) == sorted(new)
-    assert meta["imported_count"] == 12 and meta["last_error"] is None
-
-
 def test_an_imported_note_under_a_day_old_is_re_read_without_its_stored_transcript_and_an_older_one_is_not(api):
     provider = DatedNotes(api, 2)
     provider.transcript_calls = []

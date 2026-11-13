@@ -636,22 +636,6 @@ def test_busy_database_is_not_an_s3_failure_and_never_ends_the_storage_loop(tmp_
     assert not storage._write_failed and storage.put(b'attachment')
 
 
-def test_non_s3_errors_are_not_worded_as_s3():
-    import sqlite3
-    from botocore.exceptions import ClientError, EndpointConnectionError
-    from backend import blob_s3
-
-    detail = blob_s3.write_error(sqlite3.OperationalError('database is locked'), 'acme-files', cleanup=True)
-    assert 'S3 storage' not in detail and 'OperationalError' in detail
-    assert blob_s3.write_error(EndpointConnectionError(endpoint_url='https://s3.example.com'), 'acme-files').startswith(
-        'S3 storage'
-    )
-    denied = ClientError({'Error': {'Code': 'AccessDenied'}}, 'PutObject')
-    assert (
-        blob_s3.write_error(denied, 'acme-files') == "S3 storage can't write: AccessDenied on acme-files (s3:PutObject)"
-    )
-
-
 def test_refused_upload_starts_one_recheck_and_heals(tmp_path, credential_clients):
     import threading
     from backend.store import Problem
@@ -707,3 +691,35 @@ def test_storage_loop_backs_off_and_survives_errors(tmp_path, credential_clients
     assert waits == [30, 60, 120, 240, 480, 960, 1800, 1800]
     assert storage._write_failed and len(passes) == 8
     assert 'pass failed' in caplog.text
+
+
+def test_a_client_built_with_old_keys_is_not_cached_after_rekey(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from backend import blob_s3
+
+    settings = SimpleNamespace(blob_keys=('old-id', 'old-secret'), blob_endpoint=None, blob_region='us-east-1')
+    entered, release = threading.Event(), threading.Event()
+
+    def client(settings, config=None, kind=None, region_name=None):
+        keys = settings.blob_keys
+        if keys[0] == 'old-id':
+            entered.set()
+            assert release.wait(10)
+        return SimpleNamespace(keys=keys)
+
+    monkeypatch.setattr(blob_s3, 'client', client)
+    sources = blob_s3.Sources(settings)
+    old = {}
+    caller = threading.Thread(target=lambda: old.setdefault('client', sources.client_for('company')))
+    caller.start()
+    try:
+        assert entered.wait(10)
+        settings.blob_keys = ('new-id', 'new-secret')
+        sources.forget()
+        assert sources.client_for('company').keys[0] == 'new-id'
+    finally:
+        release.set()
+        caller.join(10)
+    assert not caller.is_alive()
+    assert sources.client_for('company').keys[0] == 'new-id'

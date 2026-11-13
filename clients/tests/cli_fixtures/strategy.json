@@ -1,91 +1,8 @@
 [
  {
   "argv": [
-   "strategy"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "strategy",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico strategy: error: argument sub: invalid choice: 'nope' (choose from show, summary, draft, publish, versions, diff, bet) Did you mean: tico strategy show, tico strategy diff?",
-  "exit": 64
- },
- {
-  "argv": [
    "strategy",
    "show"
-  ],
-  "tools": [
-   [
-    "tico_strategy_show",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "strategy",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "strategy",
-   "show",
-   "--section",
-   "serve"
-  ],
-  "tools": [
-   [
-    "tico_strategy_show",
-    {
-     "operation_id": null,
-     "section": "serve"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "strategy",
-    null
-   ]
-  ],
-  "stdout": "Nothing published yet.\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "strategy",
-   "show",
-   "--json"
   ],
   "tools": [
    [
@@ -219,35 +136,6 @@
   "stdout": "{\n  \"version\": 3,\n  \"summary\": \"Win small offices first\"\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "strategy",
-   "publish"
-  ],
-  "tools": [
-   [
-    "tico_strategy_publish",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "strategy",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"forbidden\",\n  \"detail\": \"Only the owner writes the strategy; a bot proposes a change with tico_proposal_create, kind strategy_draft\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
  },
  {
   "argv": [
@@ -616,18 +504,6 @@
   "argv": [
    "strategy",
    "bet",
-   "update"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico strategy bet update <id>\ntico strategy bet update: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "strategy",
-   "bet",
    "retire",
    "id-1"
   ],
@@ -657,90 +533,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "strategy",
-   "bet",
-   "retire"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico strategy bet retire <id>\ntico strategy bet retire: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "strategy",
-   "show",
-   "--section",
-   "how"
-  ],
-  "tools": [
-   [
-    "tico_strategy_show",
-    {
-     "operation_id": null,
-     "section": "how"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "strategy",
-    null
-   ]
-  ],
-  "stdout": "Nothing published yet.\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "strategy",
-   "diff",
-   "--from",
-   "1",
-   "--to",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_strategy_diff",
-    {
-     "from_n": 1,
-     "operation_id": null,
-     "to_n": 1
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "strategy/diff?from=1&to=1",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "strategy",
-   "bet"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
  }
 ]

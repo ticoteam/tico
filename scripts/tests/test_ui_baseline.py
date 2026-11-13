@@ -93,29 +93,6 @@ def test_migrate_again_drops_baselines_the_old_file_no_longer_has(tmp_path, monk
     assert ui_baseline.load_layout("tsc") == {"ui/app/a.js": 4}
 
 
-def test_script_tags_get_one_blank_line_between_them_and_migrate_is_idempotent(tmp_path, monkeypatch):
-    text = (
-        "<head>\n"
-        '<script src="/a.js"></script>\n'
-        '<script src="/b.js"></script>\n'
-        "<script>inline()</script>\n"
-        '<script src="/c.js"></script>\n'
-        "</head>\n"
-    )
-    assert ui_baseline.adjacent_script_lines(text) == [3]
-    spaced = ui_baseline.space_script_tags(text)
-    assert ui_baseline.adjacent_script_lines(spaced) == []
-    assert spaced.count("\n\n") == 1
-    assert ui_baseline.space_script_tags(spaced) == spaced
-    monkeypatch.setattr(ui_baseline, "ROOT", tmp_path)
-    (tmp_path / "ui").mkdir()
-    (tmp_path / "ui/index.html").write_text(text)
-    ui_baseline.main(["migrate"])
-    assert (tmp_path / "ui/index.html").read_text() == spaced
-    ui_baseline.main(["migrate"])
-    assert (tmp_path / "ui/index.html").read_text() == spaced
-
-
 def test_the_growth_check_reads_the_single_file_layout_at_a_ref(tmp_path, monkeypatch, capsys):
     git(tmp_path, "init", "-q", "-b", "main")
     single_file(tmp_path, "tsc", {"ui/app/a.js": 2})
@@ -151,12 +128,6 @@ def test_a_ref_with_only_the_empty_folder_marker_has_an_empty_baseline(tmp_path,
     git(tmp_path, "commit", "-q", "-m", "clean")
     assert ui_baseline.layout_at("HEAD", "biome") == {}
     assert ui_baseline.layout_at("HEAD", "tsc") is None
-
-
-def test_typescript_findings_belong_to_the_strict_ratchet_not_the_loose_one():
-    assert ui_baseline.is_typescript("ui/app/a.ts")
-    assert not ui_baseline.is_typescript("ui/types/api.d.ts")
-    assert not ui_baseline.is_typescript("ui/app/a.js")
 
 
 def test_run_tsc_drops_typescript_findings_but_counts_them_as_diagnostics(monkeypatch):

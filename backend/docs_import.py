@@ -59,10 +59,16 @@ class _Html(HTMLParser):
         self.out, self.skip, self.lists, self.href, self.pre = [], 0, [], [], 0
         self.cells, self.row_open, self.table_rows, self.title, self.in_title = None, False, None, "", False
         self.link_text = []
+        self.nested = 0  # tables open inside the current table's cell: their words go into that cell, flattened
+
+    def end_row(self):
+        if self.table_rows is not None and self.cells is not None:
+            self.table_rows.append([" ".join("".join(c).split()).replace("|", "\\|") for c in self.cells])
+        self.cells, self.row_open = None, False
 
     def add(self, text):
         if self.cells is not None and self.row_open:
-            self.cells[-1] += text
+            self.cells[-1].append(text)
         else:
             self.out.append(text)
 
@@ -119,13 +125,19 @@ class _Html(HTMLParser):
         elif tag == "img":
             if a.get("alt"):
                 self.add(a["alt"])
+        elif tag == "table" and self.table_rows is not None:
+            self.nested += 1
+            self.add(" ")
+        elif tag in ("tr", "td", "th") and self.nested:
+            self.add(" ")
         elif tag == "table":
             self.blank()
             self.table_rows = []
         elif tag == "tr" and self.table_rows is not None:
-            self.cells, self.row_open = [], False
+            self.end_row()
+            self.cells = []
         elif tag in ("td", "th") and self.cells is not None:
-            self.cells.append("")
+            self.cells.append([])
             self.row_open = True
         elif tag in self.BLOCKS:
             self.blank()
@@ -158,12 +170,17 @@ class _Html(HTMLParser):
         elif tag == "a":
             href = self.href.pop() if self.href else ""
             self.add("](" + href + ")" if href and not href.lower().startswith("javascript:") else "]")
+        elif tag in ("tr", "td", "th") and self.nested:
+            self.add(" ")
+        elif tag == "table" and self.nested:
+            self.nested -= 1
+            self.add(" ")
         elif tag in ("td", "th"):
             self.row_open = False
         elif tag == "tr" and self.table_rows is not None and self.cells is not None:
-            self.table_rows.append([" ".join(c.split()).replace("|", "\\|") for c in self.cells])
-            self.cells, self.row_open = None, False
+            self.end_row()
         elif tag == "table" and self.table_rows is not None:
+            self.end_row()
             rows = [r for r in self.table_rows if r]
             self.table_rows = None
             if rows:
@@ -187,6 +204,9 @@ def from_html(text):
     parser = _Html()
     parser.feed(text)
     parser.close()
+    parser.skip = 0
+    while parser.table_rows is not None:  # a table left open at the end still gives its words
+        parser.handle_endtag("table")
     body = "".join(parser.out)
     lines = [line.rstrip() for line in body.split("\n")]
     return normalize("\n".join(lines)), " ".join(parser.title.split())

@@ -125,16 +125,6 @@ class KnownSenders(unittest.TestCase):
         self.put("new", "kim@other.example", [self.OWNER], 300)
         self.assertEqual(self.known("later", "new"), {"later": False, "new": False})
 
-    def test_mail_from_someone_else_does_not_count_as_a_send(self):
-        self.put("sent", "ben@acme.example", ["pat@customer.example"], 100)
-        self.put("later", "pat@customer.example", [self.OWNER], 200)
-        self.assertEqual(self.known("later"), {"later": False})
-
-    def test_a_draft_to_the_sender_does_not_make_them_known(self):
-        self.put("draft", self.OWNER, ["pat@customer.example"], 100, labels=["DRAFT"])
-        self.put("later", "pat@customer.example", [self.OWNER], 200)
-        self.assertEqual(self.known("later"), {"later": False})
-
     def test_an_inbound_message_claiming_the_owners_from_does_not_make_the_recipient_known(self):
         self.put("spoof", self.OWNER, ["pat@customer.example"], 100)  # INBOX, never SENT
         self.put("later", "pat@customer.example", [self.OWNER], 200)

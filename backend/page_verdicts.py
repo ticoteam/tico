@@ -230,6 +230,7 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
     it needed, else its ladder starts again. Jev's send back wakes a bot owner with the reasons."""
     from . import task_engine as E
     from . import task_requirements as R
+    from . import task_wakes
 
     said = str(verdict["verdict"])
     reasons = " ".join(str(verdict.get("reasons") or verdict.get("last_error") or "").split())
@@ -258,6 +259,8 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
         elif said in ("unsure", "failed"):
             _unsure_wake(conn, task_id, page, f"jev:{verdict['id']}")
+        # Jev has looked at a page a person OKs: commits since the reviews are a bot's to review first.
+        task_wakes.review_new(conn, task_id)
 
 
 def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str) -> None:

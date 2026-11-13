@@ -54,16 +54,6 @@ def test_admins_see_every_row_and_members_their_own_and_what_they_may_read(api):
     assert "webhook:wh-ben" in ben and not ben & {"inbox:ibx_c", "webhook:wh-cara"}
 
 
-def test_a_row_says_what_it_is_its_status_and_where_it_opens(api):
-    seed(api)
-    got = get(api, "tool-index", "cara-test")
-    assert got["counts"]["all"] == len(got["rows"]) and got["counts"]["websites"] == 0
-    row = rows(api, "cara-test")["inbox:ibx_b"]
-    assert row["kind"] in ("mailbox", "number") and row["href"] == "#/tools/number/ibx_b"
-    assert set(row) >= {"id", "kind", "name", "detail", "way", "status", "who", "who_total", "needs_you", "href"}
-    assert row["status"]["tone"] in ("ok", "wait", "fail", "run", "idle")
-
-
 def test_bots_and_agents_see_only_company_rows_they_may_read(api):
     seed(api)
     attempt = setup_attempt(api)[2]

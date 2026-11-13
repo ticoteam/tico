@@ -226,3 +226,18 @@ def test_a_hub_upgraded_while_the_publisher_runs_takes_the_field_again(tmp_path,
     assert hub.accepted[-1]["messages"][0]["known_sender"] is True
     assert publisher.refused_known_sender_at is None and hub.refused == 2
     assert capsys.readouterr().out.count("known_sender mail field") == 1  # logged at the first refusal only
+
+
+def test_a_snapshot_holds_two_weeks_of_events_and_an_old_computers_day_still_fits():
+    from pydantic import ValidationError
+
+    from backend.connectors import SNAPSHOT_EVENTS, CalendarPublish
+
+    def publish(count):
+        rows = [dict(event(), occurrence_id="o" + str(n)) for n in range(count)]
+        return CalendarPublish.model_validate({"snapshots": [{"email": "ana@acme.example", "events": rows}]})
+
+    assert len(publish(200).snapshots[0].events) == 200  # an older computer's 24 hours
+    assert len(publish(SNAPSHOT_EVENTS).snapshots[0].events) == 500
+    with pytest.raises(ValidationError):
+        publish(SNAPSHOT_EVENTS + 1)

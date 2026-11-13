@@ -18,7 +18,7 @@ The Google client libraries are imported lazily so the rest of the package - nor
 rules, the database, the tests - works with nothing installed.
 """
 
-import json, os, stat
+import json, os, stat, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -298,7 +298,46 @@ def build_service(api, version, mailbox, scopes=None, path=None):
     creds = credentials(mailbox, scopes, path)
     service = build(api, version, credentials=creds, cache_discovery=False, **options)
     service._tico_granted = getattr(creds, "_tico_granted", None)  # oauth.require reads it
+    base_url = getattr(service, "_baseUrl", None)  # where single calls go; without it, reads stay one at a time
+    if api == "gmail" and isinstance(base_url, str) and base_url:
+        service._tico_batch = batches(base_url, creds)  # gmail.Gmail.read_many
     return service
+
+
+GMAIL_BATCH_PATH = "batch/gmail/v1"
+
+
+class Batch:
+    """One Gmail batch call: googleapiclient's BatchHttpRequest, sent over a connection that never follows a redirect."""
+
+    def __init__(self, request, http):
+        self.request, self.http = request, http
+
+    def add(self, request, request_id):
+        self.request.add(request, request_id=request_id)
+
+    def execute(self):
+        self.request.execute(http=self.http)
+
+
+def batches(base_url, creds):
+    """A factory of Gmail batch calls (callback -> Batch) for one mailbox's credentials.
+
+    The batch goes to the host single calls use: `base_url` is the service's own, Google's API or the
+    TICO_GOOGLE_API_ENDPOINT test seam (googleapiclient's new_batch_http_request ignores that seam and always names
+    Google). Every part of a batch carries the mailbox's bearer token in its body, so the connection follows no
+    redirect: a 3xx comes back as the batch call's error, and nothing is sent anywhere else."""
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.http import BatchHttpRequest, build_http
+
+    uri = urllib.parse.urljoin(base_url, GMAIL_BATCH_PATH)
+
+    def batch(callback):
+        http = build_http()
+        http.follow_redirects = False  # httplib2 would follow a 303 (or, by default, a 308 with the body)
+        return Batch(BatchHttpRequest(callback=callback, batch_uri=uri), AuthorizedHttp(creds, http=http))
+
+    return batch
 
 
 def gmail_service(mailbox, path=None):

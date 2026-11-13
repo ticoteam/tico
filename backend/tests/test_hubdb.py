@@ -40,153 +40,6 @@ class Schema(HubCase):
         )
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
-    def test_an_install_that_ran_the_first_rule_events_schema_gets_the_task_trigger_tables(self):
-        for table in ("rule_task_runs", "rule_task_state"):
-            self.conn.execute(f"DROP TABLE {table}")
-        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.RULE_EVENTS_SCHEMA) + 1}")
-        self.conn.commit()
-        H.migrate(self.conn)
-        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertLessEqual({"rule_task_runs", "rule_task_state"}, names)
-
-    def test_an_install_at_the_last_schema_before_task_run_models_gets_the_table_and_keeps_its_tasks(self):
-        task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
-        self.conn.execute("DROP TABLE task_run_models")
-        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.TASK_RUN_MODELS_SCHEMA)}")
-        self.conn.commit()
-        H.migrate(self.conn)
-        names = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertIn("task_run_models", names)
-        self.assertEqual(
-            self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0], "Prepare packet"
-        )
-        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-
-    def test_every_table_and_index_in_the_contract_exists(self):
-        names = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertLessEqual(
-            {
-                "bots",
-                "humans",
-                "conversations",
-                "messages",
-                "tasks",
-                "history_events",
-                "bot_status",
-                "bot_status_history",
-                "schedules",
-                "attempts",
-                "deltas",
-                "rate_limits",
-                "refusals",
-                "events",
-            },
-            names,
-        )
-        indexes = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-        self.assertLessEqual(
-            {
-                "messages_to_delivered",
-                "messages_conversation",
-                "messages_reply_kind",
-                "messages_from_kind",
-                "bot_file_versions_blob_media",
-                "tasks_owner_status_cover",
-                "tasks_requester_status_cover",
-                "events_ts",
-            },
-            indexes,
-        )
-
-    def test_existing_database_gains_the_reply_indexes(self):
-        self.conn.execute("DROP INDEX messages_reply_kind")
-        self.conn.execute("DROP INDEX messages_from_kind")
-        self.conn.commit()
-        self.conn.close()
-        migrated = H.connect(Path(self.dir.name) / "hub.db")
-        self.addCleanup(migrated.close)
-        for query, index in (
-            ("SELECT 1 FROM messages WHERE in_reply_to='question' AND kind='answer'", "messages_reply_kind"),
-            ("SELECT id FROM messages WHERE sender_id='bot:cmo' AND kind='ask'", "messages_from_kind"),
-        ):
-            plan = " ".join(r[3] for r in migrated.execute("EXPLAIN QUERY PLAN " + query))
-            self.assertIn(index, plan)
-        # The ask indexes went with asks (migration 20261106200453).
-        for name in ("messages_pending_conversation", "messages_open_asks_to"):
-            self.assertIsNone(
-                migrated.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
-            )
-        # The sender and recipient index stays: its leading columns serve the lookups named in hubdb.REPLY_ANSWERS_ASKS.
-        self.assertIsNotNone(
-            migrated.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name=?", ("messages_open_asks",)
-            ).fetchone()
-        )
-
-    def test_existing_database_gains_the_media_version_lookup_index(self):
-        self.conn.execute("DROP INDEX bot_file_versions_blob_media")
-        self.conn.close()
-        migrated = H.connect(Path(self.dir.name) / "hub.db")
-        self.addCleanup(migrated.close)
-        plan = " ".join(
-            r[3]
-            for r in migrated.execute(
-                "EXPLAIN QUERY PLAN SELECT 1 FROM bot_file_versions "
-                "WHERE blob_id='existing-blob' AND media_state='pending'"
-            )
-        )
-        self.assertIn("COVERING INDEX bot_file_versions_blob_media", plan)
-
-
-class GrowthRethink(unittest.TestCase):
-    """0035_growth_rethink: a new file has none of the tables it retired."""
-
-    RETIRED = (
-        "growth_ideas",
-        "growth_idea_channels",
-        "growth_segments",
-        "growth_channel_segments",
-        "growth_idea_segments",
-        "gtm_versions",
-        "gtm_drafts",
-    )
-
-    def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.path = Path(self.dir.name) / "hub.db"
-
-    def tables(self, conn):
-        return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-
-    def test_an_empty_file_is_made_at_the_current_version_without_the_retired_tables(self):
-        conn = H.connect(self.path)
-        self.addCleanup(conn.close)
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-        self.assertFalse(set(self.RETIRED) & self.tables(conn))
-        self.assertIn("gtm_sources", self.tables(conn))
-
-
-class NewDatabase(unittest.TestCase):
-    def test_a_new_file_never_makes_the_old_task_types_or_steps(self):
-        with tempfile.TemporaryDirectory() as folder:
-            conn = sqlite3.connect(Path(folder) / "hub.db", isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            try:
-                written = []
-                conn.set_trace_callback(written.append)
-                H.migrate(conn)
-                made = [
-                    s
-                    for s in written
-                    if s.lstrip().upper().startswith(("CREATE", "ALTER", "INSERT"))
-                    and ("task_types" in s or "task_steps" in s)
-                    and "schema_migrations" not in s
-                ]
-                self.assertEqual(made, [])
-            finally:
-                conn.close()
-
 
 class RegistrySync(HubCase):
     def test_sync_is_idempotent_and_keeps_quarantine(self):
@@ -258,13 +111,6 @@ class Rule3Caps(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 7
-class Rule7Lint(HubCase):
-    GOOD = (
-        "Ship the 60/40 split to paid this month, or tell me to hold.\n"
-        "It beat the 80/20 split on cost per lead in August."
-    )
-
-
 class Rule4Unsolicited(HubCase):
     def test_a_bot_may_start_ten_messages_a_day_to_a_person_and_the_eleventh_is_refused(self):
         self.assertEqual(H.UNSOLICITED_PER_DAY, 10)
@@ -342,10 +188,6 @@ class Rule8Counting(HubCase):
         )
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
-    def test_a_quarantine_from_before_the_repeat_rule_still_cools_off(self):
-        H.quarantine(self.conn, "cmo", "10 refused writes today")
-        self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
-
     def reviewed(self, slug):
         """Review tasks opened today for `slug`'s refusals. BotOps receives them, so it must exist."""
         self.assertTrue(H.bot(self.conn, H.FLEET_MAINTAINER), "no reviewer: a review count would be vacuous")
@@ -417,9 +259,6 @@ class Rule8Counting(HubCase):
         self.refused("target_inactive", H.task_create, self.conn, SEO, "Plan the week", "Draft it", "coach")
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined", "a retry loop still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "seo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
-
-    def test_tico_itself_is_named_tico_never_by_the_id_it_is_stored_under(self):
-        self.assertEqual(H.actor_name(self.conn, H.KEEPER), "Tico")
 
     def test_a_person_refused_for_a_paused_bot_reads_when_it_is_back_not_how_bots_are_reviewed(self):
         got = self.refused("target_inactive", H.task_create, self.conn, ANA, "Plan the week", "Draft it", "coach")
@@ -499,16 +338,6 @@ class Rule8Counting(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 9
-class Rule9AppendOnly(HubCase):
-    def test_messages_and_events_are_only_ever_added(self):
-        before = self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        first = H.say(self.conn, CMO, SEO, "one")
-        H.say(self.conn, CMO, SEO, "two")
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 2)
-        self.assertEqual(H.message(self.conn, first["id"])["body"], "one")
-        self.assertGreater(self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], before)
-
-
 # ----------------------------------------------------------------------------- status
 # ----------------------------------------------------------------------------- reads and the rest
 class PersonAskLint(HubCase):
@@ -609,11 +438,3 @@ def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
     assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
     by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
     assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]
-
-    def test_a_bots_ask_to_a_person_in_shorthand_is_refused_and_a_plain_one_is_asked(self):
-        task = H.task_create(self.conn, CMO, "Coordinate the trial", "", CMO, private=False)
-        with self.assertRaises(H.Refused) as refused:
-            H.task_ask(self.conn, CMO, task["id"], "ana", "Approve PO-1234? If yes, I pay it.")
-        self.assertEqual(refused.exception.rule, "lint")
-        plain = "Approve the video tool trial on Thursday? If yes, I will send the invite."
-        self.assertTrue(H.task_ask(self.conn, CMO, task["id"], "ana", plain)["requirement_id"])

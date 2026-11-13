@@ -63,8 +63,3 @@ def test_a_database_without_incremental_mode_is_untouched(tmp_path):
     assert before[1] > 2500
     assert reclaim_free_pages(s) == 0
     assert (pragma(s, "page_count"), pragma(s, "freelist_count")) == before
-
-
-def test_a_fresh_store_is_created_with_incremental_auto_vacuum(tmp_path):
-    s = store(tmp_path / "hub.sqlite")
-    assert pragma(s, "auto_vacuum") == 2

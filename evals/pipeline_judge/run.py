@@ -1,14 +1,17 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 83 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
+cases.json holds 92 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
 as text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
-unsure. 52 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
-and 31 Marketing (lead has company and contact, campaign brief approved, landing page live, Growth go-live and results
+unsure. 60 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
+and 32 Marketing (lead has company and contact, campaign brief approved, landing page live, Growth go-live and results
 pages). The page cases are real pages from the Acme test company, built as the page step builds them (attachment kind
 "page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric: five `acme-*` (rc.3) and nineteen `live-*`
 (rc.4, three tasks from Spec to Validate, all good pages) and `long-spec-*` (the rc.4 spec grown to about 6,500 and
-12,000 characters, the length bots write), with `trap-*` cut from them. `--only acme-*,live-*,long-*,trap-*` runs just
-those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder
+12,000 characters, the length bots write), with `trap-*` cut from them. `nov12-*` are six Fixes 2 pages from the
+Nov 12 stress run that a person OK'd (Jev had said 0.13 to 0.70 on them), and five bad ones: one with no check output,
+one without Reviewer 2 and two reporting a failed check at the newest commit, cut from them, and a real first page that
+answered Review 2 only. `--only
+acme-*,live-*,long-*,trap-*,nov12-*` runs just those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder
 page, a self-review, a pre-release page without the reviews, without the checks or with the checks of an older commit, a
 review of an older commit or with nothing run, a Validate page on an older version or showing nothing, a spec with no
 acceptance criteria (and a long one with none). A case may be `allow_unsure` (met is right, unsure is allowed): an

@@ -3,14 +3,17 @@
    Rules tab reuses the rows. */
 #main.ru-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .ru{display:flex;flex-direction:column;height:100%;min-height:0}
-.ru-ph{display:flex;align-items:center;gap:14px;padding:8px 28px;min-height:48px;border-bottom:1px solid var(--line)}
+/* The header wraps: the tabs keep their width and the actions (search, + Add rule) go to the next row when the two do not
+   fit side by side, so nothing in it ever covers a tab. */
+.ru-ph{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:8px 28px;min-height:48px;border-bottom:1px solid var(--line)}
+.ru-ph .spacer{display:none}
 .ru-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .ru .spacer,.ru-modal .spacer,.ru-bot .spacer{flex:1}
-.ru-tabs{display:flex;gap:2px;min-width:0}
+.ru-tabs{display:flex;flex:none;gap:2px}
 .ru-tabs a{padding:5px 10px;border-radius:var(--r-ctl);color:var(--muted);font-size:var(--t-sm);text-decoration:none;white-space:nowrap}
 .ru-tabs a:hover{color:var(--ink);background:var(--surface2)}
 .ru-tabs a.cur{color:var(--ink);background:var(--surface2);font-weight:600}
-.ru-acts{display:flex;gap:6px}
+.ru-acts{display:flex;gap:6px;margin-left:auto}
 .ru-pad{padding:14px 6px}
 .ru-body{flex:1;min-height:0;display:grid;grid-template-columns:190px minmax(0,1fr)}
 .ru.ru-open .ru-body{grid-template-columns:190px minmax(0,1fr) 400px}
@@ -250,6 +253,9 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .rr-cap input::placeholder{color:var(--muted);opacity:.75}
 .rr-from{color:var(--muted);font-size:var(--t-xs);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ru-txt .rr-from::before{content:"· "}
+/* Who bots may book: its label, then its three choices on one row (the mode above has two columns). */
+.rr-book{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:var(--t-base)}
+.rr-book .ru-seg{display:grid;grid-template-columns:repeat(3,1fr);align-self:stretch}
 .rr-sec{display:flex;flex-direction:column;gap:6px}
 .rr-sec>header{display:flex;align-items:center;gap:8px;min-height:28px}
 .rr-sec>header h3{flex:1;margin:0}
@@ -281,10 +287,8 @@ button.rr-line:hover{background:var(--surface2)}
 @media (max-width:760px){
   #main.ru-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .ru{height:auto}
-  .ru-ph{flex-wrap:wrap;gap:8px;padding:12px 12px 8px}
-  .ru-ph .spacer{display:none}
-  .ru-acts{margin-left:auto}
-  .ru-tabs{order:3;flex-basis:100%;overflow-x:auto;scrollbar-width:none}
+  .ru-ph{gap:8px;padding:12px 12px 8px}
+  .ru-tabs{order:3;flex-basis:100%;min-width:0;overflow-x:auto;scrollbar-width:none}
   .ru-tabs a{padding:8px 10px}
   .ru-body,.ru.ru-open .ru-body{display:block}
   .ru-filters{flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}

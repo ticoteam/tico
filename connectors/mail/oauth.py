@@ -442,11 +442,12 @@ def _broker_call(path, body, mailbox, retries=1):
         )
 
 
-def server_exchange(person_id, mailbox):
-    """Google's answer to the code the server holds for `person_id`'s claimed connect: the server adds the secret.
-    Sent once: the server spends the code on the first ask."""
+def server_exchange(connect_id, mailbox):
+    """Google's answer to the code the server holds for the claimed connect `connect_id` (the claim's `id`, one
+    connect, never the person): the server adds the secret. Sent once: the server spends the code on the first ask, and
+    refuses a connect the person replaced since (`stale`), with no grant."""
     return _broker_call(
-        f"connectors/mail/google/{urllib.parse.quote(str(person_id), safe='')}/exchange", {}, mailbox, retries=0
+        f"connectors/mail/google/{urllib.parse.quote(str(connect_id), safe='')}/exchange", {}, mailbox, retries=0
     )
 
 
@@ -552,8 +553,8 @@ def keep(mailbox, client, tokens, capabilities=(), path=None, opener=None, now=N
 
 
 def finish(request, path=None, opener=None, exchange_with=None):
-    """Finish a sign-in the server started (scripts/mail.sh google finish): `request` carries the connect's id, the
-    mailbox and Tico's OAuth client id; the server trades the code for the grant (`server_exchange`) and the secret
+    """Finish a sign-in the server started (scripts/mail.sh google finish): `request` carries the connect's id (this
+    connect's own, from the claim), the mailbox and Tico's OAuth client id; the server trades the code for the grant (`server_exchange`) and the secret
     stays there. Returns {"status": "connected", ...describe} or {"status": "failed", "kind", "message", "hint"};
     never a token."""
     mailbox = str(request.get("mailbox") or "").strip().lower()

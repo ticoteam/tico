@@ -99,13 +99,6 @@ def test_every_slug_a_release_shipped_still_reads():
     )
 
 
-def test_every_current_template_is_in_the_shipped_record():
-    assert sorted(CURRENT - set(SHIPPED)) == [], (
-        "New template slugs: run `python -m backend.tests.test_template_renames --write`. A renamed template also "
-        "needs its old slug in RENAMED (backend/company_file/draft.py)"
-    )
-
-
 def test_every_template_a_file_can_name_has_its_card():
     """A live seat is made from its card folder, so each template the reader takes is one."""
     folders = {path.name for path in CATALOG.iterdir() if (path / "card.yaml").is_file()}

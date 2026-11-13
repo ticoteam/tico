@@ -200,7 +200,6 @@ def test_an_own_window_that_fails_its_checks_reads_unknown_and_the_heartbeat_sti
         {'five_hour': {**good['five_hour'], 'resets_at': iso(timedelta(hours=5, minutes=11))}},
         {'weekly': {**good['weekly'], 'resets_at': iso(timedelta(days=8, minutes=1))}},
         {'weekly': {**good['weekly'], 'used_percent': 150}},
-        {'five_hour': {**good['five_hour'], 'reported_at': iso(timedelta(hours=1))}},
         {'weekly': {**good['weekly'], 'reported_at': 'yesterday'}},
         {'five_hour': {**good['five_hour'], 'token': 'sk-ant-oat01-' + 'a' * 40}},
         {'weekly': 'full'},

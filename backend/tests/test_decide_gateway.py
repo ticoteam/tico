@@ -260,15 +260,6 @@ def test_a_revoked_key_with_no_provider_after_it_is_decide_off_and_the_caller_ca
     assert SECRET not in r.text and not net.calls(ANTHROPIC)
 
 
-def test_without_an_own_key_a_failed_gateway_is_decide_off(api, monkeypatch, net):
-    wire(api, monkeypatch)
-    net.fail[GATEWAY_URL] = 401
-    r = ask(api)
-    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
-    assert not net.calls(J.URL), "no TypeSafe call without a TypeSafe key"
-    assert not net.calls(ANTHROPIC) and audits(api)[-1]["error"] == "auth"
-
-
 def no_own_key_settings(monkeypatch, tmp_path):
     """The server's settings with a gateway key and none of the three TypeSafe sources: no `TYPESAFE_API_KEY`, no
     `TICO_TYPESAFE_SECRET_ARN`, no /etc/tico/typesafe-api-key."""

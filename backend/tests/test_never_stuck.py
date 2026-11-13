@@ -254,8 +254,12 @@ def test_nothing_is_sent_while_the_bot_runs_and_a_run_that_was_cut_off_is_a_try(
     assert later(hours=6) == {} and _ladder(c, task_id) == ("owner", 0)  # its computer still checks in
     c.execute("UPDATE attempts SET state='expired', finished_at=?, lease_until=? WHERE id='run1'", (H.now(), H.now()))
     c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job_id,))
-    assert later(seconds=119) == {}
-    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    # Stopped partway after it may have acted: Paused from that moment (the claim holds the task's work for it), with
+    # no wake the bot could not take, until someone runs it again or leaves it.
+    assert [(w.state, w.line) for w in W.waiting_on(c, task_id)] == [("paused", "builder " + task_wakes.RUN_HELD)]
+    assert later(minutes=10) == {} and _queued(c, task_id) == []
+    c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job_id,))  # left (POST jobs/{id}/reconcile)
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     assert _said(c, task_id, BUILDER)[-1] == "Your last run on this task was cut off. Try 1 of 3."
 
 
@@ -298,7 +302,7 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     X.ran(c, task_id, BUILDER, state="expired")  # its job is uncertain
     attempt, job = c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task_id,)).fetchone()
     H.event(c, H.KEEPER, "job.held", attempt, {"job_id": job, "tools": ["Bash"]})
-    line = "builder has a run held for a check"
+    line = "builder " + task_wakes.RUN_HELD
     assert [(w.state, w.line) for w in W.waiting_on(c, task_id)] == [("paused", line)]
     assert later(hours=2) == {} and _queued(c, task_id) == []  # nobody is woken meanwhile
     paused = [n for n in W.needs(c, ANA) if n["kind"] == "paused"]
@@ -308,6 +312,32 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job,))  # dismissed (POST jobs/{id}/reconcile)
     assert _states(c, task_id) == [("bot", BUILDER)]
     assert later(seconds=10) == {"woken": 1}
+
+
+def test_a_run_that_stopped_partway_is_never_a_silent_wait(c, general, later):
+    from backend import health
+
+    """Nov 12, Tico Team: a Codex reviewer's turn ended "interrupted" (a steer race) and its job was held for a person to
+    run it again. For the quarter hour before auto_reconcile records `job.held`, the task still said it was the
+    reviewer's turn, nothing was on Needs you and the never-stuck reading counted nothing. From the moment the run stops
+    the task is Paused with the wait, the bot's owner has it on Needs you (no BotOps here) and the reading counts it."""
+    task_id = X.new_task(c, ANA, "Review the footer fix", assignee=REVIEWER)["id"]
+    X.ran(c, task_id, REVIEWER, state="interrupted")  # its job is uncertain, with no `job.held` yet
+    line = "reviewer " + task_wakes.RUN_HELD
+    assert line == "reviewer stopped partway: waiting on a person to run it again"
+    assert W.headline(c, task_id).line == line and _states(c, task_id) == [("paused", REVIEWER)]
+    paused = [n for n in W.needs(c, ANA) if n["kind"] == "paused"]
+    assert [(n["line"], n["bots"], n["tasks"]) for n in paused] == [(line, [REVIEWER], [task_id])]
+    reading = health.never_stuck_reading(c)
+    assert reading["cant_run"] == 1 and task_id in reading["tasks"]["cant_run"]
+    assert later(minutes=10) == {} and _queued(c, task_id) == []
+    # Tico's own choice that waits only for the bot's lane (an update cut) runs by itself: nobody's wait.
+    job, attempt = c.execute("SELECT id, attempt_id FROM jobs WHERE state='uncertain'").fetchone()
+    c.execute(
+        "INSERT INTO job_recovery(job_id, attempt_id, decision, note, actor, created_at) VALUES (?,?,?,?,?,?)",
+        (job, attempt, "resume", "", H.KEEPER, H.now()),
+    )
+    assert _states(c, task_id) == [("bot", REVIEWER)]
 
 
 def test_with_no_manager_bot_that_can_run_the_task_goes_straight_to_a_person(c, general, later):
@@ -508,6 +538,54 @@ def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, genera
     assert later(hours=1) == {}  # that wake waits for its run
     X.ran(c, task_id, BUILDER)
     assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+
+
+@pytest.mark.parametrize("via", [None, "token"])
+def test_a_persons_comment_that_wakes_the_owner_starts_the_count_again_so_a_run_that_stops_early_is_tried_soon(
+    c, general, later, via
+):
+    """The drill: two tries spent, a person writes to the bot, its run ends with "I'll install the test dependencies
+    and continue". The next look is the first gap away, not the hour a third try waits, and it is the bot's own try,
+    not a hand-over to the manager bot for runs spent before the person spoke."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    for n in (1, 2):
+        X.ran(c, task_id, BUILDER)
+        assert later(seconds=(120, 900)[n - 1]) == {"woken": 1} and _ladder(c, task_id) == ("owner", n)
+    X.ran(c, task_id, BUILDER)
+    later(minutes=20)
+    mark = H.BY_TOKEN.set(True) if via else None
+    try:
+        H.task_comment(c, ANA, task_id, "pytest is there now, carry on")
+    finally:
+        if mark:
+            H.BY_TOKEN.reset(mark)
+    assert _ladder(c, task_id) == ("owner", 0)
+    assert X.ran(c, task_id, BUILDER, comments=True) == 1  # it said it would carry on, and stopped
+    assert later(seconds=119) == {}
+    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+
+
+@pytest.mark.parametrize("who", ["assistant", "quiet", "person_level"])
+def test_a_comment_the_assistant_writes_or_one_that_wakes_no_bot_or_on_a_persons_task_keeps_the_count(
+    c, general, later, who
+):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    X.ran(c, task_id, BUILDER)
+    if who == "person_level":
+        c.execute(
+            "UPDATE visits SET level='person', person_id=?, tries=3, next_try_at=NULL WHERE task_id=?", (ANA, task_id)
+        )
+    before = _ladder(c, task_id)
+    mark = H.VIA.set("assistant") if who == "assistant" else None
+    try:
+        H.task_comment(c, ANA, task_id, "A note for later", wake=who != "quiet")
+    finally:
+        if mark:
+            H.VIA.reset(mark)
+    assert _ladder(c, task_id) == before
 
 
 def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
@@ -981,43 +1059,6 @@ def test_a_private_rows_failure_keeps_its_id_and_words_out_of_service_health(c):
     with isolated(c, "ship_deployed", secret, failures, private=True):
         pass
     assert not c.execute("SELECT 1 FROM service_health WHERE service LIKE 'background:%'").fetchone()
-
-
-def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, general, later):
-    """Speed (a pass looks at every open task): each wake read finds the task's wakes on messages_wake_key, never by a
-    scan, and live runs are read once per pass, not per task, while no bot has one. 2,000 idle tasks took 3.1 s a
-    pass when wakes were read with LIKE."""
-    for title in ("Write the launch note", "Fix the footer", "Plan the offsite"):
-        X.ran(c, X.new_task(c, ANA, title, assignee=BUILDER)["id"], BUILDER)
-    statements: list[str] = []
-    c.set_trace_callback(statements.append)
-    try:
-        assert later(seconds=120) == {"woken": 3}
-        assert later(minutes=20) == {}  # the wakes are queued
-    finally:
-        c.set_trace_callback(None)
-    reads = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "wake_key" in s]
-    assert reads
-    for sql in reads:
-        plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
-        assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
-        # A read of the task's wakes is not by the bot's own messages either (messages_to_delivered): a bot's every
-        # message, read for each task.
-        task_wakes_read = "wake_key >=" in sql and "FROM attempts" not in sql
-        assert not task_wakes_read or "messages_wake_key" in plan, (sql, plan)
-    assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
-
-
-def test_the_rules_check_reads_everyones_needs_you_once(c, general, later, monkeypatch):
-    """Needs you is read for every person together, once a check: asking for each person in turn read every open task
-    again for each of them."""
-    X.new_task(c, ANA, "Call the bank", assignee=ANA)
-    X.new_task(c, ANA, "Renew the lease", assignee="human:ben")
-    reads = []
-    whole = NS.W.needs_by_person
-    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: reads.append(1) or whole(conn))
-    assert NS.rules_hold(c) == []
-    assert len(reads) == 1
 
 
 def _private(c, title, owner, pipeline="general"):

@@ -94,8 +94,9 @@ def test_me_follows_is_whether_a_message_naming_nobody_reaches_you(api):
     assert delivery(api, say(api, thread["id"], "Budget is out")["id"], "human:ben")["reason"] == "follower"
 
 
-# ----------------------------------------------------------------------------- the unsolicited cap (19)
-def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told(api, monkeypatch):
+def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told(
+    api, monkeypatch, inside_one_half_hour
+):
     monkeypatch.setattr(H, "UNSOLICITED_PER_DAY", 1)
     thread = new_thread(api, audience="company")
     first = bot_post(api, "bot:ops", thread["id"], "One for @ben")
@@ -104,6 +105,9 @@ def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told
     assert delivery(api, second["id"], "human:ben") is None
     assert {"rule": "unsolicited_cap", "actor": "human:ben"} in second["warnings"]
     assert second["body"] == "Two for @ben"  # the message itself stays in the thread
+
+
+# ----------------------------------------------------------------------------- the unsolicited cap (19)
 
 
 def test_each_person_on_a_post_is_classified_on_their_own(api):
@@ -557,6 +561,27 @@ def test_a_purge_runs_in_bounded_batches_and_the_next_run_goes_on(api, monkeypat
     assert (
         rows(api, "SELECT COUNT(*) AS n FROM events")[0]["n"] == events
     )  # a run with nothing past its time writes nothing
+
+
+def test_a_busy_root_never_keeps_later_roots_waiting_run_after_run(api, monkeypatch):
+    store = api.app.state.store
+    monkeypatch.setattr(thread_retention, "_after", {"root": ""})
+    monkeypatch.setattr(thread_retention, "BATCH", 2)
+    monkeypatch.setattr(thread_retention, "MAX_BATCHES", 1)
+    busy, *quiet = sorted((new_thread(api, audience="company")["id"] for _ in range(3)))
+    for n in range(12):
+        say(api, busy, f"Busy {n}")
+    for thread_id in quiet:
+        say(api, thread_id, "Quiet")
+    for thread_id in (busy, *quiet):
+        patch(api, thread_id, {"retention_days": 1})
+        age(api, thread_id)
+    for _ in range(3):  # the busy root still has a backlog after every run
+        thread_retention.sweep(store)
+    for thread_id in quiet:
+        assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", thread_id) == []
+    # the busy root took its batch too, and keeps the rest for its next turn
+    assert len(rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", busy)) == 10
 
 
 def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_destination(api):

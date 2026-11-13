@@ -1,6 +1,12 @@
-"""Tico Meet calls: an audio and screen-share call that belongs to a thread (docs/meet.md).
+"""Calls in threads (docs/meet.md): a Google Meet, or a Tico Meet audio and screen-share call, that belongs to a thread.
 
-A call is a live meeting (backend/live_meetings.py) that its thread governs. The thread's audience decides who may join
+A call is a live meeting (backend/live_meetings.py) that its thread governs, whichever provider runs it. A Google Meet
+call (`provider` google_meet) is a Meet space Tico makes as the caller (backend/google_meet.py, the Workspace key's Meet
+scope); Google runs the media, the sweep polls Google for who is in it, and a person's Tico Recorder, when one is the
+call's recording source, writes its transcript into the call's live meeting. Everything below about LiveKit, tokens and
+the server's recorder is Tico Meet's (`provider` tico) only.
+
+For a Tico Meet call: The thread's audience decides who may join
 and hear it, the bots a person with Write attaches reply in the call and in the thread, and the transcript goes into
 the thread when the call ends. The media runs on LiveKit (backend/call_media.py): LiveKit keeps only the room, while
 Tico keeps the call's state and its transcript. A person's token grants audio and screen share, is good for five
@@ -16,11 +22,14 @@ are teammate_access's, as they are everywhere else.
 
 import json
 import logging
+import re
 import threading
 import time
+import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
+from typing import Annotated, Literal
 
 from fastapi import Request
 from pydantic import Field
@@ -29,8 +38,12 @@ from . import (
     audit_log,
     call_items,
     call_media,
+    call_ring,
     gateway_connection,
+    google_meet,
+    google_workspace,
     live_meetings,
+    recorder_installs,
     recorder_relay,
     teammate_access,
     threads,
@@ -60,6 +73,28 @@ ACTION_ITEMS_RETRY_SECONDS = 60
 ACTION_ITEMS_RETRY_MAX_SECONDS = 3600
 ACTION_ITEMS_GIVE_UP_SECONDS = 24 * 3600
 HOLDS_LIMIT = 20  # a call's holds, as its connector sees them: a page, not an archive
+
+# Google Meet calls. `auto` tries the providers in this order: Google Meet when the caller's Workspace mailbox has it,
+# else Tico Meet when LiveKit is set up.
+PROVIDERS = ("google_meet", "tico")
+NO_ANSWER_SECONDS = 120  # a Meet nobody was seen in this long after it started ends no_answer
+# Google opens a conference as soon as anyone loads the Meet's pre-join page, before they join, so a conference alone is
+# nobody in the call: only a listed participant is. A conference ends as soon as its last person leaves, and a rejoin
+# makes a new one on the same space, so a Meet someone was seen in ends only after nobody has been seen in it this long.
+EMPTY_SECONDS = 60
+STALE_SECONDS = 8 * 3600  # a Meet with no status from Google this long after it started ends stale
+# A Meet whose reads have failed (no answer, Google's own error, 429) keeps the status its last good read gave. One Google
+# has not answered for this long counts as having no status from Google, for the stale rule.
+QUIET_SECONDS = 600
+# The sweep reads live Meets from Google on its own small pool, so a slow or hanging Google never holds up the heartbeat:
+# it waits POLL_BUDGET_SECONDS for the pass, and a read still out then is made again on a later pass. A Meet whose read
+# failed skips 1, 2, 4... passes before its next one, never more than POLL_SKIP_MAX.
+POLL_WORKERS = 4
+POLL_BUDGET_SECONDS = 5
+POLL_SKIP_MAX = 16
+PRESENCE_MAX = 100  # the names one presence report may carry
+RINGING_LIMIT = 20  # the calls `GET /api/v2/calls/ringing` answers with at most
+CHANGE_FIELDS = ("live_count", "status_source", "recorder_actor", "meet_seen_at")  # with in_call: call.updated
 
 # The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
 AUTH = None
@@ -144,6 +179,11 @@ class Empty(Contract):
 class StartCall(Contract):
     title: str = Field(default="Call", min_length=1, max_length=200)
     speak_replies: bool = False  # a bot's reply read aloud: refused until the Gateway has text-to-speech
+    provider: Literal["auto", "google_meet", "tico"] = "auto"
+
+
+class Presence(Contract):
+    names: list[Annotated[str, Field(max_length=200)]] = Field(max_length=PRESENCE_MAX)
 
 
 class CallBots(Contract):
@@ -195,6 +235,56 @@ def _summary(row):
     }
 
 
+def _between(start, end):
+    parse = lambda stamp: datetime.fromisoformat(stamp.rstrip("Z")).replace(tzinfo=timezone.utc)
+    return (parse(end) - parse(start)).total_seconds()
+
+
+def _duration(row):
+    """An ended call's length in seconds. A Google Meet's runs from the first time anyone was seen in it to the last
+    (`meet_active_at`), and is None when nobody ever was: a missed call. A Tico Meet's runs from its start to its end."""
+    if row["state"] != "ended" or not row["ended_at"]:
+        return None
+    if _google(row):
+        if not row["meet_seen_at"]:
+            return None
+        return max(0, int(_between(row["meet_seen_at"], row["meet_active_at"] or row["meet_seen_at"])))
+    return max(0, int(_between(row["started_at"], row["ended_at"])))
+
+
+def _ring_list(row):
+    """The actors a call rang at its start (its `ring` column, a JSON list)."""
+    try:
+        found = json.loads(row["ring"] or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [actor for actor in found if isinstance(actor, str)] if isinstance(found, list) else []
+
+
+def _google(row):
+    return row["provider"] == "google_meet"
+
+
+def _join_url(row, address):
+    """The Meet link as one viewer opens it: `authuser` makes Meet open on their own Google account."""
+    if not _google(row) or not row["meet_uri"]:
+        return None
+    return row["meet_uri"] + ("?" + urllib.parse.urlencode({"authuser": address}) if address else "")
+
+
+def _spoken(name):
+    """A display name as matching compares it: case and runs of spaces do not count."""
+    return re.sub(r"\s+", " ", str(name or "")).strip().casefold()
+
+
+def _recorder_recent(c, who):
+    """Whether the viewer has a Tico Recorder seen in the last 30 days (recorder_installs.mine's `recent`), without
+    starting the release feed check `mine` would."""
+    person = H.actor_id(who.actor)
+    _version, at = recorder_installs._newest(c, [person]).get(person, ("", ""))
+    return bool(at) and recorder_installs._recent(at)
+
+
 class Calls:
     """The call operations. Writes run inside the caller's transaction (`c`) and record their audit row and threads change
     together with the change; the calls that reach LiveKit or the Gateway run outside any transaction."""
@@ -205,6 +295,11 @@ class Calls:
         self.lock = threading.Lock()
         self.pending = {}  # call_id -> the clips it is still transcribing
         self.workers = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="tico-meet-stt")
+        self.starting = {}  # (actor, idempotency key) -> the lock a Google Meet start holds while it makes its space
+        self.pollers = ThreadPoolExecutor(max_workers=POLL_WORKERS, thread_name_prefix="tico-meet-poll")
+        self.polling = {}  # call_id -> a status read a past pass left still out
+        self.backoff = {}  # call_id -> [failures in a row, passes still to skip]
+        self.poll_pass = threading.Lock()  # one polling pass at a time
 
     @property
     def media(self):
@@ -217,9 +312,9 @@ class Calls:
         (the teammate See level, as everywhere else)."""
         row = _call(c, call_id)
         people = [
-            dict(r)
+            {**dict(r), "in_call": self._in_call(row, r)}
             for r in c.execute(
-                "SELECT actor,joined_at,left_at,removed_at FROM call_participants WHERE call_id=? "
+                "SELECT actor,joined_at,left_at,removed_at,in_call FROM call_participants WHERE call_id=? "
                 "ORDER BY joined_at,actor LIMIT ?",
                 (call_id, PARTICIPANT_LIMIT),
             )
@@ -258,6 +353,51 @@ class Calls:
             "bots": bots,
             "speak_replies": bool(row["speak_replies"]),
             "holds": holds,
+            **self.provider_fields(c, row, who),
+        }
+
+    @staticmethod
+    def _in_call(row, participant):
+        """Whether the status source has the person in the call now. Tico Meet knows from its own room: joined and not
+        left."""
+        if _google(row):
+            return bool(participant["in_call"]) and row["state"] == "live"
+        return row["state"] == "live" and participant["left_at"] is None and participant["removed_at"] is None
+
+    def provider_fields(self, c, row, who, *, address=None, installed=None):
+        """What a call view adds for its provider and for this viewer (docs/dev/meet-calls-contract.md): the Meet link
+        as they open it, the status source's count, whether the call rings them, its messages and its recording source.
+        A list passes the viewer's `address` and `installed` once for all its rows."""
+        google = _google(row)
+        if google and address is None:
+            address = google_workspace.google_address(c, who.actor) or ""
+        if installed is None:
+            installed = _recorder_recent(c, who)
+        if google:
+            live_count = int(row["live_count"] or 0) if row["state"] == "live" else 0
+        else:
+            live_count = c.execute(
+                "SELECT COUNT(*) FROM call_participants WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
+                (row["id"],),
+            ).fetchone()[0]
+        joined = c.execute(
+            "SELECT 1 FROM call_participants WHERE call_id=? AND actor=?", (row["id"], who.actor)
+        ).fetchone()
+        source = row["recorder_actor"]
+        if source and source != who.actor and not self._sees(c, who, source):
+            source = None
+        return {
+            "provider": row["provider"],
+            "meet_uri": row["meet_uri"],
+            "join_url": _join_url(row, address),
+            "live_count": live_count,
+            "status_source": row["status_source"],
+            "seen_at": row["meet_seen_at"],
+            "duration_s": _duration(row),
+            "ring": row["state"] == "live" and who.actor in _ring_list(row) and not joined,
+            "card_message_id": row["card_message_id"],
+            "transcript_message_id": row["transcript_message_id"],
+            "recorder": {"source": source, "installed": bool(installed)},
         }
 
     def _sees(self, c, who, target):
@@ -292,6 +432,27 @@ class Calls:
             (kind, call_id, thread_id, actor, H.now()),
         )
 
+    def _changed(self, c, row, before, in_call_before):
+        """A `call.updated` change when what readers see of the call's status moved: its count, who is in it, its status
+        source, its recording source or when it was first seen. No audit row: these are what Google or a Recorder
+        reported, not anyone's act."""
+        after = _call(c, row["id"])
+        in_call_after = self._in_call_set(c, row["id"])
+        if any(before[name] != after[name] for name in CHANGE_FIELDS) or in_call_before != in_call_after:
+            c.execute(
+                "INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,created_at) "
+                "VALUES('threads','call.updated',?,?,?,?)",
+                (row["id"], row["thread_id"], row["connector_actor"], H.now()),
+            )
+            return True
+        return False
+
+    @staticmethod
+    def _in_call_set(c, call_id):
+        return {
+            r[0] for r in c.execute("SELECT actor FROM call_participants WHERE call_id=? AND in_call=1", (call_id,))
+        }
+
     def _connector(self, c, who, call_id):
         human_only(who)
         self.auth.domain(who)
@@ -302,7 +463,8 @@ class Calls:
             raise Problem("forbidden", "Only the person who started this call can do that", 403)
         return row
 
-    def start(self, c, who, thread_id, title, speak_replies=False):
+    def _may_start(self, c, who, thread_id, speak_replies):
+        """The checks a start makes before anything is made, whatever the provider, and again inside its write."""
         human_only(who)
         self.auth.domain(who)
         if speak_replies:
@@ -315,13 +477,80 @@ class Calls:
                 422,
             )
         threads.require(c, threads.viewer(self.auth, who), thread_id, write=True)
-        if self.media is None:
-            raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
         live = c.execute("SELECT id FROM calls WHERE thread_id=? AND state='live'", (thread_id,)).fetchone()
         if live:
             raise Problem(
                 "call_in_progress", "This thread already has a call going", 409, extra={"call_id": live["id"]}
             )
+
+    def providers(self, c, who):
+        """The call providers `who` could start now, in the order `auto` tries them."""
+        offered = []
+        if google_workspace.meet_ready(c) and google_workspace.workspace_mailbox(c, who.actor):
+            offered.append("google_meet")
+        if self.media is not None:
+            offered.append("tico")
+        return offered
+
+    def choose(self, c, who, thread_id, wanted, speak_replies=False):
+        """The provider a start uses: `auto` is the first the caller has (`providers`); a named one must be there."""
+        self._may_start(c, who, thread_id, speak_replies)
+        offered = self.providers(c, who)
+        if wanted == "auto" and offered:
+            return offered[0]
+        if wanted in offered:
+            return wanted
+        if wanted == "google_meet":
+            raise Problem(
+                "meet_unavailable",
+                "Google Meet is not available to you: the Workspace key must cover your mailbox and be authorized "
+                "for Meet",
+                503,
+            )
+        if wanted == "tico":
+            raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
+        raise Problem("meet_unavailable", "Calls are not set up: connect Google Workspace with Meet, or Tico Meet", 503)
+
+    def make_space(self, who):
+        """A Google Meet space made as the caller's Workspace mailbox. Outside any transaction: it asks Google."""
+        with self.store.read() as c:
+            box = google_workspace.workspace_mailbox(c, who.actor)
+            token = None
+            if box:
+                try:
+                    token = google_workspace.mint(c, box, "meet")["access_token"]
+                except Problem:
+                    token = None
+        if not token:
+            raise Problem("meet_unavailable", "Google did not give Tico a Meet token for your mailbox", 503)
+        try:
+            return google_meet.create_space(token)
+        except google_meet.MeetUnavailable as exc:
+            raise Problem(
+                "meet_unavailable",
+                "Google Meet did not make the meeting. Try again in a minute.",
+                503,
+                extra={"kind": exc.kind},
+                retryable=exc.kind == "unreachable",
+            ) from None
+
+    def _ring_for(self, c, who, thread_id):
+        """Who a call rings (backend/call_ring.py): the thread's people other than the caller who can read it, when it
+        has at most RING_MAX people; nobody in a bigger thread. Bots are never rung."""
+        root = threads.root_of(c, threads.thread_row(c, thread_id))
+        people = [actor for actor in threads._dm_members(c, root) if str(actor).startswith("human:")]
+        if len(people) > call_ring.RING_MAX:
+            return []
+        return [actor for actor in people if actor != who.actor and readable(c, actor, thread_id)]
+
+    def start(self, c, who, thread_id, title, speak_replies=False, provider="tico", space=None):
+        """Store a call, its live meeting, its card in the thread and who it rings. A Google Meet start brings the space
+        `make_space` made before this write; a Tico Meet one needs LiveKit set up."""
+        self._may_start(c, who, thread_id, speak_replies)
+        if provider == "tico" and self.media is None:
+            raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
+        if provider == "google_meet" and not space:
+            raise Problem("meet_unavailable", "Google Meet did not make the meeting. Try again in a minute.", 503)
         meeting = live_meetings.Connect(title=title, visibility="private")
         meeting_id, call_id, stamp = str(uuid.uuid4()), str(uuid.uuid4()), H.now()
         c.execute(
@@ -351,9 +580,11 @@ class Calls:
         live_meetings._event(
             c, meeting_id, "meeting.state", {"state": "live", "connected_by": who.actor, "visibility": "private"}
         )
+        space = space or {}
         c.execute(
             "INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
-            "created_at,updated_at,speak_replies) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,updated_at,speak_replies,provider,meet_space,meet_uri,meet_code,ring) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 call_id,
                 thread_id,
@@ -366,11 +597,76 @@ class Calls:
                 stamp,
                 stamp,
                 int(bool(speak_replies)),
+                provider,
+                space.get("name"),
+                space.get("meeting_uri"),
+                space.get("meeting_code"),
+                json.dumps(self._ring_for(c, who, thread_id)),
             ),
         )
         c.execute("INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?)", (call_id, who.actor, stamp))
-        self._record(c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id})
+        self._record(c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id, "provider": provider})
+        # The call's card in the thread. A thread that refuses it still has the call: the card is its place in the
+        # timeline, not the call, so the refusal is undone on its own and the start goes on without one.
+        c.execute("SAVEPOINT call_card")
+        try:
+            card = threads.post(
+                c,
+                threads.viewer(self.auth, who),
+                thread_id,
+                "Call",
+                kind="say",
+                refs={"call": {"id": call_id, "meeting_id": meeting_id, "card": True}},
+            )
+        except Problem as exc:
+            c.execute("ROLLBACK TO call_card")
+            log.info("A call's card was not posted: %s", exc.code)
+            card = None
+        c.execute("RELEASE call_card")
+        if isinstance(card, dict) and card.get("id") and not card.get("held"):
+            c.execute("UPDATE calls SET card_message_id=? WHERE id=?", (card["id"], call_id))
         return self.view(c, call_id, who)
+
+    def ring_started(self, call_id):
+        """Ring the people a call that just started rings, through call_ring's hooks. After the start's write, outside
+        any transaction, once per call: a retried start answered from its first answer does not ring again."""
+        with self.store.read() as c:
+            row = _call(c, call_id)
+            actors = _ring_list(row)
+            if row["state"] != "live" or not actors:
+                return
+            caller = H.actor_name(c, row["connector_actor"])
+            try:
+                who = self.auth.identity_for_actor(c, row["connector_actor"])
+                shown = threads.view(c, threads.viewer(self.auth, who), threads.thread_row(c, row["thread_id"]))
+                name = shown.get("name") or shown.get("title") or row["title"]
+            except Problem:
+                name = row["title"]
+        payload = {
+            "title": caller,
+            "body": "# " + str(name),
+            "url": f"/#/thread/{urllib.parse.quote(row['thread_id'])}?call={urllib.parse.quote(call_id)}",
+            "tag": "call-" + call_id,
+        }
+        call_ring.ring(self.app, call_id, actors, payload)
+
+    def replayed(self, request, who):
+        """Whether this request's idempotency key already has its answer stored, so the write will answer from it."""
+        with self.store.read() as c:
+            return self.store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
+
+    def start_lock(self, actor, key):
+        """One lock per (caller, idempotency key), so two copies of one start cannot both make a Meet space."""
+        with self.lock:
+            entry = self.starting.setdefault((actor, key), [threading.Lock(), 0])
+            entry[1] += 1
+        return entry
+
+    def start_unlock(self, actor, key, entry):
+        with self.lock:
+            entry[1] -= 1
+            if entry[1] <= 0:
+                self.starting.pop((actor, key), None)
 
     def check_join(self, c, who, call_id):
         """Whether `who` may join this call now: the thread still lets them read it, and the call is live. It runs before a
@@ -393,12 +689,20 @@ class Calls:
         if row["state"] != "live":
             raise Problem("call_ended", "This call has ended", 409)
         stamp = H.now()
-        c.execute(
-            "INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
-            "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL,"
-            "media_removed_at=NULL",
-            (call_id, who.actor, stamp),
-        )
+        if _google(row):
+            # Opening the Meet from Tico. The row's joined_at stays the first open (or the first time Google saw them).
+            c.execute(
+                "INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
+                "ON CONFLICT(call_id,actor) DO UPDATE SET left_at=NULL,removed_at=NULL",
+                (call_id, who.actor, stamp),
+            )
+        else:
+            c.execute(
+                "INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
+                "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL,"
+                "media_removed_at=NULL",
+                (call_id, who.actor, stamp),
+            )
         c.execute("INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], who.actor, stamp))
         self._record(c, who.actor, call_id, row["thread_id"], "call.joined", {"actor": who.actor})
         return self.view(c, call_id, who)
@@ -463,6 +767,8 @@ class Calls:
             "UPDATE call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
             (stamp, call_id),
         )
+        c.execute("UPDATE call_participants SET in_call=0 WHERE call_id=? AND in_call=1", (call_id,))
+        c.execute("UPDATE calls SET live_count=0 WHERE id=?", (call_id,))
         c.execute(
             "UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
             (stamp, stamp, row["live_meeting_id"]),
@@ -538,6 +844,8 @@ class Calls:
         ends at once, with a refusal, so no one joins a room that will not be heard."""
         with self.store.read() as c:
             row = _call(c, call_id)
+        if _google(row):
+            return  # Google runs a Meet's media; nothing of LiveKit's starts
         try:
             self.media.start_recorder(call_id, row["room_name"], self._audio_for(call_id))
         except call_media.MediaUnavailable:
@@ -659,7 +967,14 @@ class Calls:
         if row["finalized_at"]:
             return True
         if row["wrapped_up_at"] is None:
-            if self.media is not None:
+            if (
+                _google(row)
+                and row["recorder_actor"]
+                and row["ended_at"]
+                and _seconds_since(row["ended_at"]) < live_meetings.RECORDER_TAIL_SECONDS
+            ):
+                return False  # the Recorder's last chunks may still be on their way (live_meetings.recorder_tail)
+            if self.media is not None and not _google(row):
                 try:
                     self.media.stop_recorder(call_id)
                     self.media.end_room(row["room_name"])
@@ -684,9 +999,9 @@ class Calls:
 
     def _post_in_thread(self, c, row, body):
         """One message in the call's thread, from its connector, naming the call and its meeting as the source. The
-        live_meeting reference makes the meeting's own rules decide who reads the message."""
+        live_meeting reference makes the meeting's own rules decide who reads the message. Returns the message."""
         who = self.auth.identity_for_actor(c, row["connector_actor"])
-        threads.post(
+        return threads.post(
             c,
             who,
             row["thread_id"],
@@ -700,7 +1015,8 @@ class Calls:
 
     def post_transcript(self, call_id):
         """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only. A
-        thread that refuses the post leaves it unposted: that refusal is a hold the connector sees, and it is final."""
+        thread that refuses the post leaves it unposted: that refusal is a hold the connector sees, and it is final. A
+        Google Meet call has a transcript only when a Recorder wrote one: with none, nothing is posted."""
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
@@ -717,11 +1033,16 @@ class Calls:
                         break
                     lines.append(line)
                     size += len(line) + 1
+                if not lines and _google(row):
+                    return
                 body = f"Call transcript: {row['title']}\n" + ("\n".join(lines) or "(no speech was transcribed)")
                 if cut:
                     body += f"\n(cut short; the full transcript is on meeting {row['live_meeting_id']})"
-                self._post_in_thread(c, row, body)
-                c.execute("UPDATE calls SET transcript_posted_at=? WHERE id=?", (H.now(), call_id))
+                posted = self._post_in_thread(c, row, body)
+                c.execute(
+                    "UPDATE calls SET transcript_posted_at=?,transcript_message_id=? WHERE id=?",
+                    (H.now(), posted.get("id") if isinstance(posted, dict) else None, call_id),
+                )
         except Problem as exc:
             from .batch_work import report
 
@@ -840,31 +1161,37 @@ class Calls:
     def sweep(self):
         """Keep calls true to their threads (the scheduler's tick). Nothing here is a request, so a call that cannot reach
         LiveKit waits for the next tick. An ended call comes back until its room is closed, its transcript is posted and
-        LiveKit has dropped everyone who left."""
+        LiveKit has dropped everyone who left. Live Google Meets are read from Google last, all together (poll_live)."""
         self.flush(idle=True)
         with self.store.read() as c:
             ids = [
                 r["id"]
                 for r in c.execute(
-                    "SELECT id FROM calls WHERE state='live' OR finalized_at IS NULL OR id IN (SELECT call_id FROM "
-                    "call_participants WHERE media_removed_at IS NULL AND (left_at IS NOT NULL OR removed_at IS NOT NULL))"
+                    "SELECT id FROM calls WHERE state='live' OR finalized_at IS NULL OR (provider='tico' AND id IN "
+                    "(SELECT call_id FROM call_participants WHERE media_removed_at IS NULL AND "
+                    "(left_at IS NOT NULL OR removed_at IS NOT NULL)))"
                 )
             ]
+        polls = []
         for call_id in ids:
             try:
-                self._sweep_call(call_id)
+                if self._sweep_call(call_id):
+                    polls.append(call_id)
             except call_media.MediaUnavailable:
                 continue
             except Exception as exc:  # noqa: BLE001 - one call's sweep failing must not stop the others
                 from .batch_work import report
 
                 report("calls_sweep", call_id, exc, logger="tico.calls")
+        self.poll_live(polls)
 
     def _sweep_call(self, call_id):
+        """One call's pass. Returns True for a live Google Meet, whose status the sweep then reads from Google."""
         with self.store.read() as c:
             row = _call(c, call_id)
         if row["state"] == "ended":
-            self.drop_pending(call_id)
+            if not _google(row):
+                self.drop_pending(call_id)
             if row["finalized_at"] is None:
                 self.after_end(call_id)
             return
@@ -884,6 +1211,10 @@ class Calls:
                 )
                 if not attachment_standing(c, r["joined_by"], row["thread_id"], r["bot"])
             ]
+        if _google(row):
+            with self.store.transaction() as c:
+                self._keep_to_thread(c, row, revoked, stale_bots)
+            return True
         room = row["room_name"]
         exists = self.media.room_exists(room)
         if not exists and (row["media_seen_at"] or _started_long_ago(row["started_at"])):
@@ -896,35 +1227,438 @@ class Calls:
         with self.store.transaction() as c:
             if exists and row["media_seen_at"] is None:
                 c.execute("UPDATE calls SET media_seen_at=? WHERE id=?", (H.now(), call_id))
-            for actor in revoked:
-                cursor = c.execute(
-                    "UPDATE call_participants SET removed_at=? WHERE call_id=? AND actor=? "
-                    "AND left_at IS NULL AND removed_at IS NULL",
-                    (H.now(), call_id, actor),
-                )
-                if cursor.rowcount:
-                    self._record(c, actor, call_id, row["thread_id"], "call.participant_removed", {"actor": actor})
-            for slug in stale_bots:
-                cancel_bot_turns(c, row["live_meeting_id"], slug, "attacher_lost_thread")
-                c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
-                live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left", {"bot": slug, "by": "access_ended"})
-                self._record(
-                    c,
-                    row["connector_actor"],
-                    call_id,
-                    row["thread_id"],
-                    "call.bot_detached",
-                    {"bot": slug, "reason": "attacher_lost_thread"},
-                )
+            self._keep_to_thread(c, row, revoked, stale_bots)
         self.drop_pending(call_id)
         if exists and not self.media.running(call_id):
             self.media.start_recorder(call_id, room, self._audio_for(call_id))
+
+    def _keep_to_thread(self, c, row, revoked, stale_bots):
+        """Take out of the call the people who lost the thread, and the bots whose attacher did."""
+        call_id = row["id"]
+        for actor in revoked:
+            cursor = c.execute(
+                "UPDATE call_participants SET removed_at=? WHERE call_id=? AND actor=? "
+                "AND left_at IS NULL AND removed_at IS NULL",
+                (H.now(), call_id, actor),
+            )
+            if cursor.rowcount:
+                self._record(c, actor, call_id, row["thread_id"], "call.participant_removed", {"actor": actor})
+        for slug in stale_bots:
+            cancel_bot_turns(c, row["live_meeting_id"], slug, "attacher_lost_thread")
+            c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
+            live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left", {"bot": slug, "by": "access_ended"})
+            self._record(
+                c,
+                row["connector_actor"],
+                call_id,
+                row["thread_id"],
+                "call.bot_detached",
+                {"bot": slug, "reason": "attacher_lost_thread"},
+            )
+
+    # --- Google Meet: status from Google (or the Recorder), the recording source, and ending the conference
+
+    def _mint_meet(self, c, actor):
+        """A Meet access token for `actor`'s Workspace mailbox. Raises google_meet.MeetUnavailable: `refused` when Meet is
+        not authorized, the mailbox is not covered or Google names its refusal; `unreachable` when Google's token answer
+        names nothing (no answer, or its own error), which passes. Reads only."""
+        if not google_workspace.meet_ready(c):
+            raise google_meet.MeetUnavailable("refused")
+        box = google_workspace.workspace_mailbox(c, actor)
+        if not box:
+            raise google_meet.MeetUnavailable("refused")
+        try:
+            return google_workspace.mint(c, box, "meet")["access_token"]
+        except Problem as exc:
+            passes = exc.extra.get("kind") == "other"  # Google's token answer named no refusal
+            raise google_meet.MeetUnavailable("unreachable" if passes else "refused") from None
+
+    def _meet_token(self, c, actor):
+        """A Meet access token for `actor`'s Workspace mailbox, or None when there is none to have. Reads only."""
+        try:
+            return self._mint_meet(c, actor)
+        except google_meet.MeetUnavailable:
+            return None
+
+    def read_status(self, call_id):
+        """Google's answer for one live Google Meet, read as its connector with no transaction open: the space, then who
+        is still in its active conference, each read once. {"ok": True, "conference", "people"}; {"ok": False, "refused":
+        True} when Google will not give a status (no token for the mailbox, the scope or the API refused, no such space);
+        {"ok": False, "refused": False} when Google did not answer (a timeout, its own error, 429), which passes and
+        changes nothing. None when the call is no longer a live Meet."""
+        try:
+            with self.store.read() as c:
+                row = _call(c, call_id)
+                if not _google(row) or row["state"] != "live":
+                    return None
+                token = self._mint_meet(c, row["connector_actor"])
+            space = google_meet.get_space(token, row["meet_space"])
+            people = google_meet.active_participants(token, space["conference"]) if space["conference"] else []
+        except google_meet.MeetUnavailable as exc:
+            log.info("A Meet call's status read failed: %s", exc.kind)
+            return {"ok": False, "refused": exc.kind != "unreachable"}
+        return {"ok": True, "conference": space["conference"], "people": people}
+
+    def poll(self, call_id):
+        """One status read of a live Google Meet call, written, and the call wrapped up when the read ended it."""
+        seen = self.read_status(call_id)
+        if seen is None:
+            return
+        if self.apply_status(call_id, seen):
+            self.lock_later(call_id)
+            self.after_end(call_id)
+
+    def poll_live(self, ids):
+        """Read every live Google Meet in `ids` from Google at once, on the poll pool, and write what each read said.
+        The pass waits POLL_BUDGET_SECONDS at most: a read still out then is left to finish and the call is read again
+        on a later pass, never twice at once. A call whose read failed waits (`backoff`) before its next. Calls a read
+        ended are wrapped up by the next pass of the sweep, so this pass stays inside its budget."""
+        if not self.poll_pass.acquire(blocking=False):
+            return
+        try:
+            live = set(ids)
+            for gone in [call_id for call_id in self.backoff if call_id not in live]:
+                self.backoff.pop(gone, None)
+            due = []
+            for call_id in ids:
+                out = self.polling.get(call_id)
+                if out is not None and not out.done():
+                    continue
+                self.polling.pop(call_id, None)
+                waiting = self.backoff.get(call_id)
+                if waiting and waiting[1] > 0:
+                    waiting[1] -= 1
+                    continue
+                due.append(call_id)
+            if not due:
+                return
+            futures = {self.pollers.submit(self.read_status, call_id): call_id for call_id in due}
+            done, late = wait(futures, timeout=POLL_BUDGET_SECONDS)
+            for future in late:
+                if not future.cancel():
+                    self.polling[futures[future]] = future
+            index = None
+            for future, call_id in futures.items():
+                if future not in done:
+                    continue
+                try:
+                    seen = future.result()
+                    if seen is None:
+                        continue
+                    if seen["ok"]:
+                        self.backoff.pop(call_id, None)
+                    else:
+                        failures = (self.backoff.get(call_id) or [0, 0])[0] + 1
+                        self.backoff[call_id] = [failures, min(2 ** (failures - 1), POLL_SKIP_MAX)]
+                    if index is None and seen["ok"] and seen["people"]:
+                        with self.store.read() as c:
+                            index = self._people_index(c)  # the roster, read once for the whole pass
+                    if self.apply_status(call_id, seen, index):
+                        self.lock_later(call_id)
+                except Exception as exc:  # noqa: BLE001 - one call's status failing must not stop the others
+                    from .batch_work import report
+
+                    report("calls_poll", call_id, exc, logger="tico.calls")
+        finally:
+            self.poll_pass.release()
+
+    def apply_status(self, call_id, seen, index=None):
+        """Write what one read said (read_status), in one transaction with no request to Google in it, and end the call
+        when that is what it says. Only a good read changes the status: a read Google did not answer keeps the count,
+        who is in the call and the source as the last good read left them, and never ends the call but as stale.
+        A conference with nobody listed in it is nobody in the call (Google opens one for the pre-join page), and a call
+        may span several conferences (each rejoin after everyone left makes a new one). A call someone was seen in ends
+        `meet_ended` once good reads have shown nobody for EMPTY_SECONDS (`meet_empty_at`, the first of them); one
+        nobody was seen in within NO_ANSWER_SECONDS of its start ends `no_answer`. Google refusing leaves the status to
+        the Recorder, or to nothing, and a call with no status from Google ends `stale` STALE_SECONDS after it
+        started. Returns the end reason, or None."""
+        ended = None
+        with self.store.transaction() as c:
+            row = _call(c, call_id)
+            if not _google(row) or row["state"] != "live":
+                return None
+            self._drop_lost_source(c, row)
+            row = _call(c, call_id)
+            if seen["ok"]:
+                people = seen["people"]
+                self._set_status(c, row, "google", people, seen["conference"], index)
+                row = _call(c, call_id)
+                if people:
+                    ended = None  # someone is in it: the call goes on, whichever conference they are in
+                elif row["meet_seen_at"]:
+                    if row["meet_empty_at"] and _seconds_since(row["meet_empty_at"]) >= EMPTY_SECONDS:
+                        ended = "meet_ended"
+                elif _seconds_since(row["started_at"]) > NO_ANSWER_SECONDS:
+                    ended = "no_answer"
+            else:
+                if seen["refused"] and row["status_source"] == "google":
+                    self._set_status(c, row, None, [], None)
+                    row = _call(c, call_id)
+                quiet = (
+                    row["status_source"] != "google"
+                    or not row["meet_polled_at"]
+                    or _seconds_since(row["meet_polled_at"]) > QUIET_SECONDS
+                )
+                if quiet and _seconds_since(row["started_at"]) > STALE_SECONDS:
+                    ended = "stale"
+            if ended:
+                self.finish(c, call_id, ended)
+        return ended
+
+    def _drop_lost_source(self, c, row):
+        """A recording source who can no longer read the thread is no longer the source."""
+        if row["recorder_actor"] and not readable(c, row["recorder_actor"], row["thread_id"]):
+            before, in_call = _call(c, row["id"]), self._in_call_set(c, row["id"])
+            c.execute(
+                "UPDATE calls SET recorder_actor=NULL,recorder_claimed_at=NULL,status_source=CASE WHEN "
+                "status_source='recorder' THEN NULL ELSE status_source END,live_count=CASE WHEN "
+                "status_source='recorder' THEN 0 ELSE live_count END,updated_at=? WHERE id=?",
+                (H.now(), row["id"]),
+            )
+            self._changed(c, row, before, in_call)
+
+    @staticmethod
+    def _people_index(c):
+        """The company's people by spoken display name (a set: names can repeat) and by email, for matching."""
+        from .views import roster
+
+        names, emails = {}, {}
+        for person in roster(c).get("people") or []:
+            if person.get("hidden") or person.get("directory_left"):
+                continue
+            actor = "human:" + str(person["id"])
+            if _spoken(person.get("name")):
+                names.setdefault(_spoken(person.get("name")), set()).add(actor)
+            if person.get("email"):
+                emails[str(person["email"]).strip().lower()] = actor
+        return names, emails
+
+    def _match(self, c, row, people, index=None):
+        """The company people among a status source's `people`, by display name (one person with that name), then by
+        email when the source gives one. Only people who can read the call's thread are matched: anyone else is
+        counted in the call and never named in it. `index` is a pass's _people_index, read once for all its calls."""
+        if not people:
+            return set()
+        names, emails = index or self._people_index(c)
+        found = set()
+        for one in people:
+            named = names.get(_spoken(one.get("name"))) or set() if _spoken(one.get("name")) else set()
+            actor = next(iter(named)) if len(named) == 1 else emails.get(str(one.get("email") or "").lower())
+            if actor and readable(c, actor, row["thread_id"]):
+                found.add(actor)
+        return found
+
+    def _set_status(self, c, row, source, people, conference, index=None):
+        """Record what a status source says is in the call: who (in_call, and a participant row for anyone first seen),
+        how many, when someone was first and last seen, and when a read first showed nobody after that. `source` None
+        clears the status. Writes `call.updated` only when something changed."""
+        before, in_call_before = dict(row), self._in_call_set(c, row["id"])
+        stamp = H.now()
+        actors = self._match(c, row, people, index) if source else set()
+        for actor in actors:
+            c.execute(
+                "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1) "
+                "ON CONFLICT(call_id,actor) DO UPDATE SET in_call=1,left_at=NULL",
+                (row["id"], actor, stamp),
+            )
+            c.execute("INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], actor, stamp))
+        c.execute(
+            "UPDATE call_participants SET in_call=0 WHERE call_id=? AND in_call=1 AND actor NOT IN (%s)"
+            % ",".join("?" * len(actors)),
+            (row["id"], *sorted(actors)),
+        )
+        count = len(people) if source else 0
+        # SET reads the row as it was, so meet_seen_at below is the one from before this read.
+        c.execute(
+            "UPDATE calls SET live_count=?,status_source=?,meet_seen_at=COALESCE(meet_seen_at,?),"
+            "meet_active_at=COALESCE(?,meet_active_at),meet_polled_at=COALESCE(?,meet_polled_at),"
+            "meet_empty_at=CASE WHEN ? OR ? IS NULL OR meet_seen_at IS NULL THEN NULL "
+            "ELSE COALESCE(meet_empty_at,?) END,"
+            "meet_conference=COALESCE(?,meet_conference),updated_at=? WHERE id=?",
+            (
+                count,
+                source,
+                stamp if count else None,
+                stamp if count else None,
+                stamp if source else None,
+                count,
+                source,
+                stamp,
+                conference,
+                stamp,
+                row["id"],
+            ),
+        )
+        self._changed(c, row, before, in_call_before)
+
+    def presence(self, c, who, call_id, names):
+        """The recording source's Recorder says who it sees in the Meet window. Kept only while Google gives no status:
+        Google's own answer wins."""
+        row = self._readable_live(c, who, call_id)
+        if row["recorder_actor"] != who.actor:
+            raise Problem("forbidden", "Only the Recorder that records this call reports who is in it", 403)
+        if row["status_source"] != "google":
+            self._set_status(c, row, "recorder", [{"name": name} for name in names], None)
+        return self.view(c, call_id, who)
+
+    def _readable_live(self, c, who, call_id):
+        human_only(who)
+        self.auth.domain(who)
+        row = _call(c, call_id)
+        if not readable(c, who.actor, row["thread_id"]):
+            raise Problem("not_found", "Call not found", 404)
+        if not _google(row):
+            raise Problem("not_google_meet", "This call is a Tico Meet call: its server records it", 409)
+        if row["state"] != "live":
+            raise Problem("call_ended", "This call has ended", 409)
+        return row
+
+    def _source_answer(self, c, who, call_id):
+        row = _call(c, call_id)
+        holder = row["recorder_actor"]
+        shown = holder if holder and (holder == who.actor or self._sees(c, who, holder)) else None
+        seq = c.execute("SELECT seq FROM live_meetings WHERE id=?", (row["live_meeting_id"],)).fetchone()
+        return {
+            "source": holder == who.actor,
+            "meeting_id": row["live_meeting_id"],
+            "title": row["title"],
+            "source_actor": shown,
+            # A Recorder numbers its chunks from 1, so it records only into a meeting nobody has written to yet.
+            "has_transcript": bool(seq and seq[0]),
+        }
+
+    def claim_recorder(self, c, who, call_id):
+        """A person who can read the thread asks for their Recorder to be the call's recording source. The first claim
+        wins and its holder keeps it; anyone else is told who has it. Only someone in the call may (_in_call_or_thread).
+        """
+        row = self._readable_live(c, who, call_id)
+        if not self._in_call_or_thread(c, row, who.actor):
+            raise Problem("not_in_call", "Only someone in this call can record it", 403)
+        if row["recorder_actor"] is None:
+            before, in_call = dict(row), self._in_call_set(c, call_id)
+            stamp = H.now()
+            c.execute(
+                "UPDATE calls SET recorder_actor=?,recorder_claimed_at=?,updated_at=? WHERE id=? "
+                "AND recorder_actor IS NULL",
+                (who.actor, stamp, stamp, call_id),
+            )
+            c.execute(
+                "INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], who.actor, stamp)
+            )
+            audit_log.write(c, who.actor, f"call:{call_id}", None, {"kind": "call.recorder_claimed"})
+            self._changed(c, row, before, in_call)
+        return self._source_answer(c, who, call_id)
+
+    @staticmethod
+    def _in_call_or_thread(c, row, actor):
+        """Whether `actor` is in the call, for claiming its recording source: its connector, someone with a place in it
+        that was not taken away (they opened it from Tico, or a status source saw them in it), or one of the thread's
+        own people (its members; a DM's or a group chat's people). Reading the thread alone, as anyone can a company
+        thread, is not being in the call."""
+        if actor == row["connector_actor"]:
+            return True
+        if c.execute(
+            "SELECT 1 FROM call_participants WHERE call_id=? AND actor=? AND removed_at IS NULL", (row["id"], actor)
+        ).fetchone():
+            return True
+        root = threads.root_of(c, threads.thread_row(c, row["thread_id"]))
+        return actor in threads._dm_members(c, root)
+
+    def release_recorder(self, c, who, call_id):
+        """The holder stops being the recording source; the Recorder's status goes with it."""
+        human_only(who)
+        self.auth.domain(who)
+        row = _call(c, call_id)
+        if not readable(c, who.actor, row["thread_id"]):
+            raise Problem("not_found", "Call not found", 404)
+        if row["recorder_actor"] and row["recorder_actor"] != who.actor:
+            raise Problem(
+                "forbidden", "Only the person whose Recorder records this call can stop it being the source", 403
+            )
+        if row["recorder_actor"] == who.actor:
+            before, in_call = dict(row), self._in_call_set(c, call_id)
+            c.execute(
+                "UPDATE calls SET recorder_actor=NULL,recorder_claimed_at=NULL,updated_at=? WHERE id=?",
+                (H.now(), call_id),
+            )
+            if row["status_source"] == "recorder" and row["state"] == "live":
+                # An ended call keeps its source: it says something watched the call (a missed call, not an unknown one).
+                c.execute("UPDATE calls SET status_source=NULL,live_count=0 WHERE id=?", (call_id,))
+                c.execute("UPDATE call_participants SET in_call=0 WHERE call_id=?", (call_id,))
+            audit_log.write(c, who.actor, f"call:{call_id}", None, {"kind": "call.recorder_released"})
+            self._changed(c, row, before, in_call)
+        return self._source_answer(c, who, call_id)
+
+    def ringing(self, c, who):
+        """The live calls ringing `who` now, in threads they can still read, newest first."""
+        human_only(who)
+        self.auth.domain(who)
+        pattern = "%" + json.dumps(who.actor).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        found = []
+        for r in c.execute(
+            "SELECT id,thread_id FROM calls WHERE state='live' AND ring LIKE ? ESCAPE '\\' "
+            "ORDER BY started_at DESC LIMIT ?",
+            (pattern, RINGING_LIMIT * 5),
+        ):
+            if len(found) >= RINGING_LIMIT:
+                break
+            if not readable(c, who.actor, r["thread_id"]):
+                continue
+            shown = self.view(c, r["id"], who)
+            if shown["ring"]:
+                found.append(shown)
+        return {"calls": found}
+
+    def end_conference(self, call_id):
+        """Ask Google to end a Meet call's active conference, as its connector, then lock its space so the link is spent.
+        Best effort: the call ends either way."""
+        with self.store.read() as c:
+            row = _call(c, call_id)
+            token = self._meet_token(c, row["connector_actor"]) if _google(row) else None
+        if token and row["meet_space"]:
+            google_meet.end_active_conference(token, row["meet_space"])
+            self._lock(row, token)
+
+    def lock_space(self, call_id):
+        """Lock an ended Meet call's space (google_meet.lock_space), as its connector. Best effort: a failure is logged."""
+        with self.store.read() as c:
+            row = _call(c, call_id)
+            token = self._meet_token(c, row["connector_actor"]) if _google(row) else None
+        if token and row["meet_space"]:
+            self._lock(row, token)
+        elif _google(row):
+            log.warning("A Meet call's space was not locked: no token for its connector")
+
+    @staticmethod
+    def _lock(row, token):
+        try:
+            locked = google_meet.lock_space(token, row["meet_space"])
+        except Exception:  # noqa: BLE001 - locking is best effort: the call has ended either way
+            locked = False
+        if not locked:
+            log.warning("A Meet call's space was not locked; its link still opens it (call %s)", row["id"])
+
+    def lock_later(self, call_id):
+        """Lock the space of a Meet the sweep ended, on the poll pool, so the heartbeat never waits on Google for it."""
+
+        def lock():
+            try:
+                self.lock_space(call_id)
+            except Exception as exc:  # noqa: BLE001 - reported; the call has ended either way
+                from .batch_work import report
+
+                report("calls_lock", call_id, exc, logger="tico.calls")
+
+        self.pollers.submit(lock)
 
     def drop_pending(self, call_id):
         """Remove from the call's LiveKit room everyone who left or lost access. Each removal is kept until LiveKit confirms
         it, so a person who is still connected is not left in the room because one request failed."""
         with self.store.read() as c:
-            room = _call(c, call_id)["room_name"]
+            row = _call(c, call_id)
+            if _google(row):
+                return  # nobody is in a LiveKit room for a Meet
+            room = row["room_name"]
             pending = [
                 r["actor"]
                 for r in c.execute(
@@ -940,9 +1674,11 @@ class Calls:
     def drop_from_media(self, call_id, actor):
         """Drop a person who just left from the room now. A failure leaves the removal pending for the sweep."""
         with self.store.read() as c:
-            room = _call(c, call_id)["room_name"]
+            row = _call(c, call_id)
+        if _google(row):
+            return True  # leaving a Meet is Google's; Tico only records it
         try:
-            return self._remove_from_room(call_id, room, actor)
+            return self._remove_from_room(call_id, row["room_name"], actor)
         except Exception as exc:  # noqa: BLE001 - a failed removal is reported and left pending for the sweep
             from .batch_work import report
 
@@ -978,7 +1714,8 @@ def install_calls(app, store, auth, write):
     @app.get("/api/v2/threads/{thread_id}/calls")
     def list_calls(request: Request, thread_id: str, limit: int = 25, before: str = ""):
         """A thread's calls, newest first, a page at a time. `next_before` is the cursor for the next page, or null.
-        `available` is whether this server can start one (Tico Meet is set up)."""
+        `providers` is what the viewer could start, in the order `auto` tries them; `available` is whether that is
+        anything."""
         who = request.state.identity
         human_only(who)
         auth.domain(who)
@@ -986,8 +1723,11 @@ def install_calls(app, store, auth, write):
         at, _, call_id = before.partition("|")
         with store.read() as c:
             threads.require(c, threads.viewer(auth, who), thread_id)
+            offered = calls.providers(c, who)
+            address = google_workspace.google_address(c, who.actor) or ""
+            installed = _recorder_recent(c, who)
             found = [
-                _summary(r)
+                {**_summary(r), **calls.provider_fields(c, r, who, address=address, installed=installed)}
                 for r in c.execute(
                     "SELECT * FROM calls WHERE thread_id=? AND (?='' OR started_at<? OR (started_at=? AND id<?)) "
                     "ORDER BY started_at DESC, id DESC LIMIT ?",
@@ -1005,15 +1745,55 @@ def install_calls(app, store, auth, write):
         return {
             "calls": shown,
             "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None,
-            "available": calls.media is not None,
+            "available": bool(offered),
+            "providers": offered,
         }
 
     @app.post("/api/v2/threads/{thread_id}/calls")
     def start_call(request: Request, thread_id: str, body: StartCall):
+        """Start a call. A Google Meet start makes its space before the write, outside any transaction; a retry with the
+        same idempotency key is answered from the first answer and makes no second space (the lock keeps two copies
+        sent at once from both making one)."""
         who = request.state.identity
-        result = write(request, body, lambda c: calls.start(c, who, thread_id, body.title, body.speak_replies))
-        calls.begin_media(result["id"])
+        key = request.headers.get("idempotency-key") or ""
+        entry = calls.start_lock(who.actor, key)
+        try:
+            with entry[0]:
+                replayed = calls.replayed(request, who)
+                provider, space = "tico", None
+                if not replayed:
+                    with store.read() as c:
+                        provider = calls.choose(c, who, thread_id, body.provider, body.speak_replies)
+                    if provider == "google_meet":
+                        try:
+                            space = calls.make_space(who)
+                        except Problem:
+                            with store.read() as c:
+                                fallback = body.provider == "auto" and "tico" in calls.providers(c, who)
+                            if not fallback:
+                                raise
+                            provider = "tico"  # auto: Google could not make it, and Tico Meet can
+                result = write(
+                    request,
+                    body,
+                    lambda c: calls.start(
+                        c, who, thread_id, body.title, body.speak_replies, provider=provider, space=space
+                    ),
+                )
+        finally:
+            calls.start_unlock(who.actor, key, entry)
+        if result.get("provider", "tico") == "tico":
+            calls.begin_media(result["id"])
+        if not replayed:
+            calls.ring_started(result["id"])
         return result
+
+    @app.get("/api/v2/calls/ringing")
+    def ringing_calls(request: Request):
+        """The live calls ringing the caller now (page load and reconnect), in threads they can read."""
+        who = request.state.identity
+        with store.read() as c:
+            return calls.ringing(c, who)
 
     @app.get("/api/v2/calls/{call_id}")
     def call_detail(request: Request, call_id: str):
@@ -1029,6 +1809,8 @@ def install_calls(app, store, auth, write):
         )
         with store.read() as c:
             row = calls.check_join(c, who, call_id)  # a token is minted only for a person who may still join
+        if _google(row):
+            return {"call": result, "url": result.get("join_url")}  # Google runs the media: no token
         return {"call": result, **calls.token_payload(row, who.actor)}
 
     @app.post("/api/v2/calls/{call_id}/token")
@@ -1043,6 +1825,8 @@ def install_calls(app, store, auth, write):
                 raise Problem("call_access_removed", "You were removed from this call; join again to get a token", 403)
             if not readable(c, who.actor, row["thread_id"]):
                 raise Problem("not_found", "Call not found", 404)
+            if _google(row):
+                raise Problem("not_tico_meet", "This call is a Google Meet: open its link, no token is needed", 409)
             if not participant or participant["left_at"]:
                 raise Problem("not_joined", "Join the call to get a token", 409)
             if row["state"] != "live":
@@ -1060,7 +1844,9 @@ def install_calls(app, store, auth, write):
     def end_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         with store.read() as c:
-            calls._connector(c, who, call_id)  # refuses before any speech is sent on the call's behalf
+            row = calls._connector(c, who, call_id)  # refuses before any speech is sent on the call's behalf
+        if _google(row) and row["state"] == "live":
+            calls.end_conference(call_id)  # best effort: Google removes everyone; the call ends either way
         calls.finish_speech(call_id)
         result = write(request, body, lambda c: calls.end(c, who, call_id))
         calls.after_end(call_id)
@@ -1080,3 +1866,21 @@ def install_calls(app, store, auth, write):
     def detach_call_bot(request: Request, call_id: str, bot: str, body: Empty):
         who = request.state.identity
         return write(request, body, lambda c: calls.detach_bot(c, who, call_id, bot))
+
+    @app.post("/api/v2/calls/{call_id}/presence")
+    def call_presence(request: Request, call_id: str, body: Presence):
+        """The recording source's Recorder reports the names in the Meet window; kept only while Google gives none."""
+        who = request.state.identity
+        return write(request, body, lambda c: calls.presence(c, who, call_id, body.names))
+
+    @app.post("/api/v2/calls/{call_id}/recorder")
+    def claim_call_recorder(request: Request, call_id: str, body: Empty):
+        """Make the caller's Tico Recorder the call's recording source: the first claim wins and its holder keeps it."""
+        who = request.state.identity
+        return write(request, body, lambda c: calls.claim_recorder(c, who, call_id))
+
+    @app.delete("/api/v2/calls/{call_id}/recorder")
+    def release_call_recorder(request: Request, call_id: str, body: Empty):
+        """The holder's Recorder stops being the call's recording source."""
+        who = request.state.identity
+        return write(request, body, lambda c: calls.release_recorder(c, who, call_id))

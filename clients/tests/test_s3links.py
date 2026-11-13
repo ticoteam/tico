@@ -81,6 +81,15 @@ def test_tico_s_own_file_bucket_is_never_mapped(caplog):
     ]
 
 
+def test_a_base_the_url_parser_rejects_is_ignored_with_a_log_line_not_raised(caplog):
+    with caplog.at_level(logging.WARNING, logger="tico.config"):
+        parsed = s3links.parse("broken=https://[, acme-files=https://d1.example")
+    assert parsed == {"acme-files": "https://d1.example"}
+    assert [r.getMessage() for r in caplog.records] == [
+        "TICO_S3_VIEW_URLS: ignored the entry for broken: the base must be https://host[/prefix]"
+    ]
+
+
 class Api:
     """The server: `config` carries the mapping; each write is recorded and echoed."""
 

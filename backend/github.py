@@ -164,6 +164,23 @@ def fire_once(detail, item):
     return True
 
 
+def end_own_snooze(c, task_id, why):
+    """Every check on a head finished: a snooze the owner bot set on its own task is how it waits for them, so it ends
+    here, as SYSTEM, and the head's `pr_checks_done` wakes it (stress run, Nov 12: "wakes when its checks finish" slept
+    40 minutes past them). A snooze anyone else set stays, and so does the owner's while the task waits on a person:
+    those results stay notes (`rules._pr_decision`). True when it ended."""
+    from . import task_engine as E
+
+    row = E.task(c, task_id)
+    snooze = (row or {}).get("snooze") or {}
+    if not row or not snooze or snooze.get("by_id") != row.get("owner_id") or not E.is_bot(row.get("owner_id")):
+        return False
+    if E._turn_of(c, {**row, "snooze": None})[0] != row["owner_id"]:
+        return False
+    E.unsnooze(c, task_id, E.SYSTEM, why)
+    return True
+
+
 def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
@@ -192,6 +209,8 @@ def flush_wakes(c):
                     )
                 if burst.get("notes"):  # reviews that are not a person's: a note for the next run
                     E.tell_owner(c, task["id"], "\n".join(burst["notes"]), f"github:{at}:notes", wake=False)
+                if burst.get("done"):
+                    end_own_snooze(c, task["id"], burst["done"][-1]["item"])
                 for done in burst.get("done", []):
                     E.tell_owner(
                         c,
@@ -262,6 +281,36 @@ def _review_role(c, task, payload, role):
 WORKTREE_BRANCH = re.compile(r"^tico/[0-9a-f]{8}-")
 
 
+LIVE_PR_STATES = ("open", "draft")
+
+
+def _settle_branch_prs(c, task_id, repo, branch, number, state, have):
+    """A task keeps one live pull request per worktree branch: two open on one head are a race (a bot's own
+    `gh pr create` and Tico's draft in the same second), and the earliest is kept. Later live links on the branch are
+    removed, and so is `have` (this pull request's own link) when an earlier live one exists. A closed pull request is
+    never newly linked to a branch that already has one. Returns whether this pull request may stay or be linked."""
+    others = H._rows(
+        c.execute(
+            "SELECT id,number,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+            "AND lower(repo)=? AND branch=? AND number<>?",
+            (task_id, repo.lower(), branch, number),
+        )
+    )
+    if not others:
+        return True
+    if state == "closed":
+        return bool(have)
+    live = [o for o in others if o["state"] in LIVE_PR_STATES]
+    if state == "open" and (not have or have["state"] in LIVE_PR_STATES):
+        if any(o["number"] < number for o in live):
+            if have:
+                H.task_unlink(c, H.KEEPER, task_id, have["id"])
+            return False
+        for o in live:
+            H.task_unlink(c, H.KEEPER, task_id, o["id"])
+    return True
+
+
 def register_worktree_pr(c, pr):
     """A pull request whose head is a task worktree's branch in the same repository belongs to that task: its link is
     registered here, so a worktree whose bot never ran `tico task link` still gets the link its release waits on.
@@ -283,16 +332,25 @@ def register_worktree_pr(c, pr):
     from .item_sources import github as GS
 
     made = set()
+    number = int(match.group(3))
+    state = "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open"
     for row in H._rows(
         c.execute(
             "SELECT id,task_id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? AND branch=?",
             (repo.lower(), branch),
         )
     ):
-        if not c.execute(
-            "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
-            (row["task_id"], repo.lower(), int(match.group(3))),
-        ).fetchone() and not GS.queues_now(c, row["task_id"]):  # in Merge only a person links a new PR
+        have = c.execute(
+            "SELECT id,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+            "AND lower(repo)=? AND number=?",
+            (row["task_id"], repo.lower(), number),
+        ).fetchone()
+        # In Merge only a person links a new PR, and the links the stage queues stay as they are.
+        if (
+            not GS.queues_now(c, row["task_id"])
+            and _settle_branch_prs(c, row["task_id"], repo, branch, number, state, have)
+            and not have
+        ):
             link = H.task_link(c, H.KEEPER, row["task_id"], url)
             made.add(link["id"])
             H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
@@ -449,6 +507,10 @@ def base_moved(c, repo, branch, sha="", *, default_branch="", merged_number=None
         detail["recheck"] = {"sha": sha, "at": now, "due": now, "tries": 0}
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         marked += 1
+    from .item_sources import github as GS
+
+    # A bot snoozed on the Merge stage may wait for this move ("until #3417 merges"): it is woken now.
+    GS.base_moved(c, repo, branch, sha, default_branch=default_branch, merged_number=merged_number)
     return marked
 
 
@@ -697,6 +759,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             if detail.get("head_sha") != head_sha:
                 detail.pop("checks", None)
                 detail.pop("checks_dropped", None)
+                detail.pop(SUITE_RUNS, None)
                 detail.pop(DROPPED_PENDING, None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
@@ -729,6 +792,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _queue_event(detail, action, payload, pr, detail.get("head_sha") or "")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
+        # A commit that starts conflicting, or stops at the same commit (its base moved again): news on the Merge stage,
+        # where it ends a bot's snooze (item_sources/github.py `mergeable_news`). Clean after a new commit is the push's.
+        mergeable_moved = conflict_wake or (mergeable == "clean" and detail.get("conflict_head") == conflict_head)
         if mergeable == "conflict":
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
@@ -777,6 +843,12 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
+        if mergeable_moved and match:
+            from .item_sources import github as GS
+
+            ref = GS.pr_ref(f"{match.group(1)}/{match.group(2)}", int(match.group(3)))
+            if GS.mergeable_news(c, task["id"], ref, str(detail.get("head_sha") or ""), mergeable):
+                conflict_wake = False  # that wake says it: no second one from the burst
         if conflict_wake and match:
             from . import pr_conflicts
 
@@ -795,6 +867,13 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     _merge_wakes(c, merged, url)
+    pr_match = PR_LINK.match(url)
+    if action == "closed" and pr_match:
+        from .item_sources import github as GS
+
+        # A bot may be snoozed on another task "waiting for #3417 to land": this PR need not be linked to that task.
+        repo_name = f"{pr_match.group(1)}/{pr_match.group(2)}"
+        GS.named_pr_done(c, repo_name, int(pr_match.group(3)), "merged" if pr.get("merged") else "closed")
     if action == "closed" and pr.get("merged"):
         # The merge moved its base: the other pull requests on it may conflict now, and GitHub tells them nothing.
         repository = payload.get("repository") or {}
@@ -900,23 +979,72 @@ def _suite_key(suite, run):
 
 
 def _check_state(result):
-    """One check's result as the link keeps it: passing, skipped, pending or failing."""
+    """One check's result as the link keeps it: passing, skipped, pending, cancelled or failing. A cancelled (or stale)
+    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand."""
     return (
         "passing"
         if result in ("success", "neutral")
         else "skipped"
         if result == "skipped"
+        else "cancelled"
+        if result in ("cancelled", "stale")
         else ("pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
     )
 
 
-def _overall(checks):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing. A head
-    whose every check was skipped has not been checked (a draft pull request's run skips every job, and nothing on
-    main requires a check), so it reads pending: an all-skipped head never reads green."""
-    states = set(checks.values())
+# A link's `detail` key: {suite key: names of the check runs seen in that suite}, so a cancelled suite is superseded
+# only by a newer run of the same workflow (`_counted`). GitHub Actions makes one suite per workflow run, and a check
+# suite names no workflow, so its runs' names are what tie two suites to one workflow.
+SUITE_RUNS = "suite_runs"
+SUITE_RUN_NAMES = 20  # names kept per suite: one shared name is enough to tie two suites
+
+
+def _add_suite_run(suite_runs, suite_key, name):
+    names = suite_runs.setdefault(suite_key, [])
+    if name not in names and len(names) < SUITE_RUN_NAMES:
+        names.append(name)
+
+
+def _counted(checks, suite_runs=None):
+    """A head's checks without each cancelled suite that a newer suite of the same workflow superseded: a concurrency
+    group cancels the older duplicate workflow run when the newer one starts (Nov 12 stress run, I38). The same
+    workflow is a newer suite (ids only grow) of the same App with a check run of the same name (`SUITE_RUNS`). A
+    suite with no id, or whose runs were never seen, is never superseded: a cancelled workflow is never hidden behind
+    another workflow of the same App."""
+    suite_runs = suite_runs or {}
+
+    def split(key):
+        app, _, sid = key[6:].partition("#")
+        return app, int(sid) if sid.isdigit() else 0
+
+    def superseded(key):
+        app, sid = split(key)
+        names = set(suite_runs.get(key) or ())
+        return bool(sid and names) and any(
+            other.startswith("suite:")
+            and split(other)[0] == app
+            and split(other)[1] > sid
+            and names & set(suite_runs.get(other) or ())
+            for other in checks
+        )
+
+    return {k: v for k, v in checks.items() if not (v == "cancelled" and k.startswith("suite:") and superseded(k))}
+
+
+def _overall(checks, suite_runs=None):
+    """A head's checks as one state: failing if any failed, else pending if any is still going, else cancelled if one
+    was cancelled with no newer run of its workflow after it (`_counted`), else passing. A head whose every check was
+    skipped has not been checked (a draft pull request's run skips every job, and nothing on main requires a check), so
+    it reads pending: an all-skipped head never reads green."""
+    states = set(_counted(checks, suite_runs).values())
     return (
-        "failing" if "failing" in states else "pending" if "pending" in states or states <= {"skipped"} else "passing"
+        "failing"
+        if "failing" in states
+        else "pending"
+        if "pending" in states or states <= {"skipped"}
+        else "cancelled"
+        if "cancelled" in states
+        else "passing"
     )
 
 
@@ -947,13 +1075,25 @@ def _dropped(checks, kept):
     """The worst state of a non-passing check that the stored copy `kept` leaves out, or None. The copy cannot show it,
     so the link keeps this marker (`checks_dropped`) until a fresh read from GitHub (`apply_checks`) stores the head's
     whole list again: the head reads no better than this while the copy's own checks turn green."""
-    gone = [state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped")]
+    gone = [
+        state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped", "cancelled")
+    ]
     return "failing" if "failing" in gone else "pending" if gone else None
 
 
 def _with_dropped(state, dropped):
     """A head's state as a webhook reads it from the stored copy: the copy's state, or the dropped check's if worse."""
-    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else "passing"
+    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else state
+
+
+def _set_suite_runs(detail, suite_runs):
+    """Keep the run names of at most `CHECKS_KEPT` suites, the newest added last, and none when there are none. A
+    suite not in the stored copy keeps its names too: a run's webhook can come before its suite's own."""
+    kept_runs = dict(list(suite_runs.items())[-CHECKS_KEPT:])
+    if kept_runs:
+        detail[SUITE_RUNS] = kept_runs
+    else:
+        detail.pop(SUITE_RUNS, None)
 
 
 def _worst(a, b):
@@ -991,24 +1131,44 @@ def _still_going(detail):
 
 def _finish(c, task, link, detail, full, checks):
     """Every check on head `full` has finished: the head's one `pr_checks_done` per result. A redelivery or a re-run that
-    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
-    either way."""
-    failed = list(
-        dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing")
-    )
-    outcome = "fail" if failed else "pass"
+    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. A head whose only
+    non-passing check was cancelled (and not superseded, `_counted`) says so: re-run it, there is no code to fix.
+    Returns (head, outcome) either way."""
+    counted = _counted(checks, detail.get(SUITE_RUNS))
+
+    def named(state):
+        return list(
+            dict.fromkeys(
+                k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in counted.items() if v == state
+            )
+        )
+
+    failed, cancelled = named("failing"), named("cancelled")
+    outcome = "fail" if failed else "cancelled" if cancelled else "pass"
     finished = detail.get("checks_done", [])
     if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
         return full, outcome
     detail["checks_done"] = list(dict.fromkeys(finished + [f"{full}:{outcome}"]))[-10:]
     sha = full[:12]
-    done = (
-        f"Checks finished on {link['title']}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
-        f"{link['url']}/checks" + (f" at {sha}" if sha else "")
+    said = (
+        "failed (" + ", ".join(failed) + ")"
+        if failed
+        else "cancelled, not failed (" + ", ".join(cancelled) + "); re-run them, there is no code to fix"
+        if cancelled
+        else "passed"
     )
+    done = f"Checks finished on {link['title']}: {said} {link['url']}/checks" + (f" at {sha}" if sha else "")
     armed = fire_once(detail, done)
     queue_checks_done(c, task, full, outcome, done, armed)
     return full, outcome
+
+
+class ReadChecks(dict):
+    """`read_checks`' answer: {check key: state}, and `suite_runs` ({suite key: its check runs' names}, `SUITE_RUNS`)."""
+
+    def __init__(self, checks, suite_runs):
+        super().__init__(checks)
+        self.suite_runs = suite_runs
 
 
 # A check suite GitHub queued for a head that has had no check run for this long never started: an installed App (a
@@ -1055,13 +1215,15 @@ def read_checks(service, headers, repo, head):
         ):
             continue
         checks[_suite_key(suite, suite)] = _check_state(suite.get("conclusion") or suite.get("status") or "pending")
+    suite_runs = {}
     for run in runs:
-        checks[str(run.get("name") or "Checks")[:200]] = _check_state(
-            run.get("conclusion") or run.get("status") or "pending"
-        )
+        name = str(run.get("name") or "Checks")[:200]
+        checks[name] = _check_state(run.get("conclusion") or run.get("status") or "pending")
+        if (run.get("check_suite") or {}).get("id"):
+            _add_suite_run(suite_runs, _suite_key(run["check_suite"], run), name)
     for status in statuses:
         checks[str(status.get("context") or "Checks")[:200]] = _check_state(status.get("state") or "pending")
-    return checks or None
+    return ReadChecks(checks, suite_runs) if checks else None
 
 
 def _fresh_checks(service, repo, head):
@@ -1146,7 +1308,12 @@ def apply_checks(c, link_id, head, checks, since=None):
     if since is not None and link.get("updated_at") != since:
         return None
     # The state and the failures named come from the whole read; only the stored copy is cut.
-    state, kept = _overall(checks), _kept(checks)
+    suite_runs = getattr(checks, "suite_runs", None)
+    if suite_runs is not None:
+        suite_runs = {k: v for k, v in suite_runs.items() if k in checks}
+    else:
+        suite_runs = detail.get(SUITE_RUNS) or {}
+    state, kept = _overall(checks, suite_runs), _kept(checks)
     dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
     # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
     # even when its state stays the same.
@@ -1156,10 +1323,12 @@ def apply_checks(c, link_id, head, checks, since=None):
         and link.get("checks") == state
         and detail.get("checks_dropped") == dropped
         and bool(detail.get(DROPPED_PENDING)) == dropped_pending
+        and (detail.get(SUITE_RUNS) or {}) == suite_runs
         and not held
     ):
         return state
     detail["checks"] = kept
+    _set_suite_runs(detail, suite_runs)
     _set_dropped(detail, dropped, dropped_pending)
     changed = state != link.get("checks")
     # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
@@ -1244,12 +1413,16 @@ def pr_signal(c, event, payload):
                 # that is still going reopens it (a re-run keeps the suite id); a finished run delivered after its
                 # suite completed is a stale snapshot and does not.
                 checks[_suite_key(own, signal)] = "pending"
+            suite_runs = detail.get(SUITE_RUNS) or {}
+            if own.get("id"):
+                _add_suite_run(suite_runs, _suite_key(own, signal), name)
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
             pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
             _set_dropped(detail, dropped, pending)
-            fields["checks"] = _with_dropped(_overall(checks), dropped)
+            _set_suite_runs(detail, suite_runs)
+            fields["checks"] = _with_dropped(_overall(checks, suite_runs), dropped)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
             # can be the last one, so it counts too.
@@ -1521,7 +1694,69 @@ def _open_draft(service, repo, branch, worktree):
     if response.status_code != 201:
         _pr_error(service, repo, branch, failed + f" (GitHub {response.status_code})")
         return []
-    return [response.json()]
+    return [_one_draft(service, repo, branch, response.json(), token)]
+
+
+def _one_draft(service, repo, branch, mine, token):
+    """GitHub accepts two pull requests on one head when both are opened in the same moment (a bot's own
+    `gh pr create` racing the draft above). The branch's open pull requests are read again right after: the earliest
+    on the same base is kept, and each later one is unlinked from its tasks and then closed with a note, so its close
+    is no news to anyone. Returns the kept pull request; a read that fails keeps the new draft."""
+    number = mine.get("number")
+    if not isinstance(number, int):
+        return mine
+    auth = {"Authorization": "Bearer " + token}
+    path = f"/repos/{quote(repo, safe='/')}"
+    try:
+        response = service._call(
+            "GET",
+            path + "/pulls",
+            headers=auth,
+            params={"head": repo.split("/")[0] + ":" + branch, "state": "open", "per_page": 10},
+        )
+        listed = response.json() if response.status_code == 200 else []
+    except (Problem, ValueError):  # GitHub unreachable, or an answer that is not JSON
+        logging.getLogger("tico.github").warning("Reading %s %s after its draft failed", repo, branch)
+        return mine
+    base = (mine.get("base") or {}).get("ref")
+    same = {
+        pr["number"]: pr
+        for pr in (listed if isinstance(listed, list) else [])
+        if isinstance(pr, dict)
+        and isinstance(pr.get("number"), int)
+        and (pr.get("head") or {}).get("ref") == branch
+        and (pr.get("base") or {}).get("ref") == base
+    }
+    same[number] = mine
+    kept = same[min(same)]
+    later = sorted(n for n in same if n != kept["number"])
+    if not later:
+        return mine
+    with service.store.transaction() as c:
+        for row in H._rows(
+            c.execute(
+                "SELECT id,task_id FROM task_links WHERE kind='pr' AND lower(repo)=? AND number IN ("
+                + ",".join("?" * len(later))
+                + ") AND coalesce(state,'open') IN ('open','draft')",
+                (repo.lower(), *later),
+            )
+        ):
+            H.task_unlink(c, H.KEEPER, row["task_id"], row["id"])
+    for n in later:
+        try:
+            service._call(
+                "POST",
+                f"{path}/issues/{n}/comments",
+                headers=auth,
+                json={"body": f"Closed by Tico as a duplicate: #{kept['number']} is this branch's pull request."},
+            )
+            service._call("PATCH", f"{path}/pulls/{n}", headers=auth, json={"state": "closed"})
+        except Problem:  # GitHub unreachable: the task already keeps only the earliest
+            logging.getLogger("tico.github").warning("Closing duplicate %s #%s failed", repo, n)
+    logging.getLogger("tico.github").info(
+        "Two pull requests opened on %s %s at once: kept #%s, closed %s", repo, branch, kept["number"], later
+    )
+    return kept
 
 
 def _remote_work(service, repo, branch, base, auth):
@@ -1539,6 +1774,20 @@ def _remote_work(service, repo, branch, base, auth):
     if response.status_code != 200:
         raise RuntimeError(f"GitHub {response.status_code}")
     return int(response.json().get("ahead_by") or 0)
+
+
+def _covered(service, repo, branch, prs, auth):
+    """The open pull request of the same task that already holds all of this branch's work, by number, or None. A bot
+    that rebases a task's pull request from its own worktree pushes the pull request's branch, and its worktree's
+    branch can be pushed too, at the same commit: that is no new work, and a draft for it would be the task's second
+    pull request. A pull request whose head is not known yet is read."""
+    for number, head in sorted(prs.items()):
+        if not head:
+            response = service._call("GET", f"/repos/{quote(repo, safe='/')}/pulls/{number}", headers=auth)
+            head = (response.json().get("head") or {}).get("sha") if response.status_code == 200 else None
+        if head and _remote_work(service, repo, branch, head, auth) == 0:
+            return number
+    return None
 
 
 def reconcile_worktree_prs(service):
@@ -1581,7 +1830,10 @@ def reconcile_worktree_prs(service):
             for w in H._rows(
                 c.execute(
                     "SELECT w.repo,w.branch,w.detail,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
-                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
+                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base,"
+                    "(SELECT json_group_array(json_array(p.number,json_extract(p.detail,'$.head_sha'))) FROM task_links p "
+                    "WHERE p.task_id=w.task_id AND p.kind='pr' AND lower(p.repo)=lower(w.repo) AND p.number IS NOT NULL "
+                    "AND coalesce(p.state,'open') IN ('open','draft')) AS prs "
                     "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
                     "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND "
                     + held.format("w")
@@ -1590,8 +1842,9 @@ def reconcile_worktree_prs(service):
                     (org,),
                 )
             ):
-                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
+                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set(), "prs": {}})
                 b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
+                b["prs"].update((n, sha) for n, sha in H._json(w["prs"], []) or [])
                 b["heads"].update(H.worktree_heads(H._json(w["detail"], {}) or {}))
             branches = list(branches.values())
 
@@ -1658,7 +1911,12 @@ def reconcile_worktree_prs(service):
                                     remote={"ahead": ahead or 0, "absent": ahead is None, "heads": known, "at": H.now()}
                                 ),
                             )
-                            if ahead:
+                            covered = ahead and _covered(service, repo, key, link["prs"], auth)
+                            if covered:
+                                logging.getLogger("tico.github").info(
+                                    "No draft for %s %s: its work is already in #%s", repo, key, covered
+                                )
+                            elif ahead:
                                 found = _open_draft(service, repo, key, link)
                                 retry = 180 if found else 900
                     registering = kind == "branch" and found
@@ -2133,7 +2391,7 @@ def install_github(app, settings, store):
 FACT_READ = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
 mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
 pullRequest(number:$number){id state merged isDraft headRefOid mergedAt mergeCommit{oid} isInMergeQueue
-isMergeQueueEnabled autoMergeRequest{enabledAt}
+isMergeQueueEnabled autoMergeRequest{enabledAt} mergeable mergeStateStatus
 timelineItems(last:1,itemTypes:[ADDED_TO_MERGE_QUEUE_EVENT,REMOVED_FROM_MERGE_QUEUE_EVENT,AUTO_MERGE_ENABLED_EVENT,
 AUTO_MERGE_DISABLED_EVENT]){nodes{__typename ... on RemovedFromMergeQueueEvent{reason createdAt}
 ... on AutoMergeDisabledEvent{reason reasonCode createdAt}}}}}}"""
@@ -2149,7 +2407,6 @@ FACT_AUTO_OFF = """mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequ
 MERGE_GROUP_READ = """query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){
 mergeQueue(branch:$branch){entries(first:100){nodes{position headCommit{oid} pullRequest{number headRefOid}}}}}}"""
 WRITE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read"}
-FAILED_JOBS = ("failure", "timed_out", "startup_failure", "cancelled")
 
 
 class GitHubRefused(RuntimeError):
@@ -2241,8 +2498,11 @@ class AppGitHub:
         return meta
 
     def _queue_failure(self, repo, number, before):
-        """(name, url) of the first failed job of the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
-        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`, or None when GitHub will not say."""
+        """(name, url) of what failed in the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
+        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`: its failing legs, else the checks job's line
+        (`item_sources.github.failing_leg`). None when GitHub will not say."""
+        from .item_sources import github as GS
+
         try:
             runs = (
                 self._get(
@@ -2269,11 +2529,29 @@ class AppGitHub:
                 )
                 if jobs.status_code != 200:
                     return None
-                for job in jobs.json().get("jobs") or []:
-                    if job.get("conclusion") in FAILED_JOBS:
-                        return str(job.get("name") or "A check")[:200], job.get("html_url") or None
+                return GS.failing_leg(jobs.json().get("jobs") or [], lambda job: self._checks_line(repo, job))
         except Exception:  # noqa: BLE001 - the removal stands without its check
             logging.getLogger("tico.github").info("No merge-queue run read for %s #%s", repo, number)
+        return None
+
+    def _checks_line(self, repo, job):
+        """The `Failed: ...` error line the workflow's checks job printed (an annotation on its check run), or None when
+        there is none or GitHub will not say. The removal names the run without it."""
+        url = str(job.get("check_run_url") or "")
+        if not url:
+            return None
+        try:
+            notes = self.service._call(
+                "GET", url + "/annotations", headers=self._headers(repo, {"checks": "read", "metadata": "read"})
+            )
+            if notes.status_code != 200:
+                return None
+            for note in notes.json() or []:
+                message = str(note.get("message") or "")
+                if message.startswith("Failed: "):
+                    return message
+        except Exception:  # noqa: BLE001 - the removal names the run's outcome without the line
+            logging.getLogger("tico.github").info("No checks line read for %s", repo)
         return None
 
     def read_checks(self, repo, sha):
@@ -2321,6 +2599,18 @@ class AppGitHub:
             return False
         return (response.json() or {}).get("status") in ("ahead", "identical")
 
+    def pr_diff(self, repo, number, sha):
+        from .item_sources import github as GS
+
+        permissions = {"contents": "read", "pull_requests": "read", "metadata": "read"}
+        base = str(
+            ((self._get(repo, f"/pulls/{int(number)}", permissions).json() or {}).get("base") or {}).get("ref") or ""
+        )
+        if not base:
+            return None
+        path = f"/compare/{quote(base, safe='')}...{quote(sha, safe='')}"
+        return GS.diff_id((self._get(repo, path, permissions).json() or {}).get("files"))
+
     # ------------------------------------------------------------------ the merge queue
     def ready(self, repo, number):
         _, found = self._pull(repo, number, WRITE_PERMISSIONS)
@@ -2344,6 +2634,15 @@ class AppGitHub:
             return {"ok": True, "how": "queued", "reason": ""}
         if found.get("autoMergeRequest"):
             return {"ok": True, "how": "auto_merge", "reason": ""}
+        # A PR that conflicts with its base branch would only come back out of the queue: the Builder rebases it first.
+        # Reading `mergeable` also starts GitHub's work on it when it has none yet, so the next try has the answer.
+        from .item_sources import github as GS
+
+        mergeable = str(found.get("mergeable") or "").upper()
+        if mergeable == "CONFLICTING" or str(found.get("mergeStateStatus") or "").upper() == "DIRTY":
+            return {"ok": False, "how": None, "reason": GS.CONFLICTS}
+        if mergeable == "UNKNOWN":
+            raise GitHubRefused(GS.MERGEABLE_UNKNOWN)
         ids = {"id": found["id"], "head": head_sha}
         if found.get("isMergeQueueEnabled"):
             _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_ENQUEUE, ids)

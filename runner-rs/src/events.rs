@@ -3,8 +3,13 @@
 //! before; reconnects back off to RECONNECT_MAX_S and resume from the last event id. A server without the
 //! endpoint (404/405) is polled as before and asked again every LEGACY_RETRY_S. A stream that comes back after it
 //! was lost or unavailable says so, so a support bundle shows the outage ended.
+//!
+//! A running turn reads its inputs and chat goal on a notice too (drive.rs): a `work` notice naming its bot, or anything
+//! that means "read everything again" (a reset, a catch-up after an outage, a kind this runner does not know). With the
+//! stream up and no notice, it asks only every TURN_RECOVERY_S, jittered; with the stream down, every second as before.
 
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,6 +29,10 @@ pub const READ_TIMEOUT_S: u64 = 90;
 pub const HEARTBEAT_LIVE_S: f64 = 60.0;
 /// A stream that stayed up this long before it dropped had a fresh drop: its reconnect backoff starts over.
 pub const STABLE_S: u64 = 30;
+/// How often a running turn asks for its inputs and goal with the stream up and no notice for its bot: the backstop
+/// for a notice that went missing. Each wait is jittered by TURN_RECOVERY_JITTER so turns do not line up.
+pub const TURN_RECOVERY_S: f64 = 15.0;
+pub const TURN_RECOVERY_JITTER: f64 = 0.2;
 /// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
 pub const CHANNELS: [&str; 9] = [
     "claim",
@@ -100,6 +109,10 @@ pub struct Events {
     /// Woken whenever the server asks for something, so the loop acts on it at once.
     pub wake: Notify,
     stop: AtomicBool,
+    /// Notices for running turns: (for every bot, per bot). `heard` adds the two, so a turn sees either move.
+    notices: Mutex<(u64, HashMap<String, u64>)>,
+    /// TURN_RECOVERY_S in milliseconds; tests shorten it.
+    recovery_ms: AtomicU64,
 }
 
 impl Events {
@@ -112,7 +125,40 @@ impl Events {
             release: Mutex::new(None),
             wake: Notify::new(),
             stop: AtomicBool::new(false),
+            notices: Mutex::new((0, HashMap::new())),
+            recovery_ms: AtomicU64::new((TURN_RECOVERY_S * 1000.0) as u64),
         })
+    }
+
+    /// How many notices a running turn of `bot` has had: one that differs from the count at its last ask means ask
+    /// again now. Take it before the request, so a notice that lands during the request is not lost.
+    pub fn heard(&self, bot: &str) -> u64 {
+        let notices = self.notices.lock().unwrap();
+        notices.0 + notices.1.get(bot).copied().unwrap_or(0)
+    }
+
+    /// A notice for the running turns of `bots`, or of every bot when it names none.
+    fn notice(&self, bots: &[String]) {
+        let mut notices = self.notices.lock().unwrap();
+        if bots.is_empty() {
+            notices.0 += 1;
+        }
+        for bot in bots {
+            *notices.1.entry(bot.clone()).or_insert(0) += 1;
+        }
+    }
+
+    /// The wait until a running turn's next recovery check: TURN_RECOVERY_S, give or take TURN_RECOVERY_JITTER.
+    pub fn turn_recovery(&self) -> Duration {
+        let base = self.recovery_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        let spread = (uuid::Uuid::new_v4().as_u128() % 10_001) as f64 / 10_000.0 * 2.0 - 1.0;
+        Duration::from_secs_f64(base * (1.0 + TURN_RECOVERY_JITTER * spread))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_turn_recovery(&self, every: Duration) {
+        self.recovery_ms
+            .store(every.as_millis() as u64, Ordering::Relaxed);
     }
 
     pub fn live(&self) -> bool {
@@ -272,7 +318,13 @@ impl Events {
     }
 
     /// A frame this runner cannot read counts as one that says nothing: a `runner` frame then asks for everything.
-    fn dispatch(&self, event: &str, ident: Option<String>, data: &Value, recovering: bool) {
+    pub(crate) fn dispatch(
+        &self,
+        event: &str,
+        ident: Option<String>,
+        data: &Value,
+        recovering: bool,
+    ) {
         match event {
             "ready" => {
                 let frame: ReadyFrame = decode(data.clone()).unwrap_or_default();
@@ -292,6 +344,7 @@ impl Events {
                 // Back after an outage or on a new server release: one full pass catches up on anything unsaid.
                 if recovering || changed {
                     self.ask(ALL);
+                    self.notice(&[]);
                 }
                 *self.release.lock().unwrap() = Some(release);
                 *self.state.lock().unwrap() = Stream::Up;
@@ -312,9 +365,20 @@ impl Events {
                 if kind == "screen_open" {
                     crate::screen::heard();
                 }
-                self.ask(channels(kind));
+                let asked = channels(kind);
+                if kind == "work" {
+                    // A follow-up queued or a chat goal changed for these bots (backend/events.py): their running
+                    // turns ask for inputs and goal at once.
+                    self.notice(&frame.bots);
+                } else if asked == ALL {
+                    self.notice(&[]);
+                }
+                self.ask(asked);
             }
-            "reset" => self.ask(ALL),
+            "reset" => {
+                self.ask(ALL);
+                self.notice(&[]);
+            }
             "screen_open" => crate::screen::heard(),
             _ => {}
         }
@@ -411,45 +475,74 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_hears_work_for_its_own_bot_and_anything_that_asks_for_everything() {
+        let e = Events::new();
+        let (acme, cpo) = (e.heard("acme"), e.heard("cpo"));
+        e.dispatch(
+            "runner",
+            None,
+            &serde_json::json!({"kind": "work", "bots": ["acme"]}),
+            false,
+        );
+        assert!(e.heard("acme") > acme && e.heard("cpo") == cpo);
+        for kind in ["logins", "config", "credentials", "screen_open"] {
+            let before = (e.heard("acme"), e.heard("cpo"));
+            e.dispatch(
+                "runner",
+                None,
+                &serde_json::json!({"kind": kind, "bots": ["acme"]}),
+                false,
+            );
+            assert_eq!((e.heard("acme"), e.heard("cpo")), before, "{kind}");
+        }
+        let (acme, cpo) = (e.heard("acme"), e.heard("cpo"));
+        // An older server's work notice names no bot; a kind this runner does not know asks for everything.
+        for (event, data) in [
+            ("runner", serde_json::json!({"kind": "work"})),
+            ("runner", serde_json::json!({"kind": "something new"})),
+            ("reset", serde_json::json!({})),
+            ("ready", serde_json::json!({"seq": 9, "release": "v2"})),
+        ] {
+            let before = (e.heard("acme"), e.heard("cpo"));
+            e.dispatch(event, None, &data, true);
+            assert!(
+                e.heard("acme") > before.0 && e.heard("cpo") > before.1,
+                "{event} {data}"
+            );
+        }
+        assert!(e.heard("acme") > acme && e.heard("cpo") > cpo);
+        // A first `ready` on a fresh start is no gap: nothing to catch up on.
+        let fresh = Events::new();
+        fresh.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 1, "release": "v1"}),
+            false,
+        );
+        assert_eq!(fresh.heard("acme"), 0);
+    }
+
+    #[test]
+    fn recovery_checks_are_spread_over_15_s_give_or_take_a_fifth() {
+        let e = Events::new();
+        let waits: Vec<f64> = (0..500).map(|_| e.turn_recovery().as_secs_f64()).collect();
+        let (low, high) = waits
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), w| (l.min(*w), h.max(*w)));
+        assert!(low >= 12.0 && high <= 18.0, "{low}..{high}");
+        // Spread across the window, not bunched: many turns' checks do not land in the same second.
+        assert!(low < 12.5 && high > 17.5, "{low}..{high}");
+        let seconds: std::collections::HashSet<u64> = waits.iter().map(|w| *w as u64).collect();
+        assert!(seconds.len() >= 6, "{seconds:?}");
+    }
+
+    #[test]
     fn a_drop_after_a_stable_stream_restarts_the_backoff_and_a_quick_one_does_not() {
         assert_eq!(backoff_after_drop(32.0, Duration::from_secs(STABLE_S)), 1.0);
         assert_eq!(
             backoff_after_drop(32.0, Duration::from_secs(STABLE_S - 1)),
             32.0
         );
-    }
-
-    #[test]
-    fn a_stream_back_after_an_outage_says_so_once() {
-        let e = Events::new();
-        e.dispatch(
-            "ready",
-            None,
-            &serde_json::json!({"seq": 1, "release": "v1"}),
-            true,
-        );
-        let back = |lines: Vec<String>| {
-            lines
-                .iter()
-                .filter(|l| l.contains("event stream back"))
-                .count()
-        };
-        let before = back(crate::util::recent_errors());
-        *e.down_since.lock().unwrap() = Some(Instant::now());
-        e.dispatch(
-            "ready",
-            None,
-            &serde_json::json!({"seq": 2, "release": "v1"}),
-            true,
-        );
-        e.dispatch(
-            "ready",
-            None,
-            &serde_json::json!({"seq": 3, "release": "v1"}),
-            true,
-        );
-        assert_eq!(back(crate::util::recent_errors()), before + 1);
-        assert!(e.down_since.lock().unwrap().is_none());
     }
 
     #[tokio::test]

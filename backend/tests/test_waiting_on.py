@@ -24,8 +24,14 @@ BUILD = (
 
 @pytest.fixture
 def c(company):
+    """After each test, every person's own Needs you is the one every person's pass gives them: a new way a wait
+    reaches a person that `waiting_on.candidates` misses fails here."""
     with company.transaction() as conn:
         yield conn
+        every = W.needs_by_person(conn)
+        people = {f"human:{found[0]}" for found in conn.execute("SELECT id FROM humans").fetchall()}
+        for person in sorted(people | set(every)):
+            assert W.needs(conn, person) == every.get(person, []), person
 
 
 @pytest.fixture
@@ -318,3 +324,22 @@ def test_the_top_of_the_ladder_is_the_first_person_above_the_manager_bot_on_the_
     assert W.person_for(c, E.task(c, task_id)) == "human:di"
     c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='manager'")  # nobody above it: the company's owner
     assert W.person_for(c, E.task(c, task_id)) == W.company_person(c)
+
+
+def test_priming_bots_reads_their_run_back_off_once_for_all_of_them(c, general):
+    # Perf I38: `prime_bots` read each bot's state, settings, computer and onboarding together, but `cannot_run` still
+    # read each bot's run_backoff row on its own (about 300 point reads a pass). One read for all now, misses included,
+    # and a bot held for failing runs still says so.
+    from backend import run_backoff, task_wakes
+
+    bots = [X.bot(c, f"worker-{k}") for k in range(8)]
+    c.execute("INSERT INTO run_backoff(bot, fails, held_at) VALUES('worker-3', 5, ?)", (X.H.now(),))
+    reads = []
+    c.set_trace_callback(lambda sql: reads.append(sql) if "FROM run_backoff" in sql else None)
+    try:
+        task_wakes.prime_bots(c, bots)
+        causes = [task_wakes.cannot_run(c, b) for b in bots]
+    finally:
+        c.set_trace_callback(None)
+    assert causes == [task_wakes.RUNS_FAILING if b == "bot:worker-3" else None for b in bots]
+    assert len(reads) == 1, reads  # eight before: one a bot

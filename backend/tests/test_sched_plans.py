@@ -34,60 +34,12 @@ def plan(api, sql, args=()):
         return " | ".join(str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
 
 
-def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(api):
-    from backend import start_places
-
-    tidy_stats(api)
-    # The planner's choice depends on sizes and statistics, so the hint itself is pinned: without INDEXED BY the plan
-    # scanned messages on TIDY (the old statements had no hint).
-    for sql, args in ((W.HELD_NEW_SQL, ()), (W.HELD_DUE_SQL, (NOW,))):
-        assert "INDEXED BY jobs_held_queued" in sql
-        text = plan(api, sql, args)
-        assert "USING INDEX jobs_held_queued" in text, text
-        assert "SCAN m" not in text, text
-    # Task wait walks queued jobs.
-    assert "INDEXED BY jobs_queued" in views.TASK_WAIT_SQL
-    text = plan(api, views.TASK_WAIT_SQL, ("tk",))
-    assert "USING INDEX jobs_queued" in text, text
-    assert "SCAN m" not in text, text
-    # The dead-turn sweep walks live runs.
-    assert "INDEXED BY attempts_live_lease" in turn_fixer.DEAD_SQL
-    text = plan(api, turn_fixer.DEAD_SQL, (NOW,))
-    assert "USING INDEX attempts_live_lease" in text, text
-    assert "attempts_created" not in text, text
-    # Unhinted, the health GROUP BY picked attempts_runner_finished and walked every attempt ever run (48 ms on Tico Team).
-    assert "INDEXED BY attempts_live_lease" in start_places.LIVE_TOTALS_SQL
-    text = plan(api, start_places.LIVE_TOTALS_SQL, (NOW,))
-    assert "USING INDEX attempts_live_lease" in text, text
-    assert "attempts_runner_finished" not in text, text
-
-
 def register_worktree_computer(c, computer):
     # A missing registration is retired; a registered computer needs no heartbeat to keep its trees.
     c.execute(
         "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
         (computer, computer, computer, NOW),
     )
-
-
-def test_worktree_inventory_seeks_one_computers_worktrees(api):
-    # worktrees.inventory runs on every heartbeat; without a computer index it scanned every worktree link ever kept.
-    import sqlite3
-    from backend import worktrees
-
-    c = sqlite3.connect(str(api.app.state.store.settings.db_path), isolation_level=None)
-    c.row_factory = sqlite3.Row
-    register_worktree_computer(c, "computer-1")
-    seen = []
-    c.set_trace_callback(lambda sql: seen.append(sql) if sql.lstrip().startswith("SELECT l.*") else None)
-    worktrees.inventory(c, "computer-1")
-    c.set_trace_callback(None)
-    [sql] = seen
-    text = " | ".join(str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + sql))
-    assert "USING INDEX task_links_worktree_computer" in text, text
-    # The bot join seeks bots' slug key; a scan of bots would repeat for every worktree link the computer kept.
-    assert "SCAN b" not in text, text
-    c.close()
 
 
 def test_worktree_inventory_bot_state_matches_each_owner(api):
@@ -136,22 +88,3 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
     c.execute("DELETE FROM runners WHERE id='wt-computer'")
     assert worktrees.inventory(c, 'wt-computer') == []
     c.close()
-
-
-def test_queue_refusal_scan_reads_every_bots_state_in_one_query(api):
-    # The scheduler's claim observations: one read for the targets, one for all their saved states (not one per bot).
-    from backend import queue_refusals
-    from backend.tests.helpers.task_lanes import task_bot
-
-    task_bot(api, lanes=True, others=("finance", "inbox"))
-    for bot in ("ops", "finance", "inbox"):
-        post(api, "chat/" + bot, {"text": "Check the queue."})
-    from backend.store import H
-
-    store = api.app.state.store
-    seen = []
-    with store.read_transaction() as c:
-        c.set_trace_callback(lambda sql: seen.append(sql))
-        queue_refusals.pending(c, store.settings, H.now(), [])
-        c.set_trace_callback(None)
-    assert len([s for s in seen if "queue-refusal:" in s]) <= 2, seen

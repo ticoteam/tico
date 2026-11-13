@@ -114,3 +114,18 @@ def test_replay_scans_a_bounded_number_of_rows_per_source(api, monkeypatch):
     monkeypatch.setattr(replay, "SCAN_MAX", 1000)
     whole = get(api, query(started, span() + timedelta(seconds=1), "&person=ben"), token="cara-test")
     assert not whole["truncated"]
+
+
+def test_replay_names_a_deleted_bot_deleted_bot_never_its_id(api, monkeypatch):
+    """A bot removed since its events still has a name a person can read: "Deleted bot", never `bot:<id>`."""
+    started = datetime.now(timezone.utc) - timedelta(minutes=1)
+    store = api.app.state.store
+    with store.transaction() as c:
+        H.task_create(c, "human:ana", "Draft the launch post", "", "bot:ops", lint=False, private=False)
+        H.status_set(c, H.KEEPER, "ops", state="running", focus="Drafting")
+    roster = H.bots  # the bot is gone from the roster, as after its removal; its history stays
+    monkeypatch.setattr(H, "bots", lambda c, state=None: [b for b in roster(c, state) if b["id"] != "ops"])
+    span = urlencode({"from": started.isoformat(), "to": (started + timedelta(minutes=2)).isoformat()})
+    data = get(api, "replay?" + span)
+    assert any(i.get("who") == "bot:ops" or i.get("owner_id") == "bot:ops" for i in data["items"])
+    assert data["names"]["bot:ops"] == "Deleted bot"

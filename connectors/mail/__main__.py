@@ -41,7 +41,7 @@ the draft stays with Tico's reason, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, contextvars, fnmatch, hashlib, json, mimetypes, os, shlex, sys
+import argparse, contextvars, fnmatch, hashlib, itertools, json, mimetypes, os, shlex, sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -564,9 +564,13 @@ def remember_message(ctx, msg):
 
 
 def fetch(ctx, ids):
+    """The messages, in the order of `ids`, read in Gmail batch calls (gmail.read_many). The first read that fails
+    for good fails the command, after the ones before it are kept, as one read at a time did."""
     msgs = []
-    for i in ids:
-        m = ctx.normalize(ctx.gmail.get(i))
+    for _, raw in ctx.gmail.read_many(ids):
+        if isinstance(raw, Failure):
+            raise raw
+        m = ctx.normalize(raw)
         remember_message(ctx, m)
         msgs.append(m)
     return msgs
@@ -987,12 +991,40 @@ def modify(ctx, ids, add=(), remove=(), action="modify", detail=None):
     add_ids = [lb.resolve(ctx.gmail, n) for n in add] if not ctx.dry else list(add)
     rm_ids = [lb.resolve(ctx.gmail, n) for n in remove] if not ctx.dry else list(remove)
     done = []
-    for mid in ids:
-        if not ctx.dry:
-            ctx.gmail.modify(mid, add_ids, rm_ids)
+
+    def changed(mid):
         ctx.audit(action, mid, dict(detail or {}, add=list(add), remove=list(remove)))
         done.append(mid)
+
+    if ctx.dry:
+        for mid in ids:
+            changed(mid)
+    else:
+        change_many(ctx, list(ids), add_ids, rm_ids, changed)
     return done
+
+
+def change_many(ctx, ids, add_ids, rm_ids, changed):
+    """One label change on many messages: a messages.batchModify per gm.MODIFY_GROUP ids, then `changed(id)` (its audit
+    line) for each, in order. Gmail applies a batch to all or none, so a group it refuses for good is redone one
+    message at a time: what changes and what is audited is then what one-by-one changes did, and the first message
+    that can't be changed fails the command. One message is one `modify`, as before."""
+    for start in range(0, len(ids), gm.MODIFY_GROUP):
+        group = ids[start : start + gm.MODIFY_GROUP]
+        if len(group) > 1:
+            try:
+                ctx.gmail.batch_modify(group, add_ids, rm_ids)
+            except Refused:
+                raise
+            except Failure:
+                pass
+            else:
+                for mid in group:
+                    changed(mid)
+                continue
+        for mid in group:
+            ctx.gmail.modify(mid, add_ids, rm_ids)
+            changed(mid)
 
 
 def cmd_label(args):
@@ -1099,28 +1131,61 @@ def judge_line(judged):
     )
 
 
-def apply_plan(ctx, msg, plan):
-    """Turn a rule plan into Gmail calls, one audit line per rule that fired."""
-    if plan.get("unsubscribe"):
-        try:
-            plan["unsubscribe_result"] = unsubscribe_message(ctx, msg["id"])
-        except Refused:
-            plan["unsubscribe_result"] = {"status": "not_authorized", "accepted": False}
-            ctx.audit("unsubscribe-skipped", msg["id"], plan["unsubscribe_result"])
-    add = list(plan["labels"])
-    if plan["star"]:
-        add.append("STARRED")
-    remove = (["INBOX"] if plan["archive"] else []) + (["UNREAD"] if plan["mark_read"] else [])
-    if not ctx.dry and (add or remove):
+def apply_plans(ctx, planned):
+    """Turn rule plans, [(message, plan)] in run order, into Gmail calls, one audit line per rule that fired.
+
+    Each unsubscribe goes first, before any message is archived. The messages that get exactly the same change (the
+    same labels added and removed) then go to Gmail together (change_many); a message's rule hits, audit lines and
+    local copy are written only once its change succeeded. An unsubscribe that fails (not a refusal) still fails the
+    run, after the messages before it are changed and recorded, as one message at a time did."""
+    for n, (msg, plan) in enumerate(planned):
+        if plan.get("unsubscribe"):
+            try:
+                plan["unsubscribe_result"] = unsubscribe_message(ctx, msg["id"])
+            except Refused:
+                plan["unsubscribe_result"] = {"status": "not_authorized", "accepted": False}
+                ctx.audit("unsubscribe-skipped", msg["id"], plan["unsubscribe_result"])
+            except Failure:
+                _change_planned(ctx, planned[:n])
+                raise
+    _change_planned(ctx, planned)
+
+
+def _change_planned(ctx, planned):
+    """The label changes of planned messages whose unsubscribes are done, grouped by change."""
+    groups = {}  # (add, remove) -> [(message, plan)], in run order
+    for msg, plan in planned:
+        add, remove = _plan_change(plan)
+        if ctx.dry or not (add or remove):
+            _plan_done(ctx, msg, plan)
+        else:
+            groups.setdefault((tuple(add), tuple(remove)), []).append((msg, plan))
+    for (add, remove), members in groups.items():
         add_ids = [lb.resolve(ctx.gmail, n) for n in add]
         rm_ids = [lb.resolve(ctx.gmail, n) for n in remove]
-        ctx.gmail.modify(msg["id"], add_ids, rm_ids)
-        labels = [n for n in (msg.get("labels") or []) if n not in remove]
-        for n in add:
-            if n not in labels:
-                labels.append(n)
-        msg["labels"] = labels
-        remember_message(ctx, msg)
+        by_id = {msg["id"]: (msg, plan) for msg, plan in members}
+
+        def changed(mid, add=add, remove=remove, by_id=by_id):
+            msg, plan = by_id[mid]
+            labels = [n for n in (msg.get("labels") or []) if n not in remove]
+            for n in add:
+                if n not in labels:
+                    labels.append(n)
+            msg["labels"] = labels
+            remember_message(ctx, msg)
+            _plan_done(ctx, msg, plan)
+
+        change_many(ctx, list(by_id), add_ids, rm_ids, changed)
+
+
+def _plan_change(plan):
+    """(labels to add, labels to remove) for one message's plan."""
+    add = list(plan["labels"]) + (["STARRED"] if plan["star"] else [])
+    remove = (["INBOX"] if plan["archive"] else []) + (["UNREAD"] if plan["mark_read"] else [])
+    return add, remove
+
+
+def _plan_done(ctx, msg, plan):
     for hit in plan["hits"]:
         if not ctx.dry:
             db.record_rule_hit(ctx.conn, ctx.mailbox, ctx.slug, msg["id"], hit["rule"], hit["actions"])
@@ -1135,12 +1200,10 @@ def rules_run_one(ctx, args):
     if rl.uses_thread(rules):
         with_thread_state(ctx, msgs)
     judged = with_judgments(ctx, rules, msgs)
+    planned = [(m, plan) for m, plan in ((m, rl.apply(rules, m)) for m in msgs) if plan["hits"]]
+    apply_plans(ctx, planned)
     counts, lines = {}, []
-    for m in msgs:
-        plan = rl.apply(rules, m)
-        if not plan["hits"]:
-            continue
-        apply_plan(ctx, m, plan)
+    for m, plan in planned:
         for hit in plan["hits"]:
             counts[hit["rule"]] = counts.get(hit["rule"], 0) + 1
         lines.append(
@@ -1449,13 +1512,16 @@ def cmd_rules_backtest(args):
             jd.unavailable_hint(),
         )
     now, last_reply, rows, skipped, judged = now_utc(), {}, [], [], {}
-    for start in range(0, len(ids), jd.PARALLEL):  # judged a few at a time, bodies dropped after
+    reads = ctx.gmail.read_many(ids)  # read a batch call at a time, as the loop below asks
+    for _ in range(0, len(ids), jd.PARALLEL):  # judged a few at a time, bodies dropped after
         batch = []
-        for i in ids[start : start + jd.PARALLEL]:
+        for i, raw in itertools.islice(reads, jd.PARALLEL):
             # a replay over thousands of messages must not die on one Gmail refusal (a thread in
             # spam or trash answers 400): skip it, count it, say so in the report
             try:
-                m = ctx.normalize(ctx.gmail.get(i))
+                if isinstance(raw, Failure):
+                    raise raw
+                m = ctx.normalize(raw)
             except Failure as exc:
                 skipped.append({"id": i, "why": str(exc)[:120]})
                 continue
@@ -2557,9 +2623,14 @@ def cmd_upcoming(args):
     ctx = Ctx(args, "calendar_read", mailbox=args.for_mailbox)
     now = datetime.now(zone("UTC"))
     include_private = bool(getattr(args, "include_private", False))
-    events = ctx.calendar.upcoming(
-        now - timedelta(minutes=2), now + timedelta(hours=max(1, min(args.hours, 168))), include_private=include_private
-    )
+    days = getattr(args, "days", None)
+    if days:
+        # The Calendar page's copy for a personal connection: from the start of this computer's today.
+        today = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        start, end = today, today + timedelta(days=max(1, min(days, 31)))
+    else:
+        start, end = now - timedelta(minutes=2), now + timedelta(hours=max(1, min(args.hours, 168)))
+    events = ctx.calendar.upcoming(start, end, include_private=include_private)
     # This endpoint is background-polled. It exposes no message body or event description, and
     # deliberately does not add one audit row per poll.
     body = [f"# Upcoming meetings on {ctx.mailbox}", ""]
@@ -3036,10 +3107,8 @@ def sync_one(ctx, args):
         if ctx.dry:
             fetched, deleted = len(ids), len(deleted_ids)
         else:
-            for mid in ids:
-                try:
-                    raw = ctx.gmail.get(mid)
-                except Failure:
+            for _, raw in ctx.gmail.read_many(ids):
+                if isinstance(raw, Failure):
                     skipped += 1
                     continue
                 remember_message(ctx, ctx.normalize(raw))
@@ -3483,6 +3552,9 @@ def build_parser():
         "--for", dest="for_mailbox", required=True, metavar="ADDR", help="the roster mailbox whose calendars to read"
     )
     up.add_argument("--hours", type=int, default=24, help="look-ahead window, clamped to 1-168 hours")
+    up.add_argument(
+        "--days", type=int, default=None, help="from the start of today for this many days (1-31), instead of --hours"
+    )
     up.add_argument("--include-private", action="store_true", help="include private holds and solo calendar events")
     up.set_defaults(func=cmd_upcoming)
 

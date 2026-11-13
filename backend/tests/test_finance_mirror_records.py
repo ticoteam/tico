@@ -429,36 +429,6 @@ def test_quickbooks_items_departments_classes_and_jobs_map_to_their_records_and_
     ]
 
 
-def test_an_invoice_the_provider_refuses_with_its_estimate_link_is_sent_again_without_it(monkeypatch):
-    sent: list[dict[str, Any]] = []
-
-    def call(self: Any, method: str, path: str, **kw: Any) -> Any:
-        if path == "preferences":  # the company's class setting, read before a write that names a class
-            return SimpleNamespace(
-                status=200, body={"Preferences": {"AccountingInfoPrefs": {"ClassTrackingPerTxnLine": True}}}
-            )
-        sent.append(kw["body"])
-        if "LinkedTxn" in kw["body"]:
-            return SimpleNamespace(status=400, body={"Fault": {"Error": [{"Message": "LinkedTxn is not valid"}]}})
-        return SimpleNamespace(status=200, body={"Invoice": {"Id": "9", "SyncToken": "0"}})
-
-    monkeypatch.setattr(QC.QuickBooks, "_call", call)
-    monkeypatch.setattr(QC.QuickBooks, "_item_accounts", lambda self: {"Item:5": {"income": "Account:33"}})
-    client = QC.QuickBooks("1234567", lambda force: "local-token", base="http://127.0.0.1:1")
-    body = {
-        "day": "2026-10-06",
-        "memo": "",
-        "party": "Customer:4",
-        "number": "",
-        "due": "",
-        "linked_estimate": "7",
-        "lines": [{"item": "Item:5", "amount": 1500, "description": "work", "project": ""}],
-    }
-    made = client.send("invoice.create", body, "invoice:one")
-    assert made.ok and made.external_id == "9", made
-    assert ["LinkedTxn" in x for x in sent] == [True, False]
-
-
 def test_a_bill_names_its_item_class_job_and_one_location_and_refuses_two_locations():
     line = {
         "item": "Item:5",

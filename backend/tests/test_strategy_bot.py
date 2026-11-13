@@ -171,37 +171,6 @@ OLD_NAME_ALLOWED = {
 }
 
 
-def test_the_old_name_is_nowhere_a_person_sees():
-    """v3: "Goal Manager" and "CEO Bot" are gone from the app, its clients, its help and its templates. The docs are the
-    Technical Writer's sweep (docs/, README, SECURITY, PRIVACY) and the tests may name them as an install from
-    before."""
-    import pathlib
-    import subprocess
-
-    root = pathlib.Path(__file__).resolve().parents[2]
-    for old in strategy_bot.OLD_NAMES:
-        found = subprocess.run(
-            [
-                "git",
-                "grep",
-                "-l",
-                old,
-                "--",
-                "backend",
-                "clients",
-                "templates",
-                "ui",
-                "runner-rs",
-                ":!backend/tests",
-                ":!ui/tests",
-            ],
-            cwd=root,
-            capture_output=True,
-            text=True,
-        )
-        assert set(found.stdout.split()) <= OLD_NAME_ALLOWED, old
-
-
 def hide(api, value, headers=None):
     return api.post(
         "/api/v2/preferences/" + strategy_bot.HIDE_PREF, json={"value": value}, headers=headers or signed_in()

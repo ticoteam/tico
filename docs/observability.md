@@ -250,8 +250,9 @@ Opening Health or metrics reads recorded samples and does not trigger a page sca
 
 Owners, admins and the team's bots read it at `GET /api/v2/system/metrics?minutes=60&section=all` (a bot's slow requests
 leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `tico health metrics` or `tico_health_metrics`, and see the
-last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` still answers with the last 300 requests per
-route since the start.
+last hour under **Performance** on the Health page. `since` and `until` (epoch seconds, `until` excluded) read one window
+instead of the last `minutes`, and `routes` lists up to 500 routes instead of 25: the load gate (`bench/load_gate`) reads
+each steady window this way. `GET /api/v2/ops/timing` still answers with the last 300 requests per route since the start.
 
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
 Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.

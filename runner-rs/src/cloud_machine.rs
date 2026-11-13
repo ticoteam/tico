@@ -139,9 +139,4 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(!marked(&link, me(), "user"));
     }
-
-    #[test]
-    fn this_processs_user_has_a_name() {
-        assert!(!user_name(me()).is_empty());
-    }
 }

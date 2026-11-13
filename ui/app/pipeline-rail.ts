@@ -4,7 +4,7 @@
    Tasks, and Learned once it has a line. Above the tab's list, the Late tasks: title and how long, no mark, no avatar. Below, the chat with the
    manager: the ordinary direct thread (thread-view.ts threadMount), never a chat of its own.
    Tasks lists the open tasks the manager was woken about (it owns none, C25); the Log shows each push past and each
-   snooze with no end a bot made. Tasks show by title. Any [data-task] row opens the task (the page does that).
+   snooze with no end a bot made. Tasks show by title. Any [data-task] row opens the task, by click, Enter or Space (prClick, prKey).
    The page (tasks-page.ts) gives the host through the pipeline view's rail hook (task-pipelines.ts).
    Reads: the tasks the page read for the view, and GET /api/v2/pipelines/{id}/log (pipeline-api.ts).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -135,9 +135,18 @@ async function prRead(state: PrState): Promise<void> {
 function prClick(ev: MouseEvent): void {
   const state = PR, target = eventElement(ev);
   if (!state || !target || !state.host.contains(target)) return;
+  // The rail sits outside #task-body, so the page's row handler never sees its rows: it opens them itself.
+  const row = target.closest<HTMLElement>('[data-task]');
+  if (row?.dataset['task']) { void taskModalOpen(row.dataset['task']); return; }
   const tab = target.closest<HTMLElement>('[data-pm-tab]');
   if (tab) { state.tab = (tab.dataset['pmTab'] as PrTab | undefined) ?? 'log'; prDraw(state); return; }
   if (target.closest('[data-pm-hide]')) pipelineRailToggle(false);
+}
+
+/** Enter or Space on a focused task row opens it, as on the page (tasks-page.ts); keys typed in the chat stay there. */
+function prKey(ev: KeyboardEvent): void {
+  const target = eventElement(ev), row = target?.closest<HTMLElement>('[data-task]');
+  if ((ev.key === 'Enter' || ev.key === ' ') && row && row === target) { ev.preventDefault(); row.click(); }
 }
 
 /** The header's chat icon: opens or closes the rail of the pipeline in view. */
@@ -167,6 +176,7 @@ function pipelineRailSync(host: HTMLElement, rec: PipelineRec): void {
     host.replaceChildren();
     PR = {host, pipelineId: rec.id, manager, tab: 'log', log: null, failed: false, readAt: 0, chat: null};
     host.addEventListener('click', prClick);
+    host.addEventListener('keydown', prKey);
   }
   const state = PR;
   prDraw(state);
@@ -179,6 +189,7 @@ function pipelineRailLeave(): void {
   if (!state) return;
   PR = null;
   state.host.removeEventListener('click', prClick);
+  state.host.removeEventListener('keydown', prKey);
   threadUnmount(state.chat);
   state.host.closest('.tasks-page')?.classList.remove('has-rail');
 }

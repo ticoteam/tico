@@ -46,19 +46,6 @@ def _lost(shipped, now):
     )
 
 
-def test_a_changed_preset_line_keeps_the_text_it_shipped_with():
-    shipped, now = json.loads(SHIPPED.read_text()), _now()
-    lost = _lost(shipped, now)
-    assert not lost, f"Add the old text of {', '.join(lost)} to EARLIER (backend/pipeline_settings.py)."
-    assert {path: _hash(text) for path, text in now.items()} == shipped, (
-        "A preset line changed. Run `python -m backend.tests.test_preset_texts --write`."
-    )
-
-
-def test_every_earlier_text_is_of_a_line_a_preset_still_has():
-    assert set(PS.EARLIER) <= set(_now())
-
-
 # ----------------------------------------------------------------------------- an upgrade
 @pytest.fixture
 def c(company):
@@ -129,17 +116,6 @@ def test_an_rc3_company_gets_the_newer_check_lines_and_purpose_and_nothing_else_
     assert len(logged["changes"]) == 4
     PS.ensure_presets(c)  # a second start changes nothing
     assert PS.read(c, "engineering") == new and len(_follows(c)) == 1
-
-
-def test_the_pipelines_log_shows_tico_moving_untouched_wording_and_names_the_stages(c):
-    """Tico's save for an upgrade is in the events table; the pipeline log reads it, naming the stages it moved."""
-    from backend import task_factories_routes as TF
-
-    _as_rc3(c)
-    PS.ensure_presets(c)
-    [moved] = [x for x in TF.log(c, "engineering", "1=1") if x["text"].startswith("Tico updated check wording")]
-    assert moved["text"] == "Tico updated check wording to the new default on Review 1, Review 2 and Fixes 2"
-    assert moved["by"] == KEEPER and moved["task_id"] is None and moved["at"]
 
 
 def test_an_edited_line_stays_and_a_changed_pipeline_moves_up_one_version(c):

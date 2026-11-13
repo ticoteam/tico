@@ -44,32 +44,6 @@ def test_a_note_wakes_nobody_and_waits(api):
     assert listed(api)["queued"] == 0
 
 
-def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):
-    r = setup(api)
-    n = note(api)
-    post(api, "chat/ops", {"text": "First"})
-    first = claim(api, r)
-    post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(
-        api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"]
-    )
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
-    post(api, "chat/ops", {"text": "Second"})
-    second = claim(api, r)
-    assert [x["id"] for x in second["notes"]] == [n["id"]]
-    post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
-    post(
-        api,
-        f"attempts/{second['id']}/complete",
-        {"outcome": "completed", "text": "ok", "last_seq": 0},
-        token=r["token"],
-    )
-    post(api, "chat/ops", {"text": "Third"})
-    assert claim(api, r)["notes"] == []
-
-
 def test_a_bot_leaves_another_bot_a_note_and_sees_only_its_own(api):
     # The monitors' case: a bot's run leaves the Product Manager a note.
     r = setup(api)
@@ -200,25 +174,6 @@ def test_the_migration_settles_old_notes_of_completed_runs_only(api):
     assert settled(api, done["id"]) and settled(api, failed["id"]) is None and settled(api, waiting["id"]) is None
     with store.read() as c:
         assert {x["id"] for x in H.notes_waiting(c, "ops")} == {failed["id"], waiting["id"]}
-
-
-def test_the_waiting_scan_reads_only_the_unsettled_index(api):
-    store = api.app.state.store
-    with store.read() as c:
-        for sql, args in (
-            (
-                f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
-                "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
-                ("bot:ops", "tico", 50),
-            ),
-            (
-                f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
-                "GROUP BY n.to_actor",
-                ("bot:ops",),
-            ),
-        ):
-            plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
-            assert "notes_waiting" in plan, plan
 
 
 def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(api):

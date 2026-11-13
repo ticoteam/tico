@@ -2,6 +2,7 @@
 
 from clients import judge as J
 
+from backend import decide_groups as DG
 from backend import thread_rank as TR
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -11,22 +12,27 @@ from backend.tests.helpers.thread_tasks import make_task
 
 
 class FakeDecide:
-    """Answers `importance` at the level told (1-10), as the Gateway would; `fail` raises instead."""
+    """Answers `importance` at the level told (1-10), as the Gateway would; `fail` raises instead. A call about several
+    threads (backend/decide_groups.py) answers each; `calls` has one entry per call, `states` each thread asked about."""
 
     def __init__(self, level=8):
-        self.level, self.calls, self.fail = level, [], None
+        self.level, self.calls, self.states, self.fail = level, [], [], None
 
     def __call__(self, state, questions, label=None):
-        self.calls.append({"state": state, "label": label})
+        parts = DG.split(state, questions)
+        self.calls.append({"state": state, "label": label, "threads": len(parts) if parts else 1})
+        self.states.extend([one for _, one, _ in parts] if parts else [state])
         if self.fail:
             raise self.fail
+        answer = {"type": "score", "score": float(self.level - 1), "confidence": 0.8}
+        keys = [key for _, _, mine in parts for key in mine.values()] if parts else list(questions)
         return {
             "model": J.GATEWAY_MODEL,
             "provider": J.GATEWAY_PROVIDER,
             "usage": {"input_tokens": 300},
             "ms": 90,
             "cost_usd": 0.00002,
-            "answers": {"importance": {"type": "score", "score": float(self.level - 1), "confidence": 0.8}},
+            "answers": {key: dict(answer) for key in keys},
         }
 
 
@@ -49,12 +55,6 @@ def test_important_orders_by_level_then_newest_and_recent_by_newest(api):
     assert {t["id"]: t["importance"] for t in important["threads"]}[old["id"]] == 9
     recent = sidebar(api, token="ben-test", sort="recent")
     assert ids(recent)[:2] == [new["id"], old["id"]]
-
-
-def test_a_thread_never_ranked_reads_as_the_default_level(api):
-    thread = new_thread(api, title="Plans", members=("human:ben",), body="Hi")
-    row = next(t for t in sidebar(api, token="ben-test", sort="important")["threads"] if t["id"] == thread["id"])
-    assert row["importance"] == TR.DEFAULT
 
 
 def test_noise_level_leaves_important_but_stays_in_recent(api):
@@ -121,7 +121,7 @@ def test_a_pass_ranks_new_threads_once_audits_each_call_and_waits_an_hour(api):
     at = H.now()
     done = TR.run_pass(store, at=at, engine=model)
     assert done["ranked"] >= 1
-    state = next(call["state"] for call in model.calls if call["state"]["thread"]["title"] == "Launch")
+    state = next(state for state in model.states if state["thread"]["title"] == "Launch")
     assert state["thread"]["messages"][-1] == {"from": "person", "text": "Launch is Tuesday"}
     with store.read() as c:
         assert c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (thread["id"],)).fetchone()[0] == 8
@@ -181,5 +181,20 @@ def test_a_level_that_moves_tells_the_lists(api):
     assert ranked() == 1, "the same level is no change"
 
 
-def test_levels_map_from_the_score_position():
-    assert [TR.level_of(s) for s in (0, 0.4, 4.6, 9, 12)] == [1, 1, 6, 10, 10]
+def test_ten_threads_are_ranked_in_one_call_and_audited_as_one(api, monkeypatch):
+    """AC-8 for thread ranking: ten small threads, one call, each thread its own level."""
+    monkeypatch.setattr(TR, "GROUP", DG.MOST)
+    store = api.app.state.store
+    made = [new_thread(api, title=f"Topic {n}", members=("human:ben",), body=f"Note {n}") for n in range(10)]
+    model = FakeDecide(level=7)
+    done = TR.run_pass(store, engine=model)
+    assert done["ranked"] >= 10 and len(model.calls) <= 2
+    with store.read() as c:
+        levels = [
+            c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (t["id"],)).fetchone()[0] for t in made
+        ]
+        audited = c.execute(
+            "SELECT count(*) FROM events WHERE action='judge.call' AND target=?", (model.calls[0]["label"],)
+        )
+        assert audited.fetchone()[0] == len(model.calls)
+    assert levels == [7] * 10

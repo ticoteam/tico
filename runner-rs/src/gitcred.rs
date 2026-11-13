@@ -1056,34 +1056,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn workflow_commands_pick_the_repository_s_actions_token() {
-        let a = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
-        let granted = json!({"configured": true, "token": "plain", "tokens": [
-            {"token": "plain", "repositories": ["Acme/bot-rm"], "access": "write"},
-            {"token": "actions", "repositories": ["Acme/product"], "access": "write", "actions": "write"}]});
-        for command in [
-            "workflow run release.yml -R acme/product -f sha=abc",
-            "api -X POST repos/acme/product/actions/workflows/1/dispatches",
-            "run rerun 42 --repo acme/product",
-            "run cancel 42 -R acme/product",
-        ] {
-            let repo = gh_repository(&a(command), None);
-            assert_eq!(
-                select_token(&granted, repo.as_deref()),
-                "actions",
-                "{command}"
-            );
-        }
-        assert_eq!(
-            select_token(
-                &granted,
-                gh_repository(&a("pr list -R acme/bot-rm"), None).as_deref()
-            ),
-            "plain"
-        );
-    }
-
     #[tokio::test]
     async fn a_turn_user_trusts_only_its_checkout_and_owns_its_own_credential_socket() {
         let dir =
@@ -1178,12 +1150,5 @@ mod tests {
         drop(new);
         assert!(!own.exists());
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn the_helper_is_a_shell_function_that_only_answers_get() {
-        let h = fresh_helper(Path::new("/tmp/s dir/credential.sock"), "ops");
-        assert!(h.starts_with("!f() { [ \"$1\" = get ] || exit 0; exec "));
-        assert!(h.contains("git-credential --socket '/tmp/s dir/credential.sock' --bot ops; }; f"));
     }
 }

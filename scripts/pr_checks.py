@@ -18,6 +18,8 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
+    "ui/app/calendar.js": ["calendar-page"],
+    "ui/app/calendar-row.js": ["calendar-page", "sidebar-first-paint"],
     "ui/app/chat.js": ["chat", "imported-history"],
     "ui/app/chat-outline.js": ["chat", "imported-history"],
     "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
@@ -41,6 +43,18 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
+# A new or changed file under MIGRATIONS runs the tests that upgrade a legacy or fixture database through every
+# migration, in a light plan too: they reach a migration only through the app's start, past a light plan's depth, and
+# a migration that assumes a column a later legacy migration adds (#3469: an index on tasks.private) breaks only there.
+MIGRATIONS = "backend/migrations/"
+UPGRADE_TESTS = (
+    "backend/tests/test_migrations.py",  # the migration authority: converge, rerun, roll back, refuse
+    "backend/tests/test_schema_every_table.py",  # schema_old_main.sql, every table, one boot
+    "backend/tests/test_schema_renames.py",  # schema_pre_cleanup.sql: the startup renames
+    "backend/tests/test_task_privacy.py",  # the legacy cloud and native hub (user_version 23) upgrades
+    "backend/tests/test_upgrade.py",  # a database an older release made boots twice
+    "backend/tests/test_upgrade_boot.py",  # schema_pre_cleanup.sql through create_app and backend.boot
+)
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
 CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
@@ -851,10 +865,17 @@ UI_RUNNER = "scripts/ui-tests.cts"
 # or through other helpers; for UI source outside UI_MAP, the scripts named after it (ui/app/tools.ts: tools, bot-tools,
 # redesign-e2e-tools; its stem as whole words of the script's name). The page loads every UI file, so no map from a
 # source file to the scripts that can see it is sound: the name match is a cheap best effort beside the smoke set, and
-# the release check still runs the rest. When rule 6 picks more than BROWSER_ALL_OVER scripts (a rename across many
-# scripts, a helper most scripts run), the change runs every script the release check runs, about four VMs.
+# the release check still runs the rest. Rule 6 also reads the diff: a script that names a top-level function or const
+# whose definition changed (task-code.cts calls taskModalOpen in ui/app/task-modal.ts) runs. When rule 6 picks more
+# than BROWSER_ALL_OVER scripts (a rename across many scripts, a helper most scripts run), the change runs every script
+# the release check runs, about four VMs.
 SUPPORT = "ui/tests/support/"
 BROWSER_ALL_OVER = 40
+# The phone dead-end scripts (release-only) fail when a KNOWN break stops happening, so a fix in the app's own files
+# (ui/app/, ui/styles/) breaks them until their KNOWN line goes. Rule 6 runs all of them for such a change, and for their
+# rules file; no other change runs them, and the smoke set does not carry them.
+PHONE_SCOPE = ("ui/app/", "ui/styles/", "ui/tests/support/phone-rules.cts")
+PHONE_PREFIX = "phone-dead-ends-"
 
 
 def runnable_scripts(root=ROOT):
@@ -907,6 +928,99 @@ def named_after(name, scripts):
         parts = script.split("-")
         if any(parts[i : i + len(words)] == words for i in range(len(parts) - len(words) + 1)):
             found.add(script)
+    return found
+
+
+# A top-level definition in a classic UI script: a function, const, let, var or class at column 0.
+TOP_LEVEL = re.compile(
+    r"(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:const|let|var|class)\s+([A-Za-z_$][\w$]*))"
+)
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def top_level_spans(text):
+    """(name, first line, last line) of each top-level definition in a UI script. A definition starts at column 0 and
+    runs until the next line that starts at column 0 with anything but a closing bracket (its `}` stays inside it)."""
+    spans, current, lines = [], None, text.splitlines()
+    for number, line in enumerate(lines, 1):
+        if not line or line[0].isspace() or line[0] in "})]":
+            continue
+        if current:
+            spans.append((*current, number - 1))
+            current = None
+        match = TOP_LEVEL.match(line)
+        if match:
+            current = (match.group(1) or match.group(2), number)
+    if current:
+        spans.append((*current, len(lines)))
+    return spans
+
+
+def hunk_names(diff, old, new):
+    """The top-level names whose definitions a `git diff -U0` of one file touches: removed lines name the old file's
+    definitions, added lines the new file's."""
+    names = set()
+    sides = [(top_level_spans(old), []), (top_level_spans(new), [])]
+    for match in HUNK.finditer(diff):
+        for side, (start, count) in enumerate(((match[1], match[2]), (match[3], match[4]))):
+            first, size = int(start), 1 if count is None else int(count)
+            if size:
+                sides[side][1].append((first, first + size - 1))
+    for spans, ranges in sides:
+        for name, first, last in spans:
+            if any(a <= last and first <= b for a, b in ranges):
+                names.add(name)
+    return names
+
+
+def changed_definitions(base, head, names, root=ROOT):
+    """{UI source file: the top-level names whose definitions the diff from base's merge point to head changes}, for
+    the ui/ source files in `names` (not tests or vendored code). Git failing names nothing."""
+    out = {}
+    sources = [
+        n
+        for n in names
+        if n.startswith("ui/") and not n.startswith(("ui/tests/", "ui/vendor/")) and n.endswith((".ts", ".js"))
+    ]
+    if not base or not sources:
+        return out
+    try:
+        ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
+    except (subprocess.CalledProcessError, OSError):
+        return out
+    for path in sources:
+
+        def show(rev, path=path):
+            done = subprocess.run(
+                ["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, text=True, check=False
+            )
+            return done.stdout if done.returncode == 0 else ""
+
+        try:
+            diff = subprocess.check_output(
+                ["git", "diff", "-U0", "--no-renames", ancestor, head, "--", path], cwd=root, text=True
+            )
+            found = hunk_names(diff, show(ancestor), show(head))
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        if found:
+            out[path] = found
+    return out
+
+
+def callers(root, defined, scripts):
+    """The browser scripts among `scripts` that name any of `defined` (top-level UI names) as a whole word."""
+    if not defined:
+        return set()
+    pattern = re.compile(r"(?<![\w$])(?:" + "|".join(sorted(map(re.escape, defined))) + r")(?![\w$])")
+    found = set()
+    for script in scripts:
+        path = browser_script(root, script)
+        try:
+            if path and pattern.search(path.read_text(errors="replace")):
+                found.add(script)
+        except OSError:
+            continue
     return found
 
 
@@ -1038,7 +1152,7 @@ def script_changes(base, head, changed, root=ROOT):
     return sorted(found)
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
+def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None, head="HEAD"):
     """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
     from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
@@ -1058,10 +1172,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
     6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
-       changed or gone helper under ui/tests/support/, and the scripts named after UI source outside UI_MAP. More than
-       BROWSER_ALL_OVER picked runs every script `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull
-       request keeps them.
+       changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, the scripts
+       that name a top-level function or const whose definition the diff from `base` to `head` changes in a UI source
+       file (changed_definitions), and every phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
+       `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
+    8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1195,7 +1311,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     direct = set()
     if any(n.startswith("ui/") for n in names):  # rule 6
         runnable = set(runnable_scripts(root))
+        phone = {s for s in runnable if s.startswith(PHONE_PREFIX)}
         for name in names:
+            if name.startswith(PHONE_SCOPE):
+                direct |= phone
             if is_browser(name) and name in live:
                 direct.add(Path(name).stem)
             elif name.startswith(SUPPORT):
@@ -1206,6 +1325,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
                 and ui_map_key(name) not in UI_MAP
             ):
                 direct |= named_after(name, runnable)
+        defined = changed_definitions(base, head, names, root)  # a deleted file's old functions too
+        direct |= callers(root, set().union(*defined.values()), runnable)
         if len(direct) > BROWSER_ALL_OVER:
             uncertain.append(f"rule 6: {len(direct)} browser scripts picked: every script the release check runs")
             direct |= runnable
@@ -1245,6 +1366,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if owned:
         python |= owned_tests
         notes.append(owned_reason(owned))
+    if any(n.startswith(MIGRATIONS) for n in names):  # rule 8
+        python |= {t for t in UPGRADE_TESTS if (root / t).is_file()}
+        notes.append("rule 8: a migration runs the upgrade tests")
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
@@ -1555,6 +1679,9 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
     smoke_tests, smoke_scripts = smoke(root)
     full = set(picked["python"])
+    # Rule 8: a migration's upgrade tests reach it only through the app's start; they always run, like a changed test.
+    upgrade = set(UPGRADE_TESTS) & full if any(n.startswith(MIGRATIONS) for n in names) else set()
+    level = {**level, **dict.fromkeys(upgrade, 0)}
     python = {p for p in full if p in level}
     left = sorted(full - python)
     # The smoke set runs when the plan drops anything: here by depth, or later by the time budget (prepare removes
@@ -1662,7 +1789,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     light = light and event in NARROW
     # One map for the selection and the narrowing; selection builds none for a change it answers without one.
     graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
-    picked = selection(changed, event, base=base, added=added, graph=graph)
+    picked = selection(changed, event, base=base, added=added, graph=graph, head=head)
     if light:
         picked = narrow(picked, changed, event, added=added, graph=graph)
     if picked["python"] is not None and not picked["caddy"]:
@@ -1955,6 +2082,16 @@ def superseded_runs(runs, head_ref, run_number):
     return ids
 
 
+def queue_ref_dropped(repo, branch, run=subprocess.run):
+    """Whether the merge queue has dropped the group on `branch` (gh-readonly-queue/...): GitHub deletes a group's ref
+    when it rebuilds or removes the group. Only a 404 counts; any other answer (the ref exists, an API error) keeps the
+    run, which then finishes alone at worst."""
+    if not branch.startswith("gh-readonly-queue/"):
+        return False
+    result = run(["gh", "api", f"repos/{repo}/git/ref/heads/{branch}", "--silent"], capture_output=True, text=True)
+    return result.returncode != 0 and "HTTP 404" in (result.stderr or "")
+
+
 def junit_ran(path):
     """Whether a pytest JUnit report holds a test that ran (passed or failed), not only skipped ones."""
     path = Path(path)
@@ -2185,11 +2322,18 @@ def main():
             for run in page.get("workflow_runs", [])
         ]
         own = os.environ.get("GITHUB_RUN_ID", "")
+        repo = os.environ["GITHUB_REPOSITORY"]
+        branches = {run["id"]: run.get("head_branch") or "" for run in runs}
         for run_id in superseded_runs(runs, args.head_ref, args.run_number):
             if str(run_id) == own:
                 continue
+            # A cancelled group that is still the queue's live entry fails `checks` and ejects its pull request, so
+            # only a group GitHub has already dropped (its gh-readonly-queue ref deleted) is cancelled.
+            if not queue_ref_dropped(repo, branches[run_id]):
+                print(f"Keeping merge queue run {run_id}: its group {branches[run_id]} is still live or unknown")
+                continue
             print(f"Cancelling superseded merge queue run {run_id}")
-            subprocess.run(["gh", "run", "cancel", str(run_id), "--repo", os.environ["GITHUB_REPOSITORY"]], check=False)
+            subprocess.run(["gh", "run", "cancel", str(run_id), "--repo", repo], check=False)
     elif args.action == "smoke-check":
         problems = smoke_check()
         for problem in problems:

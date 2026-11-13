@@ -3,6 +3,7 @@
 pub mod meet;
 mod persistence;
 mod sharing;
+pub mod teams;
 pub(crate) use persistence::migrate;
 pub(crate) use persistence::{settle_names, timeline};
 pub(crate) use sharing::correct_shared_names;
@@ -19,7 +20,7 @@ use std::collections::BTreeMap;
 #[cfg(any(target_os = "macos", test))]
 use std::collections::BTreeSet;
 
-/// Meet's visual speaking indication can trail the captured audio by a polling tick.
+/// The visual speaking indication can trail the captured audio by a polling tick.
 const LAG_MS: u64 = 300;
 pub const POLL_MS: u64 = 250;
 /// A stalled browser must not extend the last speaker across an unobserved interval.
@@ -60,17 +61,37 @@ pub struct Observation {
     pub active: Vec<String>,
     /// Speaking state was readable this poll. Without it silence is unknown, not observed.
     pub indicators: bool,
-    /// People-panel rows seen, and how the local row was told apart: "marker", "structure",
-    /// or "none" (then no speaking state is used). For the log only.
+    /// People-panel rows (Teams: video tiles) seen, and how the local one was told apart:
+    /// "marker", "structure", or "none" (then no speaking state is used). For the log, and for
+    /// whether a Teams page shows a call.
     pub rows: usize,
     pub local_by: &'static str,
 }
 
-/// One adapter per meeting app. Browser AX transport stays outside the app's parser.
+/// One adapter per meeting app. Browser AX transport stays outside the app's parser; it reads
+/// a document with the adapter whose [`MeetingAdapter::detect_window`] matched it.
 pub trait MeetingAdapter {
+    /// The app's name, for the log.
+    fn app(&self) -> &'static str;
+    /// Only browser windows titled like the app are walked.
+    fn window_title(&self, title: &str) -> bool;
     fn detect_window(&self, title: &str, document_url: &str) -> bool;
+    /// The DOM classes the AX walker keeps.
+    fn kept_class(&self, class: &str) -> bool;
+    /// Static text under this node (role and kept classes only) is a name, never chat.
+    fn name_container(&self, node: &meet::Node) -> bool;
+    /// A branch the walker never reads: text entry, chat, captions.
+    fn private_branch(&self, role: &str, label: &str) -> bool;
     fn observe(&self, root: &meet::Node) -> Observation;
+    /// Whether the document shows a call now. A Meet document is one; a Teams page is one only
+    /// with video tiles, as Teams keeps one address for chat and calls.
+    fn in_call(&self, _observed: &Observation) -> bool {
+        true
+    }
 }
+/// The supported meeting apps, tried in order.
+#[cfg(any(target_os = "macos", test))]
+const ADAPTERS: &[&dyn MeetingAdapter] = &[&meet::GoogleMeet, &teams::Teams];
 
 pub(super) fn name(value: &str) -> Option<String> {
     let value = value.trim();
@@ -344,6 +365,34 @@ impl Batch {
     pub fn is_empty(&self) -> bool {
         self.people.is_empty() && self.intervals.is_empty() && self.readable.is_empty()
     }
+}
+
+/// Who the watch saw in the meeting window at its last poll that found one, by recording: its people and the local
+/// person, each once. Kept only in memory, for a call's live status.
+static PRESENT: std::sync::Mutex<Option<(String, Vec<String>, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+/// A reading older than this is no longer who is there.
+const PRESENT_FOR: std::time::Duration = std::time::Duration::from_secs(15);
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn note_present(id: &str, observed: &Observation) {
+    let mut names: Vec<String> = vec![];
+    for name in observed.self_names.iter().chain(&observed.participants) {
+        if !names.iter().any(|seen| same(seen, name)) {
+            names.push(name.clone());
+        }
+    }
+    *PRESENT.lock().unwrap_or_else(|error| error.into_inner()) =
+        Some((id.to_owned(), names, std::time::Instant::now()));
+}
+/// The names in the meeting window now, for the recording `id`; None while none was read lately.
+pub fn present(id: &str) -> Option<Vec<String>> {
+    PRESENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .filter(|(seen, names, at)| seen == id && !names.is_empty() && at.elapsed() < PRESENT_FOR)
+        .map(|(_, names, _)| names.clone())
 }
 
 #[cfg(target_os = "macos")]

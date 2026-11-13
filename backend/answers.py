@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from . import hubdb_core, pr_conflicts
 from . import task_engine as E
 from . import task_requirements as R
-from . import task_wakes
+from . import task_wakes, validate_gate
 from . import waiting_on as W
 
 if TYPE_CHECKING:
@@ -197,6 +197,9 @@ def _may_answer(
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok" and validate_gate.held(conn, row, requirement):
+        # A bot's OK in Validate is the person's only once Jev passed its page: not from the task page before then.
+        _refuse(conn, by, "task_requirement", f"{validate_gate.HELD}.", task_id)
     if kind == "ok" and requirement.get("visit_id") and not is_human(by):
         _refuse(conn, by, "task_requirement", "An OK is a person's to give", task_id)
     if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
@@ -249,19 +252,20 @@ def _may_answer_page(
         _refuse(conn, by, "task_why", "Say what to change", task_id)
     if value == OK and standing.line.startswith(R.DECIDE) and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say why it meets the check", task_id)
+    if value == OK and R.asked_to_review(standing, by) and not (notes or "").strip():
+        _refuse(conn, by, "task_why", "Say which commits you read and what you checked", task_id)
 
 
 def _page_version(
     conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: str | None
 ) -> int | None:
-    """The page version an answer on a page is for: the one attached now. A caller that names the page it was shown
+    """The page version an answer on a page is for: the one that counts now (task_requirements.page_for: the one
+    attached, or the one a person's OK brought back from Merge). A caller that names the page it was shown
     (`<file id>@<version>`) is refused when another is attached since (`task_changed`): another file at the same
     version number is another page."""
     if requirement["kind"] != "page":
         return None
-    from . import task_pages
-
-    page = task_pages.current(conn, row["visit"]["id"], requirement["id"])
+    page, _ = R.page_for(conn, row, requirement)
     now = int(page["version"]) if page else None
     if page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}"):
         _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
@@ -279,16 +283,30 @@ def _write(
     page_version: int | None = None,
     typed: Row | None = None,
 ) -> str:
-    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it."""
+    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it. An
+    answer on a page keeps the commits it was given at (`_heads`)."""
     H = _h()
     answer_id = H.new_id()
     settings: Row = (typed or {}).get("settings") or {}
     name = str(settings["name"]) if settings.get("name") else None
     value_type = R.answer_type(typed) if typed else None
+    heads = _heads(conn, row) if page_version is not None else None
     conn.execute(
         "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, name, value_type, "
-        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, name, value_type, H.now()),
+        "heads, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            answer_id,
+            row["visit"]["id"],
+            requirement_id,
+            str(by),
+            value,
+            notes,
+            page_version,
+            name,
+            value_type,
+            heads,
+            H.now(),
+        ),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
     if page_version is not None:
@@ -296,6 +314,16 @@ def _write(
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
+
+
+def _heads(conn: "sqlite3.Connection", row: Row) -> str | None:
+    """The newest commits of the task's linked PRs, as an answer on a page keeps them: a person's OK counts only while
+    they are still the newest, and a bot's review of the commits after the reviews names the ones it read
+    (task_requirements._new_commits). None when the task links no PR Tico has read."""
+    import json
+
+    heads = R.heads_now(conn, row)
+    return json.dumps(heads, sort_keys=True) if heads else None
 
 
 def _wake_key(row: Row, answer_id: str) -> str:
@@ -410,8 +438,9 @@ def answer(
             _refuse(conn, by, "task_requirement", why, task_id)
         value = stored
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
-    same = (str(by), value, notes, pinned)
-    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version")) == same:
+    same = (str(by), value, notes, pinned, _heads(conn, row) if pinned is not None else None)
+    kept = (newest or {}).get("heads")
+    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version"), kept) == same:
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out
@@ -421,6 +450,11 @@ def answer(
         from . import task_asks
 
         task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
+    if validate_gate.sends_back(conn, row, requirement, value):
+        # Not validated: back to In development with the note, which files new Engineering work.
+        out = validate_gate.not_validated(conn, task_id, by, notes)
+        out["answer_id"] = answer_id
+        return out
     if requirement["kind"] == "owner_done":
         _done_ends_own_snooze(conn, task_id, by)
     else:

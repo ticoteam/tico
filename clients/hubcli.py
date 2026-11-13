@@ -417,6 +417,10 @@ class HubParser(argparse.ArgumentParser):
         self.exit(2, f"{self.prog}: error: {message}{hint}\n")
 
 
+# A repeated event's edit: this one occurrence, it and the later ones, or the whole series.
+CALENDAR_SCOPES = ("this", "following", "all")
+
+
 def parser():
     p = HubParser(
         prog=PROG,
@@ -912,6 +916,7 @@ def parser():
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")
+    s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.add_argument(
         "--dry-run", dest="dry_run", action="store_true", help="print the checks a create would fail and write nothing"
     )
@@ -957,6 +962,9 @@ def parser():
     s.add_argument("owner", help="a bot slug, a person id, or me")
     s.add_argument("-m", "--why", help="why, in one plain sentence")
     s.add_argument("--version", type=int, help=version_help)
+    s.add_argument(
+        "--set-anyway", action="store_true", help="a person gives it all the same when a stage rule refused this owner"
+    )
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task reassign")
     s = task.add_parser(
@@ -1008,6 +1016,7 @@ def parser():
     s.add_argument("--due")
     s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
+    s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.set_defaults(fn="task file")
     s = task.add_parser("update", help="edit a task's fields: title, body, due, labels, privacy, goal; with --version")
     visibility = s.add_mutually_exclusive_group()
@@ -1161,6 +1170,11 @@ def parser():
     )
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
+    s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
+    s.add_argument("id", help="the task that merges later")
+    s.add_argument("task", help="the task it merges after")
+    s.add_argument("--remove", action="store_true", help="take the order off instead")
+    s.set_defaults(fn="task after")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")
@@ -1209,7 +1223,9 @@ def parser():
         "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
     )
     s.add_argument("--brief", action="store_true", help="leave out bodies")
-    s.add_argument("--all", action="store_true", help="every task and every bot you may see, as {tasks, bots}")
+    s.add_argument(
+        "--all", action="store_true", help="every task (snoozed ones too) and every bot you may see, as {tasks, bots}"
+    )
     s.add_argument(
         "--snoozed",
         choices=["only", "all"],
@@ -1736,10 +1752,52 @@ def parser():
     s.add_argument("--file", required=True, help="the JSON body tico_external_sync takes")
     s.set_defaults(fn="external sync")
 
-    calendar = sub.add_parser("calendar", help="read or schedule company appointments").add_subparsers(dest="sub")
-    s = calendar.add_parser("list", help="appointments on a company calendar")
+    calendar = sub.add_parser("calendar", help="events, free times and bookings on calendars").add_subparsers(
+        dest="sub"
+    )
+    s = calendar.add_parser("list", help="events on calendars (--who), or a company calendar's appointments")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
+    s.add_argument("--who", help="comma-separated people or bots, refs or emails; default you")
+    s.add_argument("--from", dest="from_", metavar="ISO", help="window start: ISO time, or YYYY-MM-DD")
+    s.add_argument("--to", metavar="ISO", help="window end, exclusive; at most 62 days after --from")
+    s.add_argument("--kinds", help="comma-separated: event, run, due, away (default all)")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="calendar list")
+    s = calendar.add_parser("free", help="times when people are free, within their working hours")
+    s.add_argument("--who", help="comma-separated people or bots; default you")
+    s.add_argument("--minutes", type=int, default=30, help="length of the free slot (default 30)")
+    s.add_argument("--within", metavar="DURATION", help="how far ahead to look, such as 5d")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar free")
+    s = calendar.add_parser("add", help="book an event; a bot or the Assistant may book anyone a rule allows")
+    s.add_argument("--title", required=True)
+    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD with --all-day")
+    s.add_argument("--end", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD (exclusive) with --all-day")
+    s.add_argument("--who", help="comma-separated attendees, refs or emails")
+    s.add_argument("--repeat", help='words or an RRULE, such as "weekly on mon,wed" or "daily until 2026-12-31"')
+    s.add_argument("--calendar", help="whose calendar: a ref such as human:ana, or an email; default you")
+    s.add_argument("--all-day", action="store_true", help="start and end are dates")
+    s.add_argument("--notes", help="description for attendees")
+    s.add_argument("--no-meet", action="store_true", help="no Google Meet link")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar add")
+    s = calendar.add_parser("move", help="move one occurrence, or a repeated event from it on with --scope")
+    s.add_argument("occurrence", help="occurrence id from calendar list or search")
+    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD for all day")
+    s.add_argument("--end", help="same form as --start")
+    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar move")
+    s = calendar.add_parser("cancel", help="cancel one occurrence, or a repeated event from it on with --scope")
+    s.add_argument("occurrence", help="occurrence id from calendar list or search")
+    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar cancel")
+    s = calendar.add_parser("search", help="find events by words, with tokens such as with:ben or before:2026-12-01")
+    s.add_argument("q", metavar="words")
+    s.add_argument("--who", help="comma-separated calendars to search; default you")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar search")
     s = calendar.add_parser("schedule", help="queue one calendar appointment")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
     s.add_argument("--title", required=True)
@@ -1986,6 +2044,22 @@ def parser():
     s.add_argument("bot")
     s.add_argument("computer", nargs="?", type=lambda v: None if v == "none" else v, default=argparse.SUPPRESS)
     s.set_defaults(fn="bot browser-exit")
+    s = bot.add_parser(
+        "app-view", help="read or set whether a bot may view the app read only, for its screenshots: on or off"
+    )
+    s.add_argument("bot")
+    s.add_argument("on", nargs="?", type=lambda v: {"on": True, "off": False}[v], default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot app-view")
+    s = bot.add_parser(
+        "app-shot", help="a screenshot of the app as you see it, read only: --width 390 for a phone, 1280 for a desktop"
+    )
+    s.add_argument("path", nargs="?", default="/", help="the app address, such as /#/tasks")
+    s.add_argument("--out", required=True, help="where to write the PNG")
+    s.add_argument("--width", type=int, default=390)
+    s.add_argument("--height", type=int, default=argparse.SUPPRESS)
+    s.add_argument("--wait-ms", dest="wait_ms", type=int, default=argparse.SUPPRESS)
+    s.add_argument("--full", action="store_true", default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot app-shot")
     s = bot.add_parser("budget", help="read or set a bot's runs per hour and per day, or release it from a hold")
     s.add_argument("bot")
     s.add_argument(
@@ -2038,10 +2112,16 @@ def parser():
     )
     s.add_argument("bot")
     s.set_defaults(fn="bot release")
-    s = bot.add_parser("model", help="list the models, or change this bot's (BotOps)")
+    s = bot.add_parser("model", help="list the models, or change this bot's model or where it compacts (BotOps)")
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
     s.add_argument("--effort")
+    s.add_argument(
+        "--compact-at",
+        type=int,
+        help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
+        "600000, 700000, 800000, 900000 or 1000000",
+    )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
     s = bot.add_parser(

@@ -37,7 +37,9 @@ carries the blocking count).
 ## 2. Check against the team's standard
 
 Walk `knowledge/standards.md` item by item. Note each item as met, not met, or not checkable from the diff. Look for a pattern from
-`knowledge/patterns.md`. A secret, a removed check or a removed test is blocking, and is reported to a human at once by task.
+`knowledge/patterns.md`. A secret, a removed check or a removed test is blocking. On an Engineering task it goes on the page, and the Builder
+fixes it in Fixes (a secret's rotation goes to the Security Owner); never to a person by task. Outside the pipeline, report it
+to the owner in `knowledge/standards.md` at once by task.
 
 ## 3. Size
 
@@ -70,9 +72,12 @@ one file per call. The review page shows only what is attached here. If the diff
 
 ## 5. Finish
 
-In a review stage: publish and attach the page. `tico file publish reports/reviews/<file>.md --task <id>` prints the
-file id; then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
-names. The page is the whole hand-off: the stage moves on when it covers the newest commit. Commit this repository.
+In a review stage: publish and attach the page. It is HTML (`reports/reviews/<task>-<first 7 of the commit>.html`): Tico
+refuses a Markdown or plain-text page for a requirement. At the top, two or three lines say which commit it reviews and
+what it found (blocking or not); then the sections above, with simple inline CSS and nothing from elsewhere.
+`tico page publish reports/reviews/<file>.html --task <id>` prints the file id; then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
+names. The page is the whole hand-off: the stage moves on when it covers the newest commit, and every finding on the pull
+request goes to the Builder through it, never to your Manager or a person as a separate task. Commit this repository.
 
 Outside the pipeline: `tico task done <id> -m "..." --version N`: the pull request, the head commit, the number of
 blocking issues, and what you did not check. Post requested comments with the exact text and pull request using your

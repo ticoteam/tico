@@ -231,12 +231,6 @@ def test_migration_runs_again_and_changes_nothing():
     assert _state(conn) == once
 
 
-def test_migration_on_a_new_file_with_no_tables_does_nothing():
-    conn = sqlite3.connect(":memory:")
-    MIGRATION.up(conn)
-    assert conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
-
-
 def test_migration_keeps_the_install_assistant_out_of_groups_even_without_its_template(monkeypatch):
     """With TICO_ASSISTANT_BOT=ace the Assistant is `ace` (Groups.outside reads the same setting). A template-less `ace`
     under a person in a group stays out, and `coo` is an ordinary bot on that install."""

@@ -88,28 +88,22 @@ for (const name of RD_NAV_NAMES) rdNavPaint(name, document.documentElement.class
 // the next visit). A browser that will not store it keeps Library open.
 const RD_LIB_KEY = 'tico.nav.library';
 const RD_LIB = {inside: false, was: false};
-const rdInLibrary = (r: string): boolean => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+// Contacts sits on the Team header, so its page (and its old Directory address) leaves Library as it is.
+const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && !rdUnder(p, DIR_OLD_ROUTE) && [DOCS, MEETINGS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
 function rdLibRemember(open: boolean): void { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
-// Company folds the same way: open unless folded here, opened while Strategy, Finance or Growth is showing (its own
-// page, #/home, shows its row whatever the fold).
+// Company folds the same way: open unless folded here, opened while Strategy, Finance, Growth, Automations, Listening or
+// Rules is showing (its own page, #/home, shows its row whatever the fold).
 const RD_CO_KEY = 'tico.nav.company';
 const RD_CO = {inside: false, was: false};
-const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
 function rdCoRemember(open: boolean): void { try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) !== 'closed'; } catch { return true; } }
 const rdCoOpen = () => RD_CO.inside || rdCoSaved();
-// Rules folds the other way round: folded unless this browser opened it, opened while a Rules page is showing.
-const RD_RULES_KEY = 'tico.nav.rules';
-const RD_RULES = {inside: false, was: false};
-function rdRulesRemember(open: boolean): void { try { localStorage.setItem(RD_RULES_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
-function rdRulesSaved() { try { return localStorage.getItem(RD_RULES_KEY) === 'open'; } catch { return false; } }
-const rdRulesOpen = () => RD_RULES.inside || rdRulesSaved();
 function rdLibSync() {
-  rdRulesSync();
   rdCoSync();
-  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('#side .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle)');
+  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('#side .rd-lib-toggle:not(.rd-co-toggle)');
   if (!subs || !toggle) return;
   const here = rdInLibrary(S.route);
   if (here && !RD_LIB.was) RD_LIB.inside = true;
@@ -132,22 +126,9 @@ function rdCoSync() {
   document.documentElement.classList.toggle('nav-co-shut', !open);   // ui/theme.ts set it for the first paint
   toggle.setAttribute('aria-expanded', String(open));
 }
-function rdRulesSync() {
-  const subs = document.getElementById('rd-rules'), toggle = document.querySelector('.rd-rules-toggle');
-  if (!subs || !toggle) return;
-  const here = rdUnder((S.route || '').split('?')[0] ?? '', RULES_ROUTE);
-  if (here && !RD_RULES.was) RD_RULES.inside = true;
-  if (!here) RD_RULES.inside = false;
-  RD_RULES.was = here;
-  const open = rdRulesOpen();
-  subs.hidden = !open;
-  document.documentElement.classList.toggle('nav-rules-open', open);
-  toggle.setAttribute('aria-expanded', String(open));
-}
 // The folds' chevrons.
-$('#side .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle)').onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
+$('#side .rd-lib-toggle:not(.rd-co-toggle)').onclick = () => { const open = rdLibOpen(); RD_LIB.inside = false; rdLibRemember(!open); rdLibSync(); };
 $('#side .rd-co-toggle').onclick = () => { const open = rdCoOpen(); RD_CO.inside = false; rdCoRemember(!open); rdLibSync(); };
-$('#side .rd-rules-toggle').onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
 // The current page's highlight for what the redesign adds or moves (sidebar.js asks, after its own checks).
 function redesignNavCurrent(nav: string | undefined): boolean {
   if (!nav) return false;   // sidebar.ts passes a row's data-nav, which a row without one lacks (the old code threw here)
@@ -162,7 +143,7 @@ function redesignNavCurrent(nav: string | undefined): boolean {
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
   if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
-  if (nav.startsWith('rules-')) return rdUnder(r, RULES_ROUTE) && ruTabOf(r) === nav.slice(6);
+  if (nav === 'calendar') return rdUnder(r, CAL_ROUTE);
   return false;
 }
 

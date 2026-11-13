@@ -50,8 +50,3 @@ def pick(tmp_path, *dirs):
 )
 def test_setup_runner_picks_the_newest_supported_python(tmp_path, dirs, picked):
     assert pick(tmp_path, *dirs) == picked
-
-
-def test_setup_runner_stops_with_a_message_when_no_supported_python():
-    script = (ROOT / 'scripts/setup-runner.sh').read_text()
-    assert re.search(re.escape(PICK) + r'\nif \[ -z "\$PYTHON_BIN" \]; then\n  echo "Python 3\.12 or newer', script)

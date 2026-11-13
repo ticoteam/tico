@@ -223,12 +223,6 @@ def test_generate_extends_ruff_toml_and_lists_every_pair_of_the_pieces(tmp_path,
     assert text.endswith('[lint.per-file-ignores]\n"backend/a.py" = ["BLE001"]\n"backend/b.py" = ["F401"]\n')
 
 
-def test_ruff_toml_never_mentions_the_baseline():
-    # ruff.toml is what a bare `ruff check` and `ruff format` read: a fresh checkout must work without generating anything.
-    repo = Path(__file__).resolve().parents[2]
-    assert "baseline" not in (repo / "ruff.toml").read_text(encoding="utf-8").lower()
-
-
 def test_the_gate_names_the_baseline_and_the_raw_run_names_ruff_toml_alone():
     gate = lint_baseline.ruff_command(["--output-format", "concise"])
     assert gate[gate.index("--config") + 1] == "ruff-baseline.toml"

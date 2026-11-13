@@ -5,7 +5,7 @@
 'use strict';
 
 const TR_SVG = {
-  pencil: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  plus: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   catchUp: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M6 6h12M8 3h8"/></svg>',
   browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
@@ -36,7 +36,7 @@ function threadsShell() {
   main.innerHTML = `<div class="tr-shell" id="threads-shell" data-mode="list">
     <nav class="tr-rail" id="thread-rail" aria-label="Threads">
       <div class="tr-top"><h2 class="tr-h">Threads</h2>
-        <button type="button" class="tr-ib" data-tr-new aria-label="New thread" title="New thread">${TR_SVG.pencil}</button></div>
+        <a class="tr-ib" href="${THREADS_NEW}" data-tr-new aria-label="New message" title="New message">${TR_SVG.plus}</a></div>
       <div class="tr-find"><input type="search" id="tr-find" placeholder="Find a thread" aria-label="Find a thread" autocomplete="off"></div>
       <button type="button" class="tr-catch" data-tr-catch hidden>${TR_SVG.catchUp}<span class="tr-catch-word">Catch up</span><span class="tr-badge" hidden></span></button>
       <h3 class="tr-sec" data-sec="pinned" hidden>Pinned</h3><ul class="tr-list" data-list="pinned"></ul>
@@ -52,17 +52,15 @@ function threadsShell() {
   rail.querySelector('#tr-find').oninput = () => railRender();
   rail.onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLButtonElement>('button'); if (!b) return;
-    if (b.matches('[data-tr-new]')) threadNewOpen();
-    else if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch ?? '').catch(e => { b.disabled = false; toast(errorMessage(e, ''), true); }); }
+    if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch ?? '').catch(e => { b.disabled = false; toast(errorMessage(e, ''), true); }); }
     else if (b.matches('[data-tr-catch]')) void catchUpOpen();
     else if (b.matches('[data-tr-browse]')) void threadBrowseOpen();
     else if (b.matches('[data-tr-more]')) { b.disabled = true; threadsMore().catch(e => toast(e.message, true)).finally(() => { b.disabled = false; }); }
   };
-  shell.querySelector('.tr-pane').addEventListener('click', (ev: MouseEvent) => { if (eventElement(ev)?.closest('[data-tr-new]')) threadNewOpen(); });
   return shell;
 }
 // The pane with no thread open: a picture of how a thread works, one heading and one sentence, then New thread (the
-// pane's click handler in threadsShell answers its data-tr-new). The picture's colours are classes in thread-rail.css.
+// New message pane). The picture's colours are classes in thread-rail.css.
 const TR_EMPTY_HTML = `<div class="tr-empty"><div class="empty-state">
   <svg class="tr-diagram" viewBox="7 0 360 176" aria-hidden="true">
     <rect class="td-card" x="112" y="10" width="240" height="156" rx="14"/>
@@ -81,7 +79,7 @@ const TR_EMPTY_HTML = `<div class="tr-empty"><div class="empty-state">
   </svg>
   <h2>Talk with your team here</h2>
   <p>Share conversations with your bots and anything else the team should see.</p>
-  <button type="button" class="primary" data-tr-new>New thread</button>
+  <a class="primary" href="${THREADS_NEW}" data-tr-new>New thread</a>
 </div></div>`;
 // #/threads: the rail; on a desktop the thread last opened (else the first pinned) beside it. `?view=inbox` (Inbox's
 // old address) opens Catch up; `?view=dms` and `?with=` were the old list's filters.
@@ -128,7 +126,7 @@ function railRowHTML(t: ThreadRow, cur: string) {
   const n = threadUnread(t), bold = n > 0 || !!t.me?.activity, here = t.id === cur;
   const arch = t.me?.can_manage ? `<button type="button" class="tr-arch" data-tr-arch="${esc(t.id)}" aria-label="Archive" title="Archive"><span class="nav-icon" aria-hidden="true">archive</span></button>` : '';
   return `<li class="tr-item"><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
-    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
+    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${t.live_call ? `<span class="tr-call" title="Call">${CALL_SVG}</span>` : ''}${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
 }
 function railRender() {
   const rail = $('#thread-rail'); if (!rail?.isConnected) return;

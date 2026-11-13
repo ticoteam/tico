@@ -152,6 +152,11 @@ def test_deny_and_unknown_redirects_never_hand_out_a_code(api):
     assert api.post("/api/v2/oauth/register", json={"redirect_uris": ["http://agent.example/cb"]}).status_code == 400
 
 
+def test_a_redirect_uri_the_url_parser_rejects_is_a_registration_error_not_a_server_error(api):
+    r = api.post("/api/v2/oauth/register", json={"redirect_uris": ["https://["]})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_redirect_uri"
+
+
 def test_bodies_are_capped_and_bad_requests_are_shown_not_redirected(api):
     assert (
         api.post(

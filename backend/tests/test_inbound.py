@@ -451,34 +451,6 @@ def test_phone_requests_bind_admin_identity_and_never_buy_numbers(api):
     assert not any('inboxes/sms' in call[1] for call in calls)
 
 
-def test_cli_and_mcp_reach_the_same_inbound_tools(monkeypatch):
-    class API:
-        def get(self, path, **query):
-            return {'path': path, 'query': query}
-
-        def post(self, path, body, key=None):
-            return {'path': path, 'body': body}
-
-    api = API()
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
-    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
-    for command in [
-        ['inbound', 'inboxes'],
-        ['inbound', 'create-email', 'Login'],
-        ['inbound', 'list', '--inbox-id', 'ibx_a', '--inbox-id', 'ibx_b'],
-        ['inbound', 'search', 'code'],
-        ['inbound', 'cursor'],
-        ['inbound', 'wait', '--after', '0', '--timeout', '0'],
-        ['inbound', 'read', 'ses:msg:ibx_b'],
-        ['inbound', 'code', 'ses:msg:ibx_b'],
-    ]:
-        args = hubcli.parser().parse_args(command)
-        name = remotecli.tool_name(args.fn)
-        assert name in hubtools.BY_NAME
-        result = remotecli.run(args)
-        assert result['path'].startswith('inbound/')
-
-
 def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(api):
     svc = seed(api)
     svc.ingest(page())

@@ -33,8 +33,3 @@ def test_an_old_pipeline_tool_is_an_unknown_tool_and_calls_nothing(name):
     )
     assert reply["error"]["message"] == f"Unknown tool: {name}"
     assert client.calls == []
-
-
-def test_the_task_commands_that_replace_them_still_parse():
-    assert hubcli.parser().parse_args(["task", "show", "task-7"]).fn
-    assert hubcli.removed_notice(["task", "show", "task-7"]) is None

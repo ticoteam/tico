@@ -924,9 +924,37 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-table td,.subs-table th{white-space:nowrap}
 /* The hidden labels in these tables are absolutely placed: keep them inside the scrolling box, not the page. */
 #set-subs .scroll,#set-machines .scroll{position:relative}
+/* A phone: each plan is a stacked row, so why it is not connected and its one action sit under its name, on screen.
+   Name, computer count and ⋯ on the first line; the reason or usage under them; kind and owner last. */
+@media (max-width:760px){
+  .subs-table,.subs-table tbody{display:block}
+  .subs-table thead{display:none}
+  .subs-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;column-gap:8px;padding:8px 6px;border-bottom:1px solid var(--line)}
+  .subs-table tr:last-child{border-bottom:0}
+  .subs-table td{padding:0;border:0;white-space:normal;min-width:0}
+  .subs-table .subs-name{grid-column:1;grid-row:1;overflow-wrap:anywhere}
+  .subs-table .subs-count{grid-column:2;grid-row:1}
+  .subs-table .subs-more-cell{grid-column:3;grid-row:1;width:auto}
+  .subs-table .subs-use{grid-column:1/-1;grid-row:2;padding-top:2px}
+  .subs-table .subs-use:empty{display:none}
+  .subs-table .subs-use .subs-usage{flex-wrap:wrap}
+  .subs-table .subs-kind,.subs-table .subs-owner{grid-row:3;font-size:var(--t-sm);padding-top:2px}
+  .subs-table .subs-kind{grid-column:1}
+  .subs-table .subs-owner{grid-column:2/-1;text-align:right}
+}
 .subs-name{font-weight:500}
 .subs-kind{color:var(--muted)}
-.subs-owner{color:var(--muted)}
+.subs-order{width:1%;text-align:center}
+/* Settings > Models: one group per owner (avatar, name, count), in pick order; the plan in use is tinted. */
+.subs-group-head th{padding-top:14px;text-transform:none;letter-spacing:0;font-size:var(--t-base);color:var(--fg);font-weight:600}
+.subs-group:first-of-type .subs-group-head th{padding-top:9px}
+.subs-group-title{display:inline-flex;align-items:center;gap:8px}
+.subs-group-title .muted{font-weight:400}
+.subs-noone{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted)}
+.subs-you{font-size:var(--t-sm);font-weight:400}
+.subs-in-use td{background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.subs-pick-line{display:block;margin-top:2px;font-size:var(--t-sm)}
+.subs-pick-mark{color:var(--muted)}.subs-pick-mark.in-use{color:var(--ok)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
 .subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
@@ -982,6 +1010,8 @@ section.card>header .settings-head-act{margin-left:auto}
 }
 @media (prefers-reduced-motion:reduce){.plan-spin{animation-duration:3s}}
 .subs-cell{display:inline-flex;align-items:center;gap:6px}
+.subs-cell-set{flex-direction:column;align-items:flex-start;gap:2px}
+.subs-set-line{font-size:var(--t-sm);white-space:normal;max-width:260px}
 .subs-pick{height:28px;max-width:200px;padding:0 24px 0 8px;font-size:var(--t-sm)}
 .settings-machines td,.settings-machines th{white-space:nowrap}
 .settings-machines td.num,.settings-machines th.num{text-align:right;padding-right:16px}

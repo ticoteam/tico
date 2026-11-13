@@ -369,14 +369,14 @@ function lcFactsHTML(item: LcItem | undefined): string {
 function lcWireFacts(): void {
   const host = lcFacts();
   if (!host) return;
-  host.onclick = ev => {
+  host.onclick = async ev => {
     const b = eventElement(ev)?.closest('button');
     if (!b) return;
     const cred = (id: string): VaultCredential | undefined => VAULT?.credentials.find(c => c.id === id);
     if (b.dataset.vaultEdit) vaultEdit(cred(b.dataset.vaultEdit));
     else if (b.dataset.vaultShare) vaultShare(b.dataset.vaultShare);
     else if (b.dataset.vaultReveal) vaultReveal(b.dataset.vaultReveal);
-    else if (b.dataset.vaultDelete) { if (confirm(`Delete ${cred(b.dataset.vaultDelete)?.name || 'this credential'} and every grant of it?`)) void vaultDelete(b.dataset.vaultDelete); }
+    else if (b.dataset.vaultDelete) { if (await askConfirm(`Delete ${cred(b.dataset.vaultDelete)?.name || 'this credential'} and every grant of it?`, b)) void vaultDelete(b.dataset.vaultDelete); }
     else if (b.dataset.lcAddEnv) {
       const cur = LC;
       if (!cur) throw new Error('Keys: no page is open');
@@ -549,7 +549,7 @@ async function lcSlackLinks(state: LcState): Promise<void> {
     const b = eventElement(ev)?.closest<HTMLButtonElement>('button'); if (!b) return;
     const link = rows.find(l => l.id === b.closest<HTMLElement>('[data-link]')?.dataset.link); if (!link) return;
     const drop = b.matches('[data-slack-unlink]');
-    if (drop && !confirm(`Unlink ${tcnChannel(link)}?`)) return;
+    if (drop && !(await askConfirm(`Unlink ${tcnChannel(link)}?`, b))) return;
     b.disabled = true; err.textContent = '';
     try { await tcnSlackAct(link, drop ? 'unlink' : 'resume'); await load(true); }
     catch (e) { failed(e); b.disabled = false; }

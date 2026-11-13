@@ -108,7 +108,7 @@ def register(app, auth, settings, settings_admin, store):
                     "shared": bool(declared.get("shared")),
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
-                    "compact_at": compact_at_of(declared),
+                    "compact_at": compact_at_of(declared, rows.model(c, settings, declared)),
                     # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
                     "task_model": task_models.stored(declared),
                     "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
@@ -222,6 +222,8 @@ def register(app, auth, settings, settings_admin, store):
             W.STATE_CAUSES["planned"]: "finish_setup",
             W.ONBOARDING: "finish_setup",
             W.NO_COMPUTER: "assign_computer",
+            W.CLOUD_STARTING: "open_computers",
+            W.CLOUD_FAILED: "open_computers",
             W.RUNS_FAILING: "release_hold",
             W.LOGIN: "reconnect",
             W.COMPANY_PAUSED: "resume_company",

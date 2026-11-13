@@ -227,8 +227,10 @@ turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` ro
 A stage with no requirements passes a task straight on when the next stage has room, unless the stage is by hand. The
 never-stuck check does it, on its next pass. A by-hand stage holds every task, unless it has `requests_move_on` (Product's
 Ideas): then a person's request on its first visit (`task_engine.not_held_by_hand`) is moved on by the check when the
-next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
-stage owned by each task's assignee (Growth's Ideas): every task there rests.
+next stage has room, oldest first (`never_stuck._requests`). C10: nothing is written about room, for any by-hand
+stage in any pipeline; the moved task's owner is woken by its turn in the next stage, as after any move. Every other
+task in a by-hand stage rests until someone moves it. (The "has room" wake, keyed `room:<stage>:<freed by>`, was
+removed Nov 12; migration `drop_queued_room_notices` canceled the ones still queued.)
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
@@ -599,10 +601,28 @@ page          no page attached                          not_met  owner   No page
               met, no person                             met              Jev passed it
 ```
 
-A page a person OKs that is not `at_head` (Fixes 2's Review page) also says, before the OK, when a linked PR's newest
-commit is not one a met Review page (`at_head`, Jev passed or OK'd) was attached at: "New commits since the reviews
-(now at <sha>): not reviewed by a bot." (`task_requirements.unreviewed`, from `item_versions` and the PR's head; Tico
-keeps no commit count). The bot's wake on that stage says it too. A waiting page's `since` is when that version was
+A page a person OKs that is not `at_head` (Fixes 2's Review page) is not asked of the person while a linked PR's
+newest commit is one no bot reviewed: no met Review page (`at_head`, Jev passed or OK'd) was attached at it, and no
+bot OK'd it as below (`task_requirements._new_heads`). Once Jev has looked, it waits on the bot that attached the
+newest met Review page (`delta_reviewer`; never the task's owner now): "Review the new commits since the reviews (now
+at <sha>): read only them, against what the reviews found and the spec. OK them or send them back, and say what you
+read." That bot answers on the page (`tico task answer <id> <requirement> ok|no -m ...`, notes required either way):
+the answer keeps the commits it was given at (`answers.heads`). Its OK makes those commits reviewed, and the person's
+ask then starts "<bot> reviewed the commits since the reviews: <notes>." Its no is `not_met` on the owner: "<bot>
+sent back the new commits: <notes>". A round is one set of commits it answered at; after `DELTA_ROUNDS` (2) rounds in
+a visit, or with no such bot, the person is asked with "New commits since the reviews (now at <sha>): not reviewed by
+a bot." (Tico keeps no commit count). A person's OK on that page also keeps its commits (`task_requirements._after_ok`,
+C22). After a new commit, `item_sources.github.same_changes` compares what each moved PR changes (`github_pr_diffs`,
+read once per commit by the re-read's `_refresh_diffs` through `GitHub.pr_diff`: GitHub's compare `<base>...<sha>`,
+hashed by `diff_id` from the added and removed lines of each file); until both are read the page waits on GitHub
+("Reading what the commits since <name>'s OK change"). The same lines: met, "OK'd by <name>; the commits since change
+the same lines". Other lines: the delta review above, its rounds counted from the OK; the reviewer's OK at the newest
+commits is met ("OK'd by <name>; <bot> read the commits since"). After its no, with no such bot, or with the rounds
+spent, the OK is gone: the ask starts "New commits since <name>'s OK." and goes to that person. Back from Merge with no
+page attached on the visit (`page_for`), the OK and page of the Fixes 2 visit before Merge count; when that OK is gone,
+the Builder is asked to attach the page again. In Merge a bot's `requeue` of a moved head needs the same lines
+(`COMPARING` while unread, else `SENT_BACK_FOR_NEW`). Answers from before `heads` was kept stand. The Builder's wake says "not
+reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
 asked (its attach, or Jev's verdict when later), not when the stage began. The manager bot asked to decide answers with
 `tico task answer <id> <requirement> ok|no -m "<why>"`; its forward move with a reason is kept as that OK, not a push
 past.
@@ -635,8 +655,8 @@ With many PRs the first unmet one, in link order, gives the line.
 
 ### Choices made while building
 
-- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset. A person's
-  request in Ideas takes the room first, by itself (G5, Nov 10).
+- **Room in Spec (C10)** wakes nobody. A person's request in Ideas takes the room by itself (G5, Nov 10); a bot's
+  own idea waits for a person (Nov 12: the "has room" wake was removed).
 - **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
   manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to

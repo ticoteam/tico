@@ -262,6 +262,144 @@ def calendar_status(api, args):
     return api.get("calendar/actions/" + args["id"])
 
 
+# The Calendar (events, bookings, free times): the occurrence is the instance on the grid, and its id is what the
+# edit tools take (backend/calendar_api.py).
+CALENDAR_SCOPE = _s(
+    "For a repeated event: this occurrence, this one and the later ones, or the whole series",
+    enum=["this", "following", "all"],
+)
+CALENDAR_WHO = _s(
+    "Comma-separated calendars: refs (human:<id>, bot:<id>, shared:<id>, team:<id>, google:<id>) or emails"
+)
+
+
+def _clean(fields):
+    """A request body without the fields the caller did not give (the server takes its own defaults for them)."""
+    return {k: v for k, v in fields.items() if v is not None}
+
+
+@tool(
+    "tico_calendar_events",
+    "Events, bot runs, due dates and time away on the calendars in `who` (default: yours), in a window of up to 62 "
+    "days. Everyone in the company reads a Tico calendar; a Google calendar shows what Google's sharing allows. A "
+    "busy-only event shows as Busy. Returns occurrences.",
+    {
+        "who": CALENDAR_WHO,
+        "from": _s("Window start: ISO-8601 with zone, or YYYY-MM-DD. Default: today"),
+        "to": _s("Window end, exclusive; at most 62 days after from"),
+        "kinds": _s("Comma-separated: event, run, due, away. Default: all"),
+    },
+)
+def calendar_events(api, args):
+    return api.get(
+        "calendar/events",
+        who=args.get("who"),
+        **{"from": args.get("from"), "to": args.get("to"), "kinds": args.get("kinds")},
+    )
+
+
+@tool(
+    "tico_calendar_free",
+    "Times when each person or bot in `who` is free for `minutes`, within their working hours and zone. Times only, "
+    "never titles. A bot gets times only for people it may book.",
+    {
+        "who": _s("Comma-separated people or bots, refs or emails. Default: you"),
+        "minutes": {"type": "integer", "minimum": 1, "default": 30, "description": "Length of the free slot"},
+        "within": _s("How far ahead to look, such as 5d"),
+    },
+)
+def calendar_free(api, args):
+    return api.get("calendar/free", who=args.get("who"), minutes=args.get("minutes", 30), within=args.get("within"))
+
+
+@tool(
+    "tico_calendar_add",
+    "Book an event with `attendees`, optionally repeated. Bots and the Assistant may book anyone unless the Who bots "
+    "may book rule prevents it, and the refusal names that rule. A person may add only to their own Tico calendar, "
+    "and only without Google connected. A write to a connected person's calendar lands on their Google calendar. "
+    "Returns the occurrence.",
+    {
+        "calendar": _s(
+            "Whose calendar: a ref (human:<id>, bot:<id>, shared:<id>, google:<id>) or an email such as "
+            "legal@acme.example. Default: yours"
+        ),
+        "title": _s("Event title"),
+        "start": _s("ISO-8601 with zone, or YYYY-MM-DD with all_day"),
+        "end": _s("ISO-8601 with zone, or YYYY-MM-DD with all_day (exclusive)"),
+        "all_day": {"type": "boolean", "default": False, "description": "start and end are dates"},
+        "attendees": {"type": "array", "items": {"type": "string"}, "description": "Refs or emails to invite"},
+        "repeat": _s("Words or an RRULE, such as 'weekly on mon,wed' or 'daily until 2026-12-31'"),
+        "notes": _s("Description for attendees"),
+        "add_meet": {"type": "boolean", "default": True, "description": "Add a Google Meet link"},
+    },
+    required=("title", "start", "end"),
+    writes=True,
+)
+def calendar_add(api, args):
+    body = _clean(
+        {
+            "calendar": args.get("calendar"),
+            "title": args["title"],
+            "start": args["start"],
+            "end": args["end"],
+            "all_day": args.get("all_day"),
+            "attendees": args.get("attendees"),
+            "repeat": args.get("repeat"),
+            "notes": args.get("notes"),
+            "add_meet": args.get("add_meet", True),
+        }
+    )
+    return api.post("calendar/events", body, key=_key(args))
+
+
+@tool(
+    "tico_calendar_move",
+    "Move one occurrence (its occurrence_id from tico_calendar_events or tico_calendar_search) to new times. A Google "
+    "event moves on Google. The same rules as tico_calendar_add apply to who may write.",
+    {
+        "occurrence": _s("occurrence_id of the instance to move"),
+        "start": _s("New start: ISO-8601 with zone, or YYYY-MM-DD for all day"),
+        "end": _s("New end, in the same form"),
+        "scope": CALENDAR_SCOPE,
+    },
+    required=("occurrence", "start"),
+    writes=True,
+)
+def calendar_move(api, args):
+    body = _clean({"start": args["start"], "end": args.get("end"), "scope": args.get("scope")})
+    return api.patch("calendar/events/" + quote(args["occurrence"], safe=""), body, key=_key(args))
+
+
+@tool(
+    "tico_calendar_cancel",
+    "Cancel one occurrence, or with scope the repeated event from it on. The same rules as tico_calendar_add apply to "
+    "who may write.",
+    {"occurrence": _s("occurrence_id of the instance to cancel"), "scope": CALENDAR_SCOPE},
+    required=("occurrence",),
+    writes=True,
+)
+def calendar_cancel(api, args):
+    return api.call(
+        "DELETE",
+        "calendar/events/" + quote(args["occurrence"], safe=""),
+        key=_key(args),
+        query={"scope": args.get("scope")},
+    )
+
+
+@tool(
+    "tico_calendar_search",
+    "Find events whose title, notes or location match the words, across the calendars in `who` (default: yours), "
+    "nearest first. Tokens in q: with:<name>, bot:<name>, kind:<event|run|due|away>, before:<date>, after:<date>, "
+    "has:transcript, automation:<name>, trigger:<kind>, longer:<N>m. `partial` true means some Google calendars ran "
+    "out of time.",
+    {"q": _s("Words and tokens"), "who": CALENDAR_WHO},
+    required=("q",),
+)
+def calendar_search(api, args):
+    return api.get("calendar/search", q=args["q"], who=args.get("who"))
+
+
 @tool(
     "tico_call_list",
     "The calls in a thread, newest first: id, title, state (`live` or `ended`), connector, and how each "

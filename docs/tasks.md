@@ -157,19 +157,26 @@ takes `check_model` and `check_role` on task create.
 
 ## Related tasks
 
-A relation is a note between two tasks. A task never waits on one.
+A relation is a note between two tasks. A task never waits on one, except an order in Merge.
 
 | Kind | Means |
 |---|---|
 | `related` | they belong together |
 | `duplicate_of` | the task duplicates the other |
 | `follow_up` | the task was split off or followed up from the other |
+| `after` | the task merges after the other: in Merge its PRs are not queued until the other has merged |
 
 ```sh
 tico task relate <id> <other-id>                     # related
 tico task relate <id> <other-id> --kind duplicate_of
 tico task relate <id> <other-id> --remove
+tico task after <id> <other-id>                      # merges after it; --remove takes it off
+tico task file "title" --parent <id> --after <other-id>
 ```
+
+An order is for two tasks that change the same lines: they build and are reviewed side by side, and Merge queues the
+later one only once the earlier one has merged ([Pipelines](pipelines-v3.md), "GitHub", Merge). Both pages show it,
+"After #40 · Merge" and "Before #42", read-only.
 
 The API is `POST /api/v2/tasks/{id}/relations` with `{"task": "<other id>", "kind": "...", "remove": false}`. In SQL
 they are the `task_relations` table ([Hub SQL](hub-sql.md)).

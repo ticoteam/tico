@@ -165,7 +165,9 @@ function liveUrl(): string {
     .filter(t => t !== 'letters' || LIVE.handlers.get('letters')?.size);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
   LIVE.urlTopics = topics;
-  const q = new URLSearchParams({topics: topics.join(','), needs: 'changes'});
+  // Run steps as compact signals (which step moved, not its contents): no screen here reads a step's payload; each one
+  // notes that the run moved and reads its own summary (backend/events.py _step_output).
+  const q = new URLSearchParams({topics: topics.join(','), needs: 'changes', output: 'compact'});
   if (LIVE.after != null) q.set('after', String(LIVE.after));
   if (conversations.length) q.set('conversation', conversations.join(','));
   if (threads.length) q.set('thread', threads.join(','));

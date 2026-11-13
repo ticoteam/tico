@@ -107,9 +107,9 @@ interface ReachLine {
   rule?: { id?: string; text: string } | null;
   may_edit?: boolean;
 }
-interface ReachCaps { mode: string; chats_per_day: number; tasks_per_day: number; }
+interface ReachCaps { mode: string; book: string; chats_per_day: number; tasks_per_day: number; }
 /** One setting of a party in Reach (its own value, or the server's effective one). */
-interface ReachSetting { party: string; mode?: string; chats_per_day?: number | null; tasks_per_day?: number | null; }
+interface ReachSetting { party: string; mode?: string; book?: string | null; chats_per_day?: number | null; tasks_per_day?: number | null; }
 /** Reach as GET /v2/reach answers it. */
 interface ReachData {
   defaults?: Partial<ReachCaps & { person_mode: string }>;
@@ -459,11 +459,12 @@ const ruSel = (id: string) => ruQuery().get('rule') === id;
 // and changes the party's settings, lists the rules it follows and its lines. On a phone the map gives way to a list.
 // GET /v2/reach holds it all; each change writes one setting or one line, then reads it again.
 // Bots, teams and Everyone start nearby; a person's own mode starts open (people are never refused).
-const RR_DEFAULTS = {mode: 'nearby', chats_per_day: 999, tasks_per_day: 999, person_mode: 'open'};
+const RR_DEFAULTS = {mode: 'nearby', book: 'anyone', chats_per_day: 999, tasks_per_day: 999, person_mode: 'open'};
 const RR_MAX = 100000;
 const RR_MATCHES = 8;      // the header search's list
 const RR_ADD_MATCHES = 7;  // + Add exception's list
 const RR_MODES: [string, string][] = [['open', 'Can reach anyone'], ['nearby', 'Nearby'], ['closed', "Only who's listed"]];
+const RR_BOOKS: [string, string][] = [['anyone', 'Anyone'], ['nearby', 'Nearby'], ['none', 'No one']];
 
 function rrNormal(d: ReachData | null | undefined): ReachNormal {
   return {defaults: {...RR_DEFAULTS, ...(d?.defaults || {})}, settings: d?.settings || [], effective: d?.effective || {},
@@ -492,7 +493,7 @@ const rrOwn = (p: string, R: ReachNormal = ruOpen().reach): Partial<ReachSetting
 function rrEff(p: string, R: ReachNormal = ruOpen().reach): ReachEff {
   if (R.effective[p]) return {...R.defaults, ...R.effective[p]};
   const chain = [p, ...rrTeams(p).map(id => 'group:' + id), ...(p === '*' ? [] : ['*'])], out: Record<string, string | number | null | undefined> = {}, from: Record<string, string | null> = {};
-  for (const f of ['mode', 'chats_per_day', 'tasks_per_day'] as const) {
+  for (const f of ['mode', 'book', 'chats_per_day', 'tasks_per_day'] as const) {
     const at = chain.find(q => rrOwn(q, R)[f] != null);
     out[f] = at ? rrOwn(at, R)[f] : f === 'mode' && rrKind(p) === 'human' ? R.defaults.person_mode : R.defaults[f];
     from[f] = at ?? null;
@@ -672,6 +673,8 @@ function rrPanelDraw(note = '') {
   const groups = inherited.map(([k, label, rules]) => { const open = !R.shut.has(k); return `<div class="rr-inh">
       <button type="button" class="rr-inh-h" data-rr-inh="${esc(k)}" aria-expanded="${open}"><span class="rr-cx" aria-hidden="true">›</span><span class="rr-inh-t">${esc(label)}</span><span class="ru-n">${rules.length}</span></button>
       ${open ? `<div class="rr-inh-l">${rules.map(r => rule(r, 'rr-rule rr-sub')).join('')}</div>` : ''}</div>`; }).join('');
+  // Who bots may book is a bot's calendar rule: a person's own has nothing to limit, so none is shown for one.
+  const book = rrKind(p) === 'human' ? '' : `<div class="rr-book"><span class="rr-book-l">Who bots may book</span>${ruSegHTML('rr-book', RR_BOOKS, eff.book, !may)}${rrFromTag(p, eff, 'book')}</div>`;
   const lines = rrLinesOf(p), E = R.edit;
   const row = ({l, dir, other}: ReturnType<typeof rrLinesOf>[number]) => {
     const body = `<span class="rr-lt"><span class="rr-dir">${dir === 'to' ? 'To' : 'From'}</span><span class="rr-who">${esc(rrName(other))}</span>
@@ -685,7 +688,7 @@ function rrPanelDraw(note = '') {
   side.innerHTML = `<div class="rr-panel" data-party="${esc(p)}">
     <div class="rr-h"><a class="ru-x rr-back" href="${ruHref('internal')}" aria-label="Back">‹</a><h2>${esc(rrName(p))}</h2></div>
     ${R.error ? `<p class="err">${esc(R.error)}</p>` : ''}
-    <div class="rr-set">${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}${rrFromTag(p, eff, 'mode')}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
+    <div class="rr-set">${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}${rrFromTag(p, eff, 'mode')}${book}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
     <section class="rr-sec" aria-label="Rules"><header><h3 class="ru-lbl">Rules</h3>${human ? '<button class="ghost small" type="button" data-rr-add-rule>+ Add rule</button>' : ''}</header>
       ${groups}${mine.map(r => rule(r)).join('')}${groups || mine.length ? '' : '<p class="rr-none">None.</p>'}</section>
     <section class="rr-sec" aria-label="Exceptions"><header><h3 class="ru-lbl">Exceptions</h3>${R.mayEdit.size && !R.adding && !E ? '<button class="ghost small" type="button" data-rr-add-line>+ Add exception</button>' : ''}</header>
@@ -766,9 +769,9 @@ async function rrReload(note = '') {
   rrMapPaint(); rrPanelDraw(note);
 }
 const rrStatus = (text: string) => { const el = ruOpen().root.querySelector('.rr-panel .ru-status'); if (el) el.textContent = text; };
-// One setting of the selected party: a mode, or a cap (empty clears it, so it is taken from above).
+// One setting of the selected party: a mode, a book, or a cap (empty clears it, so it is taken from above).
 async function rrPut(p: string, field: string, value: number | string | null) {
-  if (field !== 'mode' && value != null && !(Number.isInteger(value) && Number(value) >= 0 && Number(value) <= RR_MAX)) {
+  if ((field === 'chats_per_day' || field === 'tasks_per_day') && value != null && !(Number.isInteger(value) && Number(value) >= 0 && Number(value) <= RR_MAX)) {
     rrPanelDraw(`A whole number from 0 to ${RR_MAX}.`); return;
   }
   rrStatus('Saving…');
@@ -865,6 +868,11 @@ function rrClick(ev: Event) {
   const mode = t.closest<HTMLButtonElement>('[data-ru-seg="rr-mode"] [data-v]');
   if (mode) {
     if (!mode.disabled && mode.getAttribute('aria-pressed') !== 'true') void rrPut(rrParty(), 'mode', mode.dataset.v ?? '');
+    return true;
+  }
+  const book = t.closest<HTMLButtonElement>('[data-ru-seg="rr-book"] [data-v]');
+  if (book) {
+    if (!book.disabled && book.getAttribute('aria-pressed') !== 'true') void rrPut(rrParty(), 'book', book.dataset.v ?? '');
     return true;
   }
   return false;
@@ -1351,11 +1359,11 @@ async function ruRulePanel(side: HTMLElement, id: string, note = '') {
     } catch (e) { status.textContent = ruError(e); }
   });
   form.querySelector('[data-ru-retire]')?.addEventListener('click', async () => {
-    if (!confirm('Retire this rule?')) return;
+    if (!(await askConfirm('Retire this rule?'))) return;
     try {
       const out: {due?: RuleDue[]} = await post('/v2/rules/' + encodeURIComponent(r.id) + '/retire', {version: r.version});
       const dues = (out.due || []).filter(d => !d.retired_at);
-      if (dues.length && confirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`))
+      if (dues.length && (await askConfirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`)))
         for (const d of dues) await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
       location.hash = ruBack();
       await ruReload();
@@ -1477,7 +1485,7 @@ async function ruDuePanel(side: HTMLElement, id: string, ruleId: string, note = 
   });
   form.querySelector('[data-ru-satisfy-on]')?.addEventListener('click', () => void satisfy(fields.due_on.value));
   form.querySelector('[data-ru-remove]')?.addEventListener('click', async () => {
-    if (!confirm('Remove this due date?')) return;
+    if (!(await askConfirm('Remove this due date?'))) return;
     try {
       if (!d) throw new Error('This due date is gone.');
       await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});

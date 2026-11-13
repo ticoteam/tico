@@ -43,6 +43,9 @@ renderNavSections();
 // which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
 // and #/bot/<id> opens each for its settings, runs and logs.
 const isHiddenBot = (slug: string) => slug === assistantBot() || isAssistantHelper(slug);
+// Where a bot's row in Team goes: its page, except the Assistant, which each person talks to on their own Assistant page
+// (its bot page has no Home or DM), so its row and the unread count on it open that conversation.
+const botRowHref = (slug: string) => slug === assistantBot() ? ASSISTANT : `#/bot/${encodeURIComponent(slug)}`;
 const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.id));
 // Groups first: a human or a bot hangs in the group its `team` names (backend/groups.py); groups nest by `parent`. Inside
 // a group a teammate hangs under whoever it reports to when that one is in the same group, else at the top of the group.
@@ -253,7 +256,8 @@ function renderInboxNav() {
 // Which row is the page you are on is marked in place: the list's markup never depends on the route, so a page change
 // replaces no row (patchHTML keeps them all), and a whole group never redraws because one of its rows became current.
 function navCurSync(root: Element): void {
-  const bot = S.route.startsWith('#/bot/') ? decodeURIComponent(String(S.route.slice(6).split('/')[0])) : null;
+  // The Assistant page is the Assistant's row's own page.
+  const bot = S.route.startsWith('#/bot/') ? decodeURIComponent(String(S.route.slice(6).split('/')[0])) : S.route === ASSISTANT ? assistantBot() : null;
   const person = S.route.startsWith('#/person/') ? decodeURIComponent(String(S.route.slice(9).split('/')[0])) : null;
   const seat = S.route.startsWith('#/seat/') ? decodeURIComponent(String(S.route.slice(7).split(/[/?]/)[0])) : null;
   const here = S.route.startsWith(MESSAGING) ? messagingParams() : null;
@@ -620,7 +624,7 @@ async function orgGroupDelete(id: string) {
   if (!orgCanGroups() || !group || ORG_DELETING.has(id)) return;
   const parent = (S.orgGroups || []).find(g => g.id === group.parent);
   const destination = parent ? parent.name : 'No group';
-  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}.`)) return;
+  if (!(await askConfirm(`Delete ${group.name}? Its teammates and groups move to ${destination}.`))) return;
   ORG_DELETING.add(id);
   renderTree();
   try {
@@ -923,7 +927,7 @@ function renderTree() {
     if (own) INBOX_PLACED.add(e.id);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${st}" href="#/bot/${encodeURIComponent(e.id)}" title="${esc(e.display_name || e.slug)}" data-org="b:${esc(e.id)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
+      <a class="node ${e.status} ${st}" href="${botRowHref(e.id)}" title="${esc(e.display_name || e.slug)}" data-org="b:${esc(e.id)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
         ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}

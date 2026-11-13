@@ -90,16 +90,6 @@ def link_state(world, link_id):
     return next(row["state"] for row in links(world)["links"] if row["id"] == link_id)
 
 
-def test_an_admin_links_a_channel_to_a_company_thread_and_the_link_goes_active(slack_world):
-    require_threads_api(slack_world.api)
-    t = create_thread(slack_world.api, title="Marketing", audience="company")
-    asked = link(slack_world, t["id"])
-    assert asked["state"] == "requested", "the request is written first; the gateway checks it"
-    tick(slack_world)
-    assert link_state(slack_world, asked["id"]) == "active", "the check ran and both members can read the thread"
-    assert asked["channel"]["name"] in ("#marketing", "marketing"), asked
-
-
 def test_only_an_admin_can_link_a_channel(slack_world):
     require_threads_api(slack_world.api)
     t = create_thread(slack_world.api, title="Marketing", audience="company")

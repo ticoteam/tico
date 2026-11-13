@@ -280,6 +280,24 @@ The schedule call queues one idempotent action for the private Mac calendar tool
 reading, drafting or sending. The equivalent shell commands are `tico calendar list`,
 `tico calendar schedule` and `tico calendar status`.
 
+Events on any Tico or Google calendar a caller may see use the event tools. Times are shown in the zone of the
+calendar they came from (UTC when none is given). Bots and the Assistant may book anyone unless the Who bots may book
+rule refuses it; a person may add only to their own Tico calendar, and only without Google connected:
+
+```text
+tico calendar list --who human:ana,bot:ops --from 2026-11-11 --to 2026-11-14 [--kinds event,run,due,away] [--json]
+tico calendar free --who human:ana,human:ben --minutes 30 --within 5d
+tico calendar add --title "Standup" --start 2026-11-11T09:30:00-08:00 --end 2026-11-11T10:00:00-08:00 \
+  --who human:ben --repeat "weekly on wed" [--calendar legal@acme.example] [--notes "..."] [--no-meet]
+tico calendar move <occurrence> --start 2026-11-11T10:00:00-08:00 [--end ...] [--scope this|following|all]
+tico calendar cancel <occurrence> [--scope this|following|all]
+tico calendar search "standup with:ben" [--who human:ana]
+```
+
+The MCP tools are `tico_calendar_events`, `tico_calendar_free`, `tico_calendar_add`, `tico_calendar_move`,
+`tico_calendar_cancel` and `tico_calendar_search`. `tico_calendar_list` with no `who` still reads the company calendar's
+appointments.
+
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
 change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
@@ -633,7 +651,11 @@ it on the computers' behalf. The computer that holds the grant sends its refresh
 for one service's scopes, never more than the grant holds, and returns only an hour-long access token and its expiry. It keeps no token
 and logs none: only each grant's SHA-256 fingerprint, which can refresh nothing, so it refreshes only the grant it
 issued for that mailbox and that computer. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
-claimed it), so the grant on the computer has a client id and no secret. Only a computer that holds a Connect Google
+claimed it), so the grant on the computer has a client id and no secret. Each connect or disconnect has its own id,
+which the claim hands to the computer (`id`, never the person): `/exchange` and `/result` are addressed by it, so an
+answer for a connect the person has since replaced is refused (`stale`, 409) and changes nothing. A grant Google gives
+such a replaced exchange is not passed on or recorded, so the server never refreshes it; the grant connected before
+stays until a new connect finishes. The same result sent again gets the same answer. Only a computer that holds a Connect Google
 grant from this server may ask, one service at a time. A grant from Tico's shared app, or one made before scopes were
 recorded, holds only the read scopes (`gmail.readonly` and the calendar read scopes). A grant the company's own app made
 also holds `gmail.modify` and `calendar.events` if Google gave them. The

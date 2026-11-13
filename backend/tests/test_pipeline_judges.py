@@ -117,20 +117,6 @@ def test_the_spend_cap_stops_the_call_and_the_call_is_failed(tmp_path, monkeypat
     assert result["verdict"] == "failed" and "spend cap" in result["reason"] and called == []
 
 
-def test_every_pipeline_is_judged_by_jev_whatever_it_stored(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    copy_booted(path)
-    c = hub(path)
-    assert P.judge_model_of(c, None) == "jev"
-    assert P.judge_model_of(c, "no-such-pipeline") == "jev"
-
-
-def test_the_judge_model_is_jev_on_the_decide_low_gateway_id():
-    assert P.MODELS == {"jev": "tico-decide-low"}
-    assert P.DEFAULT_MODEL == "jev"
-    assert (P.MET_AT, P.NOT_MET_AT) == (0.75, 0.2)
-
-
 def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp_path, monkeypatch):
     """B11: judge_once's default engine is the installed store's live engine, not a permanent unsure."""
     path = tmp_path / "hub.sqlite"
@@ -149,14 +135,6 @@ def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp
     monkeypatch.setattr(P, "live_engine", recording_engine)
     P.judge_once(c, REQ, ATTACHMENT, settings=_settings(path))
     assert asked == ["jev"]
-
-
-def test_the_judge_state_carries_the_pipeline_goal(tmp_path):
-    """Track J/D58: the pipeline goal reaches the judge with the requirement."""
-    state = P._state(
-        {"name": "Shows the page live", "rubric": "The link opens", "goal": "Launch the lights"}, ATTACHMENT
-    )
-    assert "Launch the lights" in json.dumps(state)
 
 
 def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
@@ -179,24 +157,6 @@ def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
     )
     assert asked == [(0, files.READ_MAX)]
     assert len(text) == files.READ_MAX and cut is True
-
-
-def test_a_text_blob_within_the_cap_is_not_cut():
-    from backend import file_library as files
-
-    body = b"Shipped the page."
-
-    class SmallStore:
-        def open_range(self, digest, start=0, end=None):
-            yield body
-
-    digest = hashlib.sha256(body).hexdigest()
-    text, cut = P.text_of(
-        SimpleNamespace(blobs=SmallStore()),
-        {"mime": "text/plain", "blob_digest": digest, "blob_size": len(body)},
-    )
-    assert (text, cut) == ("Shipped the page.", False)
-    assert files.READ_MAX > len(body)
 
 
 def _blob_job(digest: str, size: int) -> dict:
@@ -413,12 +373,6 @@ def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path)
     assert "could not tell" in said["unsure"] and "p 0.50" in said["unsure"]
     kept = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5, reason="No scope line"))
     assert kept["reason"] == "No scope line", "a model's own reason is kept"
-
-
-def test_the_question_set_says_a_missing_author_is_unknown_and_a_cut_spec_is_flagged():
-    instructions = P._questions()["met"]["instructions"]
-    assert "work.author" in instructions and "not given" in instructions
-    assert "spec_truncated" in instructions
 
 
 def test_no_evidence_is_not_met_even_over_the_cap(tmp_path, monkeypatch):

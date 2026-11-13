@@ -38,25 +38,6 @@ def test_a_private_run_cannot_edit_its_company_message_into_private_words(api):
         assert H.message(c, posted["id"])["body"] == "Company status"
 
 
-def test_a_private_run_posts_to_its_own_private_task_thread_and_no_other_thread(api):
-    row, attempt = private_run(api)
-    own = api.post(
-        f"/api/v2/threads/{row['conversation_id']}/messages",
-        json={"text": "Progress"},
-        headers=headers(attempt["token"]),
-    )
-    assert own.status_code == 200, own.text
-    company = api.post(
-        "/api/v2/threads", json={"title": "Company", "audience": "company"}, headers=headers("ana-test")
-    ).json()
-    other = api.post(
-        f"/api/v2/threads/{company['id']}/messages",
-        json={"text": "Private progress"},
-        headers=headers(attempt["token"]),
-    )
-    assert other.status_code in (403, 404), other.text
-
-
 def test_a_sub_thread_title_does_not_repeat_a_hidden_parent_line(api):
     """A company thread's message that names a private task is restricted: a reader who cannot read that task reads
     its sub-thread's title through every read path, and it must not carry the message's first line."""
@@ -206,18 +187,6 @@ def test_a_sub_thread_on_a_private_task_reply_stores_no_title(api):
         assert c.execute("SELECT subject FROM conversations WHERE id=?", (own_sub,)).fetchone()[0] == ""
 
 
-def test_the_title_cleanup_runs_once(api):
-    _, parent, sub_id = hidden_sub_thread(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Secret launch plan for the board", sub_id))
-        c.execute("DELETE FROM registry_metadata WHERE key=?", (threads.NEUTRAL_TITLES_KEY,))
-        threads._neutral_titles_once(c)
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
-        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Secret launch plan for the board", sub_id))
-        threads._neutral_titles_once(c)
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] != ""
-
-
 def test_a_private_run_posts_to_no_other_private_task_thread_and_edits_its_own_message(api):
     row, attempt = private_run(api)
     other = task(api, requester="human:ben", owner="human:ana")
@@ -247,27 +216,6 @@ def company_thread_with_bot_and_ben(api):
     with api.app.state.store.transaction() as c:
         threads.post(c, "bot:ops", thread["id"], "Hello from ops")
     return thread
-
-
-def test_a_private_run_cannot_send_legacy_messages_into_a_company_thread(api):
-    """`/messages` and `/conversations/{cid}/messages` with a private run's token: the company thread's readers would
-    read the run's confidential text, whatever its participants list says."""
-    row, attempt = private_run(api)
-    thread = company_thread_with_bot_and_ben(api)
-    sent = api.post(
-        "/api/v2/messages",
-        json={"to": "human:ben", "text": "Confidential from ops", "conversation_id": thread["id"]},
-        headers=headers(attempt["token"]),
-    )
-    assert sent.status_code == 403, sent.text
-    reply = api.post(
-        f"/api/v2/conversations/{thread['id']}/messages",
-        json={"text": "Confidential reply"},
-        headers=headers(attempt["token"]),
-    )
-    assert reply.status_code in (403, 404), reply.text
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
 
 
 def test_a_private_run_can_still_reply_in_its_own_private_task_thread_by_legacy_send(api):

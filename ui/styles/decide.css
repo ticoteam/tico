@@ -14,7 +14,8 @@
 .dc-icon:disabled{color:var(--muted);opacity:.4;cursor:default}
 .dc-icon[hidden]{display:none}
 .dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px}
-.dc-thing{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px}
+.dc-thing{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px;display:flex;flex-direction:column}
+.dc-thing>.dc-doc{flex:1 0 0}
 .dc-side{min-height:0;overflow-y:auto;padding:20px;border-left:1px solid var(--line);display:flex;flex-direction:column}
 .dc-side>div{display:flex;flex-direction:column;gap:12px}
 .dc-q{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);text-wrap:pretty;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
@@ -26,6 +27,9 @@
 .dc-quote{margin:12px 0 0;padding:8px 12px;border-left:3px solid var(--line);color:var(--ink)}
 .dc-changed{margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-weight:600}
 .dc-ref{margin:0;color:var(--muted)}
+/* a page fills the pane and scrolls inside itself; several pages each take the pane's height */
+.dc-page{display:block;flex:1 0 100%;width:100%;min-height:320px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.dc-said{margin:0;overflow-wrap:anywhere}
 .dc-proof{width:100%;height:min(70vh,900px);border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
 .dc-media{max-width:100%;height:auto}
 .dc-addr{margin:0}
@@ -48,7 +52,12 @@
 .dc-done h2{margin:0;font-size:var(--t-xl)}
 @media (max-width:760px){
   /* the whole screen; the sentence and the buttons stay at the bottom while the thing scrolls */
-  .dc-dialog{inset:0;width:100%;height:100dvh;margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
+  /* The visible rectangle (viewport.ts): with the keyboard up, Approve and Send back stay above it. */
+  .dc-dialog{inset:var(--chat-viewport-top,0) 0 auto;width:100%;height:var(--chat-viewport-height,100dvh);margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
+  .dc-icon{width:44px;height:44px}
+  .dc-chip{min-height:44px;padding:0 14px}
+  .dc-more select,.dc-side select{min-height:44px}
+  .dc-side>div>.dc-acts:last-child{position:sticky;bottom:0;z-index:1;margin:0 -16px;padding:8px 16px 0;background:var(--bg)}
   .dc-wide{display:none}
   .dc-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
   .dc-thing{padding:16px}

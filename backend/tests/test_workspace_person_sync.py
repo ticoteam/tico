@@ -227,8 +227,9 @@ def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api
     post(api, "automations/mail-actions/claim", {"mailbox": PERSONAL}, other["token"], expected=403)
     health(api, chosen["token"], ok=[PERSONAL])
     health(api, other["token"], ok=[PERSONAL], expected=403)
-    targets = get(api, "connectors/calendar/targets", chosen["token"])["people"]
-    assert targets == [{"id": "cara", "email": PERSONAL}]
+    targets = get(api, "connectors/calendar/targets", chosen["token"])
+    assert targets["people"] == [{"id": "cara", "email": PERSONAL}]
+    assert (targets["hours"], targets["days"]) == (24, 14)  # hours for a computer from before days
     snapshot = {"snapshots": [{"email": PERSONAL, "events": []}]}
     post(api, "connectors/calendar/snapshots", snapshot, chosen["token"])
     post(api, "connectors/calendar/snapshots", snapshot, other["token"], expected=403)

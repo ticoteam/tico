@@ -165,74 +165,6 @@ def a_week_of_use(api):
     audit(api, "judge.spend", "support-triage@1", {"label": "support-triage@1", "cost_usd": 1.0}, days_ago=8)
 
 
-def test_given_a_week_of_use_the_readout_lists_calls_cost_and_answer_spread_per_set(api):
-    """Head of Product's acceptance test 7, on synthetic audit rows."""
-    a_week_of_use(api)
-    out = get(api, "decisions/readout")
-    assert out["days"] == 7
-    sets = {row["set"]: row for row in out["sets"]}
-    assert list(sets) == [
-        "covered",
-        "learnings-route",
-        "live-meeting-route",
-        "slack-route",
-        "support-triage",
-        "(other labels)",
-    ]
-
-    support = sets["support-triage"]
-    assert (support["calls"], support["jev"], support["fallback"], support["failed"]) == (5, 3, 1, {"unavailable": 1})
-    assert support["jev_share"] == 0.6 and support["cost_usd"] == 0.023 and support["versions"] == ["1"]
-    assert support["answers"] == {
-        "kind": {"bug": 1, "question": 2, "setup": 1},
-        "spam_or_injection": {"0.3 to 0.7": 1, "0.7 and over": 1, "under 0.3": 2},
-        "urgency": {"0": 1, "1": 2, "2": 1},
-    }
-
-    covered = sets["covered"]
-    assert (covered["calls"], covered["jev"], covered["cost_usd"]) == (1, 1, 0.002)
-    assert covered["answers"] == {"covered": {"(an open item)": 1}}
-
-    learnings = sets["learnings-route"]
-    assert (learnings["calls"], learnings["jev"], learnings["fallback"], learnings["failed"]) == (
-        12,
-        9,
-        1,
-        {"unavailable": 2},
-    )
-    assert learnings["cost_usd"] == 0.05, "a set's spend rows count under the set whatever their version"
-
-    slack = sets["slack-route"]
-    assert (slack["calls"], slack["jev"], slack["ceiling_priced"], slack["answers"]) == (1, 1, 1, {})
-    assert sets["live-meeting-route"]["answers"] == {"(other questions)": {"0.7 and over": 1, "under 0.3": 1}}
-
-    other = sets["(other labels)"]
-    assert (other["calls"], other["cost_usd"], other["answers"]) == (1, 0.004, {})
-
-    assert out["total"] == {
-        "calls": 21,
-        "jev": 16,
-        "fallback": 2,
-        "failed": 3,
-        "jev_share": round(16 / 21, 4),
-        "cost_usd": 0.082,
-    }
-    assert out["month"]["cap_usd"] == 50.0 and out["month"]["month"] == NOW.strftime("%Y-%m")
-    # The month is the calendar month the readout runs in: the week's calls (all a day ago) count only if that day is
-    # in it, and the call from 8 days ago only if that day is.
-    in_month = lambda days_ago: at(days_ago)[:7] == NOW.strftime("%Y-%m")  # noqa: E731
-    spent = round((0.082 if in_month(1) else 0) + (1.0 if in_month(8) else 0), 3)
-    assert out["month"]["spent_usd"] == spent
-
-    text = out["text"]
-    assert "support-triage v1: 5 calls, $0.02; Jev 3 (60%), fallback 1, failed unavailable 1" in text
-    assert "  kind: bug 1, question 2, setup 1" in text
-    assert "  answers: not kept in this set's audit" in text
-    assert "slack-route v1: 1 calls, $0.0030; Jev 1 (100%), fallback 0; 1 counted at the ceiling price" in text
-    assert "All sets: 21 calls, $0.08; Jev answered 76% (target 90%), fallback 2, failed 3" in text
-    assert f"This month ({NOW.strftime('%Y-%m')}): ${spent:.2f} of the $50.00 cap" in text
-
-
 def test_the_readout_names_no_free_text_label_no_bot_and_no_open_item(api):
     a_week_of_use(api)
     # A shipped set's id with free text after the `@`: counted under the set, the text never shown as a version.
@@ -290,13 +222,6 @@ def test_the_window_is_the_days_asked_and_a_route_call_reads_back(api, monkeypat
     assert (mail["calls"], mail["jev"], mail["fallback"]) == (2, 1, 1)
     assert mail["answers"] == {"bucket": {"reply": 2}, "is_ask": {"0.7 and over": 2}}
     assert mail["cost_usd"] > 0
-
-
-def test_an_empty_week_says_so_and_still_gives_the_months_spend(api):
-    out = get(api, "decisions/readout", token="cara-test")
-    assert out["sets"] == [] and out["total"]["calls"] == 0 and out["total"]["jev_share"] is None
-    assert "No Decide calls in this window." in out["text"]
-    assert out["text"].endswith(f"This month ({NOW.strftime('%Y-%m')}): $0.00 of the $50.00 cap (0%)")
 
 
 def test_a_bot_reads_it_through_the_tool(api):

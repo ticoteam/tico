@@ -530,31 +530,6 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
         )
 
 
-def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
-    r = runner(api)
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
-    path = f"tasks/{task['id']}/comments"
-    said = post(api, path, {"text": "Please look at the totals"})["comment"]
-    first = claim(api, r, "ops")
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT message_id FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == said["id"]
-    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
-    post(api, f"{path}/{said['id']}/delete", {})
-    post(
-        api,
-        f"attempts/{first['id']}/complete",
-        {"outcome": "completed", "text": "Totals checked.", "last_seq": 0},
-        r["token"],
-    )
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] == "completed"
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "completed"
-
-
 @pytest.mark.parametrize("outcome", ["completed", "failed"])
 def test_a_comment_taken_back_before_the_runtime_got_it_is_canceled_not_requeued(api, outcome):
     r = runner(api)

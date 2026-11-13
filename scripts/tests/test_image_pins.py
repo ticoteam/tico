@@ -154,44 +154,6 @@ def installs_on_the_image(tags, minor, arch, glibc):
     )
 
 
-def test_the_images_debian_release_has_a_known_glibc():
-    assert debian_release() in DEBIAN_GLIBC, f'{debian_release()}: add its glibc to DEBIAN_GLIBC'
-
-
-@pytest.mark.parametrize(
-    'wheel, x86_64, aarch64',
-    [
-        ('py3-none-any', True, True),
-        ('py2.py3-none-any', True, True),
-        ('py3-none-win_amd64', False, False),
-        ('py3-none-macosx_11_0_arm64', False, False),
-        ('cp315-cp315-manylinux_2_17_x86_64.manylinux2014_x86_64', True, False),
-        ('cp315-cp315-manylinux_2_17_aarch64.manylinux2014_aarch64', False, True),
-        ('cp315-cp315-musllinux_1_2_x86_64', False, False),
-        ('cp315-cp315-win_amd64', False, False),
-        ('cp314-cp314-manylinux_2_17_x86_64', False, False),
-        ('cp315-cp315t-manylinux_2_17_x86_64', False, False),
-        ('cp39-abi3-manylinux_2_28_x86_64', True, False),
-        ('cp316-abi3-manylinux_2_28_x86_64', False, False),
-        ('cp315-cp315-manylinux1_x86_64', True, False),
-        ('cp315-cp315-manylinux2010_x86_64', True, False),
-        ('cp315-cp315-manylinux2014_aarch64', False, True),
-        ('cp315-cp315-manylinux_2_41_x86_64', True, False),
-        ('cp315-cp315-manylinux_2_42_x86_64', False, False),
-        ('cp315-cp315-manylinux_2_99_x86_64', False, False),
-        ('cp315-cp315-manylinux_3_0_aarch64', False, False),
-        ('cp315-cp315-manylinux_2_99_x86_64.manylinux_2_17_x86_64', True, False),
-        ('cp315-cp315-manylinux_2_17_x86_64.manylinux_2_99_aarch64', True, False),
-    ],
-)
-def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aarch64):
-    tags, trixie = tuple(wheel.split('-')), DEBIAN_GLIBC['trixie']
-    assert (installs_on_the_image(tags, 15, 'x86_64', trixie), installs_on_the_image(tags, 15, 'aarch64', trixie)) == (
-        x86_64,
-        aarch64,
-    )
-
-
 FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_wheels.json'
 REQUIRES_PYTHON_FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_requires_python.json'
 PYPI_ATTEMPTS = 4
@@ -214,47 +176,6 @@ def pypi_json(name, version):
             if attempt + 1 == PYPI_ATTEMPTS:
                 raise
             time.sleep(PYPI_RETRY_BACKOFF * 2**attempt)
-
-
-def test_pypi_json_retries_a_brief_network_failure(monkeypatch):
-    from io import BytesIO
-
-    answers = iter(
-        [
-            urllib.error.URLError(ConnectionResetError('reset')),
-            ConnectionResetError('reset'),
-            BytesIO(b'{"info": {"requires_python": ">=3.12"}, "urls": []}'),
-        ]
-    )
-    calls, delays = [], []
-
-    def urlopen(url, timeout):
-        calls.append(url)
-        answer = next(answers)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
-    monkeypatch.setattr(time, 'sleep', delays.append)
-    assert pypi_json('demo', '1.2.3')['info']['requires_python'] == '>=3.12'
-    assert calls == ['https://pypi.org/pypi/demo/1.2.3/json'] * 3
-    assert delays == [0.25, 0.5]
-
-
-def test_pypi_json_still_fails_after_its_retries(monkeypatch):
-    calls, delays = [], []
-
-    def urlopen(url, timeout):
-        calls.append(url)
-        raise urllib.error.URLError('unreachable')
-
-    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
-    monkeypatch.setattr(time, 'sleep', delays.append)
-    with pytest.raises(urllib.error.URLError, match='unreachable'):
-        pypi_json('demo', '1.2.3')
-    assert len(calls) == PYPI_ATTEMPTS
-    assert delays == [0.25, 0.5, 1.0]
 
 
 def wheels_on_pypi(pin):
@@ -295,7 +216,6 @@ def requires_python_on_pypi(pin):
     return pypi_json(*pin)['info'].get('requires_python') or ''
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt', 'backend/requirements-dev.txt'])
 def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
     """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh).

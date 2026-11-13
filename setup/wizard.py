@@ -58,11 +58,64 @@ class Deps:
     cloud_cli: Callable[[list[str]], cloudmod.Cli] = cloudmod.run_cli
     which: Callable[[str], str | None] = shutil.which
     latest_release: Callable[[], str] = lambda: _latest_release()
+    checkout_version: Callable[[], str] = lambda: checkout_version()
+    server_release: Callable[[str], str] = lambda url: _server_release(url)
 
 
 def _local_compose() -> bytes | None:
     p = Path(__file__).resolve().parent.parent / "compose.yaml"
     return p.read_bytes() if p.exists() else None
+
+
+def checkout_version(root: Path | None = None, git=None) -> str:
+    """The release this setup is part of, as vX.Y.Z: the install bundle's VERSION file, else the release tag the
+    git checkout is at. "" for anything else (a branch, main, a commit between releases)."""
+    import subprocess
+
+    root = root or Path(__file__).resolve().parent.parent
+    try:
+        found = (root / "VERSION").read_text().strip()
+    except OSError:
+        found = ""
+    if not found:
+        try:
+            # Every tag on HEAD, not `git describe`'s one pick: a release tag beside another tag still counts, and when
+            # an rc is promoted on the same commit the final release wins.
+            res = (git or subprocess.run)(
+                ["git", "-C", str(root), "tag", "--points-at", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            tags = res.stdout.split() if res.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError):
+            tags = []
+        releases = sorted((t for t in tags if cloudinit.VERSION_RE.match(t)), key=_release_order)
+        finals = [t for t in releases if "-" not in t]
+        found = (finals or releases or [""])[-1]
+    found = found if not found or found.startswith("v") else "v" + found
+    return found if cloudinit.VERSION_RE.match(found) else ""
+
+
+def _release_order(tag: str) -> list:
+    """Numeric where the tag is: v0.6.0-rc.18 after v0.6.0-rc.9, and v0.6.10 after v0.6.9."""
+    return [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in re.split(r"[.\-]", tag[1:])]
+
+
+def same_release(compose_ref: str, version: str) -> bool:
+    """Whether the compose.yaml beside setup is the one `compose_ref` names. A release other than this checkout's has
+    its own compose.yaml (services and settings change between releases), so it is fetched from that release."""
+    return not cloudinit.VERSION_RE.match(compose_ref or "") or compose_ref == version
+
+
+def _server_release(url: str) -> str:
+    """The release a Tico server runs, from its /healthz; "" when it cannot be read."""
+    try:
+        req = urllib.request.Request(url.rstrip("/") + contract.HEALTH_PATH, headers={"User-Agent": "tico-setup"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return str(json.loads(r.read(4000)).get("release") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def _latest_release() -> str:
@@ -917,7 +970,7 @@ def run(args, io: IO, deps: Deps) -> int:
     gather_identity(io, args, s, dry)
     gather_backup(io, args, s, dry)
     s.updater = not args.no_updater
-    s.compose_ref = args.compose_ref
+    s.compose_ref = args.compose_ref or "main"
 
     io.say("\nLooking up who serves DNS for the domain ...")
     zone = dnsmod.detect_zone(s.dns(), deps.resolver)
@@ -954,9 +1007,16 @@ def run(args, io: IO, deps: Deps) -> int:
         Asker(io, args, s, dry).get(
             "server_ip", "Server's public IPv4 address (what the domain should point at)", flag="--server-ip"
         )
-    if args.tico_version and s.target not in cloudmod.PROVIDERS:
-        # local and AWS pin the images and fetch compose.yaml from the release, never `latest` or main
-        s.tag = s.compose_ref = args.tico_version
+    # The release to install: --tico-version, else the one this setup is part of (a bundle, or a checkout at a release
+    # tag), so setting up v0.6.0-rc.18 installs it and not GitHub's latest stable. A release pinned by an earlier run is
+    # kept when no flag names one.
+    version = args.tico_version or (s.tag if s.tag not in ("", "latest") else deps.checkout_version())
+    if version and s.target not in cloudmod.PROVIDERS:
+        # local and AWS pin the images and fetch compose.yaml from the release, never `latest` or main; a --compose-ref
+        # given without --tico-version still names where compose.yaml comes from
+        s.tag = version
+        if args.tico_version or not args.compose_ref:
+            s.compose_ref = version
     if s.target == "local":
         if s.front_door == "caddy":
             Asker(io, args, s, dry).get(
@@ -1017,7 +1077,7 @@ def run(args, io: IO, deps: Deps) -> int:
     env_text = envfile.render(s.to_env())
     state.save(s.domain, s.public(), s.private_env(env_text))
     scrub = lambda t: envfile.scrub(t, s.secrets())
-    compose = deps.compose_local()
+    compose = deps.compose_local() if same_release(s.compose_ref, deps.checkout_version()) else None
     url = contract.compose_url(s.compose_ref)
     runner: remote.Shell | None = None
     live = True
@@ -1184,6 +1244,46 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
+def _version_key(v: str) -> tuple | None:
+    """A release tag's order, as semver orders it: a pre-release sorts below its release, and its dot parts compare as
+    numbers when both are (rc.10 > rc.9). None for anything that is not a release tag (latest, empty)."""
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?", v or "")
+    if not m:
+        return None
+    pre = m.group(4)
+    if pre is None:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)), 1, ())
+    parts = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), 0, parts)
+
+
+def _keep_newer_server_version(io, s: Settings, ssm, deps, env_text: str) -> tuple[str, bool]:
+    """A re-run on a running server: an update (Update now, or scripts/install.sh on the server) moves TICO_TAG in the
+    server's .env only, and pull-env.sh replaces that .env with the stored parameter. So read the server's version first
+    and keep it when it is newer than this setup's: the parameter then holds it too, and the re-run never downgrades.
+    The update also replaced the server's compose.yaml, so a kept version takes that release's compose.yaml as well.
+    A first install (no saved server) asks nothing. Returns the env and whether the server's version was kept."""
+    if not s.aws_instance_id:
+        return env_text, False
+    cmd = f"sed -n 's/^TICO_TAG=//p' {contract.REMOTE_DIR}/.env 2>/dev/null | head -n 1"
+    try:
+        res = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep).run(cmd)
+    except ssm.exceptions.InvalidInstanceId:  # stopped, or not registered with Systems Manager (yet)
+        res = None
+    if res is None or res.returncode:
+        io.say("  Could not read the version this server runs; writing this setup's version.")
+        return env_text, False
+    running = res.stdout.strip().strip("\"'")
+    have, mine = _version_key(running), _version_key(s.tag)
+    if have is None or (mine is not None and have <= mine):
+        return env_text, False
+    io.say(f"  The server was updated to {running}; keeping it (this setup is {s.tag}).")
+    if cloudinit.VERSION_RE.match(s.compose_ref):
+        s.compose_ref = running
+    s.tag = running
+    return envfile.render(s.to_env()), True
+
+
 def _aws(
     io, args, s, deps, zone, records, cf, env_text, compose, url, timeout
 ) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
@@ -1203,6 +1303,10 @@ def _aws(
             ) from None
     elif plan_s3 and owned.strict(s.asset_prefix):
         d.verify_plan_bucket(plan_s3)  # before the env names it and before the upload
+    env_text, kept = _keep_newer_server_version(io, s, ssm, deps, env_text)
+    if kept and s.compose_ref == s.tag:
+        # This setup's own compose.yaml is of its older release; the server's release's comes from its tag.
+        compose, url = None, contract.compose_url(s.compose_ref)
     d.put_env(env_text, company_file=bool(s.company_file_data) and not plan.plan_bucket)
     if plan_s3:
         # Before launch: the server copies it at first boot. A re-run puts it again, for pull-env.sh below.
@@ -1297,7 +1401,7 @@ def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeo
     """Hetzner / DigitalOcean. Returns an exit code to stop with, or (shell, records) to continue to the checks."""
     pv = cloudmod.PROVIDERS[s.target]
     name = cloudname(s)
-    version = args.tico_version or s.cloud_version or deps.latest_release()
+    version = args.tico_version or s.cloud_version or deps.checkout_version() or deps.latest_release()
     if not cloudinit.VERSION_RE.match(version or ""):
         raise MissingInput(
             "Could not find the latest Tico release; pass --tico-version vX.Y.Z (see github.com/ticoteam/tico/releases)"
