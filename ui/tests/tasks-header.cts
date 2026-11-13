@@ -121,6 +121,17 @@ async function menu(page: Page): Promise<string[]> {
       } finally { (product as {name: string}).name = name; }
     }
     {
+      // A 700 px window (a small tablet, a split screen) gets the phone's row while its pane is wider than the narrow-pane
+      // rule's: the folded search's field stays its 44 px icon, not the shared header's 160 px search minimum.
+      const {page, errors} = await open(browser, {viewport: {width: 700, height: 900}, hash: '#/tasks?pipeline=product'});
+      await page.locator('#task-body .pv-phone').waitFor();
+      assert.deepEqual(await oneRow(page, 44), []);
+      const field = await box(page, '#task-q'), icon = await box(page, '#main header.ph .tl-search');
+      assert.ok(Math.abs(field.width - icon.width) < 0.5 && Math.abs(icon.width - 44) < 0.5, `the folded field is the 44 px icon: ${field.width} in ${icon.width}`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
       // Nothing waits on the person: ▶ is quiet, keeps its width, and a tap says so and walks nothing.
       const {page, errors} = await open(browser, {viewport: PHONE, needs: [], hash: '#/tasks?pipeline=product'});
       await page.locator('#task-body .pv-phone').waitFor();
