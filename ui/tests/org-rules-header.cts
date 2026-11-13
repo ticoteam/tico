@@ -74,6 +74,30 @@ async function foldedProblems(page: Page, acts: string[]) {
   return bad;
 }
 
+// Internal's search folded into ⋯ at 1280: typing keeps ⋯ open and the box focused (the header refits as the results
+// draw), and once ⋯ closes with text still in the box, ⋯ shows a dot, since that text still filters the map.
+async function foldedSearchProblems(page: Page) {
+  const bad: string[] = [];
+  const box = page.locator('.ru-ph .ph-menu .rr-q'), more = page.locator('.ru-ph > .ph-more');
+  if (!await box.count()) return ['the search is not folded into ⋯'];
+  await more.click({timeout: t(3000)});
+  await box.click({timeout: t(3000)});
+  await page.keyboard.type('abc', {delay: 30});
+  await page.waitForTimeout(t(200));   // a frame or two for the header to fit again
+  const state = await page.evaluate(() => ({val: document.querySelector<HTMLInputElement>('.ru-ph .rr-q')?.value,
+    focus: document.activeElement?.matches('.rr-q'), open: !!document.querySelector('.ru-ph .ph-menu:popover-open')}));
+  if (state.val !== 'abc' || !state.focus || !state.open) bad.push(`typing in the folded search: ${JSON.stringify(state)}`);
+  await page.locator('.ru-ph > .ph-t').click();   // a click outside closes ⋯ and keeps the text
+  await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
+  if (!await more.evaluate(b => b.classList.contains('ph-held') && b.getAttribute('aria-label') === 'More, a search is applied')) bad.push('⋯ shows no dot while the folded search holds text');
+  await more.click({timeout: t(3000)});
+  await box.fill('');
+  await page.keyboard.press('Escape');
+  await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
+  if (await more.evaluate(b => b.classList.contains('ph-held'))) bad.push('⋯ keeps its dot once the search is empty');
+  return bad;
+}
+
 // The header's shape on a computer: its rows (children grouped by their vertical middle), the title's top, and every
 // button or link in it whose words take more than one line.
 function headerShape(page: Page) {
@@ -128,6 +152,7 @@ function headerShape(page: Page) {
           }, null, {timeout: t(15000)});
           for (const p of await headerProblems(page, ACTS[from]!)) problems.push(`${width}px on ${from}: ${p}`);
           for (const p of await foldedProblems(page, ACTS[from]!)) problems.push(`${width}px on ${from}: ${p}`);
+          if (width === 1280 && from === 'internal') for (const p of await foldedSearchProblems(page)) problems.push(`1280px on internal: ${p}`);
           if (!phone) {
             // At 1280 the eight tabs (about 810px) and a filled button (Outside's Add document, Due's Add due date) are wider
             // than the 988px row even with the tools in ⋯, so those two tabs take a second row there.

@@ -114,6 +114,7 @@ function pageHeadFold(head: HTMLElement, fold: boolean): void {
     }
     menu.prepend(tools);
     head.classList.add('ph-fold');
+    pageHeadHeld(head);
     return;
   }
   const menu = tools.parentElement as HTMLElement;
@@ -121,7 +122,20 @@ function pageHeadFold(head: HTMLElement, fold: boolean): void {
   head.querySelector(':scope > .ph-more')?.before(tools);
   if (menu.dataset['phMade'] !== undefined) { head.querySelector(`:scope > .ph-more[popovertarget="${CSS.escape(menu.id)}"]`)?.remove(); menu.remove(); }
   head.classList.remove('ph-fold');
+  pageHeadHeld(head);
 }
+// A folded search that holds text still filters the page while ⋯ is closed: ⋯ shows a dot (.ph-held) and says so.
+function pageHeadHeld(head: HTMLElement): void {
+  const more = head.querySelector<HTMLElement>(':scope > .ph-more');
+  if (!more) return;
+  const held = [...head.querySelectorAll<HTMLInputElement>(':scope > .ph-menu > .ph-tools input[type=search]')].some(i => i.value.trim() !== '');
+  more.classList.toggle('ph-held', held);
+  more.setAttribute('aria-label', held ? 'More, a search is applied' : 'More');
+}
+document.addEventListener('input', (event: Event) => {
+  const head = eventElement(event)?.closest<HTMLElement>('.ph-menu > .ph-tools')?.closest<HTMLElement>('header.ph');
+  if (head) pageHeadHeld(head);
+});
 function pageHeadOver(head: HTMLElement): boolean {
   const box = head.getBoundingClientRect();
   const right = box.right - parseFloat(getComputedStyle(head).paddingRight) + 0.5;
@@ -193,6 +207,7 @@ document.addEventListener('toggle', (event: Event) => {
   const open = (event as Event & {newState?: string}).newState === 'open';
   const button = menu.parentElement?.querySelector<HTMLElement>(`:scope > .ph-more[popovertarget="${CSS.escape(menu.id)}"]`);
   button?.setAttribute('aria-expanded', String(open));
+  if (menu.parentElement instanceof HTMLElement) pageHeadHeld(menu.parentElement);   // a pick clears the search without an input event
   if (!open || !button) return;
   const rect = button.getBoundingClientRect();
   menu.style.top = `${Math.min(rect.bottom + 4, innerHeight - menu.offsetHeight - 12)}px`;

@@ -246,7 +246,7 @@ function auCtlDraw(): void {
 function auPlace(): void {
   auDrawn(AU);
   // G: the shell (auShell) always has these parts: the header's tools, the search and the rail.
-  const r = AU.root, tools = auEl(r, '.au-ph > .ph-tools'), s = auEl(r, '.au-s');
+  const r = AU.root, tools = auEl(r, '.au-ph .ph-tools'), s = auEl(r, '.au-s');
   if (AU.lst || auPhone()) tools.prepend(s);
   else auEl(r, '.au-rail').prepend(s);
 }

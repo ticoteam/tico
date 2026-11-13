@@ -27,6 +27,8 @@
 .ph>.ph-more{flex:none;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .ph>.ph-more:hover,.ph>.ph-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .ph>.ph-more .nav-icon{font-size:20px}
+.ph>.ph-more.ph-held{position:relative}
+.ph>.ph-more.ph-held::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
 .ph-menu[popover]{position:fixed;inset:auto;margin:0;width:max-content;min-width:160px;max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 12px 32px #0005;color:var(--ink)}
 .ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
 .ph-menu :is(button,a):hover{background:var(--surface2);text-decoration:none}
