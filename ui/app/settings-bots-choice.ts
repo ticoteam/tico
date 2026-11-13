@@ -33,9 +33,10 @@ type SettingsPanelRow = {value: string; label: string; on: boolean; off?: boolea
 // The harness a pick runs on: the Gateway's picks run on pi.
 const settingsRealHarness = (harness: string | null | undefined) => harness === 'tico' ? 'pi' : harness || '';
 // Whether a harness compacts at a size we set (its manifest says `compaction`).
+// One that compacts on its own default (`own_compaction`: Claude Code, as for a person) takes no size either.
 function settingsCompacts(harness: string | null | undefined) {
-  const id = settingsRealHarness(harness);
-  return !!id && !!(settingsHarness(id)?.capabilities || harnessCaps(id)).compaction;
+  const id = settingsRealHarness(harness), caps = id ? settingsHarness(id)?.capabilities || harnessCaps(id) : null;
+  return !!caps && !!caps.compaction && !caps.own_compaction;
 }
 // A model's context window in tokens (a Gateway pick: its tier's version), or 0 when unknown.
 function settingsModelWindow(id: string | null | undefined) {
