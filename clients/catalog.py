@@ -445,6 +445,13 @@ def _text(path):
         return "\0unreadable"
 
 
+def _still_on_old(target: Path) -> bool:
+    """AGENT.md is still a file of its own: the runner has not moved it into AGENTS.md yet. A link (to AGENTS.md, say)
+    is the repository's own arrangement and does not hold a refresh back."""
+    old = target / OLD_INSTRUCTIONS
+    return old.is_file() and not old.is_symlink()
+
+
 def refresh(template, target, names, display_name=None, directory=None, instructions=None, version=""):
     """Bring a bot made from a template up to this release's template. Returns {"added", "updated", "removed",
     "kept"}: the paths written, deleted, and kept because the bot or a person changed them.
@@ -460,7 +467,7 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
     target = outside_installation(target)
     result = {"added": [], "updated": [], "removed": [], "kept": []}
     found = card(template, directory)
-    if not found or not (target / INSTRUCTIONS).is_file() or (target / OLD_INSTRUCTIONS).is_file():
+    if not found or not (target / INSTRUCTIONS).is_file() or _still_on_old(target):
         # A repository still on AGENT.md is refreshed once the runner has moved it to AGENTS.md, even when it has an
         # AGENTS.md already (a template's "Read AGENT.md" pointer): a refresh first would replace that pointer with the
         # template's text while the bot's own instructions stay in AGENT.md, which nothing loads.

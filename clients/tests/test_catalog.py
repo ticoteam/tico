@@ -195,6 +195,11 @@ class Refresh(unittest.TestCase):
         self.assertEqual(self.refresh(), NOTHING)
         self.assertIn("Read AGENT.md", (self.path / "AGENTS.md").read_text())
 
+    def test_an_agent_md_link_to_agents_md_does_not_hold_a_refresh_back(self):
+        (self.path / "AGENT.md").symlink_to("AGENTS.md")
+        (self.template / "AGENTS.md").write_text("Updated instructions.\n")
+        self.assertEqual(self.refresh(), {**NOTHING, "updated": ["AGENTS.md"]})
+
     @pytest.mark.slow
     def test_a_bot_root_or_named_folder_cannot_resolve_into_the_install(self):
         alias = self.path.parent / "bot-alias"
