@@ -1681,6 +1681,17 @@ def _growth_body(fn, result):
         return "\n".join(lines)
     if fn == "growth customers delete":
         return f"{result.get('deleted', 0)} customers deleted; the figures fall back to typed values."
+    if fn == "growth source campaigns":
+        accounts = ", ".join(str(a.get("label") or a.get("account")) for a in result.get("accounts") or [])
+        return f"From Finance: {accounts or 'no ad account'}. Unmapped spend counts on Unknown.\n" + _table(
+            result.get("campaigns") or [],
+            [
+                ("key", "key"),
+                ("campaign", "name"),
+                ("month", "last_month"),
+                ("spend", "last_month_spend"),
+            ],
+        )
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
         head = f"Month: {result.get('month') or 'none yet'}"

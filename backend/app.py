@@ -5451,6 +5451,9 @@ def create_app(settings=None):
     from .growth_numbers import install as install_growth_numbers
 
     install_growth_numbers(app, store, auth)  # the Growth page's numbers (read-only)
+    from .growth_finance import install as install_growth_finance
+
+    install_growth_finance(app, store, auth)  # Finance ad spend source: the campaign mapping step
     from .strategy_setup import install as install_strategy_setup
 
     install_strategy_setup(app, store, auth, mutate)

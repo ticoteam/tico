@@ -3492,20 +3492,24 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py): file import and database query; Finance ad spend and bot cost follow
-# in later parts.
-GrowthSyncKind = Literal["file", "db_query"]
+# A synced source's kind (backend/growth_sync.py): file import, database query and Finance ad spend
+# (backend/growth_finance.py); bot cost follows in a later part.
+GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
 
 
 class GrowthSyncMap(Contract):
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
-    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]] | None = None
     # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
     # that database, which runs it daily.
     database: str | None = Field(default=None, min_length=1, max_length=80)
     query: str | None = Field(default=None, min_length=1, max_length=120)
     bot: str | None = Field(default=None, min_length=1, max_length=200)
+    # Finance ad spend: campaign key (platform:account:campaign) -> channel slug; "unknown" or "" is Unknown.
+    campaigns: dict[Annotated[str, Field(max_length=200)], Annotated[str, Field(max_length=80)]] | None = Field(
+        default=None, max_length=2000
+    )
 
 
 class GrowthSourceCreate(Contract):
