@@ -518,7 +518,6 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    {
     // ---- Growth's first run (ui/app/growth-start.ts): the Get started panel and the empty cards.
     const panel = (page: Page) => page.locator('#gr-start');
     const stepKinds = (page: Page) => page.locator('#gr-start .grs-step .grs-k').evaluateAll(els => els.map(el => (el.firstChild?.textContent || '').trim()));
