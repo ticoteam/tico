@@ -6592,11 +6592,8 @@ for line in sys.stdin:
     async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
         let held =
             |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("an AI teammate at");
-        let full = |p: &str| {
-            !p.contains(crate::prompt::STANDING_SEEN)
-                && p.contains("an AI teammate at")
-                && p.contains("an AI teammate at")
-        };
+        let full =
+            |p: &str| !p.contains(crate::prompt::STANDING_SEEN) && p.contains("an AI teammate at");
         // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
         // 5 compact_first (a /compact process, then the turn), 6 unchanged again.
         let turns = [
@@ -6615,7 +6612,6 @@ for line in sys.stdin:
         // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
         assert!(
             injected[2].contains(crate::prompt::RESTORED)
-                && injected[2].contains("an AI teammate at")
                 && injected[2].contains("an AI teammate at"),
             "{}",
             injected[2]

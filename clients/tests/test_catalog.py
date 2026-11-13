@@ -187,6 +187,14 @@ class Refresh(unittest.TestCase):
         self.assertEqual(self.refresh(), {**NOTHING, "updated": ["AGENTS.md"]})
         self.assertEqual((self.path / "AGENTS.md").read_text(), "Updated instructions.\n")
 
+    def test_a_bot_with_an_agents_md_pointer_beside_agent_md_waits_for_the_move(self):
+        # The Reputation Manager template shipped AGENT.md with an AGENTS.md that only says "Read AGENT.md".
+        (self.path / "AGENTS.md").rename(self.path / "AGENT.md")
+        (self.path / "AGENTS.md").write_text("Read AGENT.md: it is the standing instructions for this bot.\n")
+        (self.template / "AGENTS.md").write_text("Updated instructions.\n")
+        self.assertEqual(self.refresh(), NOTHING)
+        self.assertIn("Read AGENT.md", (self.path / "AGENTS.md").read_text())
+
     @pytest.mark.slow
     def test_a_bot_root_or_named_folder_cannot_resolve_into_the_install(self):
         alias = self.path.parent / "bot-alias"

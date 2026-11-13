@@ -460,8 +460,11 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
     target = outside_installation(target)
     result = {"added": [], "updated": [], "removed": [], "kept": []}
     found = card(template, directory)
-    if not found or not (target / INSTRUCTIONS).is_file():
-        return result  # a repository still on AGENT.md is refreshed once the runner has moved it to AGENTS.md
+    if not found or not (target / INSTRUCTIONS).is_file() or (target / OLD_INSTRUCTIONS).is_file():
+        # A repository still on AGENT.md is refreshed once the runner has moved it to AGENTS.md, even when it has an
+        # AGENTS.md already (a template's "Read AGENT.md" pointer): a refresh first would replace that pointer with the
+        # template's text while the bot's own instructions stay in AGENT.md, which nothing loads.
+        return result
     names = dict(names or {})
     values = {key: str(names.get(key) or "") for key in PLACEHOLDERS[:-1]}
     values["bot_name"] = fill(str(display_name or _display_name(target) or found.get("name") or target.name), values)

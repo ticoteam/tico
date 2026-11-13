@@ -107,6 +107,21 @@ fn tracked(out: &Out) -> bool {
     out.ok() && !out.stdout.trim().is_empty()
 }
 
+/// Whether an instruction file only sends the reader to AGENT.md: it names AGENT.md and, apart from Tico's section, is
+/// one short line.
+fn pointer(text: &str) -> bool {
+    let own = match (text.find(START), text.find(END)) {
+        (Some(a), Some(b)) if a < b => format!("{}{}", &text[..a], &text[b + END.len()..]),
+        _ => text.to_string(),
+    };
+    let lines: Vec<&str> = own
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.len() == 1 && lines[0].len() <= 200 && lines[0].contains(OLD)
+}
+
 /// Brings `checkout` (a git checkout of the bot's repository) to AGENTS.md with the current Tico section, and commits
 /// what changed. Ok(true) when it committed. Nothing is done outside a git checkout.
 pub async fn ensure(
@@ -158,23 +173,42 @@ pub async fn ensure(
         // AGENT.md is a link: renaming it could point the harness somewhere else; left for a person.
         return Ok(false);
     }
-    if text.is_none() {
-        if let Some(former) = bot_read(&old).map_err(io)? {
+    if let Some(former) = bot_read(&old).map_err(io)? {
+        // A template (Reputation Manager, say) or a person may have added AGENTS.md or CLAUDE.md before the move, often
+        // only to say "Read AGENT.md". A pointer gives way to AGENT.md's text; any other text is kept after it.
+        let claude = checkout.join(CLAUDE);
+        if bot_read(&claude).map_err(io)?.is_some_and(|t| pointer(&t)) {
             let was_tracked = tracked(
-                &g(checkout, env, &["ls-files", "--", OLD])
+                &g(checkout, env, &["ls-files", "--", CLAUDE])
                     .await
                     .map_err(git)?,
             );
-            bot_write(&new, &former).map_err(io)?;
-            bot_remove(&old).map_err(io)?;
+            bot_remove(&claude).map_err(io)?;
             if was_tracked {
-                g(checkout, env, &["rm", "-q", "--cached", "--", OLD])
+                g(checkout, env, &["rm", "-q", "--cached", "--", CLAUDE])
                     .await
                     .map_err(git)?;
-                paths.push(OLD);
+                paths.push(CLAUDE);
             }
-            text = Some(former);
         }
+        let merged = match text.as_deref() {
+            Some(own) if !pointer(own) => format!("{}\n\n{}", former.trim_end(), own.trim_start()),
+            _ => former,
+        };
+        let was_tracked = tracked(
+            &g(checkout, env, &["ls-files", "--", OLD])
+                .await
+                .map_err(git)?,
+        );
+        bot_write(&new, &merged).map_err(io)?;
+        bot_remove(&old).map_err(io)?;
+        if was_tracked {
+            g(checkout, env, &["rm", "-q", "--cached", "--", OLD])
+                .await
+                .map_err(git)?;
+            paths.push(OLD);
+        }
+        text = Some(merged);
     }
     let state = checkout.join(STATE);
     if let Some(note) = bot_read(&state).map_err(io)? {

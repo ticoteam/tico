@@ -2755,6 +2755,69 @@ async fn a_released_tree_with_a_commit_nowhere_upstream_is_kept() {
     assert!(path.join("task.md").exists());
 }
 
+/// A repository that already has AGENTS.md and CLAUDE.md as files beside AGENT.md (the Reputation Manager template's
+/// "Read AGENT.md" pointers, or a person's own AGENTS.md): AGENT.md's text still moves into AGENTS.md, a pointer gives
+/// way to it, other text is kept after it, and no AGENT.md is left behind.
+#[tokio::test]
+async fn a_repository_with_agents_md_beside_agent_md_is_still_brought_over() {
+    for (own, kept) in [
+        (
+            "Read AGENT.md: it is the standing instructions for this bot.\n",
+            false,
+        ),
+        ("Answer reviews within a day.\n", true),
+    ] {
+        let tmp = Tmp::new();
+        let (bare, seed) = remote(&tmp.0, "bot-rep");
+        std::fs::write(seed.join("AGENTS.md"), own).unwrap();
+        std::fs::write(
+            seed.join("CLAUDE.md"),
+            "Read AGENT.md: it is the standing instructions for this bot.\n",
+        )
+        .unwrap();
+        sh(&seed, &["add", "-A"]);
+        sh(&seed, &["commit", "-qm", "pointers"]);
+        sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+        let main = tmp.0.join("bot-rep");
+        sh(
+            &tmp.0,
+            &[
+                "clone",
+                "-q",
+                bare.to_str().unwrap(),
+                main.to_str().unwrap(),
+            ],
+        );
+        let home = tmp.0.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let env = turn_env(&home, &[]);
+        assert!(crate::instructions::ensure(&main, &env, "Tico", false)
+            .await
+            .unwrap());
+        assert!(!main.join("AGENT.md").exists() && !main.join("CLAUDE.md").exists());
+        let agents = std::fs::read_to_string(main.join("AGENTS.md")).unwrap();
+        assert!(agents.starts_with("# Ops\n"), "{agents}");
+        assert_eq!(
+            agents.contains("Answer reviews within a day."),
+            kept,
+            "{agents}"
+        );
+        assert!(!agents.contains("Read AGENT.md"), "{agents}");
+        assert_eq!(
+            sh(&main, &["status", "--porcelain"]),
+            "",
+            "everything is in the commit"
+        );
+        assert_eq!(
+            sh(&main, &["ls-tree", "--name-only", "HEAD"])
+                .lines()
+                .filter(|n| n.ends_with(".md"))
+                .collect::<Vec<_>>(),
+            ["AGENTS.md"]
+        );
+    }
+}
+
 /// A bot repository from before AGENTS.md: its next turn's checkout gets AGENTS.md (the old text and Tico's section),
 /// state.md kept under memory/archive, in one commit the turn's push sends; a second turn changes nothing.
 #[tokio::test]
