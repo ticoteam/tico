@@ -491,13 +491,14 @@ def actor_viewer(c, actor):
 def _task_readable(c, v, task_id):
     if not task_id:
         return True
+    # Who reads a task never depends on its tags, so none are read here (task_privacy.prime_rooms primes the rows).
     if v.auth is not None:
         try:
-            v.auth.task(c, v.who, task_id)
+            v.auth.task(c, v.who, task_id, tags=False)
             return True
         except Problem:
             return False
-    row = H.task(c, task_id)
+    row = H.task_untagged(c, task_id)
     return bool(row) and H.task_private_readable(c, v.actor, row)
 
 
