@@ -638,14 +638,16 @@ def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
     [first] = dream_rows(api, "ops")
     worked(api, "ops", 1, task=first["id"])  # it ran
     close(api, "ops")
-    with api.app.state.store.read() as c:
-        read_from = dream.since(c, owner_of(c, "ops"))
     with api.app.state.store.transaction() as c:  # 49 hours on: the limiter's ledger and the first dream are that old
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-49), first["id"]))
+        # Finished 48 hours ago, so its end is a different minute from the skip's close below.
+        c.execute("UPDATE tasks SET done_at=? WHERE id=?", (H.shift(H.now(), hours=-48), first["id"]))
         c.execute(
             "UPDATE events SET created_at=? WHERE actor=? AND action=?",
             (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
         )
+    with api.app.state.store.read() as c:
+        read_from = dream.since(c, owner_of(c, "ops"))
     worked(api, "ops", 12)
     assert len(run(api)) == 1
     with api.app.state.store.transaction() as c:  # skipped at the deadline, as the hold closes it: no run on it
@@ -656,3 +658,18 @@ def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
     assert (v.status, v.turns) == ("due", 12), "the skipped dream's work still counts"
     with api.app.state.store.read() as c:
         assert dream.since(c, owner_of(c, "ops")) == read_from, "reading starts at the last dream that ran"
+
+
+def test_a_thumbs_down_given_before_the_last_dream_does_not_count_again_when_edited(api):
+    aged(api)
+    old = DA.stamp(now() - timedelta(days=5))
+    edited = DA.stamp(now() - timedelta(hours=1))
+    with api.app.state.store.transaction() as c:  # given 5 days ago, its reason edited an hour ago
+        c.execute(
+            "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,rating,created_at,updated_at) "
+            "VALUES('f-old','ana','message','m-old','ops','down',?,?)",
+            (old, edited),
+        )
+    with api.app.state.store.read() as c:
+        assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=2))) == (0, 0), "given before: not a new correction"
+        assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=6))) == (0, 1), "given after: one correction"
