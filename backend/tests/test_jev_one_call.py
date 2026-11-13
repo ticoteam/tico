@@ -164,6 +164,20 @@ def test_a_learning_with_80_possible_recipients_makes_3_calls_and_scores_every_r
     assert scores[some] == round(answer(last["state"], last["questions"]["rel_" + some])["noul"], 3)
 
 
+@pytest.mark.parametrize(
+    "recipients, calls", [(39, [40]), (40, [40, 1]), (79, [40, 40]), (80, [40, 40, 1]), (119, [40] * 3)]
+)
+def test_a_learning_makes_the_fewest_calls_of_40_with_learnable_asked_once(recipients, calls):
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(recipients)}
+    item = {"audience": None, "source": "chat", "label": "Lesson", "text": "Ship on Tuesdays."}
+    jev = Jev()
+    _, scores = L.score(jev, qset, item, team)
+    assert [len(call["questions"]) for call in jev.calls] == calls == [40] * (len(calls) - 1) + [calls[-1]]
+    assert len(calls) == math.ceil((recipients + 1) / GATEWAY_MOST), "the fewest calls"
+    assert [q for call in jev.calls for q in call["questions"]].count("learnable") == 1 and len(scores) == recipients
+
+
 def test_a_learning_whose_recipients_do_not_fit_in_one_call_is_split_once_per_needed_call(monkeypatch):
     qset = J.load_set(L.QUESTION_SET)
     team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(80)}
@@ -171,7 +185,7 @@ def test_a_learning_whose_recipients_do_not_fit_in_one_call_is_split_once_per_ne
     monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 30)  # as if 30 fit by size
     jev = Jev()
     _, scores = L.score(jev, qset, item, team)
-    assert [len(call["questions"]) for call in jev.calls] == [30, 29, 22]
+    assert [len(call["questions"]) for call in jev.calls] == [30, 30, 21]
     assert "learnable" in jev.calls[0]["questions"] and "learnable" not in jev.calls[1]["questions"]
     assert len(scores) == 80
 

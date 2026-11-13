@@ -1113,7 +1113,7 @@ def outside_edition(store, primary, output, to=""):
         with store.transaction() as c:
             c.execute(
                 "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
-                (key, json.dumps(broken), calls[0]["id"], H.now()),
+                (key, json.dumps(broken), calls[0]["id"], H.now()),  # the first call's id, as `preflight` caches
             )
         return result("held", "broken", broken) if broken else result("pass")
     except J.JudgeError:
