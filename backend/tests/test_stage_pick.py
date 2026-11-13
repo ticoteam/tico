@@ -299,3 +299,30 @@ def test_a_restored_task_in_a_pick_stage_is_picked_for(c, bots):
     assert (back["stage_id"], back["owner_id"]) == (eng["stages"]["Review 1"], "bot:reviewer1")
     assert _lines(c, row["id"])[-1] == "Review 1 given to reviewer1 · new to this task"
     assert [who for _, who in X.wakes(c, row["id"])][-1] == "bot:reviewer1"
+
+
+def test_a_rule_added_since_holds_for_the_bot_a_task_comes_back_to(c, bots):
+    from backend import stage_rules
+
+    eng = _eng(c)
+    _last(c, eng["stages"]["Review 1"], "bot:reviewer1")
+    row = _through(c, _file(c, "Fix the axis"))
+    builder = row["assignee_id"]
+    assert row["owner_id"] == "bot:reviewer2"
+    fixes = E.move(c, row["id"], "Fixes 1", "bot:reviewer2", "A test is missing", seen_version=row["version"])
+    stage_rules.add(
+        c,
+        ANA,
+        {
+            "name": "No bot reviews",
+            "pipeline_id": "eng",
+            "stages": [eng["stages"]["Review 1"]],
+            "event": "enters",
+            "cond": {"owner_kind": "bot"},
+            "then": "block",
+            "reason": "Reviews go to people for now",
+        },
+    )
+    back = E.move(c, row["id"], "Review 1", builder, "Test added", seen_version=fixes["version"])
+    assert (back["owner_id"], back["visit"]["pick_state"]) == (None, "nobody")
+    assert _lines(c, row["id"])[-1] == "Review 1: nobody picked, rule No bot reviews refuses every bot it picks from"
