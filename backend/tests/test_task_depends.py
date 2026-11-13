@@ -631,3 +631,19 @@ def test_the_until_and_depends_on_migrations_give_one_table_in_either_order():
         )
     assert out[0] == out[1]
     assert [r[1:4] for r in out[0][1]] == [("a", "b", "after"), ("c", "a", "follow_up"), ("c", "b", "depends_on")]
+
+
+def test_a_dependency_that_comes_off_because_nothing_merged_here_never_says_in_production(c):
+    """Review 2: a server with no release manifest counts every repository, so the dependency holds; once it runs one
+    (or a Release stage's release repo changes), the task merged nothing there. It comes off, and its owner is told
+    that, not "is in production"."""
+    build(c)
+    work, check = task(c, "Lights firmware"), task(c, "Validate lights firmware")
+    merged_pr(c, work, 7, "m7", repo="acme/lights")
+    D.on_release(c, "1.1.0", "")
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work)
+    assert D.blocked(c, check)
+    assert D.on_release(c, "1.2.0", APP) == [check]
+    (body,) = bodies(c, check)
+    assert "in production" not in body and f"{ref(c, work)} is done" in body and f"merged nothing into {APP}" in body

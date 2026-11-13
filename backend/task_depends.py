@@ -61,6 +61,11 @@ WAKE = "unblocked"
 UNTIL = "released"  # task_relations.until: held past the other task's end, until production runs its release
 RELEASED_LINE = "Blocked by {ref} {title}, done, until production runs its release"
 IN_PRODUCTION = "{ref} is in production: it runs {version}"
+# A held dependency whose task merged nothing into the repository production runs (the server first ran with no release
+# manifest, or a Release stage's release repo changed): there is no release to wait for, and it is not "in production".
+NOTHING_HERE = (
+    "{ref} is done, and it merged nothing into {repo}, whose release this server runs: no release to wait for"
+)
 # registry_metadata: {"version", "repo"} of the release this server runs, as `on_release` saw it at start-up.
 RUNNING = "depends-release-running"
 
@@ -428,8 +433,13 @@ def _ship(conn: "sqlite3.Connection", blocker: str | None, version: str) -> list
             shipped[blocker_id] = in_production(conn, blocker_id)
         if shipped[blocker_id] is None:
             continue
-        _off(conn, [str(task_id)], blocker_id, str(_engine().SYSTEM), "its release runs in production")
-        said = IN_PRODUCTION.format(ref=ref({"id": blocker_id, "number": number}), version=version)
+        named = ref({"id": blocker_id, "number": number})
+        if shipped[blocker_id]:
+            note, said = "its release runs in production", IN_PRODUCTION.format(ref=named, version=version)
+        else:
+            repo = running(conn)[1] or "the repository"
+            note, said = "it merged nothing to release here", NOTHING_HERE.format(ref=named, repo=repo)
+        _off(conn, [str(task_id)], blocker_id, str(_engine().SYSTEM), note)
         if release_one(conn, str(task_id), blocker_id, said):
             out.append(str(task_id))
     return out
