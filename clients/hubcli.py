@@ -768,6 +768,13 @@ def parser():
     s.set_defaults(fn="doc search")
     s = docs.add_parser("write", help="create or replace an internal doc at a path")
     s.add_argument("path")
+    s.add_argument(
+        "--base-version",
+        dest="base_version",
+        type=int,
+        help="the version you read (tico doc read); refused if someone saved since. Leave out only to create a doc "
+        "or to replace your own latest version",
+    )
     s.add_argument("--title")
     s.add_argument("--body-file", dest="body_file", help="the Markdown file; standard input when omitted")
     s.add_argument("--note", help="one line on what changed")
