@@ -367,8 +367,9 @@ async function ruLoad(tab: RuleTab): Promise<boolean> {
       [state.suggested, state.stageSuggested] = await Promise.all([ruAll('/v2/rules?status=suggested'),
         get<StageRulesList>('/v2/stage-rules?status=suggested', {fresh: true}).then(d => d.items || [])]);
     }
-    // Every tab's count, and the rows of Wakes, Automations on tasks and Built in.
-    state.groups = await get<RuleGroups>('/v2/rule-groups', {fresh: true});
+    // Every tab's count, and the rows of Wakes, Automations on tasks and Built in. Read on its own: a tab still lists
+    // its rules when the counts can't be read, and shows none.
+    state.groups = await get<RuleGroups>('/v2/rule-groups', {fresh: true}).catch((): RuleGroups => ({}));
     state.error = '';
   } catch (e) { state.error = errorMessage(e, ''); }
   if (RU !== state || seq !== state.seq) return false;
@@ -1011,25 +1012,48 @@ function ruDrawSuggested(filters: HTMLElement, list: HTMLElement) {
     .join('');
   list.innerHTML += ruStageSuggestedHTML(ruOpen().stageSuggested);
   if (!list.innerHTML) list.innerHTML = '<p class="muted ru-pad">No suggestions.</p>';
-  list.querySelectorAll<HTMLElement>('.ru-sg').forEach(ruAddAllSync);
+  // Add all is the org rules' sections' alone; the stage rules' section has none.
+  list.querySelectorAll<HTMLElement>('.ru-sg:not([data-group="stage-rules"])').forEach(ruAddAllSync);
 }
 
 // ----------------------------------------------------------------- Pipelines and stages, Wakes, Automations, Built in
 // Stage rules are read here and changed from a stage's Rules button (stage-rules.ts), where On starts as that stage.
-const ruStageWhere = (r: StageRule) => r.scope === 'company' ? 'Every pipeline'
+const ruStageWhere = (r: StageRuleCore) => r.scope === 'company' ? 'Every pipeline'
   : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id}: every stage` : `${r.pipeline_name || r.pipeline_id}: ${(r.stage_names || r.stages).join(', ')}`;
 function ruStageRowHTML(r: StageRule, acts = ''): string {
   return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
     + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
     + `<div class="sr-what muted">${esc(ruStageWhere(r))} · ${esc(srSentence(r))}</div></div>`;
 }
-// A bot's stage rule or change, for a person to accept or skip; a change names the rule it would replace.
+/** What a suggested change alters in the rule it replaces: "When: A task enters → The owner changes", one per part. */
+function ruStageDiff(old: StageRuleCore, r: StageRuleCore): [string, string, string][] {
+  const a = srParts(old), b = srParts(r);
+  const parts: [string, string, string][] = [['Name', old.name, r.name], ['On', ruStageWhere(old), ruStageWhere(r)],
+    ['When', a.when, b.when], ['If', a.ifs || 'always', b.ifs || 'always'], ['Then', a.act, b.act], ['Says', old.reason || '', r.reason || '']];
+  return parts.filter(([, x, y]) => x !== y);
+}
+// A bot's stage rule, change or retire, for a person to accept or skip. Each says what accepting does: a new rule
+// comes into force, a change rewrites the rule it names (what differs is listed), a retire takes that rule out of force.
 function ruStageSuggestedHTML(rows: StageRule[]): string {
   if (!rows.length) return '';
   const human = S.me?.role !== 'bot';
-  return `<section class="ru-sg" data-group="stage-rules"><header><h2>Stage rules</h2></header>${rows.map(r => ruStageRowHTML(r,
-    human && r.can_edit ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-decide="skip">Skip</button>`
-      + `<button class="primary small" type="button" data-sr-decide="accept">${r.suggests ? 'Accept change' : 'Accept'}</button></span>` : '')).join('')}</section>`;
+  return `<section class="ru-sg" data-group="stage-rules"><header><h2>Stage rules</h2></header>${rows.map(r => {
+    const old = r.replaces, kind = !r.suggests ? 'new' : r.retires ? 'retire' : 'change';
+    const accept = kind === 'retire' ? 'Retire' : kind === 'change' ? 'Accept change' : 'Accept';
+    const acts = human && r.can_edit ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-decide="skip">Skip</button>`
+      + `<button class="primary small" type="button" data-sr-decide="accept">${accept}</button></span>` : '';
+    const title = kind === 'retire' ? `Retire: ${old?.name ?? r.name}` : kind === 'change' ? `Change to ${old?.name ?? r.name}` : `New: ${r.name}`;
+    let more = '';
+    if (kind === 'retire') more = `<div class="sr-says muted" data-sr-why>${r.retire_why ? `Why: ${esc(r.retire_why)}` : 'No reason given.'}</div>`;
+    else if (kind === 'change' && old) {
+      const diff = ruStageDiff(old, r);
+      more = `<ul class="sr-diff" data-sr-diff>${diff.map(([k, x, y]) => `<li><span class="sr-diff-k">${esc(k)}</span> <s class="muted">${esc(x || '(none)')}</s> → ${esc(y || '(none)')}</li>`).join('')
+        || '<li class="muted">Nothing differs from the rule as it is now.</li>'}</ul>`;
+    } else if (kind !== 'new') more = '<div class="sr-says muted">The rule it changes is gone; skip it.</div>';
+    return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"><div class="sr-line"><span class="sr-name">${esc(title)}</span>`
+      + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
+      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}</div>`;
+  }).join('')}</section>`;
 }
 // By pipeline, then stage: Company first, then each pipeline's whole-pipeline rules and its stages' rules.
 function ruDrawStages(filters: HTMLElement, list: HTMLElement) {
@@ -1079,8 +1103,9 @@ async function ruStageClick(ev: MouseEvent): Promise<boolean> {
   el.setAttribute('disabled', '');
   try {
     await post(`/v2/stage-rules/${encodeURIComponent(id)}/${action}`, {revision: r.revision});
-    toast(action === 'accept' ? 'Accepted' : 'Skipped');
+    toast(action === 'skip' ? 'Skipped' : r.retires ? 'Retired' : 'Accepted');
     ruOpen().loaded.clear();
+    SR_BOARD.clear();  // the board's Rules counts read again the next time it draws
     if (await ruLoad('suggested')) ruDraw();
   } catch (e) { el.removeAttribute('disabled'); toast(ruError(e)); }
   return true;

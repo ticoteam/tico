@@ -90,7 +90,8 @@ def _stage(args):
 
 
 def _stage_decide(api, args, action):
-    """Retire, accept or skip a stage rule, as the caller itself: a bot is refused, a person decides."""
+    """Retire, accept or skip a stage rule, as the caller itself: a bot's retire is a suggestion, and a bot's accept
+    or skip is refused."""
     body = _present({"revision": args.get("version"), "why": args.get("why")})
     return api.post(f"stage-rules/{args['id']}/{action}", body, key=_key(args))
 
@@ -110,7 +111,11 @@ def _stage_decide(api, args, action):
         "with": _s("A group, person or bot the rule's With names"),
         "source": _s("A From, by name or id"),
         "bot": _s("The rules that apply to this bot"),
-        "mine": {"type": "boolean", "description": "The rules that apply to your bot, and its settings"},
+        "mine": {
+            "type": "boolean",
+            "description": "The rules that apply to your bot, and its settings; with kind=stage, the stage rules you "
+            "wrote or suggested",
+        },
         "cursor": _s("next_cursor from the last page"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
     },
@@ -345,8 +350,9 @@ def rules_skip(api, args):
 
 @tool(
     "tico_rules_retire",
-    "Retire an org rule in force. Its due dates come back so you can remove them too.",
-    {"id": _s("The rule's id"), "version": RULE_VERSION},
+    "Retire a rule in force. An org rule's due dates come back so you can remove them too. A bot's retire of a stage "
+    "rule (sr_ id) is a suggestion a person accepts or skips; say why.",
+    {"id": _s("The rule's id"), "version": RULE_VERSION, "why": _s("Stage rule: why it should go")},
     required=("id",),
     writes=True,
 )
@@ -601,7 +607,9 @@ CLI = (
     ),
     Command("rules skip", "set a suggestion aside", example="tico rules skip r1"),
     Command(
-        "rules retire", "retire a rule in force; its due dates come back", example="tico rules retire r1 --version 2"
+        "rules retire",
+        "retire a rule in force; its due dates come back; a bot's retire of a stage rule is a suggestion",
+        example="tico rules retire r1 --version 2",
     ),
     Group("rules due", "due dates on rules: the next ones, add one, mark one satisfied", default="rules due list"),
     Command(

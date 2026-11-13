@@ -13,12 +13,17 @@ type SrEvent = 'enters' | 'owner_changes' | 'bot_snoozes' | 'timer';
 type SrWhen = SrEvent | (string & {});
 type SrThen = 'block' | 'tell_manager' | 'tell_owner' | 'move_back';
 type SrScope = 'stage' | 'pipeline' | 'company';
-/** A stage rule as the API sends it (backend/stage_rules.py view, plus names and `can_edit`). */
-interface StageRule {
+/** What a stage rule says: On, When, If, Then. */
+interface StageRuleCore {
   id: string; name: string; pipeline_id: string; stages: string[]; stage_names?: string[]; pipeline_name?: string;
   event: SrWhen; timer?: {kind?: string; hours?: number}; cond?: Record<string, unknown>; jev?: string;
-  then: SrThen; reason?: string; status: string; scope: SrScope; cost: string; revision: number; can_edit?: boolean;
-  created_by?: string; suggests?: string;
+  then: SrThen; reason?: string; scope: SrScope; revision: number;
+}
+/** A stage rule as the API sends it (backend/stage_rules_api.py view: names, `can_edit`, and for a bot's suggested
+ *  change or retire the rule it `replaces` and whether it `retires` it). */
+interface StageRule extends StageRuleCore {
+  status: string; cost: string; can_edit?: boolean; created_by?: string; suggests?: string;
+  replaces?: StageRuleCore; retires?: boolean; retire_why?: string;
 }
 /** A behaviour in code that applies at a stage: listed, never edited. */
 interface StageBuiltIn { name: string; what?: string; where?: string }
@@ -140,7 +145,13 @@ function srHeadHTML(title: string, back = false): string {
 }
 
 /** "When the owner changes → If owner not on engineering → Then Block": the rule in one line. */
-function srSentence(r: StageRule): string {
+function srSentence(r: StageRuleCore): string {
+  const {when, ifs, act} = srParts(r);
+  return `${when}${ifs ? ` → ${ifs}` : ''} → ${act}`;
+}
+
+/** A rule's When, If (empty for none) and Then (`act`) in words, each on its own so a change can show what differs. */
+function srParts(r: StageRuleCore): {when: string; ifs: string; act: string} {
   let when = srWhen(r.event);
   if (r.event === 'timer' && r.timer?.hours) when = `${r.timer.hours} h ${srWord(SR_TIMERS, r.timer.kind)}`;
   const ifs = Object.entries(r.cond || {}).flatMap(([k, v]): string[] => {
@@ -152,7 +163,7 @@ function srSentence(r: StageRule): string {
     return [`${k.replace(/_/g, ' ')} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`];
   });
   if (r.jev) ifs.push(`Jev: ${r.jev}`);
-  return `${when}${ifs.length ? ` → ${ifs.join(', ')}` : ''} → ${srWord(SR_THENS, r.then)}`;
+  return {when, ifs: ifs.join(', '), act: srWord(SR_THENS, r.then)};
 }
 
 function srRowHTML(r: StageRule): string {

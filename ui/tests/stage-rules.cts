@@ -4,7 +4,9 @@ import type {Page, Route} from 'playwright';
 // with every rule that applies, grouped (this stage, the whole pipeline, company, built in), each with its cost. Add
 // rule starts with On = Build and sends it; Edit sends the rule's revision; Retire asks first and sends it; Built in has
 // no controls. A member who may not change the pipeline reads the same panel with no Add, Edit or Retire. On a phone
-// the button sits beside the stage tabs and the panel fills the screen. The fake server answers as
+// the button sits beside the stage tabs and the panel fills the screen. Rules › Suggested says what accepting each of a
+// bot's stage rules does: a new rule, a change listing what differs from the rule it rewrites, or a retire with the
+// bot's reason and a Retire button; Retire and Skip send their decision. The fake server answers as
 // backend/stage_rules_api.py does.
 // Run: npm run build:ui && node ui/tests/stage-rules.cts
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -30,7 +32,8 @@ interface Rule { id: string; name: string; pipeline_id: string; stages: string[]
 const rule = (id: string, name: string, pipeline: string, stages: string[], extra: Partial<Rule> = {}): Rule => ({id, name, pipeline_id: pipeline, stages,
   event: 'enters', timer: {}, cond: {}, jev: '', then: 'tell_manager', reason: '', status: 'active', revision: 1, retired: false, ...extra});
 
-interface Served { rules: Rule[]; writes: {path: string; body: Record<string, unknown>}[] }
+interface Suggestion extends Rule { suggests: string; retire_why?: string }
+interface Served { rules: Rule[]; suggested: Suggestion[]; writes: {path: string; body: Record<string, unknown>}[] }
 
 async function serve(page: Page, errors: string[], mayChange: boolean): Promise<Served> {
   const state: Served = {writes: [], rules: [
@@ -38,7 +41,14 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
     rule('sr_quiet', 'Quiet bot tasks', 'eng', [], {event: 'timer', timer: {kind: 'quiet', hours: 6}}),
     rule('sr_snooze', 'Snooze only for a real wait', '', [], {event: 'bot_snoozes', jev: 'Waiting on something outside, or blocked?', then: 'block'}),
     rule('sr_spec', 'Spec has a page', 'eng', ['spec']),
-  ]};
+  ], suggested: []};
+  state.suggested = [
+    {...rule('sr_sg_new', 'Ask before Move back', 'eng', ['build'], {status: 'suggested', then: 'tell_owner'}), suggests: ''},
+    {...rule('sr_sg_change', 'Owner on the team', 'eng', ['build'], {status: 'suggested', event: 'owner_changes',
+      cond: {owner_not_on_team: 'engineering'}, then: 'tell_manager', reason: 'Not on Engineering.'}), suggests: 'sr_owner'},
+    {...rule('sr_sg_retire', 'Quiet bot tasks', 'eng', [], {status: 'suggested', event: 'timer', timer: {kind: 'quiet', hours: 6}}),
+      suggests: 'sr_quiet', retire_why: 'Covered by the Late rule.'},
+  ];
   const view = (r: Rule) => ({...r, scope: !r.pipeline_id ? 'company' : r.stages.length ? 'stage' : 'pipeline', pipeline_name: r.pipeline_id ? 'Engineering' : '',
     stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Jev call per event' : 'free', can_edit: mayChange});
   const order = ['stage', 'pipeline', 'company'];
@@ -59,6 +69,22 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
     if (p === '/api/v2/pipelines/eng') return json({pipeline: pipelineOf(mayChange)});
     if (p === '/api/v2/factories') return json({factories: [], pipelines: []});
     if (p === '/api/v2/tasks' && r.method() === 'GET') return json({tasks: [task]});
+    if (p === '/api/v2/rules' && r.method() === 'GET') return json({rules: [], next_cursor: null});
+    if (p === '/api/v2/stage-rules' && r.method() === 'GET' && url.searchParams.get('status') === 'suggested') {
+      return json({items: state.suggested.map(x => {
+        const old = state.rules.find(o => o.id === x.suggests);
+        return {...view(x), retires: x.retire_why !== undefined, retire_why: x.retire_why ?? '', ...(old ? {replaces: view(old)} : {})};
+      }), built_in: BUILT_IN, may_add: false, may_suggest: false});
+    }
+    const decided = p.match(/^\/api\/v2\/stage-rules\/([^/]+)\/(accept|skip)$/);
+    if (decided && r.method() === 'POST') {
+      state.writes.push({path: p, body: (r.postDataJSON() || {}) as Record<string, unknown>});
+      const sg = state.suggested.find(x => x.id === decided[1]);
+      state.suggested = state.suggested.filter(x => x.id !== decided[1]);
+      const old = state.rules.find(o => o.id === sg?.suggests);
+      if (decided[2] === 'accept' && old && sg?.retire_why !== undefined) old.retired = true;
+      return json(view(sg ?? rule(decided[1]!, '', '', [])));
+    }
     if (p === '/api/v2/stage-rules' && r.method() === 'GET') {
       const pid = url.searchParams.get('pipeline'), sid = url.searchParams.get('stage');
       const items = state.rules.filter(x => !x.retired && x.status === 'active' && (!pid || ['', pid].includes(x.pipeline_id))
@@ -162,6 +188,27 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await waitCount(desk, 'build', '3');
     await desk.locator('#sr-panel [data-sr-close]').click();
     assert.equal(await desk.locator('#sr-panel').isVisible(), false);
+
+    // Rules › Suggested: what accepting each of a bot's stage rules does.
+    await desk.goto('http://tico-ui.test/#/rules/suggested');
+    const sg = desk.locator('[data-group="stage-rules"]');
+    await sg.locator('[data-stage-rule]').first().waitFor();
+    const row = (id: string) => sg.locator(`[data-stage-rule="${id}"]`);
+    assert.deepEqual(await sg.locator('.sr-name').allTextContents(), ['New: Ask before Move back', 'Change to Owner on the team', 'Retire: Quiet bot tasks']);
+    assert.equal(await row('sr_sg_new').locator('[data-sr-decide="accept"]').innerText(), 'Accept');
+    // A change lists what differs from the rule as it is now, and only that.
+    assert.deepEqual(await row('sr_sg_change').locator('[data-sr-diff] li').allTextContents(), ['Then Block → Tell the manager']);
+    assert.equal(await row('sr_sg_change').locator('[data-sr-decide="accept"]').innerText(), 'Accept change');
+    // A retire says so, with the bot's reason, and its button is Retire.
+    assert.equal(await row('sr_sg_retire').locator('[data-sr-why]').innerText(), 'Why: Covered by the Late rule.');
+    assert.equal(await row('sr_sg_retire').locator('[data-sr-decide="accept"]').innerText(), 'Retire');
+    await row('sr_sg_retire').locator('[data-sr-decide="accept"]').click();
+    await row('sr_sg_retire').waitFor({state: 'detached'});
+    assert.equal(served.writes.at(-1)?.path, '/api/v2/stage-rules/sr_sg_retire/accept');
+    assert.equal(served.rules.find(x => x.id === 'sr_quiet')?.retired, true);
+    await row('sr_sg_change').locator('[data-sr-decide="skip"]').click();
+    await row('sr_sg_change').waitFor({state: 'detached'});
+    assert.equal(served.writes.at(-1)?.path, '/api/v2/stage-rules/sr_sg_change/skip');
 
     // A member reads the same rules and changes none.
     const member = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block', locale: 'en-US', timezoneId: 'UTC'});

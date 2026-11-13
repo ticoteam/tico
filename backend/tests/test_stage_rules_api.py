@@ -188,3 +188,44 @@ def test_reads_name_a_real_pipeline_and_stage(api):
     get(api, "stage-rules?pipeline=eng&stage=prod-spec", expected=404)
     get(api, "stage-rules?stage=" + BUILD, expected=422)
     get(api, "stage-rules/sr_missing", expected=404)
+
+
+def test_accepting_a_suggestion_needs_the_right_to_change_the_rule_it_names(api):
+    engineering(api)
+    company = get(api, "stage-rules/sr_real_wait", token="ben-test")
+    # Ben manages Engineering but may not change the company's rule himself...
+    post(
+        api,
+        "stage-rules/sr_real_wait",
+        {"revision": company["revision"], "pipeline": "eng"},
+        token="ben-test",
+        expected=403,
+    )
+    # ...so a bot's suggestion to move it onto Engineering is not his to accept either.
+    moved = post(
+        api, "stage-rules/sr_real_wait", {"revision": company["revision"], "pipeline": "eng"}, token="ops-test"
+    )
+    seen = get(api, f"stage-rules/{moved['id']}", token="ben-test")
+    assert seen["can_edit"] is False and seen["replaces"]["id"] == "sr_real_wait" and seen["retires"] is False
+    post(api, f"stage-rules/{moved['id']}/accept", {}, token="ben-test", expected=403)
+    assert get(api, "stage-rules/sr_real_wait")["pipeline_id"] == ""
+    # The company's owner may.
+    assert get(api, f"stage-rules/{moved['id']}")["can_edit"] is True
+    post(api, f"stage-rules/{moved['id']}/accept", {})
+    assert get(api, "stage-rules/sr_real_wait")["pipeline_id"] == "eng"
+
+
+def test_a_suggestion_says_what_accepting_it_does_and_goes_stale_when_the_rule_changes(api):
+    engineering(api)
+    made = add(api, OWNER_ON_TEAM, token="ben-test")
+    gone = post(api, f"stage-rules/{made['id']}/retire", {"why": "Covered elsewhere."}, token="ops-test")
+    seen = get(api, f"stage-rules/{gone['id']}", token="ben-test")
+    assert seen["retires"] is True and seen["retire_why"] == "Covered elsewhere."
+    assert seen["replaces"]["name"] == made["name"] and seen["can_edit"] is True
+    # A person changes the rule after the bot read it: accepting the bot's suggestion would undo that, so it is refused.
+    post(
+        api, f"stage-rules/{made['id']}", {"revision": made["revision"], "reason": "Ask the manager."}, token="ben-test"
+    )
+    post(api, f"stage-rules/{gone['id']}/accept", {}, token="ben-test", expected=409)
+    post(api, f"stage-rules/{gone['id']}/skip", {}, token="ben-test")
+    assert get(api, f"stage-rules/{made['id']}")["retired_at"] is None

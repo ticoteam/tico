@@ -136,10 +136,8 @@ def _row(c: Any, rule_id: str) -> Row:
     return rule
 
 
-def view(c: Any, actor: str, rule: Row, names: dict[str, dict[str, str]] | None = None) -> Row:
-    """A rule as its caller reads it: stage_rules.view's (from get or listed), with the names of its pipeline and
-    stages and `can_edit`."""
-    out: Row = dict(rule)
+def _named(c: Any, out: Row, names: dict[str, dict[str, str]] | None) -> None:
+    """Adds `pipeline_name` and `stage_names` to a rule."""
     pid: str = out.get("pipeline_id") or ""
     stage_names = (names or {}).get(pid)
     if stage_names is None:
@@ -152,9 +150,54 @@ def view(c: Any, actor: str, rule: Row, names: dict[str, dict[str, str]] | None 
         out["pipeline_name"] = found["name"] if found else pid
     stages: list[str] = out.get("stages") or []
     out["stage_names"] = [stage_names.get(s, s) for s in stages]
-    out["can_edit"] = bool(
-        may_change(c, actor, pid) and not out.get("retired_at") and out.get("status") in ("active", "suggested")
-    )
+
+
+def _replaced(c: Any, suggestion: Row) -> Row | None:
+    """The rule in force a bot's suggested change or retire names, or None for a new rule (or one gone since)."""
+    rid = suggestion.get("suggests") or ""
+    return SR.get(c, rid) if rid else None
+
+
+def view(c: Any, actor: str, rule: Row, names: dict[str, dict[str, str]] | None = None) -> Row:
+    """A rule as its caller reads it: stage_rules.view's (from get or listed), with the names of its pipeline and
+    stages and `can_edit`. A bot's suggestion that changes or retires a rule also carries `replaces` (that rule, as
+    it is now) and `retires` (true for a retire, with the bot's reason in `retire_why`), so a person sees what accepting
+    does. Accepting it changes both rules, so `can_edit` asks for both pipelines."""
+    out: Row = dict(rule)
+    _named(c, out, names)
+    pid: str = out.get("pipeline_id") or ""
+    may = may_change(c, actor, pid)
+    if out.get("status") == "suggested" and out.get("suggests"):
+        params: Row = out.get("then_params") or {}
+        why = params.get("retire")
+        out["retires"] = why is not None
+        out["retire_why"] = why if isinstance(why, str) else ""
+        old = _replaced(c, out)
+        if old is not None:
+            old = dict(old)
+            _named(c, old, names)
+            out["replaces"] = {
+                k: old.get(k)
+                for k in (
+                    "id",
+                    "name",
+                    "pipeline_id",
+                    "pipeline_name",
+                    "stages",
+                    "stage_names",
+                    "event",
+                    "timer",
+                    "cond",
+                    "jev",
+                    "then",
+                    "reason",
+                    "scope",
+                    "revision",
+                    "retired_at",
+                )
+            }
+            may = may and may_change(c, actor, old.get("pipeline_id") or "")
+    out["can_edit"] = bool(may and not out.get("retired_at") and out.get("status") in ("active", "suggested"))
     return out
 
 
@@ -352,6 +395,17 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 raise Problem("conflict", "This rule is not a suggestion.", 409)
             if not bot:
                 _refuse_unless(c, who.actor, row["pipeline_id"])
+            old = _replaced(c, row) if action == "accept" else None
+            if old is not None:
+                # Accepting rewrites or retires the rule it names: the person must be one who may change that rule
+                # too, or a pipeline's manager could take a company rule (or another pipeline's) for their own.
+                _refuse_unless(c, who.actor, old["pipeline_id"])
+                if old.get("retired_at"):
+                    raise Problem("conflict", "The rule this suggestion changes is retired; skip it.", 409)
+                if (old.get("updated_at") or "") > (row.get("created_at") or ""):
+                    raise Problem(
+                        "conflict", "The rule changed after the bot suggested this; skip it and ask again.", 409
+                    )
             if action == "retire":
                 # A bot's retire is a suggestion to retire it, a person's takes it out of force.
                 return {"id": SR.retire(c, who.actor, rule_id, body.why)["id"]}
