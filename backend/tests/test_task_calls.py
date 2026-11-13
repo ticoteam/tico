@@ -895,7 +895,7 @@ def test_a_private_task_waits_before_a_stage_whose_owner_cannot_read_it_until_so
     from backend import waiting_on as W
 
     (wait,) = W.waiting_on(c, row["id"])  # Needs you, lists and briefs read this line, not "Moving to Review"
-    assert wait.line == "Waits on Ana: reviewer does the next step but can't see this private task", wait
+    assert wait.line == "Waits on Ana: Ben does the next step but can't see this private task", wait
     never_stuck.check(c)
     assert E.task(c, row["id"])["stage"]["name"] == "Draft"  # still held: nothing was shared
     H.set_task_readers(c, ANA, row["id"], add=[BEN])

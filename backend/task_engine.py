@@ -362,6 +362,7 @@ def told(conn: "sqlite3.Connection", by: str, row: Row, said: Row) -> str:
     """A `shut_out` or `not_shared` refusal as `by` reads it: the cause, then `fix_for` them."""
     return f"{said['cause']}. {fix_for(conn, by, row, said)}."
 
+
 def names(stage_row: Row, bot: str | None) -> bool:
     """Whether the pipeline names `bot` to hold `stage_row`: the stage's fixed owner bot, or a bot on its "One of
     several" list. Such a bot reads a private task while it holds the stage, as its owner (spec: a private task's stage
@@ -385,6 +386,7 @@ def stage_read(conn: "sqlite3.Connection", task_id: str, stage_row: Row) -> None
         return
     line = f"{H.actor_name(conn, bot)} can read this while it holds {stage_row['name']}"
     _event(conn, task_id, SYSTEM, "stage_read", None, bot, line, {"stage": stage_row["id"], "bot": bot})
+
 
 def shut_out(
     conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None, *, new: bool = False

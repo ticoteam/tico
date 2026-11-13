@@ -98,7 +98,7 @@ def test_a_stuck_private_task_moves_on_at_the_next_never_stuck_pass(c, monkeypat
     _engineering(c)
     row = _private(c)
     with monkeypatch.context() as before:  # the rule as it was: held in Build
-        before.setattr(E, "shut_out", lambda *a, **k: {"who": R1, "cause": "held", "fix": "share it"})
+        before.setattr(E, "shut_out", lambda *a, **k: {"who": R1, "whom": [R1], "cause": "held", "fix": "share it"})
         _done(c, row, BUILDER)
     assert E.task(c, row["id"])["stage"]["name"] == "Build"
     never_stuck.check(c)
