@@ -190,7 +190,7 @@ def git_files(root):
 TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts"}
-JS_SOURCES = {".js", ".cjs", ".mjs", ".ts"}  # browser and Node code: no Python imports by bare name
+JS_SOURCES = CODE - {".py", ".sh", ".bash"}  # browser and Node code: no Python imports by bare name
 PATHLIKE = {
     "Path",
     "PurePath",
@@ -705,7 +705,7 @@ class DependencyMap:
                 self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
             # A sys.path module (`python -m hubcli.x`) is named bare only from a shell script: in JavaScript or
             # TypeScript `run.closest` is a variable, and read as `import run` it ran every run.py (#3335's
-            # e2e/website-tools/run.py reaches the conftest, so every UI file selected the whole suite).
+            # e2e/website-tools/run.py, since renamed, reached the conftest, so every UI file selected the whole suite).
             if IDENTIFIER.match(token) and "." in token:
                 self.runs[path] |= self.module(token, bare=Path(path).suffix not in JS_SOURCES)
 

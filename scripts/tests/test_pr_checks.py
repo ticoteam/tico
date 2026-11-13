@@ -709,7 +709,7 @@ def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
 
 def test_a_dotted_name_in_typescript_is_a_variable_not_a_bare_python_module(tmp_path):
     # `run.closest` in a UI file is a JavaScript variable. Read as `import run` (a sys.path module, since a script
-    # imports run bare), it ran every run.py; #3335's e2e/website-tools/run.py reaches the conftest, so every UI file
+    # imports run bare), it ran every run.py; #3335's e2e/website-tools/run.py (since renamed) reached the conftest, so every UI file
     # selected the whole suite. A shell script naming `python -m run.main` still runs it.
     source(tmp_path, "e2e/website-tools/run.py", "def main(): pass\n")
     source(tmp_path, "e2e/website-tools/practice.py", "import run\nrun.main()\n")
