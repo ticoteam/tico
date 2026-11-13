@@ -1248,10 +1248,14 @@ def set_access(
 
 def groups_view(c: Any, who: Any, admins: Iterable[str]) -> list[dict[str, Any]]:
     """`GET /website-tools/groups`: each group with its member count (nested groups included), for the Who can use it
-    picker. Credential administrators only: they alone grant a login to a group."""
+    picker, and who is in it. Credential administrators only: they alone grant a login to a group."""
     _require_admin(c, who, admins)
     groups = _org_groups(c)
-    rows = [{"id": gid, "name": _group_name(groups, gid), "members": len(group_members(c, gid))} for gid in groups]
+    rows: list[dict[str, Any]] = []
+    for gid in groups:
+        members = group_members(c, gid)
+        # `actors` lets the picker say "In Design" on a person or bot a granted group already covers.
+        rows.append({"id": gid, "name": _group_name(groups, gid), "members": len(members), "actors": sorted(members)})
     return sorted(rows, key=lambda r: (r["name"].lower(), r["id"]))
 
 

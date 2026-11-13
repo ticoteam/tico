@@ -8136,7 +8136,8 @@ STABLE.extend(
             'get',
             'Tools',
             'listWebsiteToolGroups',
-            'Each group with its member count, nested groups included, for Who can use it (credential administrators)',
+            'Each group with its member count and its people and bots (actors), nested groups included, for Who can use '
+            'it (credential administrators)',
             'WebsiteToolGroups',
         ),
         (
@@ -8169,7 +8170,7 @@ WEBSITE_ACCESS = obj(
     required=['subject', 'kind', 'id', 'name', 'initials'],
 )
 SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b', 'access': items(WEBSITE_ACCESS)})
-SCHEMAS['WebsiteToolGroups'] = items(obj({'id': 's', 'name': 's', 'members': 'i'}))
+SCHEMAS['WebsiteToolGroups'] = items(obj({'id': 's', 'name': 's', 'members': 'i', 'actors': items(_t('s'))}))
 SCHEMAS['WebsiteCode'] = obj({'code': 's', 'expires_in': 'i'})
 SCHEMAS['WebsiteToolSettings'] = obj(
     {'id': 's', 'name': 's', 'kind': {'enum': ['website']}, 'sites': items(_t('s')), 'central_only': 'b'}

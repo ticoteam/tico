@@ -157,15 +157,20 @@ async function whClick(ev: MouseEvent) {
 // A dialog in the house form style. The header holds the title only; one footer, pinned to the dialog's bottom while
 // the body scrolls, carries the refusal, then Cancel (Close when there is nothing to submit) and the caller's buttons
 // (a .danger one sits far left). The body is not wrapped, so each dialog's own `>label` rules apply. Cancel and
-// Escape close it, and closing removes it.
-function whDialog(title: string, body: string, footer = ''): HTMLDialogElement {
+// Escape close it, and closing removes it. `opts.close` renames the close button of a dialog with nothing to submit
+// and makes it primary (Who can use it's Done, since each change there saves at once).
+function whDialog(title: string, body: string, footer = '', opts: {close?: string} = {}): HTMLDialogElement {
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal task-rule-dialog wh-dialog';
   dialog.setAttribute('aria-label', title);
   dialog.innerHTML = `<form class="task-rule-form" novalidate><header><h2>${esc(title)}</h2></header>
     ${body}<footer class="wh-foot"><p class="err" role="status" data-wh-error></p><span class="spacer"></span><button type="button" class="ghost" data-close>Cancel</button>${footer}</footer></form>`;
   const foot = dialog.querySelector('.wh-foot')!;
-  if (!foot.querySelector('[type="submit"]')) foot.querySelector('[data-close]')!.textContent = 'Close';
+  if (!foot.querySelector('[type="submit"]')) {
+    const close = foot.querySelector('[data-close]')!;
+    close.textContent = opts.close || 'Close';
+    if (opts.close) close.classList.replace('ghost', 'primary');
+  }
   dialog.addEventListener('close', () => dialog.remove());
   dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dialog.close(); });
   document.body.appendChild(dialog); dialog.showModal();

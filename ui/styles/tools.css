@@ -189,16 +189,26 @@ section.card.tt-soon>header .pill{margin-left:auto}
 .tw-central{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:var(--t-sm);cursor:pointer}
 .wh-dialog .task-rule-form>label.tw-central{display:flex;margin-top:4px}
 .tw-who-field{display:grid;gap:6px}
-.tw-who-field label{display:grid;gap:4px}
 .tw-seg{align-self:flex-start;margin-bottom:4px}
-.tw-chips{display:flex;flex-wrap:wrap;gap:6px}
-.tw-chips:empty{display:none}
-.tw-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 2px 2px 4px;border:1px solid var(--line);border-radius:999px;font-size:var(--t-sm)}
-.tw-chip .tt-x{width:22px;height:22px;min-width:22px;padding:0;border:0;background:none}
-.tw-access{display:flex;flex-direction:column;margin-bottom:8px}
-.tw-access-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
-.tw-access-row:first-child{border-top:0}
-.tw-access-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Who can use it (twWhoRow): a 24px face, the name in ink, its muted text, and a quiet × on the right that shows when
+   the row is hovered or has focus; it still takes Tab while hidden. On a touch screen it always shows, 36px. */
+.tw-access{display:flex;flex-direction:column}
+.tw-access:empty{display:none}
+.tw-access-row{display:flex;align-items:center;gap:8px;min-height:36px;font-size:var(--t-base)}
+.tw-who-n{flex:none;max-width:60%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.tw-who-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
+.tw-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-width:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);opacity:0}
+.tw-x .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
+.tw-x:hover{background:var(--surface2)}
+.tw-x:focus-visible{opacity:1;outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tw-access-row:hover .tw-x,.tw-access-row:focus-within .tw-x{opacity:1}
+.tw-nobody{margin:0}
+/* The picker's list floats in the top layer below the field: the dialog leaves room for seven options, so the list
+   never makes it scroll and never covers Done. */
+.tw-access-dialog .tw-access{min-height:240px;justify-content:flex-start}
+@media (hover:none){
+  .tw-x{opacity:1;width:36px;height:36px;min-width:36px;margin-right:-6px}
+}
 .tw-code{margin:4px 0 0;font-size:var(--t-xl);font-weight:600;letter-spacing:.08em;text-align:center}
 .tw-code-left{margin:0;text-align:center}
 .tw-log .tt-who-name{display:flex;align-items:center;gap:6px}

@@ -242,6 +242,12 @@ def test_an_api_key_never_goes_to_a_group(s):
 def test_the_groups_read_counts_members_for_credential_administrators_only(s):
     found = {g["id"]: (g["name"], g["members"]) for g in get(s.api, "website-tools/groups")}
     assert found == {"design": ("Design", 2), "design-bots": ("Design bots", 1), "empty": ("Empty", 0)}
+    actors = {g["id"]: g["actors"] for g in get(s.api, "website-tools/groups")}
+    assert actors == {
+        "design": sorted(["human:cara", bot(s.api, "ops")]),
+        "design-bots": [bot(s.api, "ops")],
+        "empty": [],
+    }
     get(s.api, "website-tools/groups", token="cara-test", expected=403)
 
 

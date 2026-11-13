@@ -21,8 +21,9 @@
 
 // A tool's status: the hub's tone (ok, wait, fail, run, idle) and the text the pill shows.
 interface ToolsStatus { tone?: string; text?: string; }
-// Someone who can use a tool: a bot or a person, with the name and face the list shows.
-interface ToolsWho { kind: string; id: string; name?: string; }
+// Someone who can use a tool: a bot, a person or (a website login shared with one) a group, with the name and face the
+// list shows; a group carries its member count.
+interface ToolsWho { kind: string; id: string; name?: string; members?: number | undefined; }
 // One row of the list, as the hub sends it for this reader.
 interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; }
 // The list's state: its run (a newer pageTools wins), its rows and counts once read, the error, the search and the filter.
@@ -56,15 +57,21 @@ const toolsListStatus = (status?: ToolsStatus) => {
   const tone = status?.tone || 'idle', text = esc(status?.text || '');
   return tone === 'ok' ? `<span class="sr-only">${text}</span>` : tone === 'idle' ? `<span class="muted">${text}</span>` : toolsPill(status);
 };
-// One face: a bot's avatar, or a person's photo or initials.
-const toolsFace = (w: ToolsWho, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
+// A group's face: a rounded square with the groups icon (ui/styles/avatars.css .av-group).
+const groupAvatar = (size = 22) => `<span class="av av-group" style="width:${size}px;height:${size}px" aria-hidden="true"><span class="nav-icon">groups</span></span>`;
+// A group's member count, in words: "No members", "1 member", "5 members".
+const toolsMembers = (n: number | undefined) => n === undefined ? '' : n === 0 ? 'No members' : n === 1 ? '1 member' : `${n} members`;
+// One face: a group's, a bot's avatar, or a person's photo or initials.
+const toolsFace = (w: ToolsWho, size = 22) => w.kind === 'group' ? groupAvatar(size) : w.kind === 'bot' ? avatar(w.id, size)
   : personAvatar((S.people || []).find(p => p.id === w.id) || {id: w.id, name: w.name}, size);
+// A face's hover name: a group's says its member count ("Design · 5 members").
+const toolsFaceTitle = (w: ToolsWho) => [w.name || w.id, w.kind === 'group' ? toolsMembers(w.members) : ''].filter(Boolean).join(' · ');
 // Who can use it: up to four faces, each named on hover, then "+N more".
 function toolsWhoHTML(row: ToolsRow): string {
   const who = row.who || [], total = Math.max(row.who_total || 0, who.length);
   if (!total) return '<span class="sr-only">Nobody yet</span>';
   const shown = who.slice(0, TOOLS_WHO_SHOWN), more = total - shown.length;
-  return `<span class="tt-faces">${shown.map(w => `<span class="tt-face" title="${esc(w.name || w.id)}">${toolsFace(w)}</span>`).join('')}</span>${
+  return `<span class="tt-faces">${shown.map(w => `<span class="tt-face" title="${esc(toolsFaceTitle(w))}">${toolsFace(w)}</span>`).join('')}</span>${
     more > 0 ? `<span class="muted tt-more">+${more} more</span>` : ''}`;
 }
 
