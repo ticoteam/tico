@@ -60,4 +60,5 @@
 
 /* While the tour runs, Company's and Library's pages show whatever their fold (ui/getting-started.ts gsTourStart). */
 html.gs-touring #rd-co,html.gs-touring #rd-lib{display:flex!important}
-html.gs-touring .rd-lib-toggle .section-chev{transform:var(--chev-open)}   /* the chevrons say open while their pages show */
+/* The chevrons say open while their pages show; #side outranks redesign.css's fold rules (html.nav-lib-shut …). */
+html.gs-touring #side .rd-lib-toggle .section-chev{transform:var(--chev-open)}

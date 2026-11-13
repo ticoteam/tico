@@ -183,6 +183,10 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
       assert.equal(await seat.count(), 1, 'the seat is listed');
       assert.equal(await seat.locator('.pill').count(), 0, 'no Recruiting pill');
       assert.equal((await seat.locator('.nm').innerText()).replace(/\s+/g, ' ').trim(), 'Operations Analyst · Recruiting');
+      // The state words wrap like the name (not held to its last word, which overflowed a 200px rail), and the dot stays
+      // with its word.
+      assert.equal(await seat.locator('.nm-end .seat-word').count(), 0, 'the state words follow the last word');
+      assert.equal(await seat.locator('.seat-word').evaluate(el => el.textContent), ' ·\u00a0Recruiting');
       assert.deepEqual(errors, []);
       await context.close();
     }
@@ -215,6 +219,16 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
       assert.equal(await folded.getAttribute('aria-label'), 'Expand Engineering Manager · something inside needs you');
       assert.equal(await page.locator('#tree a.node[data-org="b:eng-manager"] .dot.needs').count(), 0, 'not in the row');
       assert.equal(await folded.evaluate(el => getComputedStyle(el, '::after').width), '6px');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+
+    // On a phone ⋯ is the only way to Contacts and the switches: the rail's 40px target.
+    {
+      const {context, page, errors} = await open(browser, {width: 390, height: 844});
+      await page.locator('#mobile-more').click();
+      await page.waitForFunction(() => document.body.classList.contains('drawer'));
+      assert.deepEqual(await page.locator('#org-more').evaluate(el => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }), [40, 40], '⋯ is 40×40 on a phone');
       assert.deepEqual(errors, []);
       await context.close();
     }
