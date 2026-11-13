@@ -76,6 +76,11 @@ def task_context(api, args):
             "work, no secret-shaped value, no file or link of it). Parent: that private task, "
             "or none",
         },
+        "for_actor": _s(
+            "A bot filing a person's own ask: the person (human:<id>) it is for, who becomes its requester. "
+            "With from_message"
+        ),
+        "from_message": _s("With for_actor: the id of the message that person asked in; you must be able to read it"),
         "parent": _s(
             "The task that files it (its id, or 8-character short id): the parent waits until this one ends. "
             "Set once, never changed"
@@ -150,6 +155,8 @@ def task_create(api, args):
         "public_title",
         "public_summary",
         "from_private",
+        "for_actor",
+        "from_message",
         "model",
         "effort",
         "harness",

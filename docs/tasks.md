@@ -78,7 +78,7 @@ Work a person has to go and do is a sub-task for them, not an ask. An @ in the c
 
 ## Snooze
 
-Snooze is the only hold. It sets a task aside until a date, or with no end ("On ice"). While snoozed, nothing wakes
+Snooze is the only hold. It sets a task aside until a date, or with no end. While snoozed, nothing wakes
 or chases it, it is not Late, it holds no slot in a stage with a limit, and it leaves Needs you.
 
 ```sh
@@ -90,6 +90,27 @@ A bare date is the start of that day, Pacific. A bot gives a reason and should g
 date tells the manager bot once; after three snoozes by a bot in one stage, the next goes to the manager bot. When a
 snooze ends, the owner is woken once. Finishing or closing a task ends its snooze. `tico task list --snoozed only|all`
 lists snoozed tasks.
+
+On a pipeline's board a snoozed task is grayed at the bottom of its stage, with the day it wakes (or "Snoozed"); its
+moon is its one button, Unsnooze.
+
+### Product's Ideas
+
+Product's Ideas is an ordinary stage. An idea that is not snoozed moves on to Spec by itself when Spec has room, oldest
+first, once Jev has checked it against open and recent Product tasks (the `idea-check@1` questions, one call per pass
+for up to 20 ideas, `backend/idea_checks.py`). When Jev is sure (0.85 or over) an idea is the same as task #N, the idea
+is closed as a duplicate of #N, linked to it, and its person is added to #N's requesters with an "Also asked by"
+comment. A person's idea that matches a bot's idea still in Ideas closes the bot's instead. Under 0.85, a failed call,
+or no answer within 2 minutes: the idea goes on as it is.
+
+A bot's own idea is filed snoozed with no end date, and only a person unsnoozes it. A bot filing a person's ask files
+it for them, from the message they asked in; the task is then the person's, and its history names the bot:
+
+```sh
+tico task create --pipeline product --owner bot:pm --title "Export to CSV" --for human:ana --from-message <message id>
+```
+
+It is refused unless that person sent the message and the bot can read its conversation.
 
 ## Done, closed and reopen
 

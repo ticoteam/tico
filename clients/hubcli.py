@@ -916,6 +916,16 @@ def parser():
         help="who does it: a bot slug, a person id or me; leave out to file into a pipeline whose first stage picks "
         "from several (the stage picks one)",
     )
+    s.add_argument(
+        "--for",
+        dest="for_actor",
+        help="a bot filing a person's own ask: the person (human:<id>) it is for, with --from-message",
+    )
+    s.add_argument(
+        "--from-message",
+        dest="from_message",
+        help="with --for: the id of the message that person asked in (you must be able to read it)",
+    )
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")

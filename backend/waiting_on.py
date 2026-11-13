@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from . import hubdb_core, merge_order, pipeline_rights, pr_conflicts, read_cache, task_wakes
+from . import hubdb_core, idea_checks, merge_order, pipeline_rights, pr_conflicts, read_cache, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 
@@ -488,15 +488,11 @@ def of(
         full = bool(ahead) and not E.has_room(conn, ahead, task_row=row)
         line = f"No room in {name}" if full else f"Moving to {name}"
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
-    elif by_hand and not unmet and E.handed_over(conn, row):
-        # Someone else handed it to the owner bot: the owner's turn, with a due time; Late wakes the manager bot
-        # (never_stuck._handoffs).
-        ahead = E.next_stage(conn, row)
-        line = f"Move to {ahead['name'] if ahead else 'the next stage'}, or snooze to park it"
-        wait = _turn(conn, row, row["owner_id"], line, None, entered, False, seen)
-        out.append(replace(wait, until=E.handover_due(conn, row)))
     elif by_hand:
         out.append(Wait(BY_HAND, stage["id"], f"Leaves {stage['name']} by hand", None, entered))
+    elif not unmet and idea_checks.holds(conn, row):
+        # An idea in Product's Ideas: Jev's duplicate check comes first, for two minutes at most (idea_checks).
+        out.append(Wait(JEV, None, "Jev is checking it against open ideas", None, entered))
     elif not unmet:
         # Everything is met. It waits for a slot in the next stage; with room, the engine takes it on its next pass.
         ahead = E.next_stage(conn, row)

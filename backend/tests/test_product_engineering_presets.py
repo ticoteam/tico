@@ -135,7 +135,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         "engineering-release": ["in_release"],
     }
     stages = {s["id"]: s for s in product["stages"] + engineering["stages"]}
-    assert stages["product-ideas"]["by_hand"] and not stages["engineering-on-deck"]["by_hand"]
+    assert not stages["product-ideas"]["by_hand"] and not stages["engineering-on-deck"]["by_hand"]
     limits = {sid: s["task_limit"] for sid, s in stages.items() if s["task_limit"]}
     assert limits == {"product-spec": 20, "engineering-build": 3}
     assert [stages[s]["expected_minutes"] for s in ("product-spec", "product-in-development", "product-validate")] == [
@@ -654,40 +654,6 @@ def test_the_product_manager_is_not_told_when_spec_has_room(c):
     assert N.rules_hold(c) == []
 
 
-def test_an_assignee_owned_ideas_tells_nobody_when_spec_has_room(c):
-    """C10 when a customer points Product's Ideas at "the task's assignee" (one Product Owner per area): a request moved
-    back into Ideas is held by hand, and its owner is not told when Spec has room, however many slots free."""
-    _team(c)
-    _answers(c, software="yes")
-    PS.ensure_presets(c)
-    area = X.bot(c, "app-owner")
-    c.execute("UPDATE stages SET owner='assignee' WHERE id='product-ideas'")
-    c.execute("UPDATE stages SET task_limit=1 WHERE id='product-spec'")
-    bug = X.new_task(c, ANA, "Saved carts lose items", "product", assignee=area)
-    X.settled(c)
-    N.check(c)  # a person's request: it moves on into Spec by itself
-    assert E.task(c, bug["id"])["stage_id"] == "product-spec"
-    E.move(c, bug["id"], "product-ideas", ANA, "Route it to its area's owner first")
-    row = E.task(c, bug["id"])
-    assert (row["stage_id"], row["owner_id"], row["visit"]["entered_how"]) == ("product-ideas", area, "back")
-    (held,) = W.of(c, row)
-    assert held.state == W.BY_HAND
-    X.settled(c)
-    N.check(c)
-    N.check(c)
-    assert _room_messages(c) == 0
-    assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: someone moves it
-    other = X.new_task(c, ANA, "Export to CSV", "product", assignee=area)
-    X.settled(c)
-    N.check(c)
-    assert E.task(c, other["id"])["stage_id"] == "product-spec"
-    E.move(c, other["id"], E.CLOSED, ANA, "Done elsewhere")
-    N.check(c)
-    N.check(c)
-    assert _room_messages(c) == 0
-    assert N.rules_hold(c) == []
-
-
 def _ideas_moves(c):
     return {
         row[0]: row[1]
@@ -695,10 +661,10 @@ def _ideas_moves(c):
     }
 
 
-def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_waits_by_hand(c):
-    """G5: a person who files into Product already picked it. With Spec's limit at 2, two filed at once both go in; the third
-    waits for room, named as room, and goes in first when a slot frees. A bot's idea, and a request moved back into
-    Ideas, are held by hand."""
+def test_ideas_move_into_spec_by_themselves_and_a_bots_own_idea_waits_snoozed(c):
+    """Ideas: say it once (#227): with Spec's limit at 2, two ideas filed at once both go in once Jev checked them; the
+    third waits for room, named as room, and goes in first when a slot frees. A bot's own idea is filed snoozed and
+    stays. Nobody is sent a "Spec has room" notice."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
@@ -706,6 +672,7 @@ def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_wait
     asked = [X.new_task(c, ANA, f"Request {n}", "product") for n in range(3)]
     brief = X.new_task(c, "bot:pm", "Brief", "product")
     X.settled(c)
+    X.ideas_checked(c)
     assert N.check(c)["moved"] == 2
     assert _ideas_moves(c) == {
         "Request 0": "product-spec",
@@ -715,17 +682,14 @@ def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_wait
     }
     (wait,) = W.of(c, E.task(c, asked[2]["id"]))
     assert (wait.state, wait.line) == (W.ROOM, "No room in Spec")
-    (held,) = W.of(c, E.task(c, brief["id"]))
-    assert held.state == W.BY_HAND
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    assert W.of(c, E.task(c, brief["id"]))[0].state == W.SNOOZED
     moved = E.task(c, asked[0]["id"])
     assert moved["owner_id"] == "bot:pm" and X.wakes(c, moved["id"], "bot:pm")  # its owner is told at once
-    E.move(c, asked[0]["id"], "product-ideas", ANA, "Not this month")
+    E.move(c, asked[0]["id"], E.CLOSED, ANA, "Not this month")
     N.check(c)
     assert _ideas_moves(c) == {
-        "Request 0": "product-ideas",  # moved back: held by hand like any idea
         "Request 1": "product-spec",
-        "Request 2": "product-spec",  # the slot went to the waiting request, not to a room wake
+        "Request 2": "product-spec",  # the freed slot went to the waiting request
         "Brief": "product-ideas",
     }
     assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0

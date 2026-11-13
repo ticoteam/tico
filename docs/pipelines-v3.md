@@ -88,7 +88,7 @@ architecture) and C (the screens).
 Close calls that change behavior, C1 to C31. They are part of sign-off A. Text in italics says what was there before.
 
 - **C1.** A bot should give an end date when it snoozes, and its wake says so. It is not required. A bot's snooze with
-  no end date shows as "On ice", the manager bot is told once, and it is listed on the manager's rail. After 3 snoozes
+  no end date shows as "Snoozed", the manager bot is told once, and it is listed on the manager's rail. After 3 snoozes
   by a bot in one stage, the next goes to the manager bot. *Draft 4 refused a bot's snooze with no end date.*
 - **C2.** A snoozed task gives up its slot in a stage that has a limit, and so does one that waits only on a person's
   OK or answer ("Limits").
@@ -325,8 +325,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
 
 1. **Snoozed**
    - Starts: Someone snoozes it.
-   - Ends: The date arrives, or anyone unsnoozes it.
-   - If not: On ice stays until a person brings it back.
+   - Ends: The date arrives, or anyone unsnoozes it (a bot's own idea, filed snoozed: only a person).
+   - If not: With no end date it stays until a person brings it back.
 2. **A person's turn**
    - Starts: A requirement names them, a bot asks them, the task is theirs, or the ladder reached them.
    - Ends: They answer, or the task leaves the stage.
@@ -381,8 +381,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: It enters a stage that tasks leave by hand. Where a person's request moves on, one on its first visit is
      not held: it is in state 8.
    - Ends: Someone picks it, closes it or snoozes it.
-   - If not: Nothing. It is a place to wait. Work handed over to the owner bot where a person's request moves on is the
-     owner's turn instead (state 4), due in 24 hours; then Late, and the manager bot is woken once.
+   - If not: Nothing. It is a place to wait. (Product's Ideas is not by hand: an idea moves on to Spec by itself,
+     after Jev's duplicate check, see docs/tasks.md.)
 
 Two labels can sit on top of any state: **Late** and **Pushed past**. Two states end a task: **Done** and **Closed**.
 
@@ -477,7 +477,8 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
   rule, the task and the stage. *Added Nov 13: Tico Team's Build tasks sat for hours snoozed "until checks pass", their
   checks passed and Review 1 unlimited, showing "Moving to Review 1", until a person moved them.*
 - Run now on a snoozed task ends the snooze, in the name of whoever pressed it, as Wake does.
-- A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
+- A bot should give an end date. With none, the task shows "Snoozed" and the manager bot is told once (C1). A bot's own
+  idea in Product's Ideas is filed snoozed, and only a person ends that snooze (Ideas: say it once).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
 
 ### Handoff: Product to Engineering

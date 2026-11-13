@@ -72,12 +72,14 @@ def _page(c, store):
 
 
 def _request(c, title):
-    """A person's request in Ideas: it moves into Spec by itself when Spec has room."""
-    return X.new_task(c, ANA, title, "product", assignee=WRITER)
+    """A person's request in Ideas, Jev's duplicate check done: it moves into Spec by itself when Spec has room."""
+    row = X.new_task(c, ANA, title, "product", assignee=WRITER)
+    X.ideas_checked(c)
+    return row
 
 
 def _idea(c, title):
-    """An idea a bot filed: it stays in Ideas until someone moves it."""
+    """An idea a bot filed for itself: it is filed snoozed, and waits in Ideas until a person unsnoozes it."""
     return X.new_task(c, WRITER, title, "product", assignee=WRITER)
 
 
