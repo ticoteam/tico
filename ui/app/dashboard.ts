@@ -280,7 +280,7 @@ async function pageDashboard(place: string, {month = ''}: {month?: string} = {})
     const grid = $('#dash-grid');
     grid.innerHTML = words ? `<p class="empty">${esc(words)}</p>`
       : `<p class="empty dash-failed" role="alert">This page couldn't load. <button type="button" class="linkish" data-dash-retry>Try again</button></p>`;
-    const retry = grid.querySelector<HTMLButtonElement>('[data-dash-retry]');
+    const retry = grid.querySelector('[data-dash-retry]') as HTMLButtonElement | null;
     if (retry) retry.onclick = () => { void pageDashboard(place, {month}); };
     return;
   }

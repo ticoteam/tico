@@ -1462,17 +1462,10 @@ def place_timing(timings):
 def view_home(ctx):
     """A bot's read-only view (backend/app_view.py) opening My dashboard (person:me, a person's own page): one card of
     the bot's own open tasks, headed with its name, which nobody arranges."""
-    pin = {**default_pins("person", "")[0], "place": "person:me", "size": "large"}
-    pin["card"] = {**pin["card"], "template": "my_tasks", "settings": json.dumps({"count": 10})}
-    view = pin_view(ctx, pin, {})
-    view["card"]["heading"] = f"{H.actor_name(ctx.c, ctx.who.actor)}'s tasks"
-    return {
-        "place": "person:me",
-        "kind": "person",
-        "saved": False,
-        "can_edit": False,
-        "pins": [{**view, "position": 0}],
-    }
+    row = {"id": None, "template": "my_tasks", "settings": {"count": 10}, "title": "", "made_by_id": None}
+    card = {**card_view(ctx, row), "heading": f"{H.actor_name(ctx.c, ctx.who.actor)}'s tasks"}
+    pin = {"id": None, "item": None, "position": 0, "size": "large", "made_by": None, "card": card}
+    return {"place": "person:me", "kind": "person", "saved": False, "can_edit": False, "pins": [pin]}
 
 
 def place_view(ctx, place, timings=None):
