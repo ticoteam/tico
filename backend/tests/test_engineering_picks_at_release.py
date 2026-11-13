@@ -174,3 +174,16 @@ def test_a_database_without_the_tables_is_skipped(tmp_path):
     conn = sqlite3.connect(tmp_path / "empty.db")
     MIGRATION.up(conn)
     assert conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0
+
+
+def test_an_ownerless_build_task_is_picked_once_too(c):
+    _engineering(c)
+    waiting = _file(c, "Nobody has it in Build")
+    _ownerless(c, waiting, BUILD)
+    MIGRATION.up(c)
+    assert E.task(c, waiting)["visit"]["pick_state"] == "full"
+    never_stuck.check(c)
+    picked = E.task(c, waiting)
+    assert picked["stage_id"] == BUILD
+    assert picked["owner_id"] in BUILDERS and picked["assignee_id"] == picked["owner_id"]
+    assert picked["visit"]["pick_state"] is None

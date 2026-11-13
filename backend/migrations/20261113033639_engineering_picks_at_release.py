@@ -95,7 +95,10 @@ def up(conn):
         ).fetchone()
         if not row or row[0] == "pick":
             continue
-        conn.execute("UPDATE stages SET owner='pick', pick=?, updated_at=? WHERE id=?", (pick, ts, stage_id))
+        conn.execute(
+            "UPDATE stages SET owner='pick', pick=?, updated_at=? WHERE id=? AND pipeline_id=?",
+            (pick, ts, stage_id, pipeline_id),
+        )
         changes[stage_id] = {"owner": [row[0], "pick"], "pick": [row[1], json.loads(pick)]}
     if not changes:
         return
