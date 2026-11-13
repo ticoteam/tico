@@ -17,7 +17,7 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 
 B = "bot:builder"
-# The column the until-released migration (20261113070000) adds: a table from before it has no such line.
+# The column the until-released migration (20261113070100) adds: a table from before it has no such line.
 UNTIL_COLUMN = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
 
 
@@ -578,7 +578,7 @@ def test_until_is_only_released_and_only_on_a_dependency(c):
 
 
 def test_the_until_migration_adds_the_column_and_keeps_every_row():
-    migration = import_module("backend.migrations.20261113070000_task_relations_until")
+    migration = import_module("backend.migrations.20261113070100_task_relations_until")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
     conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
@@ -607,7 +607,7 @@ def test_the_until_and_depends_on_migrations_give_one_table_in_either_order():
     """Both are pending on an install from before them, and pending migrations run in any order: the table, its rows
     and their order come out the same either way."""
     depends = import_module("backend.migrations.20261113060000_task_relations_depends_on")
-    until = import_module("backend.migrations.20261113070000_task_relations_until")
+    until = import_module("backend.migrations.20261113070100_task_relations_until")
     out = []
     for order in ((depends, until), (until, depends)):
         conn = sqlite3.connect(":memory:")
