@@ -116,3 +116,88 @@ def test_other_conversations_and_bots_are_not_checked(api):
     post(api, f"threads/{dm['id']}/messages", {'text': 'for github ' + KEY})
     with api.app.state.store.transaction() as c:
         assert not secret_drop.guarded(c, None)
+
+
+# ---- the owner proposes, the person grants (backend/key_grants.py)
+PASSWORD = ''.join(['Tr0ub', '4dor&3x'])
+
+
+def _proposal_world(api, monkeypatch):
+    from backend import api_tools
+    from backend.tests.helpers import credentials as creds
+    from backend.tests.helpers.api_tools import tool
+
+    machine, dm = _tools_dm(api)
+    creds.setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('support','support','Support','active')")
+    tid = tool(api)['id']
+    saved = post(
+        api,
+        'credentials',
+        {
+            'name': 'JIRA_LOGIN',
+            'kind': 'password',
+            'username': 'chris',
+            'env': 'JIRA_LOGIN',
+            'secret': PASSWORD,
+            'source': 'tools-chat',
+        },
+    )
+    post(api, f"threads/{dm['id']}/messages", {'text': 'for close [saved JIRA_LOGIN for Close CRM]'})
+    bot = claim(api, machine)['token']
+    sent = []
+    monkeypatch.setattr(api_tools, 'send_check', lambda url, hdrs, params: sent.append(hdrs) or sent_code[0])
+    sent_code = [200]
+    return dm, tid, saved, bot, sent, sent_code
+
+
+def _propose(api, dm, rows, token, expected=200):
+    return post(api, 'tools-chat/proposals', {'thread_id': dm['id'], 'rows': rows}, token, expected=expected)
+
+
+def test_the_card_never_offers_the_owner_every_bot_or_a_key_from_elsewhere(api, monkeypatch):
+    # AC-16: the server builds the rows; the bot's words can't add itself, everyone or every computer.
+    dm, tid, _, bot, _, _ = _proposal_world(api, monkeypatch)
+    row = {'key': 'JIRA_LOGIN', 'tool': 'Close CRM', 'level': 'read_write'}
+    for bots in (['ops'], ['all'], ['computers'], ['*'], ['no-such-bot']):
+        _propose(api, dm, [row | {'bots': bots}], bot, expected=422)
+    _propose(api, dm, [row | {'key': 'SOMEONE_ELSES'} | {'bots': ['support']}], bot, expected=422)
+    _propose(api, dm, [row | {'bots': ['support']}], 'ana-test', expected=403)  # only the owner bot proposes
+    # A person can't forge a card by posting its refs.
+    post(
+        api, f"threads/{dm['id']}/messages", {'text': 'x', 'refs': {'card': 'key_grant', 'key_grant': {}}}, expected=403
+    )
+    card = _propose(api, dm, [row | {'bots': ['support', 'support']}], bot)
+    rows = card['refs']['key_grant']['rows']
+    assert [(r['key'], r['tool_id'], r['level'], [b['id'] for b in r['bots']]) for r in rows] == [
+        ('JIRA_LOGIN', tid, 'read_write', ['bot:support'])
+    ]
+    assert PASSWORD not in json.dumps(card)
+
+
+def test_grant_makes_exactly_the_cards_grants_and_the_check_uses_the_username(api, monkeypatch):
+    # AC-16 and AC-18: Grant attaches the key as the tool's key, grants the kept bots, runs the check with the
+    # username, and the card says Connected or Didn't work.
+    from backend import api_tools
+
+    dm, tid, saved, bot, sent, code = _proposal_world(api, monkeypatch)
+    card = _propose(api, dm, [{'key': 'JIRA_LOGIN', 'tool': tid, 'level': 'read', 'bots': ['support']}], bot)
+    post(api, f"tools-chat/proposals/{card['id']}/grant", {}, 'cara-test', expected=403)  # not a credential admin
+    done = post(api, f"tools-chat/proposals/{card['id']}/grant", {'keep': [0]})
+    assert done['state'] == 'granted'
+    assert done['results'] == [{'key': 'JIRA_LOGIN', 'tool_id': tid, 'ok': True, 'detail': 'Connected to Close CRM'}]
+    with api.app.state.store.read() as c:
+        assert api_tools.subject_level(c, tid, 'bot:support') == 'read'
+        assert api_tools.subject_level(c, tid, 'bot:ops') is None  # the owner holds none of the keys
+        row = c.execute('SELECT tool_id, kind, username FROM credentials WHERE id=?', (saved['id'],)).fetchone()
+        assert (row['tool_id'], row['kind'], row['username']) == (tid, 'api_key', 'chris')
+    import base64
+
+    assert sent and base64.b64decode(sent[-1]['Authorization'].split()[1]).decode().startswith('chris:')
+    # A second Grant changes nothing; a failing check says why.
+    assert post(api, f"tools-chat/proposals/{card['id']}/grant", {})['state'] == 'granted'
+    code[0] = 401
+    again = _propose(api, dm, [{'key': 'JIRA_LOGIN', 'tool': tid, 'level': 'read', 'bots': ['support']}], bot)
+    failed = post(api, f"tools-chat/proposals/{again['id']}/grant", {})
+    assert failed['results'][0]['ok'] is False and failed['results'][0]['detail'].startswith("Didn't work")

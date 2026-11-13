@@ -232,3 +232,11 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .kd-x{margin-left:0}
   .kd-name{width:100%}
 }
+/* The Tools owner's proposal card in its chat: rows the server built, Grant, then each key's check. */
+.kg-card{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm)}
+.kg-title{font-weight:600}
+.kg-row,.kg-result{display:flex;flex-wrap:wrap;align-items:center;gap:6px;overflow-wrap:anywhere}
+.kg-acts{display:flex;gap:6px}
+.kg-fix{display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%}
+.kg-err{margin:0;color:var(--fail,inherit)}
+.kg-err[hidden]{display:none}

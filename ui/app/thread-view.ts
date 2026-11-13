@@ -798,6 +798,8 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
   else if (m.refs?.call?.card) body = callCardHTML(m);
+  // The Tools owner's proposal: rows the server built, and Grant (tools-key-drop.ts).
+  else if (m.refs?.card === 'key_grant') body = kgCardHTML(m);
   // A met or stopped goal: the one line the chat showed (chat-goal.js).
   else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.ts, ui/credential-card.ts).
@@ -1703,6 +1705,7 @@ async function thvClick(view: ThvView, ev: Event) {
   const m = thvMsgOf(view, row);
   const upd = t.closest<HTMLElement>('[data-th-update]');
   if (upd) { thvUpdateToggle(view, upd); return; }
+  if (kgClick(view, ev)) return;
   const file = t.closest<HTMLElement>('[data-th-file]');
   if (file) { void openFileLink(file.dataset.thFile, file.dataset.name); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }

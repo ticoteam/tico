@@ -179,6 +179,7 @@ AUDIENCE = {
         name: REQUESTER
         for name in (
             "tico_credential_grant",
+            "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
             "tico_credential_revoke",
             "tico_credential_import",
             "tico_credential_delete",
@@ -341,6 +342,7 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_contacts_describe",
         "tico_contacts_history",
         "tico_credential_grant",
+        "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",
         "tico_credential_delete",
         "tico_credential_set",

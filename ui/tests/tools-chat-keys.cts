@@ -9,7 +9,9 @@
 //  - AC-6 typed "token: <value>" is locked within a second, and no draft is kept;
 //  - AC-7 a dropped file is refused with one line;
 //  - AC-13 someone who is not a credential admin can't send keys, and is told who can;
-//  - AC-8 Mark as secret turns the last word into an item, on a 360 px phone too, with no sideways scroll.
+//  - AC-8 Mark as secret turns the last word into an item, on a 360 px phone too, with no sideways scroll;
+//  - AC-16, AC-18 the owner's proposal card: a row removed is not granted; Grant shows each key's check, a failure
+//    with Paste a new key and the tool's settings.
 // TICO_UI_SHOTS=<dir> keeps a screenshot of the chat with items at 1280 and 360.
 // Run: node scripts/ui-tests.cts tools-chat-keys
 import type {Page} from 'playwright';
@@ -38,10 +40,15 @@ const ROWS = [
 type Saved = {path: string; key: string; body: Record<string, unknown>};
 type Sent = ThreadsFakeSupport.ThreadsPost;
 
-async function start(browser: import('playwright').Browser, {width = 1280, admin = true, failSaves = 0} = {}) {
-  const saved: Saved[] = [], sent: Sent[] = [];
+const CARD = {id: 'kg-1', sender_id: 'bot:' + OWNER, kind: 'notice', body: 'Proposal: JIRA_LOGIN → Jira; POSTHOG_API_KEY → PostHog; NPM_TOKEN → npm',
+  refs: {card: 'key_grant', key_grant: {id: 'g1', state: 'proposed', results: [], rows: [
+    {key: 'JIRA_LOGIN', tool_id: 'jira', tool_name: 'Jira', level: 'read_write', bots: [{id: 'bot:support', name: 'Support'}, {id: 'bot:builder', name: 'Builder'}]},
+    {key: 'POSTHOG_API_KEY', tool_id: 'posthog', tool_name: 'PostHog', level: 'read', bots: [{id: 'bot:analyst', name: 'Product Analyst'}]},
+    {key: 'NPM_TOKEN', tool_id: 'npm', tool_name: 'npm', level: 'read', bots: [{id: 'bot:builder', name: 'Builder'}]}]}}};
+async function start(browser: import('playwright').Browser, {width = 1280, admin = true, failSaves = 0, card = false} = {}) {
+  const saved: Saved[] = [], sent: Sent[] = [], grants: unknown[] = [];
   let failures = failSaves;
-  const threads = threadsFake({bot: OWNER, me: 'human:ana', sent, messages: []});
+  const threads = threadsFake({bot: OWNER, me: 'human:ana', sent, messages: card ? [CARD] : []});
   const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools', width, height: width < 500 ? 780 : 860, ready: '.tt-row, [data-tl-empty], .tt-table',
     extra: (p, method, body, url) => {
       if (p === '/api/v2/tool-index') return {rows: ROWS, counts: null};
@@ -51,6 +58,12 @@ async function start(browser: import('playwright').Browser, {width = 1280, admin
         return admin ? {credentials: [{id: 'c-gh', name: 'GITHUB_TOKEN', env: 'GITHUB_TOKEN', revision: 3}], can_manage: true}
           : {status: 403, body: {error: {code: 'forbidden', detail: 'Only a credential administrator can share credentials. Ask Ana', retryable: false}}};
       }
+      if (p === '/api/v2/tools-chat/proposals/kg-1/grant') {
+        grants.push(body);
+        return {...CARD.refs.key_grant, state: 'granted', rows: CARD.refs.key_grant.rows.slice(0, 2), results: [
+          {key: 'JIRA_LOGIN', tool_id: 'jira', ok: true, detail: 'Connected to Jira'},
+          {key: 'POSTHOG_API_KEY', tool_id: 'posthog', ok: false, detail: "Didn't work: Key rejected"}]};
+      }
       if (p.startsWith('/api/v2/credentials') && method === 'POST') {
         const b = body as Record<string, unknown>;
         if (failures > 0 && b.name === 'JIRA_LOGIN') { failures--; return {status: 422, body: {error: {code: 'credential', detail: 'The vault is busy', retryable: false}}}; }
@@ -59,7 +72,7 @@ async function start(browser: import('playwright').Browser, {width = 1280, admin
       }
       return threads(p, url, method, body);
     }});
-  return {...got, saved, sent};
+  return {...got, saved, sent, grants};
 }
 
 const paste = (page: Page, text: string) => page.locator('.tt-pgc .p-text').evaluate((box, t) => {
@@ -199,6 +212,28 @@ async function openChat(page: Page) {
       await page.locator('.tt-pgc [data-kd-mark]').click();
       assert.match(await box.inputValue(), /and also \[key:[A-Z_]+\]$/);
       assert.equal(await page.locator('.tt-pgc [data-kd-item]').count(), 4, 'the marked word is a fourth item');
+      await page.close();
+    }
+    {
+      // AC-16, AC-18: the card's rows; one removed; Grant; each key's result, a failure with its fixes.
+      const {page, grants, seen} = await start(browser, {card: true});
+      await openChat(page);
+      const card = page.locator('.tt-pgc [data-kg="kg-1"]');
+      await card.waitFor();
+      assert.equal(await card.locator('[data-kg-row]').count(), 3);
+      const words = async (l: import('playwright').Locator) => ((await l.textContent()) || '').replace(/\s+/g, ' ').trim();
+      assert.match(await words(card.locator('[data-kg-row]').first()), /JIRA_LOGIN → Jira · Read and write · Support, Builder/);
+      await card.locator('[data-kg-remove="2"]').click();
+      assert.equal(await card.locator('[data-kg-grant]').innerText(), 'Grant 2');
+      await card.locator('[data-kg-grant]').click();
+      await page.locator('.tt-pgc .kg-result.kg-bad').waitFor();
+      assert.deepEqual(grants, [{keep: [0, 1]}], 'exactly the rows kept are granted');
+      assert.match(await words(page.locator('.tt-pgc .kg-ok')), /✓ JIRA_LOGIN Connected to Jira/);
+      const bad = page.locator('.tt-pgc .kg-bad');
+      assert.match(await words(bad), /POSTHOG_API_KEY Didn't work: Key rejected/);
+      assert.equal(await bad.locator('[data-kg-paste]').innerText(), 'Paste a new key');
+      assert.equal(await bad.locator('a').getAttribute('href'), '#/tools/api/posthog');
+      assert.deepEqual(seen.errors, []);
       await page.close();
     }
     console.log('tools-chat-keys: ok');
