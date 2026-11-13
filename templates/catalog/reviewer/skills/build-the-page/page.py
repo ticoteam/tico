@@ -5,7 +5,7 @@
     python3 page.py check  PAGE.html --kind KIND              the page's rules; exit 1 names each one it breaks
     python3 page.py render FILE_ID --kind KIND [--out DIR]    the published page, checked again and drawn at 390 and 1280 px
 
-KIND is screen-spec, change-spec, validation or review. Standard library only.
+KIND is bug-spec, screen-spec, change-spec, validation, review, qa or release. Standard library only.
 """
 
 import argparse
@@ -21,17 +21,33 @@ import sys
 import tempfile
 from pathlib import Path
 
-KINDS = ("screen-spec", "change-spec", "validation", "review")
+KINDS = ("bug-spec", "screen-spec", "change-spec", "validation", "review", "qa", "release")
 # The sections each kind must have, by id. Details come after the pictures, inside <section id="details">.
 SECTIONS = {
-    "screen-spec": ("pictures", "details", "goal", "scope", "criteria"),
-    "change-spec": ("behaviour", "details", "goal", "scope", "criteria"),
+    "bug-spec": ("report", "cause", "goal", "solution", "details", "scope", "criteria"),
+    "screen-spec": ("goal", "pictures", "details", "scope", "criteria"),
+    "change-spec": ("goal", "behaviour", "details", "scope", "criteria"),
     "validation": ("criteria", "details", "version", "not-checked"),
     "review": ("checked", "details", "head", "findings", "not-checked"),
+    "qa": ("plan", "proof", "findings", "details", "head", "reviews", "not-checked"),
+    "release": ("changelog", "confidence", "plan", "risks", "details", "tasks"),
 }
+# What the opening of each spec starts with: a bug its report, a change its goal.
+OPENS_WITH = {"bug-spec": "report", "screen-spec": "goal", "change-spec": "goal"}
+MAX_RISKS = 3
 MAX_BYTES = 8 * 1024 * 1024
 LEAD_WORDS = 70
-PAGE_WORDS = {"screen-spec": 1200, "change-spec": 1000, "validation": 1000, "review": 1800}
+PAGE_WORDS = {
+    "bug-spec": 1200,
+    "screen-spec": 1200,
+    "change-spec": 1000,
+    "validation": 1000,
+    "review": 1800,
+    "qa": 1800,
+    "release": 1500,
+}
+# What only the team reads: a changelog entry is for customers.
+INTERNAL = re.compile(r"(?<![\w&])#\d+\b|\b(PR|pull request|commit|refactor(ed|ing)?|migration)\b", re.I)
 # A page never hands the checking to its reader.
 ASKS_TO_TEST = re.compile(
     r"\b(please (check|test|look|verify|confirm)|can you (check|test|look)|could you (check|test|look)"
@@ -167,16 +183,15 @@ def problems_in(text, kind):
             out.append(f"the opening has {len(words(lead.group(2)))} words; at most {LEAD_WORDS}")
         if not re.search(r"\bdecide\b", lead.group(2), re.I):
             out.append("the opening does not say what to decide (a line starting 'Decide:')")
-        if kind == "change-spec" and not (
-            re.search(r"\bcause\b", lead.group(2), re.I) and re.search(r"\bfix\b", lead.group(2), re.I)
-        ):
-            out.append("a change spec opens with its cause and its fix")
+        opens = OPENS_WITH.get(kind)
+        if opens and not re.search(rf"\b{opens}\b", " ".join(words(lead.group(2))), re.I):
+            out.append(f"a {kind} opens with its {opens} (a line starting '{opens.capitalize()}:')")
         first = min((m.start() for m in re.finditer(r"<(figure|section)\b", text, re.I)), default=len(text))
         if lead.start() > first:
             out.append("the opening is not the first thing on the page")
-    for section in SECTIONS[kind]:
-        if not re.search(rf"\bid=\"{section}\"", text):
-            out.append(f'no section id="{section}"')
+    for name in SECTIONS[kind]:
+        if not re.search(rf"\bid=\"{name}\"", text):
+            out.append(f'no section id="{name}"')
     details = text.find('id="details"')
     figures = list(FIGURE.finditer(text))
     for i, fig in enumerate(figures, 1):
@@ -189,9 +204,22 @@ def problems_in(text, kind):
     if re.search(r"class=\"[^\"]*\bmock", text, re.I):
         out.append("a drawn mock-up: show the real app instead")
     if kind == "change-spec":
-        behaviour = re.search(r"id=\"behaviour\".*?</section>", text, re.S)
-        if behaviour and len(re.findall(r"<pre\b", behaviour.group(0), re.I)) < 2:
+        behaviour = section(text, "behaviour")
+        if behaviour and len(re.findall(r"<pre\b", behaviour, re.I)) < 2:
             out.append("a change spec shows the behaviour before and after: two <pre> blocks")
+    if kind == "bug-spec":
+        solution = section(text, "solution") or ""
+        pairs = len(re.findall(r"<figure\b", solution, re.I)), len(re.findall(r"<pre\b", solution, re.I))
+        if max(pairs) < 2:
+            out.append("a bug spec shows the solution before and after: two screenshots, or two <pre> blocks")
+    if kind == "release":
+        risks = len(re.findall(r"<li\b", section(text, "risks") or "", re.I))
+        if risks > MAX_RISKS:
+            out.append(f"{risks} risks; name the {MAX_RISKS} biggest")
+        changelog = section(text, "changelog") or ""
+        changelog = html.unescape(re.sub(r"<(style|svg)\b.*?</\1>|<[^>]+>", " ", changelog, flags=re.S | re.I))
+        for m in INTERNAL.finditer(changelog):
+            out.append(f"'{m.group(0)}' in the changelog: it is written for customers, in their words")
     plain = " ".join(words(text))
     for m in ASKS_TO_TEST.finditer(plain):
         out.append(f"'{m.group(0)}': the page brings the proof; it never asks the reader to check")
@@ -200,6 +228,19 @@ def problems_in(text, kind):
     if len(words(text)) > PAGE_WORDS[kind]:
         out.append(f"{len(words(text))} words; a {kind} page keeps under {PAGE_WORDS[kind]}: cut the details")
     return out
+
+
+def section(text, name):
+    """The HTML of <section id="name"> up to its own end (sections inside it are not counted), or None."""
+    start = re.search(rf"<section\b[^>]*\bid=\"{name}\"[^>]*>", text)
+    if not start:
+        return None
+    depth, at = 1, start.end()
+    for tag in re.finditer(r"<(/?)section\b[^>]*>", text[at:], re.I):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return text[at : at + tag.start()]
+    return text[at:]
 
 
 def check(path, kind):

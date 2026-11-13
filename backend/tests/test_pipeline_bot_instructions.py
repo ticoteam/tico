@@ -83,7 +83,9 @@ PAGE_WRITERS = {
     "segment-product-owner": ("playbooks/write-a-spec-page.md", "playbooks/validate-in-production.md"),
     "reviewer": ("playbooks/review-a-pull-request.md",),
     "builder": ("playbooks/qa.md",),
+    "release-owner": ("playbooks/write-the-release-report.md",),
 }
+PAGE_KINDS = ("bug-spec", "screen-spec", "change-spec", "validation", "review", "qa", "release")
 
 
 def page_skill(template="segment-product-owner"):
@@ -110,7 +112,7 @@ def test_every_bot_that_writes_a_page_a_person_reads_uses_the_one_page_skill():
     # were sent back as unreadable. One skill builds them all; a copy that drifts teaches one bot an older page.
     canonical = page_skill()
     assert {"SKILL.md", "page.py"} <= set(canonical)
-    assert {f"templates/{k}.html" for k in ("screen-spec", "change-spec", "validation", "review")} <= set(canonical)
+    assert {f"templates/{k}.html" for k in PAGE_KINDS} <= set(canonical)
     for template, playbooks in PAGE_WRITERS.items():
         assert page_skill(template) == canonical, template
         assert f"skills/{PAGE_SKILL}/SKILL.md" in agent(template), template
@@ -148,12 +150,10 @@ def filled(kind, folder):
     text = re.sub(r"\{\{x,y\}\} -> \{\{x,y\}\}", "600,120 -> 420,500", text)
     text = text.replace("{{screen}}", "drawer").replace("{{page}}", "drawer")
     text = re.sub(r"\{\{[^}]*\}\}", "the account row", text)
-    for line in ("Cause:", "Fix:"):
-        text = text.replace(f"<b>{line}</b> the account row", f"<b>{line}</b> the row is clipped")
     return text
 
 
-@pytest.mark.parametrize("kind", ["screen-spec", "change-spec", "validation", "review"])
+@pytest.mark.parametrize("kind", PAGE_KINDS)
 def test_a_page_built_from_each_template_passes_its_check_once_published(kind, tmp_path):
     from backend import visuals
 
@@ -195,3 +195,28 @@ def test_the_page_check_refuses_what_people_sent_back(tmp_path):
     assert any("in the details" in p for p in tool.problems_in(late, "screen-spec"))
     asks = good.replace('<section id="details">', "<p>Please check it on your phone.</p><section id=\"details\">", 1)
     assert any("never asks the reader" in p for p in tool.problems_in(asks, "screen-spec"))
+
+
+def test_each_page_opens_the_way_its_reader_needs(tmp_path):
+    # A bug spec opens with the report, a change spec with its goal; a release report names at most three risks and
+    # its changelog is written for customers, so it can be published as it is (Chris, Nov 13).
+    tool = page_tool()
+    (tmp_path / "shots").mkdir()
+    pages = {}
+    for kind in ("bug-spec", "screen-spec", "release"):
+        draft = tmp_path / f"{kind}.html"
+        draft.write_text(filled(kind, tmp_path))
+        tool.build(draft, tmp_path / f"{kind}-page.html")
+        pages[kind] = (tmp_path / f"{kind}-page.html").read_text()
+        assert tool.problems_in(pages[kind], kind) == []
+    no_report = pages["bug-spec"].replace("<b>Report:</b>", "<b>Bug:</b>")
+    assert any("opens with its report" in p for p in tool.problems_in(no_report, "bug-spec"))
+    no_goal = pages["screen-spec"].replace("<b>Goal:</b>", "<b>Change:</b>")
+    assert any("opens with its goal" in p for p in tool.problems_in(no_goal, "screen-spec"))
+    four = re.sub(
+        r'(<section id="risks">.*?)</ol>', r"\1" + "<li>more</li>" * 3 + "</ol>", pages["release"], count=1, flags=re.S
+    )
+    assert any("4 risks" in p for p in tool.problems_in(four, "release"))
+    internal = pages["release"].replace("<p class=\"plus\">", "<p class=\"plus\">Fixed in PR #4325. ", 1)
+    found = tool.problems_in(internal, "release")
+    assert any("'PR' in the changelog" in p for p in found) and any("'#4325' in the changelog" in p for p in found)

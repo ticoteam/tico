@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QA: {{change}}</title>
+<style>
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-lg);margin:0 0 8px}
+.pg h2{font-size:var(--t-md);margin:24px 0 8px}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
+#lead p{margin:2px 0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;vertical-align:top;padding:6px;border-bottom:1px solid var(--line);overflow-wrap:break-word}
+th{color:var(--muted);font-weight:600}
+.pass{color:var(--ok,#2f7a4f);font-weight:600}.fail{color:var(--fail,#c53030);font-weight:600}.nc{color:var(--wait,#b7791f);font-weight:600}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
+figure.shot{margin:0;max-width:100%}
+figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
+figcaption{color:var(--muted);margin-top:6px;max-width:640px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-base) var(--mono)}
+code{font-family:var(--mono);overflow-wrap:anywhere}
+#details{margin-top:32px;border-top:2px dashed var(--line)}
+@media (max-width:600px){.pair{flex-direction:column}}
+</style></head><body><main class="pg">
+<h1>QA: {{change}} · PR {{#n}} at {{commit, 7 characters}}</h1>
+<div id="lead">
+  <p>{{What changed for the person who asked, and the result: "Passed: 5 of 5 checks, on the demo and in the tests."}}</p>
+  <p>{{Not checked, plainly: "Not checked: a real Yale lock; the demo stubs it with the reported payload." Or "Everything in the spec was checked."}}</p>
+  <p><b>Decide:</b> {{"Approve = ship it, or send it back with what is wrong."}}</p>
+</div>
+
+<section id="plan">
+  <h2>Plan and results</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>#</th><th>Check</th><th>Result</th><th>Proof</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>{{the spec's Done when 1, short}}</td><td class="pass">pass</td><td>{{A, arrow 1}}</td></tr>
+      <tr><td>2</td><td>{{Done when 2}}</td><td class="nc">not checked</td><td>{{why, in a few words}}</td></tr>
+      <tr><td>+</td><td>{{a check you added, and why: "Other lock brands unchanged (same job)"}}</td><td class="pass">pass</td><td>{{B}}</td></tr>
+    </tbody></table></div>
+</section>
+
+<section id="proof">
+  <h2>Proof</h2>
+  <div class="pair">
+    <figure data-shot="shots/{{page}}-390-before.png" data-arrows="1: {{x,y}} -> {{x,y}}">
+      <figcaption>A · Phone, 390 px, before. 1: {{...}}</figcaption></figure>
+    <figure data-shot="shots/{{page}}-390-after.png" data-arrows="1: {{x,y}} -> {{x,y}}">
+      <figcaption>A · Phone, 390 px, after, at {{commit}}. 1: {{what check 1 sees here}}</figcaption></figure>
+  </div>
+  <pre>{{B · the command as run, and its real output: the test names and counts, the call and its response, the query and its rows. Say which of them fail on the old code.}}</pre>
+</section>
+
+<section id="findings">
+  <h2>Findings</h2>
+  <ul><li><b>{{fixed in this round | follow-up, not blocking}}:</b> {{what was done, what happened, what was expected, <code>file:line</code>, and what became of it}}</li></ul>
+</section>
+
+<section id="details">
+  <h2>Details</h2>
+  <section id="head"><h2>Where it ran</h2>
+    <p>{{The demo, a preview link, or the test run}}. PR <a href="{{pull request link}}">{{#n}}</a>, head {{full commit}}.
+    Checks at that head: {{passing, running, or which failed}}. {{YYYY-MM-DD}}.</p></section>
+  <section id="reviews"><h2>Reviews</h2>
+    <ul><li>Reviewer 1, at {{commit}}: {{what it found and what was done, or "nothing to fix"}}</li>
+        <li>Reviewer 2, at {{commit}}: {{...}}</li></ul></section>
+  <section id="not-checked"><h2>Not checked</h2>
+    <p>{{Each thing not checked, why, and what would check it. Or "Nothing."}}</p></section>
+</section>
+</main></body></html>

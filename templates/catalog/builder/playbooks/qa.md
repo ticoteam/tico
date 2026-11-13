@@ -5,29 +5,47 @@ the QA page is attached: Jev checks it, then a person approves it, and approving
 
 ---
 
-## 1. Build the page
+## 1. Run the checks
 
-Follow `skills/build-the-page/SKILL.md` with its `templates/review.html`, titled "QA", in `reports/<task id>-qa.html`,
-at the head commit:
+The bar: a person who reads the page is confident enough in your QA to skip their own. They see what was checked, how,
+and the proof, without running anything.
 
-- The opening, two or three lines: what changed for the person who asked (what they can now do or see, and what was
-  wrong before), then **Decide:** "Approve = ship to production, or send it back with what is wrong."
-- What it looks like: before and after screenshots of each changed screen at phone and desktop width, both from the
-  running app (Tico: `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out
-  shots/`; Reviewer 2's shots when they are at the head), with red numbered arrows on what changed. Never a drawn
-  screen. A change with no screen deletes this section and says "No screens changed" in the opening; the output that
-  proves it (the command and its output, numbers before and after) goes under how it was checked.
-- How it was checked: the tests added (named), the commands run and their real output, and what was not checked, with
-  why. A line that only says it passed is not proof.
-- In the details: the pull request link and the full head commit; the checks at that head (passing, with the link); what
-  Reviewer 1 and Reviewer 2 found and what you did about each, one line each; any risk or follow-up to decide, or "None".
+1. The plan is the spec's acceptance criteria (`tico task show` lists the Spec page under "From earlier stages"): one
+   row each, with its number. Add any check the change needs that the spec did not name (another screen that uses the
+   same code, a permission, a data change on a copy), and say why.
+2. Run each one at the head commit, where it really runs: the repository's demo or a preview for a screen (Tico:
+   `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out shots/`; Reviewer 2's
+   shots when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
+   job for a change with no screen.
+3. Each check gets a result: pass, fail, or not checked with why. A pass has its proof on the page: a screenshot with
+   red numbered arrows at 390 and 1280 px, or the command as run and its real output (test names and counts, the call
+   and its response, the query and its rows). "Looks good" is not proof, and a check with none is not checked.
+4. A check that fails is yours to fix before the page goes out: fix, push, and run the checks it touches again
+   (Reviewer 2 reads the new commit before the person is asked). Keep what you found and fixed under the findings. Anything that does not block the change becomes its own task, linked.
 
-## 2. Build, look, publish and attach
+## 2. Build the page
+
+Follow `skills/build-the-page/SKILL.md` with its `templates/qa.html`, in `reports/<task id>-qa.html`, at the head
+commit:
+
+- The opening: what changed for the person who asked and the result ("Passed: 5 of 5 checks"), then what was not
+  checked, plainly, then **Decide:** "Approve = ship it, or send it back with what is wrong."
+- Plan and results: the table, one row per check, each with its proof's letter or arrow.
+- Proof: the screenshots and the output, lettered to match the table. A change with no screen has no pictures; say "No
+  screens changed" in the opening.
+- Findings: what failed and was fixed in this round, and the follow-ups filed, each with what was done, what happened,
+  what was expected and `file:line`. Or "None."
+- In the details: where it ran (the demo or preview, the pull request link and the full head commit, the checks at that
+  head with the link), what Reviewer 1 and Reviewer 2 each found on the commit they read and what you did about each,
+  and what was not checked, with why and what would check it.
+
+A check only a person can do (a physical device, a reply someone owes) goes under not checked with why. The page never
+asks its reader to test.
 
     python3 skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
-    python3 skills/build-the-page/page.py check reports/<task id>-qa.html --kind review
+    python3 skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
     tico page publish reports/<task id>-qa.html --task <id> --title "QA: <the change>"
-    python3 skills/build-the-page/page.py render <file id> --kind review
+    python3 skills/build-the-page/page.py render <file id> --kind qa
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 
 `tico page publish` prints the file id. Look at both pictures `render` names before you attach: a page that does not
