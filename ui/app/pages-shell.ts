@@ -170,6 +170,7 @@ let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], model
 // Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
 const SETTINGS_PRESENCE: SettingsPresence = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
 const harnessCaps = (id: string | undefined): HarnessCaps => harnessRow(id)?.capabilities || {};
+const SETTINGS_TAB_KEY = 'tico.settings.tab';
 // Remembered per browser tab so a reload lands where the person was; a first visit opens General.
 let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'general'; } catch { return 'general'; } })();
 // The address the shown tab writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
@@ -386,7 +387,7 @@ function ghNudgeBuildName(task: GithubNudgeTask): string {
 
 // app/bot-page.ts
 const isCommand = (text: unknown) => /^\s*\//.test(String(text || ''));
-const commandWord = (text: unknown) => (String(text || '').trim().match(/^\/([a-z0-9-]*)/i) || [, ''])[1]!.toLowerCase();
+const commandWord = (text: unknown) => (String(text || '').trim().match(/^\/([a-z0-9-]*)/i) || ['', ''])[1]!.toLowerCase();
 const helpHTML = () => `<div class="cmd-out"><div class="lbl">Commands</div>${SLASH_HELP.map(([c, d]) =>
   `<div><code>${esc(c)}</code> <span class="muted">${esc(d)}</span></div>`).join('')}
   <div class="muted" style="margin-top:6px">Anything starting with <code>/</code> stays here; it is never sent to a bot.</div></div>`;
@@ -416,7 +417,6 @@ function taskPropRights(t: PropTask): PropRights {
 
 // app/settings.ts
 const harnessRow = (id: string | undefined) => HARNESS_ROWS.find(row => row.id === id) || null;
-const SETTINGS_TAB_KEY = 'tico.settings.tab';
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
 // card on Models (settingsShow scrolls to it); repos: Repositories, now a card on General. Inboxes (and Mailboxes, Email & Phone and Mail
