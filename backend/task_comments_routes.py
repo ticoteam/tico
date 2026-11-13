@@ -28,6 +28,22 @@ def register(
     task_place,
     visual_view,
 ):
+    def replying_to(c, who, task_id, body):
+        """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
+        (None, False) for a plain comment. 422 when `ask` is not a bot's question on this task's open visit."""
+        if not body.ask:
+            return None, False
+        if body.public or body.delivery == "goal":
+            raise Problem("validation", "A reply to an ask is a plain comment: send it without public or goal", 422)
+        found = c.execute(
+            "SELECT r.added_by_id, r.person_id FROM requirements r JOIN visits v ON v.id=r.visit_id "
+            "WHERE r.id=? AND v.task_id=? AND v.left_at IS NULL AND r.kind='answer' AND r.withdrawn_at IS NULL",
+            (body.ask, task_id),
+        ).fetchone()
+        if not found or not H.is_bot(found[0]):
+            raise Problem("validation", "That is not a bot's question on this task", 422)
+        return found[0], found[1] == who.actor
+
     def comment_write(c, who, tid, body, ingest=None, rc=None, reader=None):
         """One task comment, as `POST /api/v2/tasks/{tid}/comments` writes it and Send anyway replays it."""
         reader = reader or who
@@ -38,6 +54,7 @@ def register(
         from .task_reads import comment_rights
 
         comment_rights(c, auth, who, task_id)
+        asker, asked_me = replying_to(c, who, task_id, body)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
         audience = rule_comment_audience(c, who, row, body.text) if rc is not None else None
         rule = org_rule_check.apply(
@@ -56,8 +73,9 @@ def register(
         # A comment reaches its @mentions, the author it replies to and the task's followers (threads.plan). Steer and
         # queue wake the bots among them, so they take the right to direct the task (a bot's is its needs_action);
         # anyone may defer. Defer and goal wake none: a goal's own control does (set_goal below).
-        bot = comment_bot(c, row)
-        directs = who.role == "bot" or may_direct(c, who, row)
+        bot = asker or comment_bot(c, row)
+        # The person a bot's question waits on may wake that bot with a reply to it, as they may answer it.
+        directs = who.role == "bot" or asked_me or may_direct(c, who, row)
         if body.delivery in ("steer", "queue") and bot and not directs:
             raise Problem("delivery", "Only someone on this task can wake its bots: send it with defer", 403)
         if body.delivery == "goal" and who.role != "bot" and not may_direct(c, who, row):
@@ -113,6 +131,7 @@ def register(
             people_notified=people,
             delegate=directs and way != "defer",
             reach=who if who.role == "bot" else None,
+            to=asker,
         )
         org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
         due = None

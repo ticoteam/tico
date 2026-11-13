@@ -555,6 +555,9 @@ class TaskComment(Contract):
     # may not direct the task's bots.
     delivery: Literal["steer", "queue", "defer", "goal"] | None = None
     defer_for: DeferFor | None = None
+    # A reply to a bot's question on this task (the ask's requirement id): written to the bot that asked, whom it
+    # wakes, and the question stays open (the decision view's "Write to <bot>").
+    ask: ID | None = None
 
 
 class TaskReaders(Contract):

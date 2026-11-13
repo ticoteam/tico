@@ -277,3 +277,43 @@ def test_a_decision_filed_for_a_person_is_refused_with_the_ask_it_as_a_question_
         "This asks Chris to decide, so ask it as a question on your own task: tico task ask <task> --to chris, with "
         "why it matters, your choices and your recommendation."
     )
+
+
+# ---- writing to the bot that asked (AC-13) --------------------------------------------------------------------------
+
+
+def jobs_for(api, bot, message_id):
+    return sql(api, "SELECT state FROM jobs WHERE bot_id=? AND message_id=?", (bot, message_id))
+
+
+def test_a_reply_to_a_bots_question_reaches_that_bot_on_the_task_and_wakes_it_and_the_ask_stays_open(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    rid = ask(api, task, GOOD).json()["requirement_id"]
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments",
+        json={"text": "Why not both, one per audience?", "ask": rid},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 200, r.text
+    said = r.json()["comment"]
+    assert said["recipient_id"] == "bot:ops" and said["body"] == "Why not both, one per audience?"
+    assert [j["state"] for j in jobs_for(api, "ops", said["id"])] == ["queued"], "the bot that asked is woken"
+    view = get(api, f"tasks/{task['id']}")
+    view = view.get("task", view)
+    [entry] = [e for e in view["to_leave"] if e["requirement_id"] == rid]
+    assert not entry["met"] and entry["answer"] is None, "the ask stays open"
+
+
+@pytest.mark.parametrize("which", ["missing", "a person's"])
+def test_a_reply_names_a_bots_question_on_that_task(ruled, which):
+    api, _ = ruled
+    task = task_for_ops(api)
+    rid = "nope"
+    if which == "a person's":
+        rid = ask(api, task, {"line": "Which tone?"}, to="ben", token="ana-test").json()["requirement_id"]
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments", json={"text": "Hello", "ask": rid}, headers=headers("ana-test")
+    )
+    assert r.status_code == 422, r.text
+    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body='Hello'")[0]["n"] == 0

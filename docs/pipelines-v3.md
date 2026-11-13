@@ -1345,8 +1345,15 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 
 - **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…". A "Notes" box.
   Buttons "Approve" (main) and "Send back".
-- **A question:** heading "Which plan do new signups get?". Buttons "Free", "Pro trial", "Ask at signup". A box
-  "Something else".
+- **A question from a bot:** heading "Which plan do new signups get?". Under it "Why it matters: …", the bot's reason.
+  A card per choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, and "Recommended" on the
+  one the bot recommends. Then a box "Write to Builder" and Send at its right edge: the text is a comment on the task
+  written to the bot that asked, which wakes it, and the question stays open. Then one row: "I don't know, explain",
+  "Give it back" and Skip. "I don't know, explain" answers the question with those words, and the bot explains in a
+  new ask. "Give it back" closes it, and the bot is told "Ana gave it back: decide it yourself, or ask your manager".
+  A question with no choices is the same screen without the cards.
+- **A question from a person:** heading "Which colour?". Buttons for its choices and a box "Something else", whose
+  text is the answer.
 - **A one-tap fix:** heading "Connect Google for Scout". Line "Its Google login expired Nov 8." Button "Connect" (main).
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
