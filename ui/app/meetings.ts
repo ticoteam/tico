@@ -85,18 +85,18 @@ async function pageNotes(): Promise<void> {
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state: MeetState = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemAdd: '', confirmDelete: '', open: false};
-  $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
-      <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
-      <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
-    <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
-      <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>
-      <button type="button" role="tab" data-review="pending" aria-selected="false">Pending <span class="meet-pending-n" id="meet-pending-count"></span></button>
-      <button type="button" role="tab" data-review="dismissed" aria-selected="false">Dismissed</button></div>
-      <div class="meet-sources" id="meet-sources" hidden></div>
+  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, Ask and Live now
+  // as tools, Sources and Settings in its ⋯, Add notes last. The Recorder links stay in the bar under it.
+  $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
+    tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
+    tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
+      + `<button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`
+      + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
+    more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
+    primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
+    <div class="meet-review-bar">
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
-      <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a>
-      <button class="linkish" type="button" id="meet-settings">Settings</button></div>
+      <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
@@ -106,6 +106,8 @@ async function pageNotes(): Promise<void> {
     </div>
     <dialog class="tmodal notes-modal" id="notes-modal" aria-label="Meeting details"><div class="notes-modal-close"><span class="mp-tools" id="notes-modal-tools"></span><button class="mp-icon" type="button" id="notes-modal-window" aria-label="Open in new tab" title="Open in new tab"><span class="nav-icon" aria-hidden="true">open_in_new</span></button><button class="mp-icon" type="button" id="notes-modal-close" aria-label="Close meeting" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div><section class="notes-detail" id="notes-detail"></section></dialog>
     <dialog class="tmodal import-modal" id="manual-modal" aria-label="Add notes"></dialog>`;
+  // Pending's count is the tab's .ph-n, numbered by meetReviewTabs.
+  $('[data-review=pending]').insertAdjacentHTML('beforeend', '<span class="ph-n meet-pending-n" id="meet-pending-count"></span>');
   document.querySelectorAll<HTMLElement>('[data-review]').forEach(button => button.onclick = () => {
     if (state.review === button.dataset.review) return;
     state.review = button.dataset.review as MeetReview; state.landing = false; state.checked.clear(); state.selected = ''; state.people.clear();

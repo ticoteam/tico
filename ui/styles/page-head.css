@@ -25,7 +25,7 @@
 .ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
 .ph-menu :is(button,a):hover{background:var(--surface2);text-decoration:none}
 .ph-menu [hidden]{display:none}
-.ph>.ph-act{flex:none;display:flex;align-items:center}
+.ph>.ph-act{flex:none;display:flex;align-items:center;gap:8px}
 .ph>.ph-act:empty{display:none}
 .ph>.ph-act .primary{box-sizing:border-box;height:var(--ctl);white-space:nowrap}
 .ph [hidden]{display:none!important}

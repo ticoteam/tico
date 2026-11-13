@@ -196,7 +196,7 @@ function inboxesHead(host: Element, {name, status, statusText, sub = '', actions
   if (crumb) crumb.textContent = name;
   const base = page?.dataset.ibTabs, tab = page?.dataset.ibTab;
   const tabs = base ? `<nav class="tt-tabs" aria-label="${esc(name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']]
-    .map(([k, href, label]) => `<a href="${esc(href)}" data-ib-tab-link="${k}"${tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
+    .map(([k, href, label]) => `<a href="${esc(href)}" data-ib-tab-link="${k}"${tab === k ? ' class="ph-tab cur" aria-current="page"' : ' class="ph-tab"'}>${label}</a>`).join('')}</nav>` : '';
   return `<header class="ib-title" id="inbox-head"><div class="ib-title-text"><h1>${esc(name)}</h1>
       <p class="ib-title-sub">${inboxesPill(status, statusText)}${sub ? ` <span class="muted" data-ib-sub>${sub}</span>` : ''}</p></div>
     ${actions ? `<div class="ib-actions">${actions}</div>` : ''}</header>${tabs}`;

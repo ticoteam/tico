@@ -23,7 +23,7 @@ const learnNight = (night: string): string => new Date(night + 'T12:00:00').toLo
 async function pageLearnings(): Promise<void> {
   const load = ++LEARN_LOAD;
   const want = new URLSearchParams(S.route.split('?')[1] || '').get('night') || '';
-  $('#main').innerHTML = '<div class="lrn"><aside class="lrn-rail" aria-label="Nights"><h3>Learnings</h3><div id="lrn-nights"></div></aside><section class="lrn-night" id="lrn-night" aria-live="polite"></section></div>';
+  $('#main').innerHTML = pageHead({title: 'Learnings', hook: 'lrn-ph'}) + '<div class="lrn"><aside class="lrn-rail" aria-label="Nights"><div id="lrn-nights"></div></aside><section class="lrn-night" id="lrn-night" aria-live="polite"></section></div>';
   let data: LearnNights;
   try { data = await get<LearnNights>('/v2/learnings'); } catch (e) { $('#lrn-night').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== LEARN_LOAD) return;

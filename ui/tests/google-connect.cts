@@ -58,6 +58,7 @@ interface PageWin { mountGoogleConnect: (el: Element) => void }
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/tools');
+    await page.locator('.tt-head .ph-more').click();   // Settings is in the header's ⋯ (task #338)
     await page.locator('[data-tl-settings]').click();
     const pane = page.locator('#set-google');
     await pane.locator('[role=alert]').waitFor();
