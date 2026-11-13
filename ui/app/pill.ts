@@ -374,6 +374,15 @@ const touchKeyboard = () => matchMedia('(pointer: coarse)').matches || (navigato
 const asChat = (P: Pill): ChatComposer => P as ChatComposer;
 // cfg.send replaces where Send goes (the Assistant page posts to /v2/assistant/messages); cfg.files === false
 // leaves out attaching, for a chat whose server route takes text only.
+// Fit a composer's box to its words, up to its CSS max-height (meetings.css .p-pill .p-text: eight lines), the one cap
+// every composer reads (#298); past it the box scrolls inside, the caret's line kept in view. `keep` skips the collapse
+// to height:auto, which re-measures a box that only grew (see makePill's grow for why iOS needs that).
+function pillGrow(box: HTMLTextAreaElement, keep = false) {
+  if (!keep) box.style.height = 'auto';
+  const cap = parseFloat(getComputedStyle(box).maxHeight) || Infinity;
+  box.style.height = Math.min(box.scrollHeight, cap) + 'px';
+  if (box.scrollHeight > box.clientHeight && box.selectionEnd === box.value.length) box.scrollTop = box.scrollHeight;
+}
 function makePill(cfg: PillConfig): Pill {
   const P: Pill = {
     mode: cfg.mode, slug: cfg.slug || null, dest: cfg.slug,
@@ -398,15 +407,13 @@ function makePill(cfg: PillConfig): Pill {
 
   const q = (sel: string): UntypedElement => el.querySelector(sel);
   const box = q('.p-text');
-  // The cap is the textarea's CSS max-height: 120px, or up to 300px in a desktop bot chat (#524).
   // IPhone autocorrect never landed in the composer. Collapsing the box to
   // height:auto on every keystroke re-lays it out mid-word, which drops iOS's pending correction.
   // Grow only when the text overflows; collapse and re-measure only when text was removed.
   let lastLength = 0;
   const grow = () => {
     const shrank = box.value.length < lastLength; lastLength = box.value.length;
-    if (shrank) { box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; }
-    else if (box.scrollHeight > box.clientHeight) box.style.height = box.scrollHeight + 'px';
+    if (shrank || box.scrollHeight > box.clientHeight) pillGrow(box, !shrank);
   };
   box.addEventListener('input', () => { P.sendNotice = ''; grow(); pillButtons(P); chatDraftSave(P); if (P.unconfirmed) chatForgetUnconfirmed(asChat(P)); });
   // "lets do the triple return behavior on mobile send, but on desktop, lets
