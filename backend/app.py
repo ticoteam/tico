@@ -993,6 +993,7 @@ def create_app(settings=None):
                     "/api/v2/uploads/tasks",
                     "/api/v2/uploads/assistant/messages",
                     "/api/v2/meetings/import",
+                    "/api/v2/growth/customers",  # customer facts as CSV: 100,000 customers is about 7 MB
                 ) or re.fullmatch(
                     r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+|v2/uploads/threads/[^/]+/messages)",
                     request.url.path,

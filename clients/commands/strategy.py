@@ -547,9 +547,48 @@ COHORT_FIELDS = (
 )
 
 
+# Cuts and grains computed from customer facts (backend/growth_computed.py). Any of these reads the computed cohorts.
+COMPUTED_PROPS = {
+    "by": {"type": "string", "enum": ["channel", "segment", "plan", "all"], "description": "Cut cohorts by this"},
+    "grain": {
+        "type": "string",
+        "enum": ["month", "week"],
+        "description": "Monthly or weekly (Monday to Sunday) cohorts",
+    },
+    "week": _s("A date in the week (YYYY-MM-DD): that week's cohorts"),
+    "segment": _s("Only customers with this segment label"),
+    "plan": _s("Only customers with this plan label"),
+    "customers": {
+        "type": "boolean",
+        "description": "With month or week: the rule behind each retention figure, and for the owner, admins and key "
+        "readers the customer keys",
+    },
+}
+
+
+def _computed(api, args):
+    """The computed cohorts when a cut, a grain, a filter or the trace is asked for; None otherwise."""
+    if not any(args.get(k) for k in COMPUTED_PROPS):
+        return None
+    return api.get(
+        "growth/computed",
+        by=args.get("by"),
+        grain=args.get("grain"),
+        month=args.get("month"),
+        week=args.get("week"),
+        channel=args.get("channel"),
+        segment=args.get("segment"),
+        plan=args.get("plan"),
+        customers="true" if args.get("customers") else None,
+    )
+
+
 @tool(
     "tico_growth_cohort_list",
-    "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 days, revenue and margin."
+    "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 days, revenue and margin; each "
+    "figure says whether it was computed from customer facts or typed. With by, grain, week, segment, plan or "
+    "customers: cohorts computed from customer facts, cut by channel, segment, plan or all, weekly or monthly, each "
+    "figure with its count, denominator and status (not_yet with the date it fills, too_few under the team's minimum)."
     + SETUP_NOTE,
     {
         "channel": _s("A channel slug, or unknown"),
@@ -560,10 +599,13 @@ COHORT_FIELDS = (
             "maximum": 2000,
             "description": "At most this many rows (default 500)",
         },
+        **COMPUTED_PROPS,
     },
 )
 def growth_cohort_list(api, args):
-    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), limit=args.get("limit"))
+    return _computed(api, args) or api.get(
+        "growth/cohorts", channel=args.get("channel"), month=args.get("month"), limit=args.get("limit")
+    )
 
 
 @tool(
@@ -630,11 +672,37 @@ def growth_cohort_resolve(api, args):
 @tool(
     "tico_growth_economics",
     "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
-    "expected months kept, LTV and LTV:CAC, with the total and the Unknown row." + SETUP_NOTE,
-    {"month": _s("YYYY-MM; default the latest with numbers")},
+    "expected months kept, LTV and LTV:CAC, with the total and the Unknown row. With by, grain, week, segment, plan "
+    "or customers: the same figures computed from customer facts for each cohort of that cut (CAC and payback by "
+    "channel only: spend is not split by segment or plan, and typed spend is monthly)." + SETUP_NOTE,
+    {"month": _s("YYYY-MM; default the latest with numbers"), **COMPUTED_PROPS},
 )
 def growth_economics(api, args):
-    return api.get("growth/economics", month=args.get("month"))
+    return _computed(api, args) or api.get("growth/economics", month=args.get("month"))
+
+
+@tool(
+    "tico_growth_customers_load",
+    "Owner or admin only: load customer facts from a CSV, one row per customer: customer key, became customer and "
+    "channel (required), signed up, segment, plan, churned, revenue per month. The load replaces every customer the "
+    "last upload gave, so a customer left out is deleted. Any other column, a key that looks like an email or a phone "
+    "number, or a label column with a value per row refuses the whole load. Keys may be tokenised first.",
+    {"csv": _s("The CSV, whole (on a command line, a file holding it, or - for standard input)")},
+    required=("csv",),
+    writes=True,
+)
+def growth_customers_load(api, args):
+    return _as_person(api).post("growth/customers", {"csv": args["csv"]}, key=_key(args))
+
+
+@tool(
+    "tico_growth_customers_delete",
+    "Owner or admin only: delete every customer fact at once; the figures fall back to typed values.",
+    {},
+    writes=True,
+)
+def growth_customers_delete(api, args):
+    return _as_person(api).post("growth/customers/delete", {}, key=_key(args))
 
 
 @tool(
@@ -665,10 +733,14 @@ def growth_kpis(api, args):
 
 @tool(
     "tico_growth_settings",
-    "The growth settings (unit, revenue per customer per month, margin %). With values or set, "
-    "owner or admin only: change them. may_edit: you may change them." + SETUP_NOTE,
+    "The growth settings (unit, revenue per customer per month, margin %, the fewest customers a cohort needs for a "
+    "rate, the time zone customer dates are read in, who besides the owner and admins sees customer keys). With "
+    "values or set, owner or admin only: change them. may_edit: you may change them." + SETUP_NOTE,
     {
-        "values": {"type": "object", "description": "{unit, revenue_month, margin_pct}"},
+        "values": {
+            "type": "object",
+            "description": "{unit, revenue_month, margin_pct, min_cohort (5 or more), time_zone, key_readers: [...]}",
+        },
         "set": {"type": "array", "items": {"type": "string"}, "description": "KEY=VALUE, instead of values"},
     },
     writes=True,
@@ -679,11 +751,13 @@ def growth_settings(api, args):
         k, sep, v = pair.partition("=")
         if not sep:
             raise APIError("set", "--set is KEY=VALUE")
-        if k in ("revenue_month", "margin_pct"):
+        if k in ("revenue_month", "margin_pct", "min_cohort"):
             try:
-                v = float(v)
+                v = int(v) if k == "min_cohort" else float(v)
             except ValueError:
                 raise APIError("set", f"{k} is a number") from None
+        if k == "key_readers":
+            v = [ref.strip() for ref in v.split(",") if ref.strip()]
         values[k] = v
     if not values:
         return api.get("growth/settings")
@@ -721,6 +795,23 @@ _SOURCE = (
     Arg("sync_kind", "--sync"),
     Arg("map", "--map", metavar="NUMBER=COLUMN"),
 )
+_COMPUTED = (
+    Arg("by", metavar="CUT"),
+    Arg("grain", metavar="GRAIN"),
+    Arg("week", metavar="YYYY-MM-DD"),
+    Arg("segment", metavar="LABEL"),
+    Arg("plan", metavar="LABEL"),
+)
+
+
+def _read_csv(fields):
+    """`growth customers load <file>`: the CSV the file holds, or standard input for `-`, read as the command runs."""
+    import sys
+    from pathlib import Path
+
+    path = fields["csv"]
+    return {**fields, "csv": sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8-sig")}
+
 
 # `tico growth ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
 CLI = (
@@ -800,10 +891,10 @@ CLI = (
     Group("growth cohort", "monthly numbers by channel"),
     Command(
         "growth cohort list",
-        "the monthly cohorts by channel",
-        args=(Arg("channel", metavar="SLUG"), Arg("month", metavar="YYYY-MM")),
+        "the monthly cohorts by channel; --by, --grain and --customers read the ones computed from customer facts",
+        args=(Arg("channel", metavar="SLUG"), Arg("month", metavar="YYYY-MM"), *_COMPUTED),
         render=_growth_text,
-        example="tico growth cohort list --channel google-search",
+        example="tico growth cohort list --by plan --grain month --month 2026-09",
     ),
     Command(
         "growth cohort set",
@@ -837,10 +928,25 @@ CLI = (
     ),
     Command(
         "growth economics",
-        "CAC, months kept, LTV and LTV:CAC by channel",
-        args=(Arg("month", metavar="YYYY-MM"),),
+        "CAC, months kept, LTV and LTV:CAC by channel; --by and --grain cut the computed cohorts",
+        args=(Arg("month", metavar="YYYY-MM"), *_COMPUTED),
         render=_growth_text,
         example="tico growth economics --month 2026-10",
+    ),
+    Group("growth customers", "customer facts Growth computes cohorts from"),
+    Command(
+        "growth customers load",
+        "load customer facts from a CSV; it replaces the last upload (owner or admin)",
+        args=(Arg("csv", metavar="file"),),
+        convert=_read_csv,
+        render=_growth_text,
+        example="tico growth customers load customers.csv",
+    ),
+    Command(
+        "growth customers delete",
+        "delete every customer fact (owner or admin)",
+        render=_growth_text,
+        example="tico growth customers delete",
     ),
     Command(
         "growth numbers",

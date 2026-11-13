@@ -3538,6 +3538,23 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+    min_cohort: int | None = Field(default=None, ge=5, le=100000)  # the fewest customers a cohort needs for a rate
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)  # IANA; customer dates are read in it
+    key_readers: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=50)
+
+
+# Customer facts (backend/growth_customers.py): CSV text, or rows as objects. The cells are checked by the load itself,
+# whose refusals never echo a value; nothing here constrains a cell, so the contract's 422 has none to echo either.
+class GrowthCustomersLoad(Contract):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, defer_build=True)
+    csv: str | None = Field(default=None, max_length=20_000_000)
+    rows: list[dict[str, str | float | int | None]] | None = Field(default=None, max_length=200_000)
+
+    @model_validator(mode="after")
+    def one_shape(self):
+        if (self.csv is None) == (self.rows is None):
+            raise ValueError("send csv or rows, not both")
+        return self
 
 
 # Tools (backend/mailboxes.py): connect a mailbox, and who can use it.

@@ -12,6 +12,8 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.GrowthCustomerRow: "growth_customers",
+    rows.GrowthCustomerLoadRow: "growth_customer_loads",
     rows.ListeningSourceRow: "listening_sources",
     rows.ListeningItemRow: "listening_items",
     rows.FactoryRow: "factories",

@@ -1661,6 +1661,23 @@ def _growth_body(fn, result):
         return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
     if fn in ("growth source push", "growth source sync"):
         return _source_run(result)
+    if fn in ("growth cohort list", "growth economics") and "by" in result and "cohorts" in result:
+        return computed_text(result)
+    if fn == "growth customers load":
+        lines = [f"{result.get('customers')} customers loaded ({result.get('spells')} spells)."]
+        if result.get("removed"):
+            lines.append(f"{result['removed']} customers the last load had are gone.")
+        if result.get("unknown_channel"):
+            lines.append(f"{result['unknown_channel']} have no Growth channel and count as Unknown.")
+        lines.append(
+            _table(
+                result.get("new_by_month") or [],
+                [("month", "month"), ("channel", "channel"), ("new", "new_customers")],
+            )
+        )
+        return "\n".join(lines)
+    if fn == "growth customers delete":
+        return f"{result.get('deleted', 0)} customers deleted; the figures fall back to typed values."
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
         head = f"Month: {result.get('month') or 'none yet'}"
@@ -1698,6 +1715,82 @@ def _growth_body(fn, result):
             ],
         )
     return "\n".join(_plain(result)) or "Nothing yet."
+
+
+def _retention_cell(figure):
+    """One retention figure as a person reads it: 79% (56/71), 12 of 19 (too few for a rate), not yet 2026-12-29."""
+    status = figure.get("status")
+    if status == "not_yet":
+        return f"not yet {figure.get('fills_on')}"
+    if status == "too_few":
+        return f"{figure.get('count')} of {figure.get('denominator')}"
+    if figure.get("value") is None:
+        return ""
+    return f"{figure['value']:g}% ({figure.get('count')}/{figure.get('denominator')})"
+
+
+def _value_cell(figure):
+    status = figure.get("status")
+    if status == "ok":
+        value = figure.get("value")
+        return "" if value is None else f"{value:g}"
+    return {
+        "too_few": "too few",
+        "not_split": "not split",
+        "spend_monthly": "spend is monthly",
+        "not_yet": "not yet",
+        "no_spend": "",
+        "missing": "",
+    }.get(status, "")
+
+
+def computed_text(result):
+    """`tico growth cohort list|economics --by ... --grain ...`: the computed cohorts as a table, then the notes, then
+    with --customers each retention figure's rule and, for those who may see them, the keys."""
+    cut = result.get("by") or "channel"
+    rows = result.get("cohorts") or []
+    if not rows:
+        return "No customer facts yet: load them with tico growth customers load <file>."
+    table = _table(
+        rows,
+        [
+            ("period", "period"),
+            (cut, lambda r: r.get("value") if r.get("value") is not None else "none"),
+            ("new", lambda r: r["new_customers"].get("value")),
+            ("day 30", lambda r: _retention_cell(r["kept_d30"])),
+            ("day 90", lambda r: _retention_cell(r["kept_d90"])),
+            ("day 180", lambda r: _retention_cell(r["kept_d180"])),
+            ("LTV", lambda r: _value_cell(r["ltv"])),
+            ("CAC", lambda r: _value_cell(r["cac"])),
+            ("payback", lambda r: _value_cell(r["payback_months"])),
+            ("source", lambda r: "computed"),
+        ],
+    )
+    notes = []
+    if any(r.get("too_few") for r in rows):
+        notes.append(f"Under {result.get('min_cohort')} customers a cohort shows counts only: too few for a rate.")
+    if result.get("cac_note"):
+        notes.append(f"CAC and payback are per channel: {result['cac_note']}.")
+    lines = [table, *notes]
+    for r in rows:
+        for window in (30, 90, 180):
+            figure = r.get(f"kept_d{window}") or {}
+            if not figure.get("rule"):
+                continue
+            lines.append("")
+            lines.append(f"{r['period']} {r.get('value') or 'none'} day {window}: {_retention_cell(figure)}")
+            lines.append("  " + figure["rule"])
+            who = figure.get("customers")
+            if who:
+                lines.append(f"  still customers ({len(who['still'])}): " + " ".join(who["still"]))
+                lines.append(
+                    f"  churned by day {window} ({len(who['churned'])}): "
+                    + " ".join(f"{c['key']} ({c['churned']})" for c in who["churned"])
+                )
+    if any(r.get("kept_d30", {}).get("rule") for r in rows) and not result.get("keys_visible"):
+        lines.append("")
+        lines.append("Customer keys show only to the owner, admins and the people they name in key_readers.")
+    return "\n".join(lines)
 
 
 def _entity_line(row):
