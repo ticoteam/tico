@@ -255,6 +255,10 @@ const settle = async (page: Page) => {
   await page.waitForFunction(() => typeof UI_PART_SCRIPTS === 'undefined' || [...UI_PART_SCRIPTS.keys()].every(n => UI_PART_LOADED.has(n)),
     null, {timeout: t(20000)}).catch(() => {});
   await page.waitForTimeout(t(450));
+  // A modal that opened late (its task read answered after the wait) may still be fading in: mid-fade, at opacity 0,
+  // Chrome's elementFromPoint passes through it, which rule 2 would read as the page drawn over it.
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog[open]')].every(d => d.getAnimations().every(a => a.playState !== 'running')),
+    null, {timeout: t(5000)}).catch(() => {});
 };
 const go = async (page: Page, hash: string) => {
   await page.evaluate(h => { location.hash = h; }, hash);
