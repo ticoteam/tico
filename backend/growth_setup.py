@@ -41,6 +41,7 @@ ACTION = {"settings": "settings", "channel": "channels", "source": "sources", "m
 # Columns set only together with the date they follow (else `<name minus _by>_at`).
 FOLLOWS = {"set_up_before_first_open": "first_opened_at"}
 DATES = ("first_opened_at", "settings_at", "channel_at", "source_at", "month_at", "done_at", "numbers_seen_at")
+# `done_shown_at` is the web's, not a step: when the Get started panel said "you're set up" (once per team).
 
 
 def you_may(auth: Any, who: Any) -> dict[str, bool]:
@@ -132,9 +133,11 @@ def _next(c: Any, st: dict[str, Any]) -> dict[str, Any] | None:
                 "says": f"Say where {name}'s numbers come from.",
                 "command": update,
                 "tool": "tico_growth_channel_update",
+                "sources": len(ids),
             }
         return {
             "step": step,
+            "sources": 0,
             "says": f"Add the source {name}'s numbers come from, then name it on the channel.",
             "command": 'tico growth source add --truth-for "ad spend" --system "<system>" '
             "--reach-kind <mcp|credential|url|person>",
@@ -148,6 +151,7 @@ def _next(c: Any, st: dict[str, Any]) -> dict[str, Any] | None:
             "says": f"Add {name}'s first month: spend and new customers.",
             "command": f"tico growth cohort set --channel {slug} --month {month} --spend <spend> --new <new customers>",
             "tool": "tico_growth_cohort_set",
+            "month": month,
         }
     return None
 
@@ -223,6 +227,46 @@ def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool =
     return {**out, "you_may": you_may(auth, who), "setup": setup}
 
 
+def _set(c: Any, st: dict[str, Any]) -> dict[str, Any]:
+    """What each done step set, for the web's Get started panel to show beside it (None for a step not done)."""
+    done = {s["step"]: s["done"] for s in st["steps"]}
+    out: dict[str, Any] = dict.fromkeys(STEPS)
+    if done["settings"]:
+        out["settings"] = H._one(c, "SELECT unit, revenue_month, margin_pct FROM growth_settings WHERE id=1")
+    ch = st["channel"]
+    if not (done["channel"] and ch):
+        return out
+    out["channel"] = ch
+    if done["source"]:
+        out["source"] = H._one(
+            c,
+            "SELECT s.system, s.truth_for FROM growth_channels ch JOIN gtm_sources s ON s.id=ch.source_id "
+            "WHERE ch.slug=?",
+            (ch["slug"],),
+        )
+    if done["month"]:
+        out["month"] = H._one(
+            c,
+            "SELECT g.month, g.spend, g.new_customers FROM growth_cohorts g JOIN growth_channels ch ON ch.id=g.channel_id "
+            "WHERE ch.slug=? AND g.spend IS NOT NULL AND g.new_customers IS NOT NULL ORDER BY g.month LIMIT 1",
+            (ch["slug"],),
+        )
+    return out
+
+
+def celebrate(st: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Whether the web says "you're set up": setup was finished after the team first opened Growth (a team set up
+    before release has both dates from one read), and it has not been said yet."""
+    done_at, opened = row.get("done_at"), row.get("first_opened_at")
+    return bool(st["done"] and done_at and opened and done_at > opened and not row.get("done_shown_at"))
+
+
+def shown(c: Any) -> None:
+    """The web said "you're set up": written once, and only once setup is done (on a write connection)."""
+    if state(c)["done"]:
+        c.execute("UPDATE growth_setup SET done_shown_at=coalesce(done_shown_at, ?) WHERE id=1", (H.now(),))
+
+
 def show(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     """GET /api/v2/growth/setup: every step with its first done date, the next step (None once done), what the caller
     may do, and the first-open and numbers-seen dates."""
@@ -230,11 +274,14 @@ def show(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     out: dict[str, Any] = block(c, auth, who, st) if not st["done"] else {"done": True, "next": None}
     out["steps"] = [{**s, "at": row.get(s["step"] + "_at")} for s in st["steps"]]
     out["channel"] = st["channel"]
+    out["set"] = _set(c, st)
+    out["celebrate"] = celebrate(st, row)
     out["you_may"] = you_may(auth, who)
     for k in (
         "first_opened_at",
         "first_opened_by",
         "done_at",
+        "done_shown_at",
         "numbers_seen_at",
         "numbers_seen_by",
         "set_up_before_first_open",

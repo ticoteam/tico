@@ -1,8 +1,8 @@
 /* ui/app/growth-page.ts — The Growth page (#/growth, docs/growth.md): a head (the North Star, the month picker, the
-   Growth board and Settings) over the Dashboard's grid of cards for the place `growth` (ui/app/dashboard.ts,
-   backend/cards.py), which the owner, admins and bots arrange. Its cards read the month picked here (GET
-   /api/v2/places/growth?month=); this file draws them: a Number, the Funnel, Channels, Retention and the Growth board.
-   Settings (growth-channels.js) keeps the numbers the maths uses, the channels and their months; Sources
+   Growth board and Settings) and, until Growth is set up, the Get started panel (growth-start.ts), over the Dashboard's
+   grid of cards for the place `growth` (ui/app/dashboard.ts, backend/cards.py), which the owner, admins and bots
+   arrange. Its cards read the month picked here (GET /api/v2/places/growth?month=); this file draws them: a Number, the
+   Funnel, Channels, Retention and the Growth board. Settings (growth-channels.js) keeps the numbers the maths uses, the channels and their months; Sources
    (growth-sources.js) is where the numbers come from. Also what those files, Brand (brand-page.js) and the KPI views on
    Goals share: formats, a small dialog, form fields, the owner picker. Old addresses land on what replaced them. Every
    write is the server's to allow.
@@ -201,10 +201,11 @@ function pageGrowth() {
     <div class="strat-actions" id="strat-actions"></div></div><div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
   pageGrowthSources(GR);
 }
-// After Settings or a channel saves: the cards read again.
+// After Settings or a channel saves: the cards and the Get started panel read again.
 function grReload(state: unknown) {
   dashChoicesStale();   // the Number form's channels
   if (GR === state && DASH?.place === 'growth') void dashRefresh(DASH);
+  if (GR === state && GR) void grStartRead(GR);   // the Get started panel's steps
 }
 
 // ----------------------------------------------------------------- the head over the grid
@@ -222,6 +223,7 @@ DASH_PLACES.growth = {
     const root = state.root;
     if (!root) return;   // G: the grid is there before a place is wired
     root.querySelector('[data-gr-settings]')?.addEventListener('click', () => { if (GR) void gcSettings(GR); });
+    if (GR) grStartMount(GR, root);   // the Get started panel under the head while setup is not done
     const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
     if (!sel) return;   // G
     // A month picked reads every card again for it; the address keeps it.
@@ -282,8 +284,7 @@ DASH_HEADING.growth_number = card => {
   const label = (card.data as GrNumberData | null)?.label || GR_METRIC[String(card.settings?.metric)] || '';
   return label && (card.settings?.channel ? `${label} · ${grChannelName(String(card.settings.channel), card)}` : label);
 };
-Object.assign(DASH_EMPTY, {growth_number: 'No numbers yet', growth_funnel: 'No KPIs yet', growth_channels: 'No channels yet',
-  growth_retention: 'No retention yet', growth_board: 'No open marketing tasks'});
+// An empty card names the step that fills it (DASH_NONE, ui/app/growth-start.ts).
 
 // A Number: the picked month's value with its change from the month before and its trend; a value carried back from
 // an earlier month (retention, LTV) says which.

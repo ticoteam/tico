@@ -317,3 +317,65 @@ button.gsrc-row:hover{background:var(--surface2)}
   .gsrc-r,.gsrc-m,.gsrc-o{flex-basis:100%;font-size:var(--t-xs)}
   .gsrc-m:empty,.gsrc-o:empty{display:none}
 }
+
+/* ---------- Get started (ui/app/growth-start.ts): the four steps over the cards while Growth is not set up, the next
+   one lit with its button; a done step's tick pops and the bar fills; all four done says so once. Empty cards name the
+   step that fills them. */
+.grs{margin:4px 28px 14px;padding:var(--s4);border:1px solid var(--line);border-radius:var(--radius);
+  background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 7%,var(--surface)),var(--surface) 55%);animation:tico-pop var(--dur) var(--ease-out)}
+.grs[hidden]{display:none}
+.grs .spacer{flex:1}
+.grs-head,.grs-yay{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.grs-h{margin:0;font-size:var(--t-lg);line-height:1.2}
+.grs-sub{margin:2px 0 0;color:var(--muted);font-size:var(--t-base);max-width:60ch}
+.grs-prog{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:140px}
+.grs-prog-t{font-size:var(--t-sm);color:var(--muted)}
+.grs-prog-t b{color:var(--ink)}
+.grs-bar{display:block;width:140px;height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
+.grs-bar i{display:block;height:100%;width:100%;border-radius:3px;background:var(--ok);transform-origin:left;transform:scaleX(var(--p));
+  transition:transform calc(var(--dur) * 3) var(--ease-out);animation:grs-fill calc(var(--dur) * 3) var(--ease-out)}
+@keyframes grs-fill{from{transform:scaleX(0)}}
+.grs-steps{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;counter-reset:grs}
+.grs-step{position:relative;display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);min-width:0}
+.grs-n{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);color:var(--muted);font-size:var(--t-sm);font-weight:600;font-variant-numeric:tabular-nums}
+.grs-b{display:flex;flex-direction:column;gap:3px;min-width:0}
+.grs-k{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.grs-t{font-size:var(--t-base);color:var(--ink);line-height:1.3}
+.grs-l{font-size:var(--t-sm);color:var(--muted);line-height:1.4;overflow-wrap:anywhere}
+.grs-go{align-self:flex-start;margin-top:8px}
+.grs-who{margin:8px 0 0;font-size:var(--t-sm);color:var(--ink)}
+/* done: a green tick, and what was set */
+.grs-done .grs-n{border-color:var(--ok);background:var(--ok);color:var(--surface)}
+.grs-done .grs-k{color:var(--ok)}
+.grs-done .grs-l{color:var(--ink)}
+.grs-just .grs-tick{display:inline-block;animation:grs-tick calc(var(--dur) * 2.5) var(--ease-out)}
+@keyframes grs-tick{0%{transform:scale(0) rotate(-30deg)}60%{transform:scale(1.35)}100%{transform:none}}
+/* next: lit, with a soft ring that breathes twice */
+.grs-next{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.grs-next .grs-n{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);animation:grs-ring 1.6s var(--ease) 2}
+.grs-next .grs-k{color:var(--accent)}
+@keyframes grs-ring{50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--accent) 20%,transparent)}}
+.grs-step:not(.grs-done):not(.grs-next){opacity:.72}
+/* all done: said once */
+.grs-won{background:linear-gradient(135deg,var(--ok-bg),var(--surface) 70%);border-color:color-mix(in srgb,var(--ok) 35%,var(--line))}
+.grs-yay{align-items:center}
+.grs-yay .grs-go{margin-top:0}
+.grs-burst{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--ok);color:var(--surface);font-size:var(--t-lg);font-weight:700;
+  animation:grs-tick calc(var(--dur) * 3) var(--ease-out),grs-burst 1.2s var(--ease-out) calc(var(--dur) * 2)}
+@keyframes grs-burst{from{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}to{box-shadow:0 0 0 18px transparent}}
+/* "this one": a step pointed at from an empty card, or the channel's numbers after setup */
+.grs-flash{animation:grs-flash 1.4s var(--ease-out)}
+@keyframes grs-flash{0%,40%{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 55%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
+tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
+@keyframes grs-row{0%,40%{background:color-mix(in srgb,var(--accent) 16%,transparent)}}
+/* empty cards: the step that fills them */
+.grs-fill button.linkish,.grs-fill a{color:var(--link);text-decoration:none;font-weight:600;white-space:nowrap}
+.grs-fill button.linkish:hover,.grs-fill a:hover{text-decoration:underline}
+@media(max-width:1100px){.grs-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){
+  .grs{margin:4px 12px 10px;padding:var(--s3)}
+  .grs-steps{grid-template-columns:minmax(0,1fr);gap:8px}
+  .grs-prog{align-items:flex-start;width:100%}
+  .grs-bar{width:100%}
+  .grs-step:not(.grs-done):not(.grs-next) .grs-l{display:none}
+}
