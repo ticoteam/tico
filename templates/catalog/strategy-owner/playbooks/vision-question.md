@@ -12,7 +12,8 @@ again yourself, and never write a vision of your own.
 3. **A question** (what a vision is, an example, why you need it): answer it on the task in two or three plain sentences,
    from the published strategy and the market pages, never with a vision written for them. The question stays open
    for their next reply. If they answered the question itself with a question, ask it again on the task:
-   `tico task ask <id> --to <owner> "What is this team for? ..." --why "Every goal ties to the vision ..."`.
+   `tico task ask <id> --to <owner> "What is this team for? ..." --why "Every goal ties to the vision ..." --version N`
+   (N is the version `tico task show <id>` prints).
 4. **Anything else** (they want it changed later, they are not sure): say in one line that it is saved only when they
    send it, and leave the question open.
 
