@@ -940,24 +940,21 @@ def channel_names(ctx):
 
 
 def marketing_tasks(ctx):
-    """The open marketing tasks the reader may read, each with its stage (the furthest of its idea labels: idea,
-    building, testing, scaling, measuring or paused), owner and channel slugs, most recently updated first
-    (backend/marketing_tasks.py: an idea is a General task with a label that says where it is)."""
+    """The open marketing tasks the reader may read, each with its stage (idea, building, testing, scaling, measuring
+    or paused), owner and channel slugs, most recently updated first. A task in a work stage of the Growth Experiments
+    or Growth Monitoring pipeline stands where that stage says; any other stands at the furthest of its idea labels
+    (backend/marketing_tasks.py). A task with both is listed once, at its pipeline stage."""
     from . import marketing_tasks as MT
 
     def make():
         order = [stage for stage, _labels in MT.STAGES]
         marks = ",".join("?" * len(MT.LABELS))
+        presets = ",".join("?" * len(MT.PIPELINE_STAGES))
+        visible = ctx.visible()
         found = {}
-        for r in ctx.c.execute(
-            "SELECT t.id, t.title, t.owner_id, t.updated_at, tg.key FROM tasks t "
-            "JOIN task_tags tt ON tt.task_id=t.id JOIN tags tg ON tg.id=tt.tag_id "
-            f"WHERE t.status='open' AND (tg.key IN ({marks}) OR tg.key LIKE 'channel:%') "
-            "AND t.id IN (SELECT x.task_id FROM task_tags x JOIN tags g ON g.id=x.tag_id "
-            f"WHERE g.key IN ({marks})) AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) ORDER BY t.id, tg.key",
-            (*MT.LABELS, *MT.LABELS),
-        ):
-            task = found.setdefault(
+
+        def task_of(r):
+            return found.setdefault(
                 r["id"],
                 {
                     "id": r["id"],
@@ -968,12 +965,45 @@ def marketing_tasks(ctx):
                     "channels": [],
                 },
             )
+
+        piped = set()
+        for r in ctx.c.execute(
+            "SELECT t.id, t.title, t.owner_id, t.updated_at, t.stage_id, p.id AS pipeline_id, p.preset FROM tasks t "
+            "JOIN stages s ON s.id=t.stage_id JOIN pipelines p ON p.id=s.pipeline_id "
+            f"WHERE t.status='open' AND s.kind='work' AND p.preset IN ({presets}) "
+            f"AND t.id IN (SELECT id FROM tasks WHERE {visible})",
+            tuple(MT.PIPELINE_STAGES),
+        ):
+            task = task_of(r)
+            task["stage"] = MT.pipeline_stage(r["preset"], r["pipeline_id"], r["stage_id"])
+            if MT.stage_key(r["preset"], r["pipeline_id"], r["stage_id"]) == MT.SLIPPING:
+                task["slipping"] = True
+            piped.add(r["id"])
+        for r in ctx.c.execute(
+            "SELECT t.id, t.title, t.owner_id, t.updated_at, tg.key FROM tasks t "
+            "JOIN task_tags tt ON tt.task_id=t.id JOIN tags tg ON tg.id=tt.tag_id "
+            f"WHERE t.status='open' AND (tg.key IN ({marks}) OR tg.key LIKE 'channel:%') "
+            "AND t.id IN (SELECT x.task_id FROM task_tags x JOIN tags g ON g.id=x.tag_id "
+            f"WHERE g.key IN ({marks})) AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY t.id, tg.key",
+            (*MT.LABELS, *MT.LABELS),
+        ):
+            task = task_of(r)
             if r["key"] in MT.LABELS:
                 stage = MT.LABELS[r["key"]]
-                if task["stage"] is None or order.index(stage) > order.index(task["stage"]):
+                if r["id"] not in piped and (task["stage"] is None or order.index(stage) > order.index(task["stage"])):
                     task["stage"] = stage
             else:
                 task["channels"].append(r["key"][len("channel:") :])
+        # A pipeline task with no stage label: its channels, read on their own.
+        bare = [tid for tid in piped if not found[tid]["channels"]]
+        for i in range(0, len(bare), 500):
+            part = bare[i : i + 500]
+            for tid, key in ctx.c.execute(
+                "SELECT tt.task_id, tg.key FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id "
+                f"WHERE tt.task_id IN ({','.join('?' * len(part))}) AND tg.key LIKE 'channel:%' ORDER BY tg.key",
+                part,
+            ):
+                found[tid]["channels"].append(key[len("channel:") :])
         return sorted(found.values(), key=lambda t: (t["updated_at"], t["id"]), reverse=True)
 
     return ctx.memo("marketing", make)
@@ -1097,6 +1127,7 @@ def growth_board(ctx, s):
                         "title": t["title"],
                         "owner_id": t["owner_id"],
                         "channel": names.get(t["channels"][0], t["channels"][0]) if t["channels"] else "",
+                        **({"slipping": True} if t.get("slipping") else {}),
                     }
                     for t in mine[: s["count"]]
                 ],

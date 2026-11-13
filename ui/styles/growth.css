@@ -192,6 +192,7 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grc-card:hover{background:var(--hover);text-decoration:none}
 .grc-card-t{grid-area:t;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .grc-card-c{grid-area:c;min-width:0;font-size:var(--t-xs);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grc-slip{color:var(--wait-ink)}
 .grc-face{grid-area:f;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--g3);color:var(--ink);font-size:var(--t-2xs);font-weight:600}
 
 /* ---------- Settings: the channels and their months */
