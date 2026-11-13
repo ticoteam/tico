@@ -24,7 +24,6 @@ interface RdoState {
 }
 /** A chart's transform: its scale and its offset in the pane. */
 interface RdoPose { x: number; y: number; s: number }
-/** A mouse drag on the pane: where it began, the scroll it began at, and whether it moved. */
 /** Per-draw context: the nodes drawn so far, and (Rules › Internal) a group renderer in place of rdoGroupBlock. */
 type RdoCtx = {seen: Set<string>; group?: typeof rdoGroupBlock};
 

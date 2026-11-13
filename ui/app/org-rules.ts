@@ -652,7 +652,10 @@ function rrMapPaint() {
       pane.scrollTo({left: (l + r - pane.clientWidth) / 2, top: (t + btm - pane.clientHeight) / 2});
   }
   svg.innerHTML = `<defs>${marks}</defs>${paths}`;
+  // The chips are drawn again on every paint (a scroll coming to rest among them): a chip that had focus keeps it.
+  const focused = document.activeElement instanceof HTMLElement && chips.contains(document.activeElement) ? document.activeElement.dataset.rrLine : '';
   chips.innerHTML = labels;
+  if (focused) chips.querySelector<HTMLElement>(`[data-rr-line="${CSS.escape(focused)}"]`)?.focus({preventScroll: true});
   // A chip goes where it covers no card and no chip already placed: along its line first (90px past the selected card,
   // then the middle outward), then above, below or beside it; where nothing is clear it keeps the first spot that
   // misses the chips. Near the selected card it stays on screen however far its line runs.
