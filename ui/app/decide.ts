@@ -338,7 +338,7 @@ function decideStop() {
   const st = DEC;
   if (!st) return;
   DEC = null;
-  DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD = null;
+  DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD.clear(); DEC_SENDING.clear();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
@@ -366,7 +366,7 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
 
 // ---- moving through
 function decideGo(st: DecState, id: string | null) {
-  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = ''; DEC_HELD = null;
+  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = '';
   decideRender(st);
 }
 function decideStep(st: DecState, dir: number) {

@@ -32,7 +32,11 @@ const DEC_ABOUT = new Map<string, DecAbout>();   // held while the screen is ope
 let DEC_SENT = '';                               // the item whose reply was just sent: "Sent" shows under its box
 /** A reply an org rule held (the comment's answer, `held`): shown under its box as the task page shows it, with the
     rule and the actions the sender may take. Nothing was written; an "Ask first" hold may still be sent by a reviewer. */
-let DEC_HELD: {item: string; box: '#dc-reply' | '#dc-other'; hold: RuleHold} | null = null;
+interface DecHeld { item: string; box: '#dc-reply' | '#dc-other'; hold: RuleHold; words: string; }
+/** Kept per item while the screen is open, so a reply held after the person moved on still shows when they come back. */
+const DEC_HELD = new Map<string, DecHeld>();
+/** The items whose reply is on its way: a second Send waits for the first (the walk may move on meanwhile). */
+const DEC_SENDING = new Set<string>();
 let DEC_RESUME = '';                             // the item Go to left from: ▶ picks up there
 const DEC_HEAD_LONG = 90, DEC_HEAD_MAX = 60;
 
@@ -211,22 +215,25 @@ function decideReplyHTML(st: DecState, it: NeedsEntry): string {
     The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words stay. */
 async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other') {
   const words = decideNote(box), taskId = decideTaskId(it);
-  if (!words || !taskId || st.busy) return;
+  if (!words || !taskId || st.busy || DEC_SENDING.has(it.id)) return;
   const files = await decideFilesReady(st, it.id);
   if (!files) { if (DEC === st) decidePaintSide(st); return; }
   if (DEC !== st || st.at !== it.id) return;
   const to = decideReplyTo(it), handle = to ? decideHandle(to) : '';
   const named = handle && new RegExp(`(?<![\\w@])@${decideReEsc(handle)}(?![\\w-])`, 'i').test(words);
   const text = decideWithFiles(handle && !named ? `@${handle} ${words}` : words, files);
-  st.busy = true; st.error = ''; DEC_SENT = ''; DEC_HELD = null;
+  st.busy = true; st.error = ''; DEC_SENT = ''; DEC_HELD.delete(it.id); DEC_SENDING.add(it.id);
   decidePaintSide(st);
   try {
     const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text}) as {held?: RuleHold | null};
     if (DEC !== st) return;
+    // A hold is kept by item: the card shows on this item now, or when the walk comes back to it.
+    if (r?.held) DEC_HELD.set(it.id, {item: it.id, box, hold: r.held, words});
+    // The walk moved on while this was sent: the item on screen is another one, and its box and files are its own.
+    if (st.at !== it.id) return;
     st.busy = false;
     const el = $(`.decide ${box}`) as HTMLTextAreaElement | null;
     if (r?.held) {
-      DEC_HELD = {item: it.id, box, hold: r.held};
       // An "Ask first" hold waits for a reviewer who may still send it: the words leave the box, so a second Send
       // cannot post them twice. A "Stop" hold keeps them, to change and send again.
       if (r.held.outcome === 'escalated' && el) { el.value = ''; st.files = []; }
@@ -235,14 +242,14 @@ async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | 
       if (el) el.value = '';
     }
   } catch (e) {
-    if (DEC !== st) return;
+    if (DEC !== st || st.at !== it.id) return;
     st.busy = false; st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not sent.');
-  }
-  if (st.at === it.id) decidePaintSide(st);
+  } finally { DEC_SENDING.delete(it.id); }
+  decidePaintSide(st);
 }
 /** The held reply under its box: what happened in one line, then the hold's card (rule, and Edit and resend). */
 function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other'): string {
-  const h = DEC_HELD?.item === it.id && DEC_HELD.box === box ? DEC_HELD.hold : null;
+  const held = DEC_HELD.get(it.id), h = held?.box === box ? held.hold : null;
   if (!h) return '';
   const line = h.outcome === 'escalated' ? 'Held for a reviewer: a rule asks first. It is posted if they send it anyway.'
     : 'Not sent: a rule stops it.';
@@ -250,14 +257,16 @@ function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other'): string 
 }
 /** After the right side draws: the held card's actions. Withdrawing a held reply puts its words back in the box. */
 function decideHeldWire(st: DecState, host: HTMLElement) {
-  const slot = host.querySelector<HTMLElement>('[data-dc-held]'), held = DEC_HELD, it = decideCurrent(st);
+  const it = decideCurrent(st), slot = host.querySelector<HTMLElement>('[data-dc-held]'), held = it ? DEC_HELD.get(it.id) : undefined;
   if (!slot || !held || !it) return;
   ruleHoldsWire(slot, decideTaskId(it), (_card, _hid, path) => {
-    if (DEC_HELD !== held) return;
-    DEC_HELD = null;
+    if (DEC_HELD.get(held.item) !== held) return;
+    DEC_HELD.delete(held.item);
     if (DEC !== st || st.at !== held.item) return;
     decidePaintSide(st);
+    // The words typed, not the comment as sent: Send adds the @mention and the files list again (files still on the
+    // note stay; after an "Ask first" hold they left with it).
     const el = $(`.decide ${held.box}`) as HTMLTextAreaElement | null;
-    if (path === 'withdraw' && el && held.hold.text && !held.hold.text_cut) { el.value = held.hold.text; el.focus(); decideNeedsText($('.decide')!); }
+    if (path === 'withdraw' && el) { el.value = held.words; el.focus(); decideNeedsText($('.decide')!); }
   });
 }

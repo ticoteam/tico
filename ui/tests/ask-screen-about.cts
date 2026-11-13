@@ -28,7 +28,9 @@ function world(over: {title?: string} = {}) {
   const t3 = tasks.find(t => t.id === 't-3')!;
   Object.assign(t3, {requester_id: 'bot:pm', created_at: at(120),
     body: 'Write the **Vision** on the Strategy page (#/strategy).\n\n- one paragraph\n- by Friday',
-    attachments: [{id: 'f-brief', name: 'brief.pdf', content_type: 'application/pdf', size: 10}]});
+    attachments: [{id: 'f-brief', name: 'brief.pdf', content_type: 'application/pdf', size: 10}],
+    links: [{id: 'l1', kind: 'session', url: 'https://acme.example/session/abc123', title: 'session:abc123'},
+      {id: 'l2', kind: 'link', url: 'https://acme.example/brand', title: 'Brand guide'}]});
   tasks.find(t => t.id === 't-2')!.body = 'Perf I31 compares the cache change against the **load test**.';
   tasks.push(task('t-8', 'Finance access for the owner', 'todo', {owner_id: 'human:ana', requester_id: 'keeper',
     body: 'Open Finance → Access and give the Finance Owner Everything.', turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana',
@@ -68,6 +70,7 @@ function world(over: {title?: string} = {}) {
         assert.equal(await left.locator('.dc-md strong').innerText(), 'Vision', 'the text is Markdown');
         assert.equal(await left.locator('.dc-md li').count(), 2);
         assert.equal(await left.locator('a.dc-ref-chip[href="/api/v2/files/f-brief"]').innerText(), 'brief.pdf', 'its file is a chip');
+        assert.deepEqual(await left.locator('.dc-ref-chip').allInnerTexts(), ['Brand guide', 'brief.pdf'], 'a session link is the builder\'s, not a chip');
         const leftText = await left.innerText();
         assert.ok(!leftText.includes('Book the team offsite'), 'the title is not repeated on the left');
         assert.equal(await card(page).locator('.dc-q').innerText(), 'Book the team offsite', 'the heading is the title');
@@ -206,8 +209,43 @@ function world(over: {title?: string} = {}) {
         assert.equal(await card(page).locator('#dc-reply').inputValue(), outcome === 'escalated' ? '' : words, `${outcome}: the box`);
         await held.locator('[data-hold-edit]').click();
         await held.waitFor({state: 'detached', timeout: 5000});
-        assert.equal(await card(page).locator('#dc-reply').inputValue(), `@pm ${words}`, `${outcome}: Edit and resend puts the words back`);
+        assert.equal(await card(page).locator('#dc-reply').inputValue(), words, `${outcome}: Edit and resend puts back the words typed, not the comment as sent`);
         assert.ok(posts.some(x => x.p === '/api/v2/rule-holds/h1/withdraw'));
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+
+    // Send, then › before the answer comes: the next item's box keeps what is typed there, and a reply a rule held
+    // shows on its own item when the walk comes back to it.
+    for (const outcome of ['blocked', 'escalated', 'sent'] as const) {
+      const {tasks, needs} = world();
+      let release: () => void = () => {};
+      const answered = new Promise<void>(r => { release = r; });
+      const {page, errors} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}, beforeGoto: async p => {
+        await p.route(u => u.pathname === '/api/v2/tasks/t-3/comments', async route => {
+          if (route.request().method() !== 'POST') return route.fallback();
+          await answered;
+          return route.fulfill({contentType: 'application/json', body: JSON.stringify(outcome === 'sent' ? {comment: {id: 'm1'}, comments: [], woke: true}
+            : {held: {id: 'h1', outcome, state: 'held', author: 'human:ana', text: '@pm First reply', rules: [{id: 'ru1', kind: 'internal', text: 'No Markdown in comments'}], can_withdraw: true}})});
+        });
+      }});
+      try {
+        await page.evaluate(() => { decideOpen('task:t-3'); });
+        await card(page).locator('.dc-md').waitFor({timeout: 5000});
+        await card(page).locator('#dc-reply').fill('First reply');
+        await card(page).locator('[data-dc="reply"]').click();
+        await card(page).locator('[data-dc="next"]').click();
+        await card(page).locator('.dc-q', {hasText: 'Finance access for the owner'}).waitFor({timeout: 5000});
+        await card(page).locator('#dc-reply').fill('typed on the next item');
+        const done = page.waitForResponse(r => r.url().endsWith('/api/v2/tasks/t-3/comments'));
+        release();
+        await done;
+        await page.waitForTimeout(100);
+        assert.equal(await card(page).locator('#dc-reply').inputValue(), 'typed on the next item', `${outcome}: the next item's box keeps its words`);
+        assert.equal(await card(page).locator('[data-dc-held], .dc-sent').count(), 0, `${outcome}: nothing of the first reply shows here`);
+        await card(page).locator('[data-dc="prev"]').click();
+        await card(page).locator('.dc-q', {hasText: 'Book the team offsite'}).waitFor({timeout: 5000});
+        assert.equal(await card(page).locator('[data-dc-held]').count(), outcome === 'sent' ? 0 : 1, `${outcome}: the hold shows on its item`);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
