@@ -180,6 +180,12 @@ def test_a_bots_docs_tools_read_write_list_and_respect_a_lock(api):
     assert [d["path"] for d in listing["docs"]] == ["ops/runbook.md"]
     err, missing = tool(api, "tico_doc_read", {"ref": "nope"}, token=token)
     assert missing["refused"] == "docs"
+    # A doc archived after the bot read it: a write with its base version is refused, never a new doc in its place.
+    gone = make(api, "Old notes", "kept", who=CARA, path="ops/old.md")
+    edit(api, gone, who=CARA, archived=True)
+    err, refused = tool(api, "tico_doc_write", {"path": "ops/old.md", "body": "bot", "base_version": 1}, token=token)
+    assert err and refused["error"] == "not_found"
+    assert [d["path"] for d in call(api, "GET", "docs", params={"path_prefix": "ops/"})["docs"]] == ["ops/runbook.md"]
     # AC-12: a locked doc refuses the bot with or without a base version.
     edit(api, call(api, "GET", "docs/" + made["doc"]["id"])["doc"], who=ANA, locked=True)
     for extra in ({}, {"base_version": 2}):
