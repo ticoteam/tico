@@ -133,8 +133,11 @@ def register(
         also: Callable[[Any, Any], Any] | None = None,
         hands_over: bool = False,
         ask: bool = False,
+        late: bool = False,
     ) -> None:
-        """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker)."""
+        """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker). `late`:
+        under rules that only warn, the write goes first and its check right after; its call says where its words went
+        (org_rule_check `late_on`)."""
         writes[operation] = {
             "model": model,
             "said": said,
@@ -143,6 +146,7 @@ def register(
             "also": also,
             "hands_over": hands_over,
             "ask": ask,
+            "late": late,
         }
 
     def carry(c: Any, who: Any, task_id: str, gate: Any, text: Any, version: Any) -> tuple[Any, Any]:
@@ -202,6 +206,8 @@ def register(
             to=spec["to"](body),
             also=reached(spec, params),
             hands_over=spec["hands_over"],
+            late=spec["late"],
+            ask=spec["ask"],
         )
 
     def checked(request: Request, tid: str, body: Any, operation: str, params: Any = None) -> Any:
@@ -251,9 +257,13 @@ def register(
     def done_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         setup_finished(c, who, task_id)
         note, version = carry(c, who, task_id, gate, body.note or "", body.version)
-        H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None)
+        done: dict[str, Any] = H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None) or {}
+        # A done note is kept on the answer it gave (answers.answer names it): a late check's warning line goes there.
+        answered: str | None = done.get("answer_id")
+        if answered:
+            org_rule_check.late_on(c, gate, "answer", answer=answered)
 
-    says("task_done", M.TaskDone, lambda body: [("Done", body.note)], done_call)
+    says("task_done", M.TaskDone, lambda body: [("Done", body.note)], done_call, late=True)
 
     @app.post("/api/v2/tasks/{tid}/done")
     def task_done(request: Request, tid: str, body: M.TaskDone):
@@ -442,9 +452,12 @@ def register(
             seen_version=version,
             mover=mover(c, who) or None,
         )
+        if gate and gate.get("late"):
+            saved: dict[str, Any] = H.task(c, task_id) or {}
+            org_rule_check.late_on(c, gate, "task_note", task=task_id, note=saved.get("note") or "")
         return {"requirement_id": made.get("requirement_id")}
 
-    says("task_ask", M.TaskAsk, ask_said, ask_call, to=lambda body: body.to, ask=True)
+    says("task_ask", M.TaskAsk, ask_said, ask_call, to=lambda body: body.to, ask=True, late=True)
 
     @app.post("/api/v2/tasks/{tid}/asks")
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
