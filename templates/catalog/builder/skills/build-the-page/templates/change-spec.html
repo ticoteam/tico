@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{Change}} · Spec</title>
+<style>
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-lg);margin:0 0 8px}
+.pg h2{font-size:var(--t-md);margin:24px 0 8px}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
+#lead p{margin:2px 0}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
+.pair>div{flex:1 1 300px;min-width:0}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-base) var(--mono)}
+</style></head><body><main class="pg">
+<h1>{{Change}} · Spec · {{YYYY-MM-DD}}</h1>
+<div id="lead">
+  <p><b>Cause:</b> {{what goes wrong and why, in one line: "A reclaimed worker settles the row it lost, so the task is marked done twice."}}</p>
+  <p><b>Fix:</b> {{what changes, in one line.}}</p>
+  <p><b>Decide:</b> {{"OK this spec, or send it back with what is wrong."}}</p>
+</div>
+
+<section id="behaviour">
+  <h2>Before and after</h2>
+  <div class="pair">
+    <div><b>Today</b><pre>{{the real call or steps, and what it gives today}}</pre></div>
+    <div><b>After the fix</b><pre>{{the same call, and what it will give}}</pre></div>
+  </div>
+</section>
+
+<section id="details">
+  <h2>Details</h2>
+  <section id="goal"><h2>Goal</h2><p>{{Who it hurts and how often, with the evidence and its source.}}</p></section>
+  <section id="scope"><h2>Scope and non-goals</h2><ul><li>In: {{...}}</li><li>Out: {{...}}</li></ul></section>
+  <section id="criteria"><h2>Acceptance criteria</h2>
+    <ol><li>Given {{...}}, when {{...}}, then {{...}}. <i>before release</i></li></ol></section>
+</section>
+</main></body></html>

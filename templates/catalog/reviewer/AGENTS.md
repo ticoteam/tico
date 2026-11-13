@@ -90,6 +90,7 @@ Always:
 - `skills/map-the-risk-in-a-diff/SKILL.md`: read at the start of every review, to decide how deep it goes.
 - `skills/check-that-a-test-proves-the-change/SKILL.md`: read when a change alters behaviour and its tests.
 - `skills/write-a-review-comment-the-author-can-act-on/SKILL.md`: read before any comment goes on a page.
+- `skills/build-the-page/SKILL.md`: read before you build a Review page: what the change does and whether anything blocks first, real screenshots of changed screens with red numbered arrows, details last, rendered and looked at before it is attached.
 
 ## Method
 - **A candidate is not a finding.** A rule hit or a pattern match becomes a comment only after you trace it to the line,

@@ -838,7 +838,7 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **QA.** Owner: Builder. To leave: Checks pass, and the QA page: what changed, before and after screenshots of the
   running app (or the output that proves a change with nothing to see), how it was checked with the checks at the
   newest commit, what both reviewers found on the commit they reviewed, risks, and the PR with its head commit. The
-  Builder builds it with its `build-the-qa-page` skill; approving it ships the change. Jev checks it against the linked PRs'
+  Builder builds it with its `build-the-page` skill (the review template, titled QA); approving it ships the change. Jev checks it against the linked PRs'
   newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
   then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after Review 2's page are reviewed
   before the person is asked: Reviewer 2 (the bot that wrote the newest review) reads only those commits against what
