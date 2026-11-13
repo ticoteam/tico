@@ -67,6 +67,14 @@ pub fn window_title(title: &str) -> bool {
         || title.contains("google meet")
         || title.contains("meet.google.com/")
 }
+/// A browser tab title Meet gives a call ("Meet - abc-defg-hij", or the event's name), not its
+/// home page. Read from a window's tab strip to tell the call is in a tab behind another one.
+pub fn call_tab(title: &str) -> bool {
+    let title = title.trim_start().to_lowercase();
+    ["meet - ", "meet – ", "meet — "]
+        .iter()
+        .any(|prefix| title.starts_with(prefix))
+}
 fn others(text: &str) -> bool {
     let text = text.trim().to_lowercase();
     text.split_once(' ').is_some_and(|(n, rest)| {
@@ -207,6 +215,9 @@ impl MeetingAdapter for GoogleMeet {
     }
     fn window_title(&self, title: &str) -> bool {
         window_title(title)
+    }
+    fn call_tab(&self, title: &str) -> bool {
+        call_tab(title)
     }
     fn kept_class(&self, class: &str) -> bool {
         kept_class(class)

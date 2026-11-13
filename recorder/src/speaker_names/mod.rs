@@ -76,6 +76,12 @@ pub trait MeetingAdapter {
     /// Only browser windows titled like the app are walked.
     fn window_title(&self, title: &str) -> bool;
     fn detect_window(&self, title: &str, document_url: &str) -> bool;
+    /// A browser tab title that shows a call in this app. Browsers expose only the front tab's
+    /// page, so such a tab behind another one is a call whose names cannot be read. Teams keeps
+    /// one title for chat and calls, so only Meet says.
+    fn call_tab(&self, _title: &str) -> bool {
+        false
+    }
     /// The DOM classes the AX walker keeps.
     fn kept_class(&self, class: &str) -> bool;
     /// Static text under this node (role and kept classes only) is a name, never chat.
@@ -396,7 +402,14 @@ pub fn present(id: &str) -> Option<Vec<String>> {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos::{Watch, access, dismiss_permission, open_settings, permission_pending};
+pub use macos::{
+    Watch, access, dismiss_permission, hidden_call, open_settings, permission_pending,
+};
+/// The meeting app whose call is in a background browser tab, so its names cannot be read.
+#[cfg(not(target_os = "macos"))]
+pub fn hidden_call() -> Option<&'static str> {
+    None
+}
 #[cfg(not(target_os = "macos"))]
 pub fn access() -> Option<bool> {
     None

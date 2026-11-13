@@ -32,6 +32,9 @@ enum Command {
     /// Replay transcript echo rules against a bounded, synthetic or exported recording JSON.
     EchoReplay {
         file: std::path::PathBuf,
+        /// Streamed words by channel (`{"me": [...], "them": [...]}`), replayed as the live view.
+        #[arg(long)]
+        streamed: Option<std::path::PathBuf>,
     },
     Devices,
     Inspect {
@@ -167,7 +170,7 @@ fn main() -> Result<()> {
                 &std::fs::read(file)?
             )?)?
         ),
-        Command::EchoReplay { file } => {
+        Command::EchoReplay { file, streamed } => {
             use tico_recorder_native::{store::Recording, transcript};
             anyhow::ensure!(
                 std::fs::metadata(&file)?.len() <= 2_000_000,
@@ -205,10 +208,28 @@ fn main() -> Result<()> {
                 .filter(|c| c.channel == "me")
                 .flat_map(|c| cleaned.get(&c.id).into_iter().flatten())
                 .collect();
+            let shown = |lines: Vec<transcript::Line>| {
+                lines
+                    .into_iter()
+                    .map(|l| serde_json::json!({"speaker":l.speaker,"me":l.me,"start_ms":l.start_ms,"text":l.text}))
+                    .collect::<Vec<_>>()
+            };
+            let live = match streamed {
+                Some(path) => {
+                    anyhow::ensure!(
+                        std::fs::metadata(&path)?.len() <= 2_000_000,
+                        "Replay is too large"
+                    );
+                    let streamed: std::collections::BTreeMap<String, Vec<_>> =
+                        serde_json::from_slice(&std::fs::read(path)?)?;
+                    shown(transcript::live_lines(&record, &streamed))
+                }
+                None => vec![],
+            };
             println!(
                 "{}",
                 serde_json::to_string(&serde_json::json!({"before":baseline,"after":after,
-                "lines":transcript::lines(&record).into_iter().map(|l| serde_json::json!({"speaker":l.speaker,"me":l.me,"text":l.text})).collect::<Vec<_>>() }))?
+                "lines":shown(transcript::lines(&record)),"live":live}))?
             );
         }
         Command::VerifyTranscription {

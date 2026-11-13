@@ -4,7 +4,9 @@
 //! `AXManualAccessibility` switch on the browser app, which makes it build the page's AX tree
 //! (it stays empty for assistive clients otherwise; Chromium can answer the switch with an
 //! error yet build the tree, and the result is never relied on). AXValue is read only for
-//! static text inside a participant row or a video tile's name container.
+//! static text inside a participant row or a video tile's name container. While no meeting
+//! document is found, other browser windows' tab strips are read for tab titles only (never
+//! pages), so a call in a background tab can be named in the log and the window.
 use super::{
     ADAPTERS, Batch, MeetingAdapter, Observation, POLL_MS, Samples,
     meet::Node,
@@ -83,8 +85,20 @@ const FLUSH_MS: u64 = 1000;
 const PROMPT_FILE: &str = "speaker-accessibility-dismissed";
 const ASKED_FILE: &str = "speaker-accessibility-prompted";
 const MANUAL: &str = "AXManualAccessibility";
+/// While no meeting document is found, tab strips are read this rarely, and this many nodes.
+const TAB_SCAN_MS: u64 = 10_000;
+const TAB_NODES: usize = 300;
 /// Set while this recording's watch saw a supported browser without Accessibility access.
 static PERMISSION: AtomicBool = AtomicBool::new(false);
+/// The meeting app whose call this recording's watch saw in a background tab, until its
+/// document is found or the tab is gone.
+static HIDDEN: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+pub fn hidden_call() -> Option<&'static str> {
+    *HIDDEN.lock().unwrap_or_else(|error| error.into_inner())
+}
+fn set_hidden(app: Option<&'static str>) {
+    *HIDDEN.lock().unwrap_or_else(|error| error.into_inner()) = app;
+}
 pub fn permission_pending() -> bool {
     PERMISSION.load(Ordering::Acquire)
 }
@@ -289,6 +303,51 @@ fn document(
     }
     None
 }
+fn selected(tab: &CFType) -> bool {
+    attr(tab, "AXValue").is_some_and(|value| {
+        value.downcast::<CFBoolean>().is_some_and(bool::from)
+            || value
+                .downcast::<CFNumber>()
+                .and_then(|n| n.to_i64())
+                .is_some_and(|n| n != 0)
+    })
+}
+/// The meeting app with a call in a tab behind this window's front tab, read from its tab strip:
+/// roles and tab titles only. The walk never enters a page, a text field or a scroll area.
+fn hidden_tab(window: &CFType, budget: &mut Budget) -> Option<&'static str> {
+    let mut level = vec![(window.clone(), false)];
+    for _ in 0..8 {
+        let mut next = vec![];
+        for (element, in_strip) in &level {
+            if !budget.take() {
+                return None;
+            }
+            let role = text(element, "AXRole");
+            if *in_strip {
+                let title = text(element, "AXTitle");
+                if let Some(meeting) = ADAPTERS.iter().find(|meeting| meeting.call_tab(&title)) {
+                    if !selected(element) {
+                        return Some(meeting.app());
+                    }
+                    continue;
+                }
+            }
+            if matches!(
+                role.as_str(),
+                "AXWebArea" | "AXScrollArea" | "AXTextArea" | "AXTextField"
+            ) {
+                continue;
+            }
+            let strip = *in_strip || role == "AXTabGroup";
+            next.extend(children(element).into_iter().map(|child| (child, strip)));
+        }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    None
+}
 fn project(
     app: &dyn MeetingAdapter,
     element: &CFType,
@@ -372,6 +431,8 @@ struct Discovery {
     /// Accessibility access as last logged.
     trusted: Option<bool>,
     rec: String,
+    /// When tab strips were last read for a call in a background tab.
+    scanned: Option<Instant>,
 }
 #[derive(Default)]
 struct Poll {
@@ -383,6 +444,8 @@ struct Poll {
     fast: bool,
     observed: Observation,
     info: PollInfo,
+    /// Tab strips were read this poll: the app with a call in a background tab, if any.
+    hidden: Option<Option<&'static str>>,
 }
 fn poll(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
     objc2::rc::autoreleasepool(|_| poll_inner(canceled, discovery))
@@ -466,6 +529,7 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
         canceled,
     };
     let mut found = vec![];
+    let mut behind = vec![];
     let mut seen = false;
     let mut call = None;
     let mut info = PollInfo::default();
@@ -478,14 +542,18 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
         unsafe {
             AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.025);
         }
-        // Only a window titled like a meeting app is walked; other windows are never read.
-        let windows: Vec<_> = elements(&app, "AXWindows")
-            .into_iter()
-            .filter(|w| {
-                let title = text(w, "AXTitle");
-                ADAPTERS.iter().any(|meeting| meeting.window_title(&title))
-            })
-            .collect();
+        // Only a window titled like a meeting app is walked; other windows' pages are never read.
+        let mut windows = vec![];
+        for window in elements(&app, "AXWindows") {
+            let title = text(&window, "AXTitle");
+            // A window's title is its front tab's: one showing a call has no call behind it.
+            if !ADAPTERS.iter().any(|meeting| meeting.call_tab(&title)) {
+                behind.push(window.clone());
+            }
+            if ADAPTERS.iter().any(|meeting| meeting.window_title(&title)) {
+                windows.push(window);
+            }
+        }
         // Chromium page accessibility slows the browser, so only for a meeting app's window.
         let browser = discovery
             .bundles
@@ -536,11 +604,33 @@ fn poll_inner(canceled: Arc<AtomicBool>, discovery: &mut Discovery) -> Poll {
             }
         }
     }
+    // No call document: a call may sit in a tab behind another one, which the browser does
+    // not expose. Tab strips say so; read them rarely, within what is left of this poll's budget.
+    let hidden = (found.is_empty()
+        && discovery
+            .scanned
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(TAB_SCAN_MS)))
+    .then(|| {
+        discovery.scanned = Some(Instant::now());
+        let mut scan = Budget {
+            until: budget.until,
+            left: budget.left.min(TAB_NODES),
+            canceled: budget.canceled.clone(),
+        };
+        let app = behind
+            .iter()
+            .find_map(|window| hidden_tab(window, &mut scan));
+        // A scan cut short says nothing about the tabs it did not reach.
+        let complete = scan.left > 0 && Instant::now() < scan.until;
+        (app.is_some() || complete).then_some(app)
+    })
+    .flatten();
     info.found = seen;
     info.app = call.unwrap_or(info.app);
     info.nodes = 1800 - budget.left;
     Poll {
         denied: false,
+        hidden,
         found: seen,
         fast: !found.is_empty(),
         info,
@@ -596,6 +686,10 @@ impl Watch {
                 };
                 crate::diag!("meet: rec={} watch started", log.rec());
                 let mut asked = false;
+                // The app with a call in a background tab, and whether the log said so already.
+                let mut hidden: Option<&'static str> = None;
+                let mut hidden_said = false;
+                set_hidden(None);
                 let mut batch = Batch::default();
                 let mut flushed = Instant::now();
                 while !canceled.load(Ordering::Acquire) {
@@ -618,6 +712,20 @@ impl Watch {
                     if polled.denied && !store.root().join(PROMPT_FILE).exists() {
                         PERMISSION.store(true, Ordering::Release);
                     }
+                    // A call's document read this poll: its names are being read.
+                    if polled.fast {
+                        hidden = None;
+                    } else if let Some(scan) = polled.hidden {
+                        hidden = scan;
+                    }
+                    if let Some(app) = hidden.filter(|_| !hidden_said) {
+                        hidden_said = true;
+                        crate::diag!(
+                            "meet: rec={} {app} call is in a background tab; the browser shows only the front tab's page, so no names until it is in front",
+                            log.rec()
+                        );
+                    }
+                    set_hidden(hidden);
                     let at = offset + started.elapsed().as_millis() as u64;
                     let intervals = samples.push(at, polled.observed.clone());
                     for line in log.poll(&polled.info, &polled.observed, &intervals, at) {
@@ -656,6 +764,7 @@ impl Watch {
                     crate::diag!("{line}");
                 }
                 PERMISSION.store(false, Ordering::Release);
+                set_hidden(None);
             })
             .ok();
         Self { stop, worker }
