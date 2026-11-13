@@ -1054,7 +1054,7 @@ const ruStageWhere = (r: StageRuleCore) => r.scope === 'company' ? 'Every pipeli
 function ruStageRowHTML(r: StageRule, acts = ''): string {
   return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
     + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
-    + `<div class="sr-what muted">${esc(ruStageWhere(r))} · ${esc(srSentence(r))}</div></div>`;
+    + `<div class="sr-what muted">${esc(ruStageWhere(r))} · ${esc(srSentence(r))}</div>${srIdleHTML(r)}</div>`;
 }
 /** What a suggested change alters in the rule it replaces: "When: A task enters → The owner changes", one per part. */
 function ruStageDiff(old: StageRuleCore, r: StageRuleCore): [string, string, string][] {
@@ -1083,7 +1083,7 @@ function ruStageSuggestedHTML(rows: StageRule[]): string {
     } else if (kind !== 'new') more = '<div class="sr-says muted">The rule it changes is gone; skip it.</div>';
     return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"><div class="sr-line"><span class="sr-name">${esc(title)}</span>`
       + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
-      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}</div>`;
+      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}${kind === 'retire' ? '' : srIdleHTML(r)}</div>`;
   }).join('')}</section>`;
 }
 // By pipeline, then stage: Company first, then each pipeline's whole-pipeline rules and its stages' rules.

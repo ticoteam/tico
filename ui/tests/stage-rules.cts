@@ -25,6 +25,7 @@ const pipelineOf = (mayChange: boolean) => ({id: 'eng', name: 'Engineering', goa
 const task = {id: 't1', title: 'Saved carts', number: 1, pipeline_id: 'eng', stage_id: 'build', status: 'open', owner_id: 'human:ana',
   requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false, turn: null, version: 1,
   created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z'};
+const NEEDS_TIMER = 'Tell and Move back need a timer in step 1: pick N h in the stage, quiet or waiting on a person';
 const BUILT_IN = [{name: 'Hand-off files with no assignee', what: 'A stage hand-off files its task with no assignee.', where: 'every stage'}];
 
 interface Rule { id: string; name: string; pipeline_id: string; stages: string[]; event: string; timer: Record<string, unknown>;
@@ -50,7 +51,9 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
       suggests: 'sr_quiet', retire_why: 'Covered by the Late rule.'},
   ];
   const view = (r: Rule) => ({...r, scope: !r.pipeline_id ? 'company' : r.stages.length ? 'stage' : 'pipeline', pipeline_name: r.pipeline_id ? 'Engineering' : '',
-    stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Jev call per event' : 'free', can_edit: mayChange});
+    stage_names: r.stages.map(s => s === 'build' ? 'Build' : 'Spec'), cost: r.jev ? 'one Jev call per event' : 'free', can_edit: mayChange,
+    // As backend/stage_rules.py not_acting: Tell or Move back on an action When never acts in step 1.
+    not_acting: r.event !== 'timer' && r.then !== 'block' ? NEEDS_TIMER : ''});
   const order = ['stage', 'pipeline', 'company'];
   page.on('pageerror', (error: Error) => errors.push(error.message));
   page.on('dialog', d => { void d.accept(); });
@@ -98,7 +101,7 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
       const m = p.match(/^\/api\/v2\/stage-rules(?:\/([^/]+))?(?:\/(retire))?$/);
       if (m && !m[1]) {
         const made = rule('sr_new', String(body['name']), String(body['pipeline'] ?? ''), (body['stages'] as string[]) ?? [],
-          {event: String(body['event']), then: String(body['then']), reason: String(body['reason'] ?? ''), jev: String(body['jev'] ?? '')});
+          {event: String(body['event']), timer: (body['timer'] as Record<string, unknown>) ?? {}, then: String(body['then']), reason: String(body['reason'] ?? ''), jev: String(body['jev'] ?? '')});
         state.rules.push(made);
         return json(view(made));
       }
@@ -159,6 +162,14 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await form.locator('[name=jev]').fill('');
     assert.equal(await form.locator('[data-sr-timer]').isHidden(), true, 'no timer unless When is a timer');
     await form.locator('[name=name]').fill('Sent back twice');
+    // An action When offers Block alone, and says why: Tell and Move back need a timer in step 1.
+    assert.deepEqual(await form.locator('[name=then] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['block']);
+    assert.equal(await form.locator('[data-sr-thenline]').innerText(), `${NEEDS_TIMER}.`);
+    // A timer keeps all four.
+    await form.locator('[name=event]').selectOption('timer');
+    assert.deepEqual(await form.locator('[name=then] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)),
+      ['block', 'tell_manager', 'tell_owner', 'move_back']);
+    assert.equal(await form.locator('[data-sr-thenline]').isHidden(), true);
     await form.locator('[name=then]').selectOption('tell_owner');
     // Owner not on team with no team named: the pipeline manager's team.
     await form.locator('[name=owner_check]').selectOption('not_on');
@@ -189,6 +200,29 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await desk.locator('#sr-panel [data-sr-close]').click();
     assert.equal(await desk.locator('#sr-panel').isVisible(), false);
 
+    // Edit on an old rule that never acts (A task enters → Tell the manager) keeps no Then picked: Save sends nothing
+    // until the person picks, so a rename never turns it into a Block that clears every entering task's owner.
+    await desk.locator('[data-sr-open="spec"]').first().click();
+    await desk.locator('#sr-panel [data-sr-rule="sr_spec"] [data-sr-edit]').click();
+    assert.equal(await form.locator('[name=then]').inputValue(), '', 'no Then is picked for the person');
+    assert.deepEqual(await form.locator('[name=then] option:not([disabled])').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['block']);
+    const writes = served.writes.length;
+    await form.locator('[name=name]').fill('Spec has a page (renamed)');
+    await form.locator('[type=submit]').click();
+    assert.equal(await form.isVisible(), true, 'the form stays open');
+    assert.equal(served.writes.length, writes, 'Save sent nothing');
+    // A timer offers all four again, still with none picked.
+    await form.locator('[name=event]').selectOption('timer');
+    assert.equal(await form.locator('[name=then]').inputValue(), '');
+    assert.equal(await form.locator('[name=then] option:not([disabled])').count(), 4);
+    await desk.locator('#sr-panel [data-sr-close]').click();
+
+    // Rules › Pipelines and stages: a rule saved before Tell needed a timer is listed as not acting, with why.
+    await desk.goto('http://tico-ui.test/#/rules/stages');
+    await desk.locator('[data-stage-rule="sr_spec"]').waitFor();
+    assert.equal(await desk.locator('[data-stage-rule="sr_spec"] [data-sr-idle]').innerText(), `Not acting: ${NEEDS_TIMER}`);
+    assert.equal(await desk.locator('[data-stage-rule="sr_owner"] [data-sr-idle]').count(), 0, 'a Block on an action acts');
+
     // Rules › Suggested: what accepting each of a bot's stage rules does.
     await desk.goto('http://tico-ui.test/#/rules/suggested');
     const sg = desk.locator('[data-group="stage-rules"]');
@@ -196,6 +230,8 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     const row = (id: string) => sg.locator(`[data-stage-rule="${id}"]`);
     assert.deepEqual(await sg.locator('.sr-name').allTextContents(), ['New: Ask before Move back', 'Change to Owner on the team', 'Retire: Quiet bot tasks']);
     assert.equal(await row('sr_sg_new').locator('[data-sr-decide="accept"]').innerText(), 'Accept');
+    // A suggestion of a shape that would never act says so before Accept is pressed.
+    assert.equal(await row('sr_sg_new').locator('[data-sr-idle]').innerText(), `Not acting: ${NEEDS_TIMER}`);
     // A change lists what differs from the rule as it is now, and only that.
     assert.deepEqual(await row('sr_sg_change').locator('[data-sr-diff] li').allTextContents(), ['Then Block → Tell the manager']);
     assert.equal(await row('sr_sg_change').locator('[data-sr-decide="accept"]').innerText(), 'Accept change');
