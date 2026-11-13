@@ -124,13 +124,13 @@ def test_number_cards_and_the_channels_table_say_computed_or_typed(api):
     put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-10", "new_customers": 12, "spend": 600})
     put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "spend": 4000})
     sept, octo = growth(api, "?month=2026-09"), growth(api, "?month=2026-10")
-    assert card(sept, "growth_number", "new_customers")["origin"] == "computed"
-    assert card(octo, "growth_number", "new_customers")["origin"] == "typed"
-    assert card(sept, "growth_number", "spend")["origin"] == "typed"
-    assert card(sept, "growth_number", "cac")["origin"] == "computed"  # it divides by computed new customers
+    assert card(sept, "growth_number", "new_customers")["basis"] == "computed"
+    assert card(octo, "growth_number", "new_customers")["basis"] == "typed"
+    assert card(sept, "growth_number", "spend")["basis"] == "typed"
+    assert card(sept, "growth_number", "cac")["basis"] == "computed"  # it divides by computed new customers
     # Day 30 carried back from September to October is September's computed figure.
     kept = card(octo, "growth_number", "kept_d30")
-    assert (kept["from"], kept["origin"]) == ("2026-09", "computed")
+    assert (kept["from"], kept["basis"]) == ("2026-09", "computed")
     rows = {r["slug"]: r for r in card(sept, "growth_channels")["rows"]}
     assert rows["search-ads"]["origin"]["new_customers"] == "computed"
     assert rows["search-ads"]["origin"]["cac"] == "computed"
