@@ -11,7 +11,7 @@ import pytest
 from backend.item_sources import github as F
 from backend.item_sources import github_release as GR
 from backend.store import H
-from backend.tests import test_release_cut as T
+from backend.tests.helpers import release_cut as T
 from backend.tests.helpers.fake_github import FakeGitHub
 
 REPO = T.REPO
