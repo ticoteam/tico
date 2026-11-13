@@ -69,10 +69,10 @@ def _negative_full(value: str, shapes: str = "negative") -> bool:
     return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()[shapes]))
 
 
-def secretish(value: str, shapes: str | None = "negative") -> bool:
+def secretish(value: str, shapes: str = "negative") -> bool:
     """A value that reads as a key, not a word: 6+ characters with a digit or a symbol, or mixed case past the first
     letter, and no placeholder or ordinary shape (an address, an email, an id, a path; `shapes`: see _shapes)."""
-    if len(value) < 6 or _placeholder(value) or (shapes is not None and _negative_full(value, shapes)):
+    if len(value) < 6 or _placeholder(value) or _negative_full(value, shapes):
         return False
     digit, symbol = _has(value, "[0-9]"), _has(value, "[^A-Za-z0-9]")
     mixed = _has(value[1:], "[A-Z]") and _has(value, "[a-z]")
@@ -84,15 +84,16 @@ def _has(text: str, cls: str) -> bool:
     return bool(_re(cls).search(text))
 
 
-def _shapes(rule: dict[str, Any], name: str) -> str | None:
+def _shapes(rule: dict[str, Any], name: str) -> str:
     """Which ordinary shapes still cancel a value after the context word `name`: every one with no strong word; after a
     strong one only a web address, an email or a path from /, ~/, ./ or ../ (a hex string, a UUID or a relative path
-    there is a key); after a password word none, since a password can take any shape. pass and pw are plain English
+    there is a key); after a password word only a web address, since a password can be shaped like a path or an email
+    but a reset or callback link sits under a password name (RESET_PASSWORD_URL). pass and pw are plain English
     too, so after a space they are not strong (spec Scope 4b: hex is negative only with no context word)."""
     word = _word(name) if name else None
     if not word or not word["strong"] or (rule.get("spaced") and word.get("spaced") is False):
         return "negative"
-    return None if word["type"] == "password" else "negative_keyed"
+    return "negative_password" if word["type"] == "password" else "negative_keyed"
 
 
 def _word(name: str) -> dict[str, Any] | None:
@@ -156,7 +157,7 @@ def _certain(text: str, rule: dict[str, Any]) -> list[Item]:
             continue
         if check in ("env", "context"):
             word = _word(named)
-            if shapes != "negative" and (_placeholder(value) or (shapes and _negative_full(value, shapes))):
+            if shapes != "negative" and (_placeholder(value) or _negative_full(value, shapes)):
                 continue
             if shapes == "negative" and not secretish(value):
                 continue

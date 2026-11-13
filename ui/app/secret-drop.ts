@@ -17,7 +17,7 @@ interface SdRule {
 interface SdWord { re: string; kind: string; base: string; type: string; strong: boolean; spaced?: boolean }
 interface SdRules {
   version: number; zero_width: string; services: {re: string; service: string}[]; certain: SdRule[]; words: SdWord[];
-  placeholder: string; negative: string[]; negative_keyed: string[]; token: string; db_schemes: string;
+  placeholder: string; negative: string[]; negative_keyed: string[]; negative_password: string[]; token: string; db_schemes: string;
   suspect: {entropy_length: number; entropy_bits: number; mixed_length: number; plain_hex: number};
 }
 /** One secret found: what it is and where, and its value, which lives only in page memory. */
@@ -43,16 +43,16 @@ function sdNormalize(rules: SdRules, text: string): string {
   return (text || '').normalize('NFKC').replace(sdRe(rules.zero_width), '');
 }
 const sdPlaceholder = (rules: SdRules, value: string): boolean => sdTest(rules.placeholder, value, 'i');
-type SdShapes = 'negative' | 'negative_keyed' | null;
+type SdShapes = 'negative' | 'negative_keyed' | 'negative_password';
 /** Wholly one of the ordinary shapes in the rule list `shapes` (secret_drop._negative_full). */
-const sdNegativeFull = (rules: SdRules, value: string, shapes: 'negative' | 'negative_keyed' = 'negative'): boolean =>
+const sdNegativeFull = (rules: SdRules, value: string, shapes: SdShapes = 'negative'): boolean =>
   rules[shapes].some(p => sdFull(p, value));
 // Character classes are ASCII on both sides: a letter outside ASCII counts as a symbol in Python and JavaScript.
 const sdHas = (text: string, cls: string): boolean => sdTest(cls, text);
 
 /** A value that reads as a key, not a word (secret_drop.secretish). */
 function sdSecretish(rules: SdRules, value: string, shapes: SdShapes = 'negative'): boolean {
-  if (value.length < 6 || sdPlaceholder(rules, value) || (shapes !== null && sdNegativeFull(rules, value, shapes))) return false;
+  if (value.length < 6 || sdPlaceholder(rules, value) || sdNegativeFull(rules, value, shapes)) return false;
   const digit = sdHas(value, '[0-9]'), symbol = sdHas(value, '[^A-Za-z0-9]');
   const mixed = sdHas(value.slice(1), '[A-Z]') && sdHas(value, '[a-z]');
   return digit || symbol || (mixed && value.length >= 10);
@@ -65,7 +65,7 @@ function sdWord(rules: SdRules, name: string): SdWord | null {
 function sdShapes(rules: SdRules, rule: SdRule, name: string): SdShapes {
   const word = name ? sdWord(rules, name) : null;
   if (!word?.strong || (rule.spaced && word.spaced === false)) return 'negative';
-  return word.type === 'password' ? null : 'negative_keyed';
+  return word.type === 'password' ? 'negative_password' : 'negative_keyed';
 }
 const sdWordOnly = (rules: SdRules, named: string): boolean => !!sdWord(rules, named)?.base;
 function sdServiceNear(rules: SdRules, text: string, start: number): string {
@@ -109,7 +109,7 @@ function sdCertain(rules: SdRules, text: string, rule: SdRule): SdFound[] {
     if (check === 'secretish' && !sdSecretish(rules, value, shapes)) continue;
     if (check === 'env' || check === 'context') {
       const word = sdWord(rules, named);
-      if (shapes !== 'negative' && (sdPlaceholder(rules, value) || (shapes !== null && sdNegativeFull(rules, value, shapes)))) continue;
+      if (shapes !== 'negative' && (sdPlaceholder(rules, value) || sdNegativeFull(rules, value, shapes))) continue;
       if (shapes === 'negative' && !sdSecretish(rules, value)) continue;
       if (word) { kind = word.kind; type = word.type; base = word.base || base; }
     } else if (check === 'secretish' && named) {
