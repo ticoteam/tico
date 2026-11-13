@@ -19,6 +19,8 @@ are on it:
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
+- Stage rules whose When is a timer (N h in the stage, N h quiet, N h waiting on a person) are judged after the
+  tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
 - A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
   (`_ready_snoozes`).
 
