@@ -143,4 +143,4 @@ def test_every_channel_together_is_mixed_when_one_is_computed_and_one_typed(api)
     channel(api, "referrals", "Referrals")
     load(api, september())
     put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-09", "new_customers": 12})
-    assert card(growth(api, "?month=2026-09"), "growth_number", "new_customers")["origin"] == "mixed"
+    assert card(growth(api, "?month=2026-09"), "growth_number", "new_customers")["basis"] == "mixed"
