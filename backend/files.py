@@ -19,6 +19,7 @@ import secrets
 import sqlite3
 import tempfile
 from collections import namedtuple
+from collections.abc import Iterable
 from contextlib import ExitStack
 from urllib.parse import quote, unquote, urlsplit
 
@@ -688,7 +689,8 @@ def prime_page_references(c, values):
     of messages, comments or events costs one lookup, not one per item."""
     # Only the candidates and the ids named outright matter here, not which structure named them: each distinct
     # string is scanned once, however many of these values repeat it.
-    found, candidates, strings, stack = set(), set(), set(), [list(values)]
+    found, candidates, strings = set(), set(), set()
+    stack: list[Iterable[object]] = [list(values)]
     while stack:
         for child in stack.pop():
             if isinstance(child, str):
