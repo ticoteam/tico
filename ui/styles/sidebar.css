@@ -201,7 +201,7 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 .tree .node.seat .seat-pill{margin-left:auto;font-size:var(--t-xs);padding:1px 6px;flex:none}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .nm{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Keep the personal branch label visible even when a long bot name is clipped. */
 .org-branch{flex:none;color:var(--muted);font-size:var(--t-2xs);font-weight:500;white-space:nowrap}

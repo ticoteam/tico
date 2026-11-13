@@ -1,9 +1,10 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of snoozed tasks in a pipeline's view (task-pipelines.ts): in the desktop columns, the desktop
-// list and the phone's stage (390 px), a snoozed task stays in its stage after every task that is not, dimmed, with a
-// sleep mark (an icon whose label and title say "Snoozed until Nov 14", no words beside it) and the day it wakes, or
-// On ice when its snooze has no end. A snoozed task holds no slot, so the stage's number leaves it out. The fake server
-// answers `snoozed=hide` as backend/hubdb.py does: it leaves snoozed tasks out.
+// list and the phone's stage (390 px), a snoozed task stays in its stage after every task that is not, dimmed, with the
+// day it wakes (or Snoozed when its snooze has no end) and a moon that is its one button: Unsnooze (its label and title,
+// no words beside it, a 40 px tap area on a phone). One click wakes it without opening it; a refusal says why. A snoozed
+// task holds no slot, so the stage's number leaves it out. The fake server answers `snoozed=hide` as backend/hubdb.py
+// does: it leaves snoozed tasks out.
 // Run: npm run build:ui && node ui/tests/pipeline-snoozed.cts
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -27,6 +28,7 @@ const brief = (id: string, title: string, turn: Record<string, unknown> | null =
 const TASKS = [brief('s1', 'Pricing page copy', snooze('2026-11-14T08:00:00Z')), brief('a1', 'Saved carts'),
   brief('s2', 'Old importer', snooze(null)), brief('a2', 'Refund flow')];
 const AWAKE = ['a1', 'a2'], ASLEEP = ['s1', 's2'];
+const woke: string[] = [];
 
 async function serve(page: Page, errors: string[]): Promise<void> {
   page.on('pageerror', (error: Error) => errors.push(error.message));
@@ -48,6 +50,15 @@ async function serve(page: Page, errors: string[]): Promise<void> {
       const snoozed = url.searchParams.get('snoozed');
       return json({tasks: TASKS.filter(t => snoozed === 'hide' ? !t.snoozed : snoozed === 'only' ? t.snoozed : true)});
     }
+    const wake = p.match(/^\/api\/v2\/tasks\/([^/]+)\/unsnooze$/);
+    if (wake && r.method() === 'POST') {
+      woke.push(wake[1]!);
+      if (wake[1] === 's2') {
+        return json({error: 'idea_filed_snoozed', detail: "A bot's idea stays snoozed until a person unsnoozes it.", missing: []}, 409);
+      }
+      const t = TASKS.find(x => x.id === wake[1])!;
+      return json({task: {...t, snoozed: false, turn: null, version: 2}});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -61,7 +72,8 @@ async function drawn(page: Page, rows: string) {
     const mark = el.querySelector('.pv-sleep'), title = el.querySelector('.tk-title');
     return {id: (el as HTMLElement).dataset['task'], dim: el.classList.contains('pv-snoozed'),
       color: title ? getComputedStyle(title).color + '/' + getComputedStyle(title).opacity : '',
-      rowTip: el.getAttribute('data-tip'), label: mark?.getAttribute('aria-label') ?? null, tip: mark?.getAttribute('title') ?? null, role: mark?.getAttribute('role') ?? null,
+      rowTip: el.getAttribute('data-tip'), label: mark?.getAttribute('aria-label') ?? null, tip: mark?.getAttribute('title') ?? null, tag: mark?.tagName ?? null,
+      buttons: el.querySelectorAll('button, a, input').length,
       markText: mark?.textContent ?? null, icon: !!mark?.querySelector('svg'), text: (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim()};
   }));
 }
@@ -74,16 +86,17 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     const r = by[id]!;
     assert.ok(r.dim, `${where}: ${id} is dimmed`);
     assert.notEqual(r.color, by['a1']!.color, `${where}: ${id}'s title is drawn dimmer than an awake one`);
-    assert.equal(r.role, 'img', `${where}: ${id}'s sleep mark is an image`);
-    assert.ok(r.icon, `${where}: ${id}'s sleep mark is an icon`);
-    assert.equal(r.markText, '', `${where}: ${id}'s sleep mark has no words`);
+    assert.equal(r.tag, 'BUTTON', `${where}: ${id}'s moon is a button`);
+    assert.equal(r.buttons, 1, `${where}: ${id} has no other button`);
+    assert.equal(r.label, 'Unsnooze', `${where}: the moon says Unsnooze to a screen reader`);
+    assert.equal(r.tip, 'Unsnooze', `${where}: and on hover`);
+    assert.ok(r.icon, `${where}: ${id}'s moon is an icon`);
+    assert.equal(r.markText, '', `${where}: ${id}'s moon has no words`);
     assert.match(r.rowTip ?? '', /Back after the launch/, `${where}: ${id}'s tip keeps the snooze's why`);
   }
-  assert.equal(by['s1']!.label, 'Snoozed until Nov 14', `${where}: the mark's label says when it wakes`);
-  assert.equal(by['s1']!.tip, 'Snoozed until Nov 14', `${where}: and so does its title`);
   assert.match(by['s1']!.text, /Nov 14$/, `${where}: the wake day shows`);
-  assert.equal(by['s2']!.label, 'Snoozed, On ice', `${where}: a snooze with no end is On ice`);
-  assert.match(by['s2']!.text, /On ice$/, `${where}: On ice shows`);
+  assert.match(by['s2']!.text, /Snoozed$/, `${where}: a snooze with no end says Snoozed`);
+  assert.ok(!rows.some(r => /On ice/.test(r.text)), `${where}: On ice is said nowhere`);
 }
 
 (async () => {
@@ -110,6 +123,21 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     check('phone', await drawn(phone, '.pv-phone .tk-card'));
     const wide = await phone.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(wide <= 390, `the phone page does not scroll sideways (${wide} px)`);
+    const tap = await phone.locator('.pv-phone [data-pv-unsnooze="s1"]').evaluate(el => {
+      const after = getComputedStyle(el, '::after');
+      return [parseFloat(after.width), parseFloat(after.height)];
+    });
+    assert.deepEqual(tap, [40, 40], 'the moon is a 40 px tap area on a phone');
+
+    // One click on the moon wakes it, and does not open the task. A refusal says the engine's reason above the stages.
+    await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=columns');
+    await desk.locator('[data-pv-col="build"] [data-pv-unsnooze="s1"]').click();
+    await desk.waitForFunction(() => !document.querySelector('[data-pv-col="build"] .pv-snoozed[data-task="s1"]'));
+    assert.deepEqual(woke, ['s1'], 'one click, one unsnooze');
+    assert.equal(await desk.locator('dialog[open]').count(), 0, 'the task is not opened');
+    await desk.locator('[data-pv-col="build"] [data-pv-unsnooze="s2"]').click();
+    await desk.locator('.pv', {hasText: "A bot's idea stays snoozed until a person unsnoozes it."}).waitFor();
+    assert.equal(await desk.locator('dialog[open]').count(), 0, 'nor on a refusal');
 
     assert.deepEqual(errors, []);
     console.log('pipeline snoozed: ok');

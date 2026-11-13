@@ -581,10 +581,15 @@ def test_a_bot_sends_raw_bodies_through_the_door_and_they_arrive_as_sent(api, do
     assert api.get("/api/v2/files/" + copy["file"]["id"], headers=headers(token)).content == text
 
     (tmp_path / "pages").mkdir()
-    (tmp_path / "pages" / "weekly.html").write_text("<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p>")
+    # A screenshot saved beside the page goes in with it: the server would drop a reference to a file it cannot reach.
+    (tmp_path / "pages" / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    (tmp_path / "pages" / "weekly.html").write_text(
+        '<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p><img src="shot.png">'
+    )
     shown = hubtools.pages_publish_path(bot, {"path": "pages/weekly.html", "title": "Weekly", "cadence": "weekly"})
     assert shown["page"]["title"] == "Weekly"
-    assert "42 deals" in api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+    stored = api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+    assert "42 deals" in stored and 'src="data:image/png;base64,' in stored
 
     # An import is copied from S3 by the bot's computer; the server stores the bytes it is sent with their source.
     source = "s3://acme-exports/q3/pipeline.md"

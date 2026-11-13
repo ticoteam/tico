@@ -51,6 +51,20 @@ interface PipelineStageRec {
   expected_bots_only: boolean;
   on_enter: Record<string, unknown>;
   requirements: PipelineReqRec[];
+  /** Where `owner` is `pick` ("One of several", backend/stage_pick.py): the bots it picks from and how. A save that
+      leaves it out keeps the stored one. */
+  pick?: PipelinePickRec;
+  /** Who gets the next task, in one sentence, as last saved: the server writes it and a save never sends it. */
+  pick_next?: string;
+}
+/** A stage's "One of several". `families` is each listed bot's model family ("Claude", "GPT"; "" when unknown), read only. */
+interface PipelinePickRec {
+  bots: string[];
+  how: 'turns' | 'random';
+  limit_each: number | null;
+  prefer: 'anyone' | 'new' | 'family';
+  owns_task: boolean;
+  families?: Record<string, string>;
 }
 interface PipelineRec {
   id: string;
@@ -64,6 +78,8 @@ interface PipelineRec {
   preset: string | null;
   settings_version: number;
   retired_at: string | null;
+  /** Each active bot's model family ("Claude", "GPT"; "" when unknown), for a stage's One of several: read only. */
+  bot_families?: Record<string, string>;
   stages: PipelineStageRec[];
   done: {id: string; name: string} | null;
   closed: {id: string; name: string} | null;

@@ -194,6 +194,12 @@ def settled(c):
     c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
 
 
+def ideas_checked(c):
+    """Jev's duplicate check answered "new" for every idea filed into Product's Ideas (backend/idea_checks.py): they
+    move on when Spec has room, as after the Heartbeat's check."""
+    c.execute("UPDATE idea_checks SET checked_at=?, outcome='new' WHERE checked_at IS NULL", (H.now(),))
+
+
 def new_task(c, by, title, pipeline_id="general", assignee=None, parent=None):
     """A task in the first stage of `pipeline_id`, as `task_engine.task()` gives it: made the way every task is
     (`H.task_create`), given to `assignee`, or to whoever files it when nobody is named."""

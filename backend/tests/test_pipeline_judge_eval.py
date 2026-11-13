@@ -224,7 +224,7 @@ def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monk
 def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped_rubrics():
     """The three pages Jev was unsure of on Acme (Nov 11) and the two it passed are cases, built by the page step's own
     builder (page_verdicts.job_of): the page's text, the stage's shipped rubric, the PR and its newest commit."""
-    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC
+    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC
 
     cases = {c["id"]: c for c in run.chosen(run.load(), "acme-*")}
     assert set(cases) == {"acme-review-1", "acme-review-2", "acme-fixes-2", "acme-spec", "acme-validate"}
@@ -235,11 +235,11 @@ def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped
     head = state["work"]["context"]["heads"]["ticoteam/pipeline-sandbox#38"]
     assert state["attachment"]["text"].startswith(f"Reviewed commit {head}")
     assert adapter.state_for(cases["acme-validate"])["work"]["context"]["release"] == ["v6"]
-    assert adapter.state_for(cases["acme-fixes-2"])["requirement"]["rubric"] == FIXES_2_RUBRIC
+    assert adapter.state_for(cases["acme-fixes-2"])["requirement"]["rubric"] == QA_RUBRIC
     # Its two cuts are traps: a pre-release page without what the reviewers found, or without the checks, is not met.
     for trap in ("dev-prerelease-no-reviews", "dev-prerelease-unchecked"):
         cut = next(c for c in run.load() if c["id"] == trap)
-        assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == FIXES_2_RUBRIC
+        assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == QA_RUBRIC
         assert len(cut["attachment"]["text"]) < len(cases["acme-fixes-2"]["attachment"]["text"])
     assert run.chosen(run.load(), "acme-spec,dev-review-done") and len(run.chosen(run.load(), "acme-spec")) == 1
 
@@ -248,9 +248,9 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
     """The nineteen good pages Jev was too often unsure of on rc.4 (Nov 11) and the traps cut from them: each with the
     stage's shipped rubric, the page shown as made for the work as it is now, and a pre-release page with the PR's newest
     commit beside it (task_pages.judged_against)."""
-    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
+    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
 
-    shipped = {FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
+    shipped = {QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
     live = run.chosen(run.load(), "live-*")
     traps = run.chosen(run.load(), "trap-*")
     assert len(live) == 19 and all(c["expected"] == "met" for c in live)
@@ -259,7 +259,7 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
         state = adapter.state_for(case)
         assert state["requirement"]["rubric"] in shipped, case["id"]
         assert state["attachment"]["work_version"] == state["work"]["work_version"] > 0, case["id"]
-        if state["requirement"]["rubric"] == FIXES_2_RUBRIC:
+        if state["requirement"]["rubric"] == QA_RUBRIC:
             assert state["work"]["context"]["heads"], case["id"]
     assert [c["id"] for c in run.load() if c.get("allow_unsure")] == ["live-c-fixes-2-v2"]
 
@@ -267,9 +267,9 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
 def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut():
     """The six Fixes 2 pages from the Nov 12 stress run that a person OK'd (Jev said 0.13 to 0.70 on them), and the bad
     ones: no check output, one reviewer left out, a failed check at the newest commit, and a real first page that
-    answered Review 2 only. Each is judged with the shipped Fixes 2 rubric beside its PR's newest commit, and the page
+    answered Review 2 only. Each is judged with the shipped QA rubric (Fixes 2's, before QA had a stage of its own) beside its PR's newest commit, and the page
     names that commit."""
-    from backend.pipeline_settings import FIXES_2_RUBRIC
+    from backend.pipeline_settings import QA_RUBRIC
 
     cases = run.chosen(run.load(), "nov12-*")
     good = [c for c in cases if c["expected"] == "met"]
@@ -279,7 +279,7 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
     assert all(c["expected"] == "not_met" for c in bad)
     for case in cases:
         state = adapter.state_for(case)
-        assert state["requirement"]["rubric"] == FIXES_2_RUBRIC, case["id"]
+        assert state["requirement"]["rubric"] == QA_RUBRIC, case["id"]
         [head] = state["work"]["context"]["heads"].values()
         assert head[:9] in state["attachment"]["text"], case["id"]
     no_reviewer = next(c for c in bad if c["trap"] == "reviewer_left_out")["attachment"]["text"]
@@ -287,7 +287,7 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
     # A red check differs from CI still running: the rubric that lets the second through must say so of the first.
     red = [c for c in bad if c["trap"] == "check_failed"]
     assert len(red) >= 2 and all("fail" in c["attachment"]["text"] for c in red)
-    assert "but not failed" in FIXES_2_RUBRIC and "reports a check failed at the newest commit" in FIXES_2_RUBRIC
+    assert "but not failed" in QA_RUBRIC and "reports a check failed at the newest commit" in QA_RUBRIC
 
 
 def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():

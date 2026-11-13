@@ -157,7 +157,10 @@ is soft-deleted and its unfinished runs are skipped.
 if you set one; with neither the run shows "needs a decision model"; when the team's monthly decision spend cap is
 reached, even partway through, the night sends nothing, shows "Skipped", and the same activity is read again on a later
 night) answers, per item, whether it is
-learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
+learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). Each item's text is read once
+with all its recipients' questions; an item that fits one call alone can share it with other such items
+(`backend/decide_groups.py`, `GROUP` in `backend/learnings.py`, one item per call until the grouped answers are
+checked against real Jev), each item getting only its own answers. An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 15 items each,
 highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Owner,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot

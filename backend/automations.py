@@ -356,15 +356,18 @@ def remove(c, actor, row, via=None):
     _unhold(c, aid, actor, "drop", via)
     c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
     listening.sync_sources(c, aid, None)  # a deleted listening reads nothing: what it had not sent expires
-    for dropped in c.execute(
+    dropped = c.execute(
         "SELECT id FROM automation_runs WHERE automation_id=? AND status IN ('queued','waiting','running')", (aid,)
-    ).fetchall():
-        _cancel_mail(c, dropped["id"])
+    ).fetchall()
+    for run in dropped:
+        _cancel_mail(c, run["id"])
     c.execute(
         "UPDATE automation_runs SET status='skipped',finished_at=? WHERE automation_id=? "
         "AND status IN ('queued','waiting','running')",
         (H.now(), aid),
     )
+    for run in dropped:
+        listening.settle(c, run["id"])  # what a dropped send held: its source is gone, so it expires
     audit_log.write(c, actor, "automation:" + aid, flow_of(row), None, via)
 
 
@@ -2370,6 +2373,38 @@ class HubServices:
         )
         return result
 
+    def judge_many(self, items, label):
+        """Several find items' Decide calls (backend/automation_engine.py `_judge`): `items` are (values, questions)
+        pairs, asked in as few calls as fit (backend/decide_groups.py), one `judge.call` row per call. Each item's
+        reply is its own result, or the exception its call ended in; None when Decide is off."""
+        from . import decide_groups as DG
+        from .judge import server_engine
+
+        store = self.hub.store
+        with store.read() as c:
+            engine = server_engine(store, c, self.hub.app.state.judge)
+        if engine is None:  # no decision model, or the month's decision cap is reached
+            return None
+        pairs = [(_trim(values), questions) for values, questions in items]
+        replies, calls = DG.ask(engine, pairs, label, E.GROUP)
+        sent = [call for call in calls if call.sent]
+        if sent:
+            self.dirty = True
+
+            def audit(c):
+                who = A.acts_as(c, self.auto) or H.KEEPER
+                for call in sent:
+                    H.event(
+                        c,
+                        who,
+                        "judge.call",
+                        label,
+                        DG.audit_row(call, label, automation=self.row["id"], run=self.run_id),
+                    )
+
+            self._write(audit)
+        return replies
+
     def _screened(self, bot, values):
         """A webhook run's call, screened for prompt injection before a bot gets work from it (backend/screening.py);
         None for any other run. Outside every transaction: it may wait on the decision model."""
@@ -2832,6 +2867,8 @@ class Hub:
             )
             if status == "failed":
                 _due_failed(c, rid, _run_error(state))
+            # An ended listening run's items: sent if a step delivered them, else waiting again.
+            listening.settle(c, rid)
             if status not in ("waiting", "held"):
                 _ring(c)  # queued again, or done: a run of this automation that the cap held back can start now
         return True
@@ -2882,10 +2919,11 @@ def settle_mail(c, state):
         )
         pending |= record["status"] == "waiting"
         failed |= record["status"] == "failed"
-    if state.get("status") in ("ok", "waiting") and not any(
+    if state.get("status") in ("ok", "waiting", "partial") and not any(
         t.get("state") == E.WAITING for t in state.get("threads") or []
     ):
-        state["status"] = "waiting" if pending else "failed" if failed else "ok"
+        state["status"] = "waiting" if pending else E.outcome(state, "failed" if failed else "ok")
+        E.conclude(state)
     return state.get("status")
 
 
@@ -2951,6 +2989,7 @@ def _settle_run(c, run_id):
     )
     if status == "failed" and run["status"] != "failed":
         _due_failed(c, run_id, _run_error(state))
+    listening.settle(c, run_id)
 
 
 def restate(c, run_id, key, value, changes):
@@ -3506,6 +3545,7 @@ def _fail(c, rid, state, now, why):
     )
     if was and was["status"] != "failed":
         _due_failed(c, rid, why)
+    listening.settle(c, rid)
 
 
 def _due(trigger, at):
@@ -3590,8 +3630,17 @@ def page(rows, limit, offset, cap):
 
 
 def _summary(state):
-    """A few words for the run's row: where it failed, else the paths it took, else what the cap stopped."""
+    """A few words for the run's row: what a listening's run did not deliver, else where it failed, else the paths it
+    took, else what the cap stopped."""
     steps = state.get("steps") or []
+    found = state.get("delivery")
+    if isinstance(found, dict) and found.get("missed"):
+        missed, total = found["missed"], len(found["missed"]) + len(found.get("sent") or [])
+        whys = ", ".join(dict.fromkeys(missed.values()))
+        if found.get("sent"):
+            return f"Partly delivered · {len(missed)} of {total} not delivered ({whys})"[:120]
+        why = str(state.get("error") or "").removeprefix("nothing delivered: ") or whys
+        return f"Nothing delivered: {why} · {len(missed)} back to waiting"[:120]
     failed = next((s["id"] for s in steps if s["status"] == "failed"), None)
     if failed:
         return f"failed at {failed}"
@@ -3620,7 +3669,17 @@ def run_view(run, detail=True):
         sent = (state.get("payload") or {}).get("listening")
         if isinstance(sent, dict):
             out["listening"] = {k: sent.get(k) for k in ("text", "count", "waiting", "sent_at", "counts")}
-            out["summary"] = out["summary"] or f"{sent.get('count') or 0} sent"
+            found = state.get("delivery")
+            counts = dict(sent.get("counts") or {})
+            if isinstance(found, dict):  # ended: what a step delivered, and what went back to waiting
+                counts.update(sent=len(found.get("sent") or []), back=len(found.get("missed") or {}))
+                counts.pop("sending", None)
+            elif run["status"] in ("queued", "running", "waiting", "held"):  # reserved for this run, not sent yet
+                counts["sending"] = counts.pop("sent", sent.get("count"))
+            out["listening"]["counts"] = counts
+            going = "sending" in counts
+            n = counts["sending"] if going else counts.get("sent", sent.get("count"))
+            out["summary"] = out["summary"] or f"{n or 0} {'sending' if going else 'sent'}"
     if detail:
         out["steps"] = (state or {}).get("steps") if state else None  # None: pruned after KEEP_DAYS
         if state and state.get("error"):

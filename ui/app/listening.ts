@@ -24,7 +24,8 @@ interface LstSourceRow {
 /** What a send's run carries (run.listening): the text that went out and the counts since the send before. */
 interface LstRun {
   text?: string; count?: number; waiting?: number; sent_at?: string;
-  counts?: { read?: number; duplicates?: number; dropped?: number; kept?: number; sent?: number; waiting?: number; failed?: number };
+  counts?: { read?: number; duplicates?: number; dropped?: number; kept?: number; sent?: number; waiting?: number; failed?: number;
+    sending?: number; back?: number };
 }
 
 const LST_UNITS = ['hour', 'day', 'week', 'month'];
@@ -303,13 +304,17 @@ function lstRunOf(run: object): LstRun | null {
   const l: unknown = (run as {listening?: unknown}).listening;
   return typeof l === 'object' && l !== null ? l as LstRun : null;
 }
-/** A send's run, opened: the counts since the send before and the text that went out; the steps' lines follow. */
+/** A send's run, opened: the counts since the send before and the text that went out; the steps' lines follow. Sent is
+ *  what a step delivered once the run ended; while it runs its items read Sending, and what no step delivered went back
+ *  to waiting. */
 function lstRunHTML(run: object): string {
   const l = lstRunOf(run);
   if (!l) return '';
   const c = l.counts || {};
+  const sent: [string, number | undefined, string] = c.sending != null ? ['Sending', c.sending, ' lst-b'] : ['Sent', c.sent ?? l.count, ' lst-b'];
   const rows: Array<[string, number | undefined, string]> = [['Read', c.read, ''], ['Duplicates removed', c.duplicates, ''], ['Dropped by rules', c.dropped, ''],
-    ['Kept', c.kept, ''], ['Sent', c.sent ?? l.count, ' lst-b'], ['Waiting', c.waiting ?? l.waiting, ' muted']];
+    ['Kept', c.kept, ''], sent, ['Waiting', c.waiting ?? l.waiting, ' muted']];
+  if (Number(c.back) > 0) rows.splice(5, 0, ['Back to waiting', c.back, '']);
   if (Number(c.failed) > 0) rows.splice(3, 0, ['Could not score', c.failed, '']);
   return `<div class="lst-run"><div class="lst-cnt"><div class="au-lb">Since the last one</div>
       ${rows.map(([label, n, cls]) => `<div class="lst-cr${cls}"><span>${label}</span><span class="au-n">${n == null ? '—' : Number(n).toLocaleString()}</span></div>`).join('')}</div>

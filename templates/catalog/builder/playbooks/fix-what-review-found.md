@@ -4,7 +4,7 @@ Triggered when a task you own enters Fixes 1 or Fixes 2. The reviewer's Review p
 stages" in your wake and in `tico task show`, and its comments may also be on the pull request. Reviewers only comment; the fixes and the decisions are yours.
 
 Outcome: each finding is acted on or answered with one line of reason, the checks pass at the new head, and the stage
-has what it needs: in Fixes 1 your done, in Fixes 2 the page that shows what was built.
+has what it needs: your done.
 
 ---
 
@@ -38,5 +38,6 @@ head as in `playbooks/build-a-dev-task.md` step 5, then push once. Record the he
 
 - **Fixes 1:** `tico task done <id> -m "<head sha>: fixed <list>; declined <list with one line each>" --version N`. The
   task moves to Review 2 once the checks pass at that head.
-- **Fixes 2:** write and attach the page in `playbooks/show-what-was-built.md`. The task moves to Merge once the checks
-  pass, Jev passes the page and a person OKs it.
+- **Fixes 2:** the same done. When Review 2 found nothing to fix, say done at once:
+  `tico task done <id> -m "<head sha>: Review 2 found nothing to fix" --version N`. The task moves to QA once the checks
+  pass at that head, and there you build the QA page (`playbooks/qa.md`).

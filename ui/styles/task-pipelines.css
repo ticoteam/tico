@@ -20,12 +20,16 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-col-body{display:flex;flex-direction:column;gap:8px;min-height:24px}
 /* A phone's stage: the same cards as a column, one under the other. */
 .pv-phone{display:flex;flex-direction:column;gap:8px}
-/* A snoozed task, last in its stage: dimmed, with a moon mark and the day it wakes (or On ice). */
+/* A snoozed task, last in its stage: dimmed, with the day it wakes (or Snoozed) and the moon, its Unsnooze button: the
+   mark's size, a 40 px tap area on a phone. */
 .pv-snoozed{color:var(--muted)}
 .tk-card.pv-snoozed{flex-direction:row;align-items:center;gap:6px;padding:6px 8px;background:none;border-style:dashed}
 .tk-card.pv-snoozed .tk-title{display:block;flex:1 1 auto;min-width:0;white-space:nowrap;text-overflow:ellipsis}
 .pv-snoozed .tk-title{opacity:.75}
-.pv-sleep{color:var(--muted)}
+.pv-sleep{position:relative;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);font:inherit;cursor:pointer}
+.pv-sleep:hover{color:var(--ink)}
+.pv-sleep:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.pv-is-phone .pv-sleep::after{content:"";position:absolute;left:50%;top:50%;width:40px;height:40px;transform:translate(-50%,-50%)}
 .tk-card .pv-wake{min-width:0}
 
 /* The list: a group per stage. */

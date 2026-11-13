@@ -580,6 +580,8 @@ KEEP = (
             "github_pr_diffs",
             "requirement_pages",
             "page_verdicts",
+            # Jev's duplicate check on each idea filed into Product's Ideas (backend/idea_checks.py): kept with its tasks.
+            "idea_checks",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
             "turns",

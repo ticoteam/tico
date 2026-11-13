@@ -60,11 +60,12 @@ def covered() -> set[int]:
 def idea_to_done(r: SoftRig) -> None:
     from backend import task_engine as E
 
-    # 1. A person files the request: it is not held by hand, and goes into Spec by itself on the next pass. The PM
-    #    attaches a spec, Jev passes it, a person OKs it.
+    # 1. A person files the request: once Jev's duplicate check answered, it goes into Spec by itself on the next pass.
+    #    The PM attaches a spec, Jev passes it, a person OKs it.
     p = r.idea("Export to CSV")
     r.at(p, "Ideas")
-    expect([s for s, _ in r.waits(p)] == ["room"], f"a person's request in Ideas waits on {r.waits(p)}, not room")
+    expect([s for s, _ in r.waits(p)] == ["jev"], f"a person's request in Ideas waits on {r.waits(p)}, not Jev")
+    r.jev()
     r.check()
     r.at(p, "Spec")
     expect(r.owner(p) == PM, f"Spec's owner is {r.owner(p)}")
@@ -97,8 +98,11 @@ def idea_to_done(r: SoftRig) -> None:
     r.says(e, "No PR linked")
 
     # 3. The Builder opens two PRs; checks run, then pass.
-    r.pr(e, 1)
+    # PR 2 is linked a second before PR 1: the task shows its first linked PR's line, and with both linked in the same
+    # frozen millisecond the seeded ids would decide which that is (step 7 reads PR 2's).
     r.pr(e, 2)
+    r.w.shift(1)
+    r.pr(e, 1)
     r.settle()
     r.says(e, "Checks running")
     expect(("source", "github") in r.waits(e), f"running checks wait on {r.waits(e)}, not GitHub")
@@ -131,9 +135,14 @@ def idea_to_done(r: SoftRig) -> None:
     r.jev()
     r.settle()
 
-    # 6. Fixes 2: what was built, Jev, then a person's OK. On to Merge, and the PRs are queued.
+    # 6. Fixes 2: Review 2 found nothing, so the Builder says done. QA: the QA page, Jev, then a person's OK.
+    # On to Merge, and the PRs are queued.
     r.at(e, "Fixes 2")
-    r.attach(e, r.page(BUILDER, "What was built: the export"), BUILDER)
+    expect(r.say_done(e, BUILDER) is not None, "the Builder could not say done in Fixes 2")
+    r.check()
+    r.at(e, "QA")
+    expect(r.owner(e) == BUILDER, f"QA's owner is {r.owner(e)}")
+    r.attach(e, r.page(BUILDER, "QA: the export"), BUILDER)
     r.jev()
     r.check()
     r.ok_page(e)
@@ -146,7 +155,7 @@ def idea_to_done(r: SoftRig) -> None:
 
     # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Owner is
     # told once, the manager once. No bot may queue the new commit (the OK was for the old one): it goes back to
-    # Fixes 2. A person may queue it, once its checks pass.
+    # QA. A person may queue it, once its checks pass.
     r.gh.push(2)
     r.settle()
     r.at(e, "Merge")
@@ -157,7 +166,7 @@ def idea_to_done(r: SoftRig) -> None:
     changed = [w for w in r.wakes(e, EM) if w[0].startswith("changed_after_ok")]
     expect(len(changed) == 1, f"the manager was told of the change after the OK {len(changed)} times")
     out = r.queue_again(e)
-    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    expect(isinstance(out, Refusal) and "Move the task back to QA" in out.detail, f"a bot queued it: {out!r}")
     out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while checks run: {out!r}")
     expect(f"The checks on {REF_2} are still running" in out.detail, out.detail)
@@ -204,12 +213,12 @@ def idea_to_done(r: SoftRig) -> None:
 
     # 11. Every stage in order.
     expect(r.visited(p) == ["Ideas", "Spec", "In development", "Validate", "Done"], f"Product: {r.visited(p)}")
-    want = ["On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "Merge", "Release", "Done"]
+    want = ["On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "QA", "Merge", "Release", "Done"]
     expect(r.visited(e) == want, f"Engineering: {r.visited(e)}")
 
 
 # ----------------------------------------------------------------------------- presets
-@case("presets", "A new org gets the presets: owners, requirements, On deck empty, Ideas by hand", covers=(19,))
+@case("presets", "A new org gets the presets: owners, requirements, On deck and Ideas empty", covers=(19,))
 def presets(r: SoftRig) -> None:
     from backend import pipeline_settings as PS
 
@@ -221,12 +230,12 @@ def presets(r: SoftRig) -> None:
     for record in (product, engineering):
         for stage in record["stages"]:
             expect(stage["owner"], f"{stage['name']} has no owner")
-            if stage["name"] != "On deck" and not stage.get("by_hand"):  # Ideas: tasks leave by hand, nothing asked
+            if stage["name"] not in ("On deck", "Ideas"):  # nothing asked: a task moves on when there is room
                 expect(stage["requirements"], f"{stage['name']} has no requirement")
     on_deck = next(s for s in engineering["stages"] if s["name"] == "On deck")
     expect(not on_deck["requirements"], f"On deck has {on_deck['requirements']}")
     stages = {s["name"]: s for s in [*product["stages"], *engineering["stages"]]}
-    expect(stages["Ideas"]["by_hand"], "tasks do not leave Ideas by hand")
+    expect(not stages["Ideas"]["by_hand"], "tasks leave Ideas by hand")
     expect(stages["Spec"]["task_limit"] == 20 and stages["Build"]["task_limit"] == 3, "the limits")
     owners = {name: stages[name]["owner"] for name in ("Build", "Review 1", "Review 2", "Merge", "Release")}
     want = {"Build": BUILDER, "Review 1": REVIEWER_1, "Review 2": REVIEWER_2, "Merge": RELEASE, "Release": RELEASE}
@@ -308,34 +317,39 @@ def push_past_pr_merged(r: SoftRig) -> None:
         )
         expect("Move back or close" in out.detail, f"no Move back and Close: {out.detail}")
     r.at(e, "Merge")
-    r.ok(RELEASE, lambda c: E.move(c, e, "Fixes 2", RELEASE, "Needs the Builder", r.version(e)), "Move back")
+    r.ok(RELEASE, lambda c: E.move(c, e, "QA", RELEASE, "Needs the Builder", r.version(e)), "Move back")
     r.effects()
     r.settle()
     expect(r.gh.state(1)["queue_state"] == "none", f"the PR stayed queued: {r.gh.state(1)}")
 
 
-@case("spec-full", "A third idea into Spec at its limit of 2 waits; a freed slot tells nobody", covers=(20,))
+@case(
+    "spec-full",
+    "A third idea into Spec at its limit of 2 waits; a freed slot takes it in, with no notice",
+    covers=(20,),
+)
 def spec_full(r: SoftRig) -> None:
     from backend import task_engine as E
 
     pid = r.preset(PRODUCT)["id"]
     with r.w.tx() as c:  # the preset gives Spec 20; a limit of 2 keeps the case small
         c.execute("UPDATE stages SET task_limit=2 WHERE pipeline_id=? AND name='Spec'", (pid,))
-    ideas = [r.idea(f"Idea {i}", by=PM) for i in range(1, 4)]  # the PM's own: held by hand
+    ideas = [r.idea(f"Idea {i}") for i in range(1, 4)]  # a person's: not snoozed
+    brief = r.idea("The PM's own brief", by=PM)  # filed snoozed: it waits for a person
+    r.jev()
+    r.check()
     for p in ideas[:2]:
-        r.by_hand(p)
         r.at(p, "Spec")
     third = ideas[2]
-    out = r.act(ANA, lambda c: E.move(c, third, E.NEXT, ANA))
-    expect(r.stage_of(third) == "Ideas", f"a third idea went into a full Spec ({out!r})")
-    expect(not r.room_wakes(PM), f"the PM was woken while Spec was full: {r.room_wakes(PM)}")
+    expect(r.stage_of(third) == "Ideas", "a third idea went into a full Spec")
+    expect([s for s, _ in r.waits(third)] == ["room"], f"the third idea waits on {r.waits(third)}, not room")
     r.ok(ANA, lambda c: E.move(c, ideas[0], E.CLOSED, ANA, "Not this quarter"), "an idea in Spec closes")
     r.check()
-    r.check()
+    r.at(third, "Spec")
     r.later(hours=2)
-    woken = r.room_wakes(PM)
-    expect(not woken, f"the PM was told {len(woken)} times that Spec had room: {woken}")  # no "has room" notice (C10)
-    expect(r.stage_of(third) == "Ideas", "the PM's own idea left Ideas without a person picking it")
+    r.check()
+    expect(not r.room_wakes(PM), f"the PM was sent a room notice: {r.room_wakes(PM)}")
+    expect(r.stage_of(brief) == "Ideas", "the PM's own brief left Ideas while snoozed")
 
 
 @case("close-product-while-queued", "Close the Product task while its PR is queued: the PR is pulled", covers=(24, 31))
@@ -452,11 +466,11 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while red: {out!r}")
     expect(f"Checks failed on {REF_1}" in out.detail, out.detail)
     # (b) a fix is pushed: the person's OK was for the old commit, so the Release Owner may not queue it (it goes
-    # back to Fixes 2); a person may, once its checks pass.
+    # back to QA); a person may, once its checks pass.
     r.gh.push(1)
     r.settle()
     out = r.queue_again(e)
-    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    expect(isinstance(out, Refusal) and "Move the task back to QA" in out.detail, f"a bot queued it: {out!r}")
     out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and f"The checks on {REF_1} are still running" in out.detail, f"{out!r}")
     r.settle(r.gh.ci_s)
@@ -464,12 +478,12 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     r.effects()
     r.settle()
     expect(r.gh.state(1)["queue_state"] == "queued", f"not queued again: {r.gh.state(1)}")
-    # (c) dropped again: sent back to Fixes 2, where the Builder has it.
+    # (c) dropped again: sent back to QA, where the Builder has it.
     r.gh.drop(1, "Merge conflict", None)
     r.settle()
-    r.ok(RELEASE, lambda c: E.move(c, e, "Fixes 2", RELEASE, "A conflict the Builder must fix", r.version(e)), "back")
-    r.at(e, "Fixes 2")
-    expect(r.owner(e) == BUILDER, f"Fixes 2 is {r.owner(e)}'s")
+    r.ok(RELEASE, lambda c: E.move(c, e, "QA", RELEASE, "A conflict the Builder must fix", r.version(e)), "back")
+    r.at(e, "QA")
+    expect(r.owner(e) == BUILDER, f"QA is {r.owner(e)}'s")
 
 
 @case("github-refuses-the-merge", "GitHub is down: the queue call is tried 3 times, then it is the owner's turn")

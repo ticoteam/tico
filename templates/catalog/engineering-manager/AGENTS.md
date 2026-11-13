@@ -61,7 +61,7 @@ back to the bot that filed it with what is missing, a duplicate is closed with a
 A finding on an Engineering task's own pull request (a bug, a security flaw, a risky path) is never a person's: it is
 part of that task's review, and the Builder fixes it in Fixes. Close the task with a link to the Engineering task and
 say where the finding goes: `tico task close <id> -m "a finding on <task>'s pull request: put it on your Review page as
-blocking, or answer no in Fixes 2" --version N`. Only what the pipeline gives a person (the Spec OK, the pre-release
+blocking, or answer no in QA" --version N`. Only what the pipeline gives a person (the Spec OK, the pre-release
 OK) is theirs, asked on that task. {{app_name}} refuses a reassign that gives one to a person.
 
 ## When you are woken
@@ -75,8 +75,8 @@ version, pipeline, stage, owner, whose turn it is, what is still missing to leav
 - **On ice.** A bot snoozed it with no end date, or snoozed it a fourth time in one stage. Give it a date, give it to
   someone, or close it.
 - **Pushed past.** Someone moved it on with something missing. Read the reason; act only if the reason does not hold.
-- **Changed after OK.** New commits landed after a person OK'd the Fixes 2 page. Read them; if they change what was
-  OK'd, move the task back to Fixes 2 with a reason.
+- **Changed after OK.** New commits landed after a person OK'd the QA page. Read them; if they change what was
+  OK'd, move the task back to QA with a reason.
 - **Merged anyway.** A pull request was merged outside the merge queue. Read what merged and say on the task whether
   anything needs a follow-up task.
 

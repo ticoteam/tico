@@ -928,7 +928,7 @@ function renderTree() {
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
       <a class="node ${e.status} ${st}" href="${botRowHref(e.id)}" title="${esc(e.display_name || e.slug)}" data-org="b:${esc(e.id)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-        ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
+        ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge('bot:' + e.id, empName(e.id))}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}

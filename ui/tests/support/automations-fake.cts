@@ -383,7 +383,12 @@ function listenRuns(now = Date.now()): Run[] {
         {id: 'lb1', type: 'bot_turn', status: 'ok', outputs: {}, cost: 0.06},
         {id: 'lt1', type: 'action', status: 'ok', outputs: {result: '1 task'}, cost: 0},
         {id: 'lu1', type: 'action', status: 'ok', outputs: {result: 'posted'}, cost: 0}]};
-  });
+  }).map((run, i) => i !== 1 ? run : {...run, status: 'partial', summary: 'Partly delivered · 1 of 3 not delivered (spend cap)',
+    // The second send: the spend cap stopped the bot turn, so its one item went back to waiting.
+    listening: {...run.listening!, counts: {...run.listening!.counts, sent: 2, back: 1}},
+    steps: [...run.steps!.map(s => s.id === 'lb1' ? {...s, status: 'spend_cap', missed: 1, cost: 0} : s),
+      // A choose step the cap stopped: ok, its default destination ran, but its turn never got the item.
+      {id: 'lc1', type: 'llm', status: 'ok', outputs: {skipped: 'spend_cap', to: 'later'}, missed: 1, cost: 0}]});
 }
 
 // One page on the fake hub. viewer: the person signed in (any but the fixture's owner sees nothing editable).
