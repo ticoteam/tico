@@ -13,15 +13,15 @@ It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
 header: opening flies it up from the row (or tab) to its place beside the name, quickly, closing flies it back down; while the
-panel is open a close mark holds the dot's place. Bots' questions
-and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
+panel is open a close mark holds the dot's place. The thread holds only your conversation and the Confirm previews of
+a send, a spend or a publish, by when they were asked. What waits on you stays in Needs you, and the Assistant names it
+when you ask ("anything need me?"): one plain line per item, or per group of alike items.
 
 The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-Nothing speaks up beside the dot. Bot questions and Confirm cards wait in the panel, and the dot never carries a sound
-or a count.
+Nothing speaks up beside the dot. Confirm cards wait in the panel, and the dot never carries a sound or a count.
 
 The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
@@ -32,10 +32,8 @@ Opening and closing change no `hidden` attribute anywhere and add nothing to the
 a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
 but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
 
-What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
-its own Home, with its Confirm and Cancel, and up to three bots' asks to you from Needs you. An ask with two to
-six choices is answered with a tap, any other with a line of words (an ask with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
+A Confirm card BotOps (or another bot) left in its own Home comes into the DM with its Confirm and Cancel. Bots' asks
+to you are never added to the chat: they wait in Needs you. You can answer one by telling the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
 records it as your answer. It answers only when your words give what the ask needs, such as a price, a pick, a yes or
 no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer
 nothing: the ask stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell

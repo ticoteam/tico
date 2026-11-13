@@ -9,9 +9,8 @@
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
 // means. It keeps its own small state, never the bot pages' (chat.js V2C), and drops the
 // Assistant page's cached copy when it sends.
-// What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
-// card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
-// answered here or by telling the Assistant.
+// A Confirm card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`) sits in the thread by when it
+// was asked. Bots' asks in Needs you are never added to the chat; the Assistant names them when asked.
 
 // The state of the panel's conversation (ASK), its thread and composer, as the functions below read and write them.
 interface AskChat {
@@ -329,7 +328,6 @@ document.addEventListener('click', ev => {
   ev.preventDefault();
   if (a.getAttribute('href')?.includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
 }, true);
-liveOn('needs-list', () => { ASK?.draw?.(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
 // On a phone Ask is a page of its own: another tab, even the one already under it, leaves it.
 document.addEventListener('click', ev => {

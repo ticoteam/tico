@@ -2174,9 +2174,11 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     return sorted(items, key=needs_key)
 
 
-# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)"): the list says who it is for
-# already, so they go; what comes before or after them (Jev's reason, a send back, a merge conflict) stays.
-_PAGE_OK_WORDS = re.compile(r"\s*\bOK [^()]*? \(version \d+\)\.?")
+# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)", task_requirements._page):
+# the list says who it is for already, so they go; what comes before or after them (Jev's reason, a send back, a merge
+# conflict) stays. Only the last such phrase is the stage's: one inside Jev's reason is kept, and a name may hold
+# brackets ("OK Chris (Owner) (version 3)").
+_PAGE_OK_VERSION = re.compile(r"\(version \d+\)\.?")
 _PAGE_WORD = re.compile(r"\s+page$", re.IGNORECASE)
 
 
@@ -2188,8 +2190,22 @@ def page_ask_line(name, title, waiting):
     what = _PAGE_WORD.sub("", name) or name
     title = (title or "").strip()
     head = f"{what} for {title}, ready for your OK" if title else f"{name}, ready for your OK"
-    said = _PAGE_OK_WORDS.sub(" ", waiting or "").strip()
+    said = _without_page_ok(waiting or "")
     return f"{head}. {said}" if said else head
+
+
+def _without_page_ok(waiting):
+    """`waiting` without its last "OK <name> (version N)" phrase, the one the stage wrote."""
+    versions = list(_PAGE_OK_VERSION.finditer(waiting))
+    if not versions:
+        return waiting.strip()
+    end = versions[-1]
+    start = waiting.rfind("OK ", 0, end.start())
+    while start > 0 and not waiting[start - 1].isspace():
+        start = waiting.rfind("OK ", 0, start)
+    if start < 0:
+        return waiting.strip()
+    return " ".join((waiting[:start] + " " + waiting[end.end() :]).split())
 
 
 def needs_key(x):

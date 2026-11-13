@@ -1576,3 +1576,14 @@ def test_needs_you_names_a_page_ok_by_its_task_and_decision_not_the_requirement(
         "Review for Share chat, ready for your OK. Jev is unsure: no checks."
     )
     assert views.page_ask_line("Results page", "", "OK someone (version 1)") == "Results page, ready for your OK"
+    # Only the stage's own last phrase goes: one inside Jev's reason stays, and a name with brackets goes whole.
+    said = "Jev is unsure: says OK Ana (version 2) earlier. OK Ana (version 2)"
+    assert (
+        views.page_ask_line("Spec page", "X", said)
+        == "Spec for X, ready for your OK. " + said[: -len(" OK Ana (version 2)")]
+    )
+    assert views.page_ask_line("Spec page", "X", "OK Chris (Owner) (version 3)") == "Spec for X, ready for your OK"
+    conflict = "OK Ana (version 1). The PR has a merge conflict: builder fixes it after your OK."
+    assert views.page_ask_line("Review page", "X", conflict) == (
+        "Review for X, ready for your OK. The PR has a merge conflict: builder fixes it after your OK."
+    )
