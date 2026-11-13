@@ -140,6 +140,8 @@ let browser: Browser = null!;
     await shot(page, 'threads-unread-desktop');
 
     // Mark read shows on hover, takes the row and one off the badge at once, and opens nothing.
+    // A mention row has no Mark read: reading does not settle an open mention, so the row would come back.
+    assert.equal(await page.locator('[data-tr-read="t-task"]').count(), 0);
     const route = await page.evaluate(() => location.hash);
     await page.locator('[data-thread="dm-ben"]').hover();
     const read = page.locator('[data-tr-read="dm-ben"]');
@@ -219,6 +221,23 @@ let browser: Browser = null!;
     assert.equal(await page.locator('[data-tr-read]').count(), 0, 'a phone has no Mark read');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 390), 'no sideways scroll at 390px');
     await shot(page, 'threads-unread-phone');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
+  // A touch tablet (wider than a phone, no hover): every count shows, and no Mark read covers it, so a tap on a row's right
+  // edge opens the chat.
+  {
+    const {page, seen} = await open(browser, {viewport: {width: 1024, height: 768}, phone: true});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('[data-list="unread"] .tr-row').first().waitFor();
+    assert.deepEqual(await page.locator('[data-list="unread"] .tr-count').allTextContents(), ['@', '3', '1', '2']);
+    const covered = await page.locator('[data-list="unread"] .tr-count').evaluateAll(els => els.map(el => {
+      const box = el.getBoundingClientRect(), top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return top === el || el.contains(top) ? '' : String(top?.className || top?.tagName);
+    }));
+    assert.deepEqual(covered, ['', '', '', ''], 'nothing covers a count');
+    await shot(page, 'threads-unread-tablet');
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
