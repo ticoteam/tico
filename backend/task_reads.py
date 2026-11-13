@@ -209,7 +209,7 @@ def _could_read(c, visible_sql, tid, ref):
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
-    `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`),
+    `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
     `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
     person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
     entered its stage: its open visit, else when it was filed; a board card's age) and `on_person` (it waits only on a
@@ -276,8 +276,11 @@ def brief(c, rows, visible_sql="1"):
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         row["snoozed"] = row["id"] in snoozed
-        row["blocked_by"] = blocked_by.get(row["id"], [])
-        row["blocks"] = blocks.get(row["id"], [])
+        # Only on a row with a dependency: 500 rows of empty lists would cost the list's byte budget.
+        if blocked_by.get(row["id"]):
+            row["blocked_by"] = blocked_by[row["id"]]
+        if blocks.get(row["id"]):
+            row["blocks"] = blocks[row["id"]]
         row["pushed_past"] = row["id"] in pushed
         row["stage_since"] = entered.get(row["id"]) or row.get("created_at")
         row["on_person"] = row["id"] in person

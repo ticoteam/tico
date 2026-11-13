@@ -52,17 +52,18 @@ def test_a_board_row_names_the_tasks_that_block_it_and_those_it_blocks(c):
     TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     read = rows(c, blocker, blocked, other)
     number = E.task(c, blocker)["number"]
-    assert read[blocked]["blocked_by"] == [{"id": blocker, "number": number}]
-    assert read[blocked]["blocks"] == []
-    assert read[blocker]["blocks"] == [{"id": blocked, "number": E.task(c, blocked)["number"]}]
-    assert read[blocker]["blocked_by"] == []
-    assert (read[other]["blocked_by"], read[other]["blocks"]) == ([], [])
+    assert read[blocked].get("blocked_by", []) == [{"id": blocker, "number": number}]
+    assert read[blocked].get("blocks", []) == []
+    assert read[blocker].get("blocks", []) == [{"id": blocked, "number": E.task(c, blocked)["number"]}]
+    assert read[blocker].get("blocked_by", []) == []
+    # A row with no dependency carries neither field: a 500-row list stays inside its byte budget.
+    assert "blocked_by" not in read[other] and "blocks" not in read[other]
     # Blocked, not asleep: its turn is the dependency, and it is not snoozed.
     assert read[blocked]["snoozed"] is False and read[blocked]["turn"]["state"] == W.TASKS
     # Once the blocker ends, neither row says so any more.
     E.move(c, blocker, E.DONE, X.ANA, "Finished")
     read = rows(c, blocker, blocked)
-    assert (read[blocked]["blocked_by"], read[blocker]["blocks"]) == ([], [])
+    assert (read[blocked].get("blocked_by", []), read[blocker].get("blocks", [])) == ([], [])
 
 
 def test_a_reader_who_may_not_open_the_other_end_is_not_told_which_task_it_is(c):
@@ -71,9 +72,9 @@ def test_a_reader_who_may_not_open_the_other_end_is_not_told_which_task_it_is(c)
     TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     hidden = f"id <> '{blocker}'"
     read = rows(c, blocked, visible_sql=hidden)
-    assert read[blocked]["blocked_by"] == [{"id": None, "number": None}]  # still blocked: the mark stays
+    assert read[blocked].get("blocked_by", []) == [{"id": None, "number": None}]  # still blocked: the mark stays
     read = rows(c, blocker, visible_sql=f"id <> '{blocked}'")
-    assert read[blocker]["blocks"] == []
+    assert read[blocker].get("blocks", []) == []
 
 
 def test_a_dependency_says_since_when_from_both_ends(c):

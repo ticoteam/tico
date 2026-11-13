@@ -2664,11 +2664,14 @@ SCHEMAS = {
         pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
         blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}}))
         | {
-            "description": "On a list row: the open tasks it depends on (\"Blocked by #304\"), oldest first; one the "
-            "reader may not open has a null id and number"
+            "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by #304\"), oldest "
+            "first; one the reader may not open has a null id and number. Absent when there are none"
         },
         blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}}))
-        | {"description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\")"},
+        | {
+            "description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\"). "
+            "Absent when there are none"
+        },
         stage_since={
             "type": ["string", "null"],
             "description": "On a list row: when it entered its stage, else when it was filed",
@@ -3704,9 +3707,28 @@ SCHEMAS = {
             "pushed_past": "b",
             "stage_since": "n",
             "on_person": "b",
-            "blocked_by": items(obj({"id": "n", "number": {"type": ["integer", "null"]}})),
-            "blocks": items(obj({"id": "s", "number": {"type": ["integer", "null"]}})),
-        }
+        },
+        [
+            "id",
+            "number",
+            "title",
+            "status",
+            "version",
+            "pipeline_id",
+            "stage_id",
+            "owner_id",
+            "assignee_id",
+            "requester_id",
+            "due_at",
+            "turn",
+            "late",
+            "snoozed",
+            "pushed_past",
+            "stage_since",
+            "on_person",
+        ],
+        blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}})),
+        blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}})),
     ),
     "GranolaStatus": obj(
         {
