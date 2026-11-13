@@ -686,6 +686,21 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
 
 
+def test_a_bare_dotted_word_in_the_ui_names_no_python_module_from_sys_path(tmp_path):
+    # backend/tests/test_botops_evals.py imports `run` from sys.path, so `run.status` in a shell script may mean any run.py;
+    # in ui/app/*.ts it means none. e2e/website-tools/run.py runs the release scripts (#3335), which run this selector,
+    # and the UI reaching it made every pull request run the suite.
+    source(tmp_path, "evals/replay/run.py", "STATUS = 1\n")
+    source(tmp_path, "backend/tests/test_evals.py", "import run\ndef test_x(): pass\n")
+    source(tmp_path, "ui/app/jobs.ts", "export const done = (run) => run.status;\n")
+    source(tmp_path, "scripts/replay.sh", "python3 -c 'import run; print(run.STATUS)'\n")
+    source(tmp_path, "ui/app/boot.ts", "spawn('python3', ['-m', 'evals.replay.run']);\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "evals/replay/run.py" not in graph.runs["ui/app/jobs.ts"]
+    assert "evals/replay/run.py" in graph.runs["scripts/replay.sh"]
+    assert "evals/replay/run.py" in graph.runs["ui/app/boot.ts"]
+
+
 def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
     # Every tree held at once peaked near 2.3 GB on this checkout, which the allocator keeps: four workers that each
     # built the map ran a merge queue VM out of memory. Each tree is let go before the next file is parsed.

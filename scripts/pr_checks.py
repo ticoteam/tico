@@ -190,6 +190,8 @@ def git_files(root):
 TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts"}
+# Languages that cannot import a Python module from sys.path, so a bare dotted word in them names none.
+JS_LANGUAGES = {".js", ".cjs", ".mjs", ".ts"}
 PATHLIKE = {
     "Path",
     "PurePath",
@@ -703,7 +705,10 @@ class DependencyMap:
             if token.startswith(("./", "../")) and folder != ".":
                 self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
             if IDENTIFIER.match(token) and "." in token:
-                self.runs[path] |= self.module(token, bare=True)
+                # A sys.path module (`import run` in a test) is not one a script names by its bare name: `run.status` in
+                # ui/app/*.ts made every run.py a dependency of the UI, and e2e/website-tools/run.py runs scripts/heavy.sh,
+                # which runs this selector, so every change ran the suite. A dotted path from the root still counts.
+                self.runs[path] |= self.module(token, bare=Path(path).suffix not in JS_LANGUAGES)
 
     def tokens(self):
         """Each text file's path-like tokens, indexed by token (built on first use). A relative token also indexes the
