@@ -40,7 +40,7 @@ def tico(*args):
     if isinstance(answer, dict) and answer.get("error"):
         raise Problem(str(answer.get("detail") or answer["error"])[:400])
     if done.returncode or answer is None:
-        raise Problem((done.stderr or done.stdout or f"tico exited {done.returncode}").strip()[:400])
+        raise Problem((done.stderr or done.stdout or f"exit code {done.returncode}").strip()[:400])
     return answer
 
 
