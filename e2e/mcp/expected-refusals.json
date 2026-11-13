@@ -105,7 +105,6 @@
  "tico_gateway_fetch": "422 validation",
  "tico_gateway_search": "409 gateway_not_connected",
  "tico_general_manager_set": "usage",
- "tico_github_connect": "422 github_org",
  "tico_github_finish": "400 github_state",
  "tico_goal_checkin": "404 not_found",
  "tico_goal_checkin_list": "404 not_found",
