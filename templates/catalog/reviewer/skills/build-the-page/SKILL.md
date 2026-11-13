@@ -14,8 +14,9 @@ never sent until it was seen rendered.
 1. **The opening says what it is and what to decide.** Two or three short lines in `<div id="lead">`: what the page is
    about and its result, then a line that starts **Decide:**. A bug or no-screen spec opens with **Cause:** and
    **Fix:**, one line each. At most 70 words.
-2. **Then the pictures. Details last.** Before and after, at phone (390 px) and desktop (1280 px) width, with a red
-   numbered arrow on each thing that changes or is measured. Under each picture, one line per number. Then
+2. **Then the pictures. Details last.** Before and after, at phone (390 px) and desktop (1280 px; 1440 px when both
+   sides come from the demo) width, with a red numbered arrow on each thing that changes or is measured. Under each
+   picture, one line per number. Then
    `<section id="details">`: goal, scope, criteria, version, findings, whatever the template names.
 3. **Pictures are real screenshots of the app, never drawings.** No mock-up drawn in HTML, CSS or SVG: drawn screens
    look nothing like the app and are sent back. Before is the app today; after is the app running with the change
@@ -44,7 +45,8 @@ opening).
 
 ## Real screenshots
 
-Name each file `shots/<screen>-<before|after>-<390|1280>.png` (for validation, `shots/<screen>-<390|1280>.png`).
+Name each file `shots/<screen>-<before|after>-<390|1280|1440>.png` (1440 when both sides come from the demo; for
+validation, `shots/<screen>-<390|1280>.png`), and say the same width in the picture's caption.
 
 - **Production, as it is today** (every validation picture; a spec's before only where no demo runs): the read-only view, signed in as
   yourself.
