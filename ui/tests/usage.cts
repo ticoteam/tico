@@ -391,6 +391,19 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await support.locator('.use-line').click();
     assert.equal(await support.locator('.use-detail').isHidden(), true);
 
+    // A bot whose runs reported no tokens: no cache rate and no empty bar.
+    const inbox = page.locator('.use-row[data-bot=inbox]');
+    await inbox.locator('.use-line').click();
+    await inbox.locator('.use-detail .use-sum').waitFor();
+    assert.match(flat(await inbox.locator('.use-sum').innerText()), / · 0 tokens · cache rate —$/);
+    assert.equal(flat(await inbox.locator('.use-sec').first().innerText()), 'Tokens No token counts reported for 3 runs');
+    assert.equal(await inbox.locator('.use-mix').count(), 0);
+    await inbox.locator('.use-line').click();
+    await page.locator('button.use-filter').click();
+    await page.locator('#use-filter-panel [data-use-filter=model]').selectOption('');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
+
     // One day has no daily chart: a single bar would only fill the width. The automations and the CSV stay.
     await page.locator('.use-seg button', {hasText: 'Today'}).click();
     await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy])'));
