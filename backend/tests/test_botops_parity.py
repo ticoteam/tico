@@ -494,7 +494,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     template = tmp_path / "catalog" / "qa-custom"
     template.mkdir(parents=True)
     (template / "card.yaml").write_text("template: qa-custom\nslug: qa-custom\nname: QA Custom\n")
-    (template / "AGENT.md").write_text("# Template defaults\n")
+    (template / "AGENTS.md").write_text("# Template defaults\n")
     api.app.state.store.settings.catalog_dir = template.parent
     err, made = mcp(
         api,

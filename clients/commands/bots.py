@@ -340,7 +340,7 @@ def bot_copy(api, args):
 
 @tool(
     "tico_bot_update_from_original",
-    "Bring a copy's instructions (AGENT.md, skills, playbooks) up to date with the bot it was copied from, as the "
+    "Bring a copy's instructions (AGENTS.md, skills, playbooks) up to date with the bot it was copied from, as the "
     "person who asked you (they manage the copy): a file-level three-way merge, in one commit on the copy's repository. Answers the "
     "original's diff since the copy, and either `updated`, `current`, or `conflicts` (nothing changed; settle each with the person, "
     "edit the copy, commit, then call again with `resolved`). Runs on this computer.",
@@ -372,7 +372,7 @@ def bot_update_from_original(api, args):
         "paths": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Only these files or folders (AGENT.md, skills/x)",
+            "description": "Only these files or folders (AGENTS.md, skills/x)",
         },
         "title": _s("The pull request's or task's title"),
     },

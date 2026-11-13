@@ -6,7 +6,7 @@ from backend.tests.helpers.api import assign, get, post, runner
 from backend.tests.helpers.settings_transitions import _company_default
 
 REPO = "Acme/emp-ops"
-GENERIC = "Missing bot repository or AGENT.md"
+GENERIC = "Missing bot repository or AGENTS.md"
 
 
 def report(api, machine, present, published=None, problems=(), ready=None, repository=""):

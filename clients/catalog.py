@@ -3,7 +3,7 @@
 A card (`templates/catalog/<template>/card.yaml`) says what a bot is for, what it owns, what it
 never does, and whether the runner may set it up itself (`bootstrap: true`, which is the
 assistant and BotOps, because BotOps cannot create itself). Everything else in the folder is the
-repository a new bot starts from — AGENT.md, bot.yaml, playbooks, knowledge, memory — with
+repository a new bot starts from — AGENTS.md, bot.yaml, playbooks, knowledge, memory — with
 `{{company_name}}`, `{{app_name}}`, `{{assistant_name}}` and `{{bot_name}}` standing in for what
 this installation calls itself and this bot.
 
@@ -37,12 +37,15 @@ CARD = "card.yaml"
 # PRODUCT_OWNED is what a card says is Tico's own (`product_owned` overrides it): its instructions, playbooks and skills.
 # A built-in bot (a `bootstrap: true` card) takes those on every update even over its own edits.
 STAMP = ".tico-template.json"
-PRODUCT_OWNED = ("AGENT.md", "playbooks", "skills")
+INSTRUCTIONS = "AGENTS.md"
+# The instruction file's name before AGENTS.md: the runner moves it to AGENTS.md on the bot's next turn.
+OLD_INSTRUCTIONS = "AGENT.md"
+PRODUCT_OWNED = (INSTRUCTIONS, "playbooks", "skills")
 # Also the template's: the permissions file it ships (no template ships a Codex settings file) and its knowledge pages.
 TEMPLATE_OWNED = (".claude/settings.json", "knowledge")
 # Written for this company when the bot is made, never by the template: the onboarding answers.
 COMPANY_PAGE = "knowledge/company.md"
-# What the bot and its people write (memory, state, reports, bot.yaml, their own playbooks and knowledge) stays theirs.
+# What the bot and its people write (memory, reports, bot.yaml, their own playbooks and knowledge) stays theirs.
 SET_UP = re.compile(r"^Set up \S+ from the \S+ template$")
 # The seat's own part of a seat bot's instructions (backend/recruiting.py brief), carried over a newer template.
 JOB = re.compile(r"^## Job description[ \t]*$", re.M)
@@ -186,7 +189,7 @@ def company_page(names, answers, today=None):
     """`knowledge/company.md`: what the person said about their company while choosing bots.
 
     Every bot reads its own knowledge folder, so this is where the answers belong rather than in
-    each AGENT.md. Plain sentences, and a `## Sources` line that says where they came from, so a
+    each AGENTS.md. Plain sentences, and a `## Sources` line that says where they came from, so a
     bot that later learns better knows what it is correcting.
     """
     names, answers = dict(names or {}), dict(answers or {})
@@ -239,7 +242,7 @@ def materialize(
     display_name=None,
     instructions=None,
     directory=None,
-    state=None,
+    setup=None,
     folder=None,
 ):
     """Copy one catalog template into `<workspace>/bot-<slug>` and commit it. Returns the path. `folder` is the folder
@@ -247,11 +250,10 @@ def materialize(
     gets `bot-<slug>-<part of its id>`), and wins over the slug's folder.
 
     The names fill the placeholders, the onboarding answers become `knowledge/company.md`, and
-    `instructions` — what the person wrote for this bot during onboarding — replaces AGENT.md
-    when it is given. `state` maps `state.md` sections to their text, for a bot whose setup is already done when it
-    is made (the sample company, backend/sample_company.py): a template's state.md says setup has not started, and
-    its AGENT.md asks the setup questions before any other work until state.md says otherwise. An existing
-    directory is never touched: a bot's repository is its memory.
+    `instructions` — what the person wrote for this bot during onboarding — replaces AGENTS.md
+    when it is given. `setup` maps `## <heading>` sections to their text, added to `knowledge/company.md` for a bot
+    whose setup is already done when it is made (the sample company, backend/sample_company.py). An existing directory
+    is never touched: a bot's repository is its memory.
     """
     if not SLUG_RE.fullmatch(slug or ""):
         raise ValueError("A bot slug is lowercase letters, digits, and single hyphens")
@@ -290,12 +292,9 @@ def materialize(
     if manifest.is_file():
         _write(target, manifest, identify(manifest.read_text(), slug, values["bot_name"]))
     (target / "knowledge").mkdir(exist_ok=True)
-    _write(target, target / "knowledge" / "company.md", company_page(names, answers))
+    _write(target, target / COMPANY_PAGE, set_sections(company_page(names, answers), setup))
     if instructions:
-        _write(target, target / "AGENT.md", str(instructions).rstrip("\n") + "\n")
-    if state:
-        page = target / "state.md"
-        _write(target, page, set_sections(page.read_text() if page.is_file() else "# State\n", state))
+        _write(target, target / INSTRUCTIONS, str(instructions).rstrip("\n") + "\n")
     apply_mailbox(target, instructions)
     _stamp(
         target,
@@ -331,7 +330,7 @@ def _product_files(source, template, values, directory=None):
 
 
 def with_job(text, instructions):
-    """A template's AGENT.md with the seat's job description the bot was given (`## Job description` to the end)."""
+    """A template's AGENTS.md with the seat's job description the bot was given (`## Job description` to the end)."""
     found = JOB.search(str(instructions or ""))
     if not found:
         return text
@@ -340,16 +339,16 @@ def with_job(text, instructions):
 
 def offered(template, values, instructions=None, directory=None, mailbox=None):
     """{relative path: text} of every file a bot takes from its template: the product-owned files, the permissions file
-    and the template's knowledge pages, never the company page. AGENT.md keeps the job description of `instructions`
-    (what the bot was made with, or its AGENT.md now), and a `{{mailbox}}` is filled from `mailbox`, else from the
+    and the template's knowledge pages, never the company page. AGENTS.md keeps the job description of `instructions`
+    (what the bot was made with, or its AGENTS.md now), and a `{{mailbox}}` is filled from `mailbox`, else from the
     `Mailbox:` line of `instructions`."""
     source = template_dir(template, directory)
     files = dict(_product_files(source, template, values, directory))
     for rel, text in _files_under(source, TEMPLATE_OWNED, values):
         files.setdefault(rel, text)
     files.pop(COMPANY_PAGE, None)
-    if "AGENT.md" in files:
-        files["AGENT.md"] = with_job(files["AGENT.md"], instructions)
+    if INSTRUCTIONS in files:
+        files[INSTRUCTIONS] = with_job(files[INSTRUCTIONS], instructions)
     box = mailbox if mailbox is not None else mailbox_of(instructions)
     return {rel: text.replace("{{mailbox}}", box) if box else text for rel, text in files.items()}
 
@@ -461,8 +460,8 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
     target = outside_installation(target)
     result = {"added": [], "updated": [], "removed": [], "kept": []}
     found = card(template, directory)
-    if not found or not (target / "AGENT.md").is_file():
-        return result
+    if not found or not (target / INSTRUCTIONS).is_file():
+        return result  # a repository still on AGENT.md is refreshed once the runner has moved it to AGENTS.md
     names = dict(names or {})
     values = {key: str(names.get(key) or "") for key in PLACEHOLDERS[:-1]}
     values["bot_name"] = fill(str(display_name or _display_name(target) or found.get("name") or target.name), values)
@@ -478,7 +477,10 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
         given, declined, at = dict(record.get("files") or {}), dict(record.get("kept") or {}), record.get("version")
     if newer(at, version):
         return result
-    agent = _text(target / "AGENT.md")
+    for record_of in (given, declined):  # what the bot was given as AGENT.md, it has as AGENTS.md since the move
+        if OLD_INSTRUCTIONS in record_of and INSTRUCTIONS not in record_of:
+            record_of[INSTRUCTIONS] = record_of.pop(OLD_INSTRUCTIONS)
+    agent = _text(target / INSTRUCTIONS)
     offer = offered(template, values, agent, directory, mailbox=mailbox_of(agent) or mailbox_of(instructions))
     product = {rel for rel, _ in _product_files(template_dir(template, directory), template, values, directory)}
     built_in = bool(found.get("bootstrap"))

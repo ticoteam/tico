@@ -1,4 +1,4 @@
-"""Scripted turns of the built-in Bookkeeper (slug `finance-owner`; templates/catalog/finance-owner/AGENT.md and playbooks).
+"""Scripted turns of the built-in Bookkeeper (slug `finance-owner`; templates/catalog/finance-owner/AGENTS.md and playbooks).
 
 Each test is one accounting job from spec section 11. The Bookkeeper runs with its own run token and only its
 tico_finance_* tools (the `call` helper of test_mcp.py, the same MCP door a bot uses), against a fake Mercury. Each call
@@ -31,7 +31,7 @@ PAYEE = {
 
 
 def vendor_bill(api, token, number="NW-1042", amount=45_000):
-    """A vendor and its bill, entered and approved the way the Bookkeeper enters one (AGENT.md, Each Books check, 2)."""
+    """A vendor and its bill, entered and approved the way the Bookkeeper enters one (AGENTS.md, Each Books check, 2)."""
     err, vendor = ask(api, token, "contact_create", {"name": "Northwind Hosting", "kind": "vendor"}, "vendor:northwind")
     assert not err and vendor["status"] == "committed", vendor
     err, made = ask(
@@ -94,7 +94,7 @@ def test_categorize_turn(api):
     assert not err and deposit["feed_id"] not in {r["feed_id"] for r in left["items"]}, left
 
 
-def test_categorize_proposes_a_posting_rule(api):  # AGENT.md step 4: a pattern repeats, so propose a rule
+def test_categorize_proposes_a_posting_rule(api):  # AGENTS.md step 4: a pattern repeats, so propose a rule
     token = hire(api)
     err, out = ask(
         api,
@@ -409,7 +409,7 @@ def test_sales_tax_turn(api):
 
 
 def test_gap_sales_tax_is_readable_before_approval(api):
-    """AGENT.md 'Sales tax return due': the amount tax_remit shows is checked against the year's sales tax workpaper before
+    """AGENTS.md 'Sales tax return due': the amount tax_remit shows is checked against the year's sales tax workpaper before
     approval. The workpaper is a whole read for someone who sees everything (the hire helper's Everything grant)."""
     token = hire(api)
     err, authority = ask(api, token, "contact_create", {"name": "California CDTFA", "kind": "vendor"}, "vendor:cdtfa")
@@ -434,7 +434,7 @@ def test_gap_sales_tax_is_readable_before_approval(api):
 
 # ----------------------------------------------------------------------------- year end (spec 11: 1099-NEC by Jan 31)
 def test_gap_year_end_1099_list_is_readable(api):
-    """AGENT.md asks the owner to review the 1099-NEC flagged vendors before the due date: the workpaper lists them."""
+    """AGENTS.md asks the owner to review the 1099-NEC flagged vendors before the due date: the workpaper lists them."""
     token = hire(api)
     err, vendor = ask(
         api,
@@ -449,7 +449,7 @@ def test_gap_year_end_1099_list_is_readable(api):
     assert any(r["vendor"] == "Northwind Hosting" for r in flagged["rows"]), flagged
 
 
-# ----------------------------------------------------------------------------- what the bot may never do (AGENT.md, Never)
+# ----------------------------------------------------------------------------- what the bot may never do (AGENTS.md, Never)
 def test_bookkeeper_is_refused_what_it_may_never_do(api):
     token = hire(api)
     before = get(api, "finance/access")

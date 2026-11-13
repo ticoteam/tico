@@ -3412,28 +3412,21 @@ def install_views(app, store, auth, mutate, task_view):
             row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             config = json.loads(row[0]) if row else {}
             safe = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets", "secrets_file")}
-            status = H.status(c, bot) or {}
             instruction = c.execute("SELECT content FROM bot_agent_instructions WHERE bot=?", (bot,)).fetchone()
             if not instruction:
                 instruction = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
             instructions = instruction["content"] if instruction and instruction["content"].strip() else ""
-            state = "# Cloud status\n\nState: " + str(status.get("state") or H.bot(c, bot)["state"])
-            if status.get("focus"):
-                state += "\n\nFocus: " + status["focus"]
-            if status.get("last_result"):
-                state += "\n\nLast result: " + status["last_result"]
             from .memory_history import documents
 
             memory = documents(c, bot)
             return {
-                "AGENT.md": instructions,
-                "state.md": state + "\n",
+                "AGENTS.md": instructions,
                 "memory/learnings.md": memory.get("memory/learnings.md", ""),
                 "memory/decisions.md": memory.get("memory/decisions.md", ""),
                 "bot.yaml": yaml.safe_dump(safe, sort_keys=False, allow_unicode=True),
                 "employee.yaml": yaml.safe_dump(safe, sort_keys=False, allow_unicode=True),
                 "playbooks": {},
-                "source": "cloud registry and status snapshot",
+                "source": "cloud registry snapshot",
             }
 
     @app.get("/api/employees/{bot}/session")

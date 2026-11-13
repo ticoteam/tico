@@ -1,6 +1,6 @@
 """Every `hub` command a bot is taught must parse with clients/hubcli.py, and every task command must run as taught.
 
-Bots copy the commands they read in policies/, the templates their repositories are made from (AGENT.md, playbooks,
+Bots copy the commands they read in policies/, the templates their repositories are made from (AGENTS.md, playbooks,
 skills), the shared skills, the integration pages, the runner's prompt and the BotOps routine's text. When the task
 engine changed (docs/pipelines-v3.md), those texts kept teaching commands that no longer existed, so a bot in a new
 company failed on its first task. Parsing was not enough either: `tico task label <id> --add x` parsed, but the CLI
@@ -27,7 +27,7 @@ from backend.tests.helpers.assistant_template_commands import argv_of, commands_
 from clients import hubcli, remotecli
 
 ROOT = Path(__file__).resolve().parents[2]
-# Where a bot reads the commands it runs: policies, the templates (AGENT.md, playbooks, skills, knowledge), the shared
+# Where a bot reads the commands it runs: policies, the templates (AGENTS.md, playbooks, skills, knowledge), the shared
 # skills, the integration pages and the runner's prompt as it renders (its goldens).
 FOLDERS = ("policies", "templates", "skills", "integrations", "runner-rs/src/testdata")
 SUFFIXES = (".md", ".yaml", ".txt")

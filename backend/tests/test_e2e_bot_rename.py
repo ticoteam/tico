@@ -61,7 +61,7 @@ def test_a_new_bot_runs_in_its_named_folder_and_keeps_it_after_a_rename(api, mac
     projects = tmp_path / "projects"
     folder = projects / "bot-sales-helper"
     folder.mkdir()
-    (folder / "AGENT.md").write_text("# Sales Helper\n\nAnswer the Acme team.\n")
+    (folder / "AGENTS.md").write_text("# Sales Helper\n\nAnswer the Acme team.\n")
     (folder / "bot.yaml").write_text(f"name: sales-helper\nruntime: {machine.runtime}\nmodel: {MODELS['claude']}\n")
 
     machine.start()

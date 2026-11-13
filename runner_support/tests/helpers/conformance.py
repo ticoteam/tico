@@ -124,7 +124,7 @@ class Computer:
             post(api, f"credentials/{key['id']}/grants", {"subject": "bot:ops"})
         repo = tmp_path / "projects" / "bot-ops"
         repo.mkdir(parents=True)
-        (repo / "AGENT.md").write_text("# Ops\n\nAnswer the Acme team.\n")
+        (repo / "AGENTS.md").write_text("# Ops\n\nAnswer the Acme team.\n")
         (repo / "bot.yaml").write_text(f"name: ops\nruntime: {self.runtime}\nmodel: {MODELS[harness]}\n")
         if git:
             # A checkout with an upstream, so a task can have a worktree of its own (runner-rs/src/sessions.rs).

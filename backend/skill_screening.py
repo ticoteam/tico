@@ -8,7 +8,7 @@ row, and writes one `skill_screenings` row plus the proposal's `screen_status` w
 What the screen is made of:
 
 - **Patterns** (code, free, deterministic): hidden Unicode, HTML comments, encoded blobs, URLs, pipe-to-shell, reads of
-  secrets, writes to agent settings, hooks, other skills or AGENT.md/CLAUDE.md, network calls in scripts, and the
+  secrets, writes to agent settings, hooks, other skills or AGENTS.md/CLAUDE.md, network calls in scripts, and the
   injection phrases screening.py already knows. Each hit names its file and line. A hidden-Unicode, secret-read or
   pipe-to-shell hit raises the risk to at least medium whatever the model says.
 - **The model**: Gateway Decide High alone (backend/judge.py `strict_engine`), question set `questions/skill-screen.json`,

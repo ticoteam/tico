@@ -127,8 +127,8 @@ def step_result(store, auth, max_bots=3):
 
 
 def test_what_counts_as_memory():
-    assert DA.counted(LEARNINGS) and DA.counted("AGENT.md") and DA.counted("CLAUDE.md")
-    assert not DA.counted("memory/state.md"), "state.md is rewritten every turn: churn, not memory"
+    assert DA.counted(LEARNINGS) and DA.counted("AGENTS.md") and DA.counted("CLAUDE.md")
+    assert DA.counted("AGENTS.md"), "a repository not moved to AGENTS.md yet"
     assert not DA.counted("knowledge/notes.md") and not DA.counted("secrets/x")
 
 
@@ -136,9 +136,9 @@ def test_changed_lines_are_the_hunk_lines_not_the_file_headers():
     text = (
         "diff --git a/memory/learnings.md b/memory/learnings.md\n--- a/memory/learnings.md\n+++ b/memory/learnings.md\n"
         "@@ -1,2 +1,2 @@\n-old\n+new\n keep\n+++ not a header\n"
-        "diff --git a/memory/state.md b/memory/state.md\n--- a/memory/state.md\n+++ b/memory/state.md\n@@ -1 +1 @@\n-a\n+b\n"
+        "diff --git a/memory/decisions.md b/memory/decisions.md\n--- a/memory/decisions.md\n+++ b/memory/decisions.md\n@@ -1 +1 @@\n-a\n+b\n"
     )
-    assert DA.changed_lines(text) == {"memory/learnings.md": 3, "memory/state.md": 2}
+    assert DA.changed_lines(text) == {"memory/learnings.md": 3, "memory/decisions.md": 2}
 
 
 def test_a_bot_that_never_dreamed_must_be_48_hours_old_and_an_inactive_one_is_not_due(api):
@@ -162,9 +162,9 @@ def test_the_thresholds_are_200_changed_lines_and_10_memory_turns(api):
     assert (cpo.status, cpo.lines, cpo.turns) == ("due", 200, 10)
 
 
-def test_state_churn_and_the_dreams_own_commits_are_not_memory(api):
+def test_knowledge_churn_and_the_dreams_own_commits_are_not_memory(api):
     aged(api)
-    remember(api, "ops", 20, lines=50, path="memory/state.md")  # 1000 lines of churn
+    remember(api, "ops", 20, lines=50, path="knowledge/notes.md")  # 1000 lines outside memory
     remember(api, "ops", 1, lines=500, subject="Dream: merged report rules")  # the dream's own commit
     v = verdict(api, "ops", now())
     assert (v.status, v.lines, v.turns) == ("quiet", 0, 0)

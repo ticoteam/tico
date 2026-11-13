@@ -433,7 +433,7 @@ class Stack:
         )
         origins = "".join(
             f"""
-            git init -q -b main /tmp/{bot} && cd /tmp/{bot} && echo '# Acme bot' > AGENT.md && git add AGENT.md
+            git init -q -b main /tmp/{bot} && cd /tmp/{bot} && echo '# Acme bot' > AGENTS.md && git add AGENTS.md
             git -c user.name='Acme' -c user.email=bots@acme.example commit -qm start
             git clone -q --bare /tmp/{bot} /srv/git/acme/bot-{bot}.git && cd / && rm -rf /tmp/{bot}"""
             for bot in bots

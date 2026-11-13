@@ -412,7 +412,11 @@ def waiting_heartbeat(api, machine, change):
     }
     pi = {"installed": True, "authenticated": "missing"}
     if change == "no repository":
-        bot = {**bot, "repository_present": False, "problems": bot["problems"] + ["Missing bot repository or AGENT.md"]}
+        bot = {
+            **bot,
+            "repository_present": False,
+            "problems": bot["problems"] + ["Missing bot repository or AGENTS.md"],
+        }
     elif change == "settings differ":
         bot = {**bot, "configuration_valid": False, "problems": bot["problems"] + ["Configuration differs from server"]}
     elif change == "no pi":

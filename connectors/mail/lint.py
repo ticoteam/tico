@@ -11,7 +11,7 @@ a person. A rule id never changes meaning, because playbooks and Issues quote th
     L011  error     a forbidden URL (calendly, go.acme.example/get-demo, S3, presigned)
     L020  error     a placeholder survived ({{ }}, [NAME], TODO, XXX, lorem ipsum, <insert)
     L030  error     something shaped like a secret (xoxb-, AKIA, sk-, ghp_, -----BEGIN)
-    L040  error     internal leakage (s3://, runtime/, emp-, bot-<slug>/, AGENT.md)
+    L040  error     internal leakage (s3://, runtime/, emp-, bot-<slug>/, AGENTS.md, AGENT.md)
     L041  warn      what looks like a hub Issue reference (#123)
     L050  error     no subject, and this is not a reply
     L051  error     the subject is over 120 characters
@@ -53,7 +53,7 @@ FORBIDDEN_URL_PARTS = ("calendly.com",)
 PRESIGNED = ("x-amz-signature", "x-amz-credential", "amazonaws.com", "s3.amazonaws.com")
 PLACEHOLDERS = ("{{", "}}", "[NAME]", "[name]", "TODO", "XXX", "lorem ipsum", "<insert")
 SECRET_SHAPES = ("xoxb-", "AKIA", "sk-", "ghp_", "-----BEGIN")
-INTERNAL_MARKS = ("s3://", "runtime/", "emp-", "AGENT.md")
+INTERNAL_MARKS = ("s3://", "runtime/", "emp-", "AGENTS.md", "AGENT.md")
 # A bot's repository is `bot-<slug>` (older: `emp-<slug>`). `emp-` is flagged wherever it appears; `bot-` only where it names a
 # repository, a `bot-<slug>/` path or link, or this message's own bot's folder, so a word like "bot-driven" is not a leak.
 BOT_REPO = re.compile(r"(?<![\w-])bot-[a-z0-9][a-z0-9-]*/", re.I)

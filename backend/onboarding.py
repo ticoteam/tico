@@ -38,9 +38,9 @@ LIBRARIAN = "librarian"
 STRATEGY_OWNER = G.STRATEGY_OWNER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
 ASSISTANT_TEMPLATE_SLUG = "assistant"
 CARD_FILE = "card.yaml"
-INSTRUCTIONS_FILE = "AGENT.md"
+INSTRUCTIONS_FILE = "AGENTS.md"
 # Filled wherever a person reads a card: a template names itself after the assistant, and
-# its AGENT.md is written against the company that is about to adopt it. The wizard no longer
+# its AGENTS.md is written against the company that is about to adopt it. The wizard no longer
 # asks for assistant_name; an empty one falls back to TICO_ASSISTANT_NAME (display_names).
 PLACEHOLDERS = ("company_name", "app_name", "assistant_name", "bot_name")
 NEEDS_SETUP = statuses.NEEDS_SETUP
@@ -116,7 +116,7 @@ def fill(text, names, bot_name=""):
 
 def render(card, names, bot_name=""):
     """One card as a person reads it. A card is written for whichever company adopts it, so
-    every word it shows carries the placeholders, not only its AGENT.md."""
+    every word it shows carries the placeholders, not only its AGENTS.md."""
     name = fill(bot_name or card["name"], names)
     instructions = fill(card["instructions"], names, name)
     return {
@@ -504,7 +504,7 @@ def setup_body(slug, choice, answers):
                 else []
             ),
             "",
-            "Instructions the owner reviewed, for AGENT.md:",
+            "Instructions the owner reviewed, for AGENTS.md:",
             "",
             "```markdown",
             choice["instructions"].strip(),

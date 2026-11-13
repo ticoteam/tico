@@ -128,7 +128,7 @@ def test_a_repository_is_found_under_bot_or_emp_and_a_new_one_is_bot(tmp_path):
     template = tmp_path / "catalog" / "helper"
     write(template / "bot.yaml", "name: CHANGE-ME\ndisplay_name: Helper\nroutines: []\n")
     write(template / "card.yaml", {"template": "helper", "name": "Helper"})
-    write(template / "AGENT.md", "# {{bot_name}}\n")
+    write(template / "AGENTS.md", "# {{bot_name}}\n")
     workspace = tmp_path / "ws"
     (workspace / "emp-old").mkdir(parents=True)
     made = catalog.materialize("helper", "fresh", workspace, {}, {}, directory=tmp_path / "catalog")

@@ -7,7 +7,7 @@ A bot is due when, read from `bot_memory_updates` (the commits its computer repo
 - it is active, keeps memory, and has no open dream;
 - its last dream of either kind started at least MIN_GAP_HOURS ago (a bot that never dreamed must be that old);
 - its memory since that dream's start (or LOOKBACK_DAYS ago, whichever is later) changed at least MIN_LINES lines over
-  at least MIN_TURNS memory turns. Counted: memory/ except memory/state.md, and AGENT.md, AGENTS.md and CLAUDE.md. Not
+  at least MIN_TURNS memory turns. Counted: memory/, and AGENTS.md, CLAUDE.md and AGENT.md. Not
   counted: the commits of dreams and of the retired Nightly memory tidy pilot's passes (its Keep commits and the runs
   of its pass tasks, still in bot repositories and in memory_tidy_passes).
 
@@ -38,8 +38,8 @@ MIN_GAP_HOURS = 48  # between dreams of any kind; a bot's first must be this old
 MAX_PER_RUN = 3  # the default "Most bots per run" (backend/maintenance_steps/dream.py)
 MIN_LINES = 200  # changed lines of counted memory since the last dream
 MIN_TURNS = 10  # memory turns (commits that changed a counted file) since the last dream
-INSTRUCTION_FILES = ("AGENT.md", "AGENTS.md", "CLAUDE.md")
-STATE = "memory/state.md"  # rewritten every turn: churn, not memory
+# AGENT.md: the instruction file's name in a repository the runner has not moved to AGENTS.md yet.
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "AGENT.md")
 DREAM_SUBJECT = "Dream:"  # a dream's own commits
 TIDY_SUBJECT = "Dreamed "  # a Keep commit of the retired Nightly memory tidy pilot
 # The task ids of every dream of one owner, as a subquery: the runs that worked on them are that owner's dream runs.
@@ -65,8 +65,8 @@ def stamp(at):
 
 
 def counted(path):
-    """Whether a changed file counts: memory/, but not memory/state.md, and the instruction files."""
-    return path in INSTRUCTION_FILES or (path.startswith("memory/") and path != STATE)
+    """Whether a changed file counts: memory/ and the instruction files."""
+    return path in INSTRUCTION_FILES or path.startswith("memory/")
 
 
 def _name(rest, prefix):

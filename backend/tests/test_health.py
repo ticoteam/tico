@@ -500,7 +500,7 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
                                 "coder": {
                                     "ready": False,
                                     "runtime": "codex",
-                                    "problems": ["Missing bot repository or AGENT.md"],
+                                    "problems": ["Missing bot repository or AGENTS.md"],
                                 },
                             },
                         }
@@ -528,7 +528,7 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
     writer, coder = snapshot("writer"), snapshot("coder")
     assert writer["state"] == "queued" and writer["readiness_reason"] == "model_sign_in"
     assert writer["label"] == "Saved — Claude login required"
-    assert "readiness_reason" not in coder and coder["label"] == "Saved — Missing bot repository or AGENT.md"
+    assert "readiness_reason" not in coder and coder["label"] == "Saved — Missing bot repository or AGENTS.md"
     assert health_of(api)[1]["models"]["summary"] == "No online computer is signed in to your model."
     report("ready")
     assert "readiness_reason" not in snapshot("writer") and health_of(api)[1]["models"]["status"] == "ok"
@@ -567,7 +567,7 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
                             "scout": {
                                 "ready": False,
                                 "runtime": "gemini",
-                                "problems": ["Missing bot repository or AGENT.md"],
+                                "problems": ["Missing bot repository or AGENTS.md"],
                             }
                         },
                     }
@@ -586,9 +586,9 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
         H._write_message(c, owner, "bot:scout", "start setup", chat, "say", {}, None, None)
     execution = api.get("/api/v2/conversations/" + chat["id"] + "/snapshot", headers=signed_in()).json()["execution"]
     assert execution["state"] == "queued" and "readiness_reason" not in execution
-    assert execution["label"] == "Saved — Missing bot repository or AGENT.md"
+    assert execution["label"] == "Saved — Missing bot repository or AGENTS.md"
     [row] = health_of(api)[0]["stuck"]
-    assert row["bot"] == "scout" and row["why"] == "Missing bot repository or AGENT.md on Team box"
+    assert row["bot"] == "scout" and row["why"] == "Missing bot repository or AGENTS.md on Team box"
     assert "Gemini" not in json.dumps(row) and "login" not in row["fix"] and "move" not in row["fix"]
     # Judged as Gemini CLI, the same computer's answer is a sign-in: the hint the bot must not get.
     from backend.readiness import can_run
@@ -955,7 +955,7 @@ def _hosted(api, runner, bot, report):
 def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment):
     """A bot that may push but whose Claude Code settings deny `git push` stops at that step; a bot that only reads
     keeps its denies, and the deny on its own repository is not counted. Its `gh` denies are not named here: write
-    access does not say its work opens pull requests or issues (its AGENT.md does: "Claude Code permissions")."""
+    access does not say its work opens pull requests or issues (its AGENTS.md does: "Claude Code permissions")."""
     api = environment()
     runner = enrolled(api)
     add_bot(api, "monitor")

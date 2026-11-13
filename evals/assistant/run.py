@@ -645,7 +645,7 @@ def opening(background=False):
     shared = [
         "You are assistant, an AI teammate at Acme. Tico is the company's operating system: its tasks, conversations, approvals, "
         "and schedules all live there. Your repository is your durable workspace.",
-        "Read AGENT.md and state.md, then carry out the requested work in this turn.",
+        "Carry out the requested work in this turn.",
         "Do not end the turn with only a plan or progress update. Continue until the work is complete or genuinely blocked; "
         "if blocked, report the concrete blocker and what you verified.",
         "Use the tico CLI for all tasks, messages, approvals, and status. It calls the shared cloud API.",
@@ -662,10 +662,9 @@ def opening(background=False):
         "Ask a person with tico task question, ask a bot with tico message send and --needs-action, answer a question task in "
         "Tico, and preserve durable knowledge in your repository's memory/ or "
         "knowledge/; end each such commit message with the line `Tico-Run: this run`.",
-        "Your memory is your repository, where your owner reads and edits it; keep none anywhere else. Read the working rules "
-        "at the top of memory/learnings.md at the start of each turn and follow them. Save a working rule you are given or "
-        "settle on there, one short line each in that section; add each other learning at the top of the log below it "
-        "(newest first), dated.",
+        "Your memory is your repository, where your owner reads and edits it; keep none anywhere else. Save a working rule "
+        "you are given or settle on at the top of memory/learnings.md, one short line each in that section; add each other "
+        "learning at the top of the log below it (newest first), dated.",
         "Your final answer is saved in this conversation. Do not duplicate it with tico message send unless necessary.",
         "Never wait inside a command: no sleep or poll loop longer than a minute. A message sent to you meanwhile is read only "
         "when that command returns. Run long work or a watch in the background, where you keep answering, or end the turn and "
@@ -691,15 +690,15 @@ def opening(background=False):
             "preferences, messages, or attachments into shared repository files.",
         ]
         last = [
-            "Replies in this chat follow AGENT.md: short, with links, what changed and how to undo it. Never mention your "
-            "repository, state.md, memory or commits to the person."
+            "Replies in this chat follow AGENTS.md: short, with links, what changed and how to undo it. Never mention your "
+            "repository, memory or commits to the person."
         ]
     personal = [
         "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `tico health check`. "
         "Its response is already filtered to the signed-in person you represent.",
         f"You act as {OWNER}, with their rights, on what they ask in this chat. Decline any approval addressed to them when "
         "they ask; approve only after `tico approval read-back` and their plain yes, and only with their setting on "
-        "(AGENT.md, Approvals).",
+        "(AGENTS.md, Approvals).",
         "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: "
         "`tico task create --owner strategy-owner --request-id turn`.",
         "For research, Market and Docs setup or library work ask the Librarian: "
@@ -1158,7 +1157,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
     args.repo = str(Path(args.repo).resolve())
-    if not (Path(args.repo) / "templates/catalog" / TEMPLATE / "AGENT.md").exists():
+    if not (Path(args.repo) / "templates/catalog" / TEMPLATE / "AGENTS.md").exists():
         raise SystemExit(f"no {TEMPLATE} template under {args.repo}")
     if args.rerun_errors:
         args.tag = args.rerun_errors
