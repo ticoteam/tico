@@ -389,3 +389,19 @@ def test_the_cli_moves_a_source_to_another_bot_without_retyping_its_columns(api)
     moved = strategy.growth_source_update(Hub(api, "ana-test"), {"id": src["id"], "bot": "cpo"})
     assert moved["map"]["bot"] == "cpo" and moved["map"]["fields"] == {"new_customers": "signups"}
     assert moved["map"]["query"] == "signups-by-channel" and moved["map"]["automation"] == src["map"]["automation"]
+
+
+def test_sync_now_follows_the_automation_run_rule_but_the_sources_bot_may_start_its_own_run(api):
+    """Starting the daily run early is running the bot's automation, so it takes the same rule as
+    POST /api/v2/automations/{id}/run: an admin not above the bot is refused; the bot itself may start it."""
+    catalog(api)
+    token = bot(api, "ops")
+    src = connect(api)
+    refused = post(api, f"growth/sources/{src['id']}/sync", {}, token="ben-test", expected=403)
+    assert "bot:ops" in refused["error"]["detail"]
+    assert post(api, f"growth/sources/{src['id']}/sync", {}, token=token)["started"]
+    with api.app.state.store.read() as c:
+        runs = c.execute(
+            "SELECT count(*) FROM automation_runs WHERE automation_id=?", (src["map"]["automation"],)
+        ).fetchone()[0]
+    assert runs == 1

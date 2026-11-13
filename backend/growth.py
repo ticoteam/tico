@@ -570,18 +570,22 @@ DB_RUN_PROMPT = (
 )
 
 
-def _start_db_run(c, actor, row):
+def _start_db_run(c, who, row):
     """`sync` on a database query source: its query runs on its bot's computer, so start its daily run now. The bot's
-    turn posts the result, which `tico growth source list` then shows."""
+    turn posts the result, which `tico growth source list` then shows. Starting it is running the bot's automation, so
+    it takes the rule POST /api/v2/automations/{id}/run takes (automations.may_change); the source's bot may always
+    start its own run."""
     from . import automations as AU
 
     mapping = json.loads(row.get("sync_map") or "{}")
     found = AU._row(c, mapping.get("automation") or "")
+    if found and who.actor != GS.run_bot(row):
+        AU._require(c, who, AU.flow_of(found), "start the daily run of " + AU.flow_of(found)["owner"])
     if not found:
         raise Problem(
             "conflict", f"{row['system']} has no daily run: connect it again (tico growth source update)", 409
         )
-    run = AU.queue(c, found, {"manual": {"by": actor}}, "manual", manual=True, chain=(found["id"],))
+    run = AU.queue(c, found, {"manual": {"by": who.actor}}, "manual", manual=True, chain=(found["id"],))
     if not run:
         raise Problem("on_hold", f"{row['system']}'s daily run is on hold: release or drop its held runs first", 409)
     return {
@@ -970,7 +974,7 @@ def install(app, store, auth, mutate):
                     )
                 return GS.run(c, who.actor, row, csv_text=row["last_payload"])
             if row["sync_kind"] == "db_query":
-                return _start_db_run(c, who.actor, row)
+                return _start_db_run(c, who, row)
             raise Problem("conflict", f"{row['system']} cannot be run from here yet", 409)
 
         return mutate(request, body, work)

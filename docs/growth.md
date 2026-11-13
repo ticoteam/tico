@@ -134,7 +134,9 @@ tico growth source sync <id>      # starts the bot's run now
 
 The owner and admins connect, remap and retire a synced source; retiring a database query source removes its daily
 run. The daily run is an automation owned by the query's bot, so naming or changing that bot also needs the right to
-make automations for it (its owner, or someone above it). `tico growth source update <id> --bot BOT` moves the run to
+make automations for it (its owner, or someone above it), and so does starting it early with `sync` (the bot itself
+may always start its own run). Retiring the source, or switching it to another kind, removes its daily run whoever
+does it: that run exists only for the source, and the owner and admins must be able to stop a source. `tico growth source update <id> --bot BOT` moves the run to
 another bot and keeps the columns it maps. The owner, an admin, the source's own owner or its query's bot sends it rows.
 
 ## Marketing tasks
