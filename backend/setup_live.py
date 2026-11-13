@@ -25,6 +25,9 @@ GOES_LIVE = "goes_live_on_setup"
 # When the seat bot was given its own setup task, so it is given once. A time, not the task's id: the declaration goes
 # to its computer, which may not read the task.
 SELF_SETUP = "self_setup_given_at"
+# The task BotOps registered a bot from when it is not the bot's own setup task (settings_admin.register): an ordinary
+# task such as "Add Builder 3". The bot page names it, and any ask on it, while the bot is planned (org_routes.cant_run).
+MADE_ON = "made_on_task_id"
 
 
 def _object(value: Any) -> dict[str, Any]:
@@ -122,16 +125,27 @@ def go_live_ends_botops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
         E.unsnooze(c, task_id, by, "Live")
 
 
+def making_task(c: sqlite3.Connection, bot: str) -> str | None:
+    """The open task a planned bot is being made on: its setup task, or the task BotOps registered it from (`MADE_ON`,
+    an ordinary task such as "Add Builder 3"), or None."""
+    found = c.execute(
+        "SELECT json_extract(extra,'$.setup_task_id'), json_extract(extra,'$." + MADE_ON + "') FROM bot_settings "
+        "WHERE bot_id=?",
+        (bot,),
+    ).fetchone()
+    for task in found or ():
+        if task and c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (task,)).fetchone():
+            return str(task)
+    return None
+
+
 def being_set_up(c: sqlite3.Connection, bot: str) -> bool:
-    """Whether a planned bot is on its way live: BotOps has its setup task open, or its go-live waits for its
-    repository. Such a bot's tasks wait on its setup, not on a person."""
+    """Whether a planned bot is on its way live: the task making it is open (`making_task`), or its go-live waits for
+    its repository. Such a bot's tasks wait on its setup, not on a person."""
     found = pending(c, bot)
     if found is not None and not found.get("failed"):
         return True
-    task = c.execute("SELECT json_extract(extra,'$.setup_task_id') FROM bot_settings WHERE bot_id=?", (bot,)).fetchone()
-    return bool(
-        task and task[0] and c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (task[0],)).fetchone()
-    )
+    return making_task(c, bot) is not None
 
 
 def setup_files(catalog_dir: str, template: str) -> list[str]:

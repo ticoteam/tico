@@ -3058,12 +3058,29 @@ SCHEMAS = {
                             "unlock_cloud",
                             "add_credit",
                             "open_computers",
+                            "open_ask",
                             None,
                         ]
                     },
+                    "task": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}, "title": {"type": "string"}},
+                        "description": "The task a planned bot is being made on, for a caller who may open it",
+                    },
+                    "ask": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"enum": ["ok", "answer"]},
+                            "mine": {"type": "boolean"},
+                            "line": {"type": "string"},
+                        },
+                        "description": "The ask on that task the bot waits on: whether it is the caller's, and its "
+                        "words for a caller who may open the task",
+                    },
                 },
                 "description": "For a caller who can read it: why the bot can't run (a sentence) and the one fix, "
-                "or null while it can run",
+                "or null while it can run. A bot being made on a task names it (`task`) and the ask it waits on "
+                "(`ask`); `open_ask` opens that ask on its task",
             },
             "access": ref("Access"),
             "onboarding_state": "s",

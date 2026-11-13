@@ -12,7 +12,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface PageWin { opened: string[]; open: (url: string) => null }
-interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown>; cantRun?: {cause: string; fix: string | null} | null; pin?: boolean }
+interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown>; cantRun?: {cause: string; fix: string | null; task?: {id: string; title: string}; ask?: {kind: string; mine: boolean; line?: string}} | null; pin?: boolean }
 // Page-defined function (the bot page script), called inside page.evaluate.
 declare function botLatestUpdate(bot: string): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -436,6 +436,30 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       await page.locator('#bot-alert .bot-cant-run').waitFor();
       assert.equal(await page.locator('#bot-alert button, #bot-alert a').count(), 0);
       assert.deepEqual(errors, [], "can't run, no fix errors");
+      await context.close();
+      // #411: a bot being made on a task, waiting on the viewer's answer there: the one button opens that task.
+      const making = {id: 'add-cmo', title: 'Add AI CMO'}, asked = 'OK to start its cloud machine?';
+      ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'planned'},
+        cantRun: {cause: 'AI CMO is waiting for your answer', fix: 'open_ask', task: making, ask: {kind: 'answer', mine: true, line: asked}}}));
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#bot-alert .bot-cant-run').waitFor();
+      const answer = page.locator('#bot-alert a');
+      assert.equal(await answer.count(), 1);
+      assert.equal(await answer.innerText(), 'Answer');
+      assert.equal(await answer.getAttribute('href'), '#/task/add-cmo');
+      assert.equal(await answer.getAttribute('title'), asked);
+      assert.deepEqual(errors, [], "can't run, ask errors");
+      await context.close();
+      // Nothing is the viewer's to do: the task is a plain link, and no Finish setup button opens the Info tab.
+      ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'planned'},
+        cantRun: {cause: 'BotOps is still setting up AI CMO', fix: null, task: making}}));
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#bot-alert .bot-cant-run').waitFor();
+      assert.equal(await page.locator('#bot-alert button, #bot-alert a.primary').count(), 0);
+      assert.equal(await page.locator('#bot-alert a[data-bot-making]').getAttribute('href'), '#/task/add-cmo');
+      assert.equal(await page.locator('#bot-alert a[data-bot-making]').innerText(), 'Add AI CMO');
+      assert.equal(await page.locator('#bot-alert a[href$="/info"]').count(), 0);
+      assert.deepEqual(errors, [], "can't run, making errors");
       await context.close();
     }
     console.log('bot page: Tasks, Updates and Files; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More; Try now on a usage limit; a last run that ended unfinished says why');
