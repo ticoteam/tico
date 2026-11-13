@@ -141,6 +141,8 @@ function audit(where: string): {rule: number; element: string; why: string}[] {
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const own = (node.nodeValue || '').trim(), el = node.parentElement;
     if (!el || !STATE.test(own) || own.length > 70 || !shown(el) || el.closest('script, style, option, [contenteditable], textarea')) continue;
+    // An empty state that says nothing waits ("Nothing waiting on you") has nothing to lead to.
+    if (/^nothing\b/i.test(own)) continue;
     // A heading, tab, filter or menu item names a place, not a state; a control is its own way forward.
     if (el.closest('h1, h2, nav, [role="tab"], [role="tablist"], label, legend, a[href], button, [role="button"], summary, select')) continue;
     // Its own line or card: a link somewhere else on the page is not beside it.
