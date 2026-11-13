@@ -73,7 +73,8 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
       await page.goto('http://tico-ui.test/#/tasks?pipeline=engineering&layout=columns');
       const dialog = page.locator('#pe-dialog');
       const build = dialog.locator('.pe-stage[data-pe-si="1"]');
-      await page.locator('#task-pipeline-edit').click();
+      await page.locator('#task-menu').click();   // Edit pipeline is in ⋯
+      await page.locator('#task-filter-pop [data-tm="edit"]').click();
       await dialog.locator('[data-pe-pf="goal"]').waitFor();
       await build.locator('> summary').click();
 

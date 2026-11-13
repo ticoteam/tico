@@ -3,7 +3,8 @@
 // left edge on every screen (AC-1); at most one filled button, worded, no "+", 32px, last in the header, and none on Usage,
 // Updates and Learnings (AC-2); every tab is a .ph-tab at 13px with only the current one on --surface2 at 600, and every
 // single-choice filter (.ph-seg) has that look with no shadow (AC-3); at 390x844 the title and the button share a row
-// (Tasks instead is one row of icons at 390 and 360, the UI Owner's call),
+// (Tasks instead is one row of icons at 390 and 360, the UI Owner's call, with New task in its ⋯: spec "Pipeline board in
+// one row", task #404),
 // tabs are 40px in their own row and nothing scrolls sideways (AC-4); at 1100x800 the header is one row and the button in
 // view (AC-5); Docs', Tools', Meetings' and Updates' ⋯ list what moved there and Escape closes it (AC-6).
 import type * as RealHubSupport from './support/real-hub.cts';
@@ -20,7 +21,8 @@ const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
-  {name: 'Tasks', hash: '#/tasks', button: true, iconRow: true},
+  // Tasks' row has nothing filled: New task is in its ⋯, and C (spec "Pipeline board in one row", A).
+  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true},
   {name: 'Automations', hash: '#/automations', button: true},
   {name: 'Listening', hash: '#/listening', button: true},
   {name: 'Rules', hash: '#/rules', tabs: true},
@@ -95,8 +97,8 @@ function desktopProblems(page: Page, s: Screen) {
   }, s);
 }
 
-// Tasks on a phone: one row (every shown control centred on the scope button's line), the + alone and named "New task",
-// the title only for screen readers, nothing sideways.
+// Tasks on a phone: one row (every shown control centred on the scope button's line), ⋯ last and in view, nothing
+// filled, the title only for screen readers, nothing sideways.
 function iconRowProblems(page: Page) {
   return page.evaluate(() => {
     const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!;
@@ -104,9 +106,10 @@ function iconRowProblems(page: Page) {
     const scope = head.querySelector<HTMLElement>('#task-scope')!, line = mid(scope);
     const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tools > *, :scope > .ph-act .primary')].filter(el => el.getClientRects().length);
     for (const el of shown) if (Math.abs(mid(el) - line) > 4) bad.push(`${el.id || el.className} is off the one row`);
-    const plus = head.querySelector<HTMLElement>('.ph-act .primary')!, pr = plus.getBoundingClientRect();
-    if (pr.width > 44.5 || pr.right > document.documentElement.clientWidth) bad.push(`+ is ${Math.round(pr.width)}px wide, right edge ${Math.round(pr.right)}`);
-    if ((plus.textContent || '').trim() !== 'New task') bad.push('+ is not named New task');
+    if (head.querySelector('.primary')) bad.push('a filled button on the row');
+    const more = head.querySelector<HTMLElement>('#task-menu'), mr = more?.getBoundingClientRect();
+    if (!more || !mr || shown.some(el => el !== more && el.getBoundingClientRect().right > mr.left + 0.5)) bad.push('⋯ is not last on the row');
+    else if (mr.width < 43.5 || mr.right > document.documentElement.clientWidth) bad.push(`⋯ is ${Math.round(mr.width)}px wide, right edge ${Math.round(mr.right)}`);
     if (head.querySelector<HTMLElement>(':scope > h1.ph-t')!.getBoundingClientRect().width > 1) bad.push('the title shows');
     const de = document.documentElement;
     if (de.scrollWidth > de.clientWidth) bad.push(`the page scrolls sideways (${de.scrollWidth} > ${de.clientWidth})`);

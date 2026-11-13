@@ -78,7 +78,7 @@ function countWatch(root: Element | null, sel: string, keyOf: (el: HTMLElement) 
 }
 countWatch($('#tree'), '.cnt', b => b.closest<HTMLElement>('[data-org]')?.dataset.org || '');
 const motionTasksPage = (): boolean => /^#\/(tasks|task\/)/.test(location.hash);
-countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
+countWatch($('#main'), '.bcol > header .cnt', b => {
   const tab = b.closest<HTMLElement>('[data-view]'), col = b.closest<HTMLElement>('.bcol');
   return tab ? 'view:' + tab.dataset.view : col ? 'col:' + col.dataset.col : '';
 }, {when: motionTasksPage, page: true});

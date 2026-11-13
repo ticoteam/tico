@@ -106,6 +106,11 @@ function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
       const icon = page.locator('#task-manager');
       assert.equal(await icon.isVisible(), true, 'the chat icon shows for a pipeline with a manager');
       assert.equal(await icon.getAttribute('aria-pressed'), 'false');
+      // It is the manager's own 20px face, named for the chat it opens (spec "Pipeline board in one row", A).
+      await page.waitForFunction(() => document.querySelector('#task-manager')?.getAttribute('aria-label') === 'Chat with PM');
+      const face = await icon.evaluate(b => { const f = b.firstElementChild as HTMLElement | null, r = f?.getBoundingClientRect();
+        return {chatIcon: !!b.querySelector(':scope > svg'), w: Math.round(r?.width || 0), h: Math.round(r?.height || 0)}; });
+      assert.deepEqual(face, {chatIcon: false, w: 20, h: 20}, `the manager's face, not a chat bubble: ${JSON.stringify(face)}`);
 
       // Opened: a column at the right, the full height beside the stages.
       await icon.click();

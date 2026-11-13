@@ -56,14 +56,13 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-group-head .sr-btn + .pv-play{margin-left:auto}
 .pv-stage-n[title]{cursor:help}
 
-/* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
+/* A phone: a row of stage tabs (the only thing that scrolls sideways), the stage's Rules, then its tasks; the header's ▶ Review opens what waits. Every
    control is at least 44 px tall (S17). */
 .pv-phone-head{display:flex;align-items:center;gap:6px;min-width:0}
 .pv-tabs{flex:1 1 auto;min-width:0;display:flex;gap:4px;overflow-x:auto;padding:0 0 4px;scrollbar-width:none}
 .pv-tab{flex:none;min-height:44px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
 .pv-tab.on{background:var(--surface2);color:var(--ink)}
 .pv-tab{position:relative}
-.pv-phone-head .pv-play{width:56px;height:44px;margin:0 0 4px;padding:0}   /* one width with or without a count: the tabs never move */
 /* a phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards */
 .pv-slots{margin:2px 4px 8px;color:var(--muted);font-size:var(--t-xs)}
 /* items wait on you in that stage: a dot in the tab's right padding, so the tab is as wide with it as without */

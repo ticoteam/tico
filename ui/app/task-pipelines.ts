@@ -7,7 +7,8 @@
    before the snoozed ones; it holds no slot either. A task others depend on says "Blocks #307".
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
    for whoever may change the pipeline. Beside it, Rules and its count opens the stage's rules (stage-rules.ts); then ▶ and how many items in the stage wait on the person opens the
-   stage's review (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone it sits beside the stage tabs. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   stage's review (decide.ts decideStageOpen); there is no ▶ where none wait. A phone has no ▶ beside its stage tabs: a dot marks
+   a tab with items waiting, and the header's ▶ Review opens them. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
    search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
    file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -229,10 +230,10 @@ function pvPhoneHTML(state: PvState): string {
   }).join('');
   const rows = pvInStage(state, shown).map(pvCardHTML).join('');   // the column's cards (task #220)
   // A phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards.
-  const on = stages.find(s => s.id === shown), play = on ? pvPlayHTML(on) : '';
+  const on = stages.find(s => s.id === shown);
   const rules = on ? stageRulesButtonHTML(state.rec.id, on) : '';
   const tip = on && pvPersonCount(state, on) ? pvLimitTip(state, on) : '';
-  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${rules}${play}</div>`
+  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${rules}</div>`
     + `${tip ? `<p class="pv-slots">${esc(tip)}</p>` : ''}<div class="pv-phone">${rows}</div>`;
 }
 

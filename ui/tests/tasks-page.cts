@@ -367,7 +367,9 @@ async function you(browser: Browser) {
     assert.equal(await page.getByRole('button', {name: /^Signup plans Which plan do new signups get\?/}).count(), 1, 'a screen reader hears the title and its question apart');
     assert.equal(await page.locator('[data-need="r1"]').getAttribute('title'), 'Approve the spec for Checkout flow', 'an OK has its ask as the tooltip');
     assert.equal(await page.locator('[data-need="task:t-3"]').getAttribute('title'), null, 'a task of your own has no tooltip');
-    assert.match(await page.locator('#task-scope').innerText(), /You\s*3/);
+    // the count once, in ▶ Review; the picker reads "You" (spec "Pipeline board in one row", AC-13)
+    assert.equal((await page.locator('#task-scope').innerText()).trim(), 'You');
+    assert.equal(await page.locator('#task-play .tl-review-n').innerText(), '3');
     assert.ok(await sideways(page) <= 1, `nothing scrolls sideways at ${viewport.width}px`);
     // Search narrows the rows; Escape clears it.
     await page.locator('#task-q').fill('offsite');
@@ -442,7 +444,8 @@ async function archive(browser: Browser) {
     assert.deepEqual(await rowTitles(page), titles);
     assert.equal(await page.locator(`#task-archives [data-archive="${which}"]`).getAttribute('aria-pressed'), 'true');
   };
-  await page.locator('#task-archive').click();
+  await page.locator('#task-menu').click();   // Archived is in ⋯
+  await page.locator('#task-filter-pop [data-tm="archive"]').click();
   await shows('snoozed', {status: 'open', snoozed: 'only'}, ['Renew the domain']);
   // A write's reply is the full task, `snooze` without `snoozed`: the snoozed task stays in Snoozed.
   await page.evaluate(() => {
@@ -458,7 +461,7 @@ async function archive(browser: Browser) {
   await page.locator('#task-body [data-task="t-7"]').click();
   await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Old pricing test'}).waitFor();
   await page.keyboard.press('Escape');
-  await page.locator('#task-archive').click();
+  await page.locator('#task-archive-x').click();   // ✕ "Leave Archived" in the bar
   await page.waitForFunction(() => !TASKS_ST.archive && !TASKS_ST.loading);
   assert.deepEqual(await groups(page), ['Answer', 'Review', 'Do']);
   assert.deepEqual(errors, []);

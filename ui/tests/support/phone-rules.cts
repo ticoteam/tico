@@ -294,7 +294,8 @@ const SCREENS: Screen[] = [
     if (!id) return false;
     await go(page, '#/task/' + encodeURIComponent(id));
   }},
-  {name: 'New task', open: async page => { await go(page, '#/tasks'); return tapFirst(page, ['#task-new', '[data-new-task]', 'button:has-text("New task")', '[aria-label="New task"]']); }},
+  // New task is in Tasks' ⋯ (spec "Pipeline board in one row")
+  {name: 'New task', open: async page => { await go(page, '#/tasks'); return await tapFirst(page, ['#task-menu']) && tapFirst(page, ['#task-filter-pop [data-tm="new"]']); }},
   {name: 'Pipeline', open: async page => {
     await go(page, '#/tasks');
     const id = await page.evaluate(async () => {
