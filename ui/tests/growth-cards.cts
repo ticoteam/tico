@@ -106,7 +106,7 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, computed = false) 
   let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
   const reads: unknown[] = [], writes: Write[] = [];
   const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: false,
-    data: computed && c.template === 'growth_retention' ? {...(DATA[c.template]!(c.settings, month) as object), computed: computedView('channel', 'month', keys, false)}
+    data: computed && c.template === 'growth_retention' ? {...(DATA[c.template]!(c.settings, month) as object), computed: {...computedView('channel', 'month', keys, false), typed: [{value: 'referrals', new_customers: 25, kept: [70, null, null], origin: 'typed'}]}}
       : DATA[c.template]!(c.settings, month)});
   const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
     pins: pins.map(p => ({...p, card: draw(p.card, month)}))});
@@ -443,7 +443,10 @@ async function shot(page: Page, name: string) {
       const card = page.locator('#dash-grid [data-grx]');
       await card.locator('table').waitFor();
       const rowsOf = () => card.locator('tbody tr:not(.grx-wk)').evaluateAll(els => els.map(el => [...el.children].map(c => (c as HTMLElement).innerText.trim())));
-      assert.deepEqual(await rowsOf(), [['Search', '64', '81%', 'not yet · 29 Dec', 'not yet · 29 Mar', '$540', '$45'], ['Unknown', '19', '12 of 19', 'not yet · 29 Dec', 'not yet · 29 Mar', 'too few', '—']]);
+      assert.deepEqual(await rowsOf(), [['Search', '64', '81%', 'not yet · 29 Dec', 'not yet · 29 Mar', '$540', '$45'], ['Unknown', '19', '12 of 19', 'not yet · 29 Dec', 'not yet · 29 Mar', 'too few', '—'],
+        ['Referrals typed', '25', '70%', '—', '—', '—', '—']], 'a channel with typed retention and no customers stays, marked typed');
+      assert.equal(await card.locator('tr[data-origin="typed"] button').count(), 0, 'a typed figure has no customers to open');
+      assert.match(await card.locator('.grx-foot').innerText(), /Rows marked typed were typed by the team/);
       assert.match(await card.locator('.grx-foot').innerText(), /Computed from 124 customers · loaded 13 Nov 06:00 from an upload in Growth\./);
       assert.match(await card.locator('.grx-foot').innerText(), /Under 30 customers a cohort shows counts only: too few for a rate\./);
       assert.ok(await contrast(card.locator('td.grc-k').first()) >= 4.5, 'a computed share reads at 4.5:1');
@@ -451,6 +454,7 @@ async function shot(page: Page, name: string) {
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] thead th')?.textContent === 'Segment');
       assert.deepEqual((await rowsOf()).map(r => [r[0], r[2], r[5], r[6]]), [['agency', '81%', '$612', 'not split'], ['studio', '66%', '$612', 'not split'], ['solo', '12 of 19', 'too few', 'not split']]);
       assert.match(await card.locator('.grx-foot').innerText(), /CAC is per channel: spend is not split by segment\./);
+      assert.match(await card.locator('.grx-foot').innerText(), /Typed retention for Referrals shows under Cut by Channel, Monthly\./);
       await card.locator('[data-gr-seg="grx-by"] button[data-v="plan"]').click();
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] thead th')?.textContent === 'Plan');
       assert.deepEqual((await rowsOf()).map(r => r[0]), ['pro', 'No plan']);

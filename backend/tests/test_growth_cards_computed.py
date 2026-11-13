@@ -80,9 +80,27 @@ def test_the_retention_card_carries_the_picked_months_computed_cohorts(api):  # 
     # "loaded <time> from <source>": the newest load, counts only.
     assert computed["loads"][0]["source"] == "upload" and computed["loads"][0]["customers"] == 40
     assert "customers" not in search["kept_d30"]  # the card never carries keys: the trace is its own read
-    # A month with no customer facts carries none.
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-08", "new_customers": 9, "kept_d30": 60})
-    assert card(growth(api, "?month=2026-08"), "growth_retention")["computed"]["cohorts"] == []
+
+
+def test_typed_retention_stays_on_the_card_beside_customer_facts(api):  # AC-15 on the web (Review 1)
+    channel(api)
+    channel(api, "referrals", "Referrals")
+    put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-09", "new_customers": 25, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-08", "new_customers": 9, "kept_d30": 60})
+    load(api, september())
+    # A month with facts for one channel: the other channel's typed month comes with the computed cohorts, marked typed.
+    sept = card(growth(api, "?month=2026-09"), "growth_retention")
+    assert [r["value"] for r in sept["computed"]["cohorts"]] == ["search-ads"]
+    assert sept["computed"]["typed"] == [
+        {"value": "referrals", "new_customers": 25, "kept": [70, None, None], "origin": "typed"}
+    ]
+    # A month with no facts at all: the typed table, as before facts were loaded.
+    aug = card(growth(api, "?month=2026-08"), "growth_retention")
+    assert "computed" not in aug and aug["rows"][-1] == {
+        "month": "2026-08",
+        "new_customers": 9,
+        "kept": [60, None, None],
+    }
 
 
 def test_a_team_with_only_typed_rows_keeps_its_retention_card_as_before(api):  # AC-15 on the web

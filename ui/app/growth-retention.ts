@@ -13,8 +13,10 @@ type GrxFigure = {value: number | null; status: string; origin: string; count?: 
 type GrxCohort = {value: string | null; period: string; start: string; end: string; computed_from: number; too_few: boolean;
   new_customers: GrxFigure; kept_d30: GrxFigure; kept_d90: GrxFigure; kept_d180: GrxFigure; ltv: GrxFigure; cac: GrxFigure};
 type GrxLoad = {source: string; customers: number; loaded_at: string};
+// A channel's typed month with no customer facts (backend/cards.py typed_retention): kept beside the computed cohorts.
+type GrxTyped = {value: string; new_customers: number | null; kept: Array<number | null>; origin: string};
 type GrxView = {by: string; grain: string; month: string | null; min_cohort: number; computed_from: number; cohorts: GrxCohort[];
-  cac_note: string | null; keys_visible: boolean; loads: GrxLoad[]};
+  cac_note: string | null; keys_visible: boolean; loads: GrxLoad[]; typed?: GrxTyped[]};
 type GrxWindow = 'kept_d30' | 'kept_d90' | 'kept_d180';
 type GrxLoaded = {customers: number; removed: number; unknown_channel: number};
 
@@ -24,6 +26,8 @@ const GRX_WINDOWS: Array<[GrxWindow, number]> = [['kept_d30', 30], ['kept_d90', 
 // The cut and grain picked on this page, kept while it is open; the view drawn last, which a figure opens from.
 let GRX_PICK = {by: 'channel', grain: 'month'};
 let GRX_SHOWN: GrxView | null = null;
+// The typed channels of the month the card data carried; the API's own reads (another cut or grain) carry none.
+let GRX_TYPED: {month: string | null; rows: GrxTyped[]} = {month: null, rows: []};
 let GRX_READ = 0;
 
 const grxDay = (iso: string | null | undefined) => { const [, m, d] = String(iso || '').split('-').map(Number); return m && d ? `${d} ${GR_MON[m - 1]}` : ''; };
@@ -65,6 +69,8 @@ const GRX_NOTE: Record<string, string> = {
 function grxCard(v: GrxView) {
   if (v.by !== GRX_PICK.by || v.grain !== GRX_PICK.grain) { void grxRead(v.month); return `<div class="grc-ret grx" data-grx data-month="${esc(v.month || '')}" aria-busy="true">${skelRows(3, {dot: false})}</div>`; }
   GRX_SHOWN = v;
+  if (v.typed) GRX_TYPED = {month: v.month, rows: v.typed};
+  const typed = GRX_TYPED.month === v.month ? GRX_TYPED.rows : [], byChannelMonth = v.by === 'channel' && v.grain === 'month';
   const week = v.grain === 'week', cut = GRX_CUTS.find(c => c[0] === v.by)?.[1] || 'Cohort';
   let lastWeek = '';
   const rows = v.cohorts.map((c, i) => {
@@ -72,18 +78,29 @@ function grxCard(v: GrxView) {
     lastWeek = c.period;
     return `${head}<tr data-grx-row="${esc(c.value ?? '')}"><th scope="row">${esc(grxName(v.by, c.value))}</th><td class="grc-n">${esc(grX(c.new_customers.value ?? c.computed_from, 0))}</td>
       ${GRX_WINDOWS.map(([f, days]) => grxKept(c[f], i, f, days)).join('')}${grxMoney(c.ltv)}${grxMoney(c.cac)}</tr>`;
-  }).join('');
+  }).join('') + (byChannelMonth ? typed.map(grxTypedRow).join('') : '');
   const notes = [`Computed from ${grX(v.computed_from, 0)} customers${grxLoaded(v.loads)}.`];
+  const typedNames = typed.map(t => grxName('channel', t.value)).join(', ');
+  if (typed.length) notes.push(byChannelMonth ? 'Rows marked typed were typed by the team: those channels have no customers loaded.'
+    : `Typed retention for ${typedNames} shows under Cut by Channel, Monthly.`);
   if (v.cohorts.some(c => c.too_few)) notes.push(`Under ${v.min_cohort} customers a cohort shows counts only: too few for a rate.`);
   if (v.cohorts.some(c => c.kept_d30.status === 'not_yet' || c.kept_d90.status === 'not_yet')) notes.push('A day fills once every customer in the cohort has reached it.');
   if (v.cac_note) notes.push(GRX_NOTE[v.cac_note] || v.cac_note);
   return `<div class="grc-ret grx" data-grx data-month="${esc(v.month || '')}">
     <div class="grx-bar">${grSeg('grx-by', 'Cut by', GRX_CUTS, v.by)}${grSeg('grx-grain', 'Weekly or monthly', GRX_GRAINS, v.grain)}</div>
-    ${v.cohorts.length ? `<table class="grc-table grc-ret-t grx-t"><thead><tr><th scope="col">${esc(cut)}</th><th scope="col" class="grc-n">New</th>
+    ${v.cohorts.length || (byChannelMonth && typed.length) ? `<table class="grc-table grc-ret-t grx-t"><thead><tr><th scope="col">${esc(cut)}</th><th scope="col" class="grc-n">New</th>
       <th scope="col" class="grc-k-h">Day 30</th><th scope="col" class="grc-k-h">Day 90</th><th scope="col" class="grc-k-h">Day 180</th><th scope="col" class="grc-n">LTV</th><th scope="col" class="grc-n">CAC</th></tr></thead>
       <tbody>${rows}</tbody></table>` : `<p class="muted dash-none">No one became a customer in ${esc(grMonth(v.month))}</p>`}
     <p class="grx-foot muted">${notes.map(esc).join(' ')}</p>
     ${grAdmin() ? '<button type="button" class="ghost small grx-up" data-grx-upload>Upload customers</button>' : ''}</div>`;
+}
+
+// A typed channel's month: its new customers and each day's typed share, shaded as computed ones are; nothing to open.
+function grxTypedRow(t: GrxTyped) {
+  const kept = (v: number | null | undefined) => v == null ? '<td class="grx-not muted">—</td>'
+    : `<td class="grc-k" style="--k:${Math.max(0, Math.min(100, Math.round(Number(v))))}">${esc(grPct(v))}</td>`;
+  return `<tr data-grx-row="${esc(t.value)}" data-origin="typed"><th scope="row">${esc(grxName('channel', t.value))} <span class="muted grx-tag">typed</span></th>
+    <td class="grc-n">${t.new_customers == null ? '—' : esc(grX(t.new_customers, 0))}</td>${[0, 1, 2].map(i => kept(t.kept[i])).join('')}<td class="grc-n muted">—</td><td class="grc-n muted">—</td></tr>`;
 }
 
 // Reads the picked cut and grain for the month and draws every computed Retention card on the page again.

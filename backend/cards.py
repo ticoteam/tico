@@ -934,11 +934,34 @@ def growth_retention(ctx, s):
         {"month": r["month"], "new_customers": r["new_customers"], "kept": [r[k] for k in kept]} for r in nums["series"]
     ]
     computed = GX.computed(ctx.c, ctx.auth, ctx.who, month=ctx.month) if GX.has_facts(ctx.c) else None
+    if computed is not None and not computed["cohorts"]:
+        computed = None  # a month with no customer facts reads its typed rows, as before facts were loaded
     if computed is None and not any(v is not None for row in rows for v in row["kept"]):
         return None
     out = {"columns": ["30 days", "90 days", "180 days"], "rows": rows}
     if computed is not None:
+        computed["typed"] = typed_retention(ctx, kept)
         out["computed"] = computed
+    return out
+
+
+def typed_retention(ctx, kept):
+    """The picked month's channels with typed retention and no customer facts, which the web lists beside the computed
+    cohorts, each marked typed."""
+    from . import growth as G
+
+    out = []
+    for r in G.cohorts(ctx.c, month=ctx.month, limit=G.COHORTS_MAX):
+        if "computed_from" in r or all(r.get(k) is None for k in ("new_customers", *kept)):
+            continue
+        out.append(
+            {
+                "value": r["channel"] or G.UNKNOWN,
+                "new_customers": r.get("new_customers"),
+                "kept": [r.get(k) for k in kept],
+                "origin": "typed",
+            }
+        )
     return out
 
 
