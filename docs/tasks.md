@@ -176,7 +176,7 @@ both tasks can do this; bots cannot.
 | Open sub-tasks | Move under the kept task, before the close, so they stay open |
 | Comments | Stay on the dropped task. The kept task's note says how many |
 | Open asks and OKs | End with it. The kept task's note lists each question, so its owner can ask again |
-| Followers and requesters | Added to the kept task |
+| Followers and requesters | Added to the kept task. Teammates who asked for the merged task also follow the kept one, so they hear when it is done |
 | Labels and related links | Added to the kept task. Its own stage, due date and pipeline stay; the other's due date is in the note |
 | The task itself | Closed with "Archiving this one as a duplicate of #N; its details were added there.", related as `duplicate_of` |
 

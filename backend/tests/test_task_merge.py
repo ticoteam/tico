@@ -57,6 +57,7 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
     seen = get(api, f"tasks/{dup['id']}/merge?into={kept['id']}")
     assert (seen["merge"], seen["subtask"], seen["same_owner"]) == (None, None, True)
     assert seen["moves"]["comments"] == 7 and seen["moves"]["subtasks"] == 1
+    assert seen["moves"]["followers"] == 2, "cara, who follows it, and ana, who asked for it"
     assert seen["moves"]["asks"] == ["Which plan did it fail on?", "Is it every annual customer?"]
 
     done = post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"]})
@@ -81,7 +82,12 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
         ).fetchone()
         from backend import task_followers as F
 
-        assert "human:cara" in {f["actor"] for f in F.listed(c, b)}
+        following = {f["actor"] for f in F.listed(c, b)}
+        assert "human:cara" in following
+        assert "human:ana" not in {f["actor"] for f in F.listed(c, H.task(c, dup["id"]))}
+        assert "human:ana" in following, (
+            "whoever asked for the duplicate follows the kept task, so hears when it is done"
+        )
         assert c.execute(
             "SELECT 1 FROM task_requesters WHERE task_id=? AND actor='human:ana'", (kept["id"],)
         ).fetchone(), "whoever asked for the duplicate hears when the kept task is done"

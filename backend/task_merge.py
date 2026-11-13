@@ -224,31 +224,48 @@ def _files(conn: Any, task_id: str) -> list[Row]:
     return out
 
 
-def _followers(conn: Any, a: Row, b: Row) -> list[str]:
-    F = _followers_mod()
+def _teammate(actor: Any) -> bool:
+    return isinstance(actor, str) and actor.startswith(("human:", "bot:"))
 
-    have: set[str] = {f["actor"] for f in F.listed(conn, b)}
-    return [
-        f["actor"]
-        for f in F.listed(conn, a)
-        if f["actor"] not in have and _h().task_private_readable(conn, f["actor"], b)
+
+def _followers(conn: Any, a: Row, b: Row) -> list[str]:
+    """Who follows B after the merge: A's followers, and the teammates who asked for A (its requester and the
+    task_requesters rows), so they hear when B is done. Nobody can follow a task with no thread of its own (one filed
+    into a shared chat), so that gives none."""
+    F = _followers_mod()
+    if not F.thread_id(conn, b):
+        return []
+    asked = [a.get("requester_id")] + [
+        row[0] for row in conn.execute("SELECT actor FROM task_requesters WHERE task_id=?", (a["id"],))
     ]
+    have: set[str] = {f["actor"] for f in F.listed(conn, b)}
+    out: list[str] = []
+    for actor in [f["actor"] for f in F.listed(conn, a)] + [x for x in asked if _teammate(x)]:
+        if actor not in have and _h().task_private_readable(conn, actor, b):
+            have.add(actor)
+            out.append(actor)
+    return out
 
 
 def _requesters(conn: Any, a: Row, b: Row) -> list[Row]:
-    """A's requesters that B does not have yet: its own requester first, then the rows of task_requesters."""
+    """A's requesters that B does not have yet: its own requester first, then the rows of task_requesters. A teammate
+    who may not read B is left out, as for followers."""
+    H = _h()
     have = {b.get("requester_id")} | {
         row[0]
         for row in conn.execute("SELECT actor FROM task_requesters WHERE task_id=? AND actor IS NOT NULL", (b["id"],))
     }
     out: list[Row] = []
     if a.get("requester_id") and a["requester_id"] not in have:
-        out.append({"actor": a["requester_id"], "source": "manual"})
+        if not _teammate(a["requester_id"]) or H.task_private_readable(conn, a["requester_id"], b):
+            out.append({"actor": a["requester_id"], "source": "manual"})
         have.add(a["requester_id"])
     for row in conn.execute("SELECT * FROM task_requesters WHERE task_id=? ORDER BY created_at", (a["id"],)):
         if row["actor"] and row["actor"] in have:
             continue
         have.add(row["actor"])
+        if _teammate(row["actor"]) and not H.task_private_readable(conn, row["actor"], b):
+            continue
         out.append(dict(row))
     return out
 
@@ -407,7 +424,7 @@ def merge(
     F = _followers_mod()
 
     tid = F.thread_id(conn, b)
-    for who in followers if tid else []:
+    for who in followers:  # none when B has no thread: _followers checked
         F._upsert(conn, tid, who, F.CHOSEN)
     for req in requesters:
         values = {k: req.get(k) or "" for k in ("name", "email", "phone", "other", "organization", "note")}
