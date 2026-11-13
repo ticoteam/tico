@@ -15,14 +15,15 @@ const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.A
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 // `iconRow`: on a phone the header is one dense row of icons with the title kept for screen readers only (Tasks).
-type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean; opens?: [string, string]};
+// `row`: the one row's height under the top padding where a screen sets its own (Tasks: 56px and the 1px rule); else 41px.
+type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean; row?: number; opens?: [string, string]};
 // The week-one table. `button: false` = no filled button allowed; undefined = at most one.
 const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
   // Tasks' row has nothing filled: New task is in its ⋯, and C (spec "Pipeline board in one row", A).
-  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true},
+  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true, row: 57},
   {name: 'Automations', hash: '#/automations', button: true},
   {name: 'Listening', hash: '#/listening', button: true},
   {name: 'Rules', hash: '#/rules', tabs: true},
@@ -179,7 +180,7 @@ const titleLeft = (page: Page) => page.evaluate(() =>
           for (const s of SCREENS) {
             try { await open(page, s); } catch { say(s, String(width), ['no header']); continue; }
             await page.waitForTimeout(t(100));   // the fit runs on the next frame
-            say(s, String(width), await page.evaluate(([oneRow]) => {
+            say(s, String(width), await page.evaluate(([oneRow, row]) => {
               const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
               const vw = document.documentElement.clientWidth;
               const name = (el: Element) => el.id ? '#' + el.id : (el.textContent || '').trim().slice(0, 24) || el.className;
@@ -202,10 +203,10 @@ const titleLeft = (page: Page) => page.evaluate(() =>
               if (oneRow) {
                 // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
                 const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
-                if (tall > 41.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
+                if (tall > row + 0.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
               }
               return bad;
-            }, [width === 1100 && !['Rules', 'Meetings'].includes(s.name)] as const));
+            }, [width === 1100 && !['Rules', 'Meetings'].includes(s.name), s.row ?? 41] as const));
           }
         }
       } finally { await page.context().close(); }
