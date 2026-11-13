@@ -1042,7 +1042,8 @@ def publishes_releases(conn: "sqlite3.Connection", repo: str) -> bool | None:
 
 
 def included(conn: "sqlite3.Connection", release_id: str, commit_sha: str) -> bool | None:
-    """Whether a commit is in a release's history, as read from GitHub; None when not read yet."""
+    """Whether a commit is in one release's history, as read from GitHub; None when not read yet. One question per call:
+    to find which release holds a commit, use `release_of` (or `holds` with `holding`), never this in a loop."""
     found = conn.execute(
         "SELECT included FROM github_release_commits WHERE release_id=? AND commit_sha=?", (release_id, commit_sha)
     ).fetchone()
