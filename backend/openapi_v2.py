@@ -7063,7 +7063,7 @@ _RUN = obj(
         "trigger_ref": "s",
         "started_at": "s",
         "finished_at": {"type": ["string", "null"]},
-        "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
+        "status": {"enum": ["queued", "running", "waiting", "ok", "partial", "failed", "empty", "skipped", "held"]},
         "cost": "f",
         "summary": "n",
         "steps": {

@@ -26,7 +26,7 @@ LISTENING = "listening"  # a listening has its own page: the overview leaves it 
 STATUSES = {
     "done": ("ok", "empty", "skipped"),
     "ok": ("ok", "empty", "skipped"),
-    "failed": ("failed",),
+    "failed": ("failed", "partial"),
     "waiting": ("waiting",),
     "running": ("queued", "running"),
     "held": ("held",),
