@@ -4,7 +4,10 @@
    bot's Files rail does (file-review.ts). What a message names is asked of the server together, once per draw
    (GET /api/v2/bots/{bot}/files/mentions), and kept; a name the server cannot pin to one file stays text.
    A bare name prefers the file in the folder named before it in the same paragraph or list item, else it must be the
-   only file of that name. Classic script: its globals are shared with the other files under ui/app/. */
+   only file of that name. Every surface that draws a message draws it with messageMd (the bot's chat on its page, the
+   Assistant, task chats and threads, Catch up, updates), so they link the same way; an answer that arrives after the
+   draw links the names in place in whatever shows them. Classic script: its globals are shared with the other files
+   under ui/app/. */
 'use strict';
 
 interface FmFile { id: string; title?: string | null; name?: string | null }
@@ -25,8 +28,6 @@ const FM_KNOWN = new Map<string, {file: FmFile | null; at: number}>();   // bot 
 const FM_WANT = new Map<string, Set<string>>();                          // bot -> names this draw asks about
 const FM_DRAWN = new Map<string, {gen: number; until: number; html: string}>();
 let FM_GEN = 0;
-/** What redraws the messages once an answer arrives with a file in it (thread-view.ts sets it). */
-let FM_REDRAW: (() => void) | null = null;
 
 const fmKey = (bot: string, said: string) => bot + '\0' + said;
 // A name as the server reads it: no ./ in front, forward slashes.
@@ -34,7 +35,7 @@ const fmClean = (said: string) => said.trim().replace(/\\/g, '/').replace(/^\.\/
 const fmDir = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
 
 // Every name in the drawn message, in reading order, each with its block's folder so far.
-function fmFind(root: DocumentFragment): FmFound[] {
+function fmFind(root: Node): FmFound[] {
   const out: FmFound[] = [], folders = new Map<Element | null, string>();
   const take = (node: Text | HTMLElement, start: number, end: number, said: string) => {
     const block = node.parentElement?.closest(FM_BLOCK) ?? null, path = fmClean(said);
@@ -99,22 +100,11 @@ async function fmSend(bot: string): Promise<void> {
     } catch { /* not readable or offline: the names stay text until they are asked again */ }
   }
   FM_GEN++;
-  if (found) FM_REDRAW?.();
+  if (found) fmPatch(bot);
 }
 
-/** A bot's drawn message (safeMd's HTML) with the files it names as links; the same input gives the same markup until
-    an answer changes what is known. `bot` is the bot's id; '' leaves the message as it is. */
-function fileMentionLinks(html: string, bot: string): string {
-  if (!bot || !FM_ANY.test(html)) return html;
-  const key = fmKey(bot, html), now = Date.now(), kept = FM_DRAWN.get(key);
-  if (kept && kept.gen === FM_GEN && now < kept.until) return kept.html;
-  const tpl = document.createElement('template');
-  tpl.innerHTML = html;
-  const found = fmFind(tpl.content), missing = new Set<string>();
-  let until = Infinity;
-  const picks = found.map(f => { const pick = fmPick(bot, f.asks, now, missing); until = Math.min(until, pick.until); return pick.file; });
-  if (missing.size) fmAsk(bot, missing);
-  // Last first, so an earlier name's offsets in a shared text node still hold.
+// Wrap each found name that is a file in its link; last first, so an earlier name's offsets in a shared text node hold.
+function fmWrap(bot: string, found: FmFound[], picks: (FmFile | null)[]): void {
   for (let i = found.length - 1; i >= 0; i--) {
     const f = found[i]!, file = picks[i];
     if (!file) continue;
@@ -131,10 +121,43 @@ function fileMentionLinks(html: string, bot: string): string {
     tail.replaceWith(a);
     a.append(tail);
   }
+}
+
+// An answer arrived after the draw: link what it found in every message of that bot on screen, in place (the next
+// draw of each draws the same links from what is now known).
+function fmPatch(bot: string): void {
+  const now = Date.now();
+  for (const el of document.querySelectorAll<HTMLElement>(`[data-fm-bot="${CSS.escape(bot)}"]`)) {
+    const found = fmFind(el);
+    fmWrap(bot, found, found.map(f => fmPick(bot, f.asks, now, new Set()).file));
+  }
+}
+
+/** A bot's drawn message (safeMd's HTML) with the files it names as links; the same input gives the same markup until
+    an answer changes what is known. `bot` is the bot's id; '' leaves the message as it is. */
+function fileMentionLinks(html: string, bot: string): string {
+  if (!bot || !FM_ANY.test(html)) return html;
+  const key = fmKey(bot, html), now = Date.now(), kept = FM_DRAWN.get(key);
+  if (kept && kept.gen === FM_GEN && now < kept.until) return kept.html;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  const found = fmFind(tpl.content), missing = new Set<string>();
+  let until = Infinity;
+  const picks = found.map(f => { const pick = fmPick(bot, f.asks, now, missing); until = Math.min(until, pick.until); return pick.file; });
+  if (missing.size) fmAsk(bot, missing);
+  fmWrap(bot, found, picks);
   const out = found.length ? tpl.innerHTML : html;
   FM_DRAWN.set(key, {gen: FM_GEN, until: missing.size ? now : until, html: out});
   if (FM_DRAWN.size > 400) { const oldest = FM_DRAWN.keys().next().value; if (oldest !== undefined) FM_DRAWN.delete(oldest); }
   return out;
+}
+
+/** A message's body as every surface draws it: safeMd's markdown in a `<div class="${cls}">`, and, when a bot sent it
+    (`sender` 'bot:<id>'), the files it names as links to them. The one hook for every place messages show. `tail` is
+    markup of the caller's own after the text, inside the box (Catch up's "…"). */
+function messageMd(cls: string, body: unknown, sender: unknown, options: SafeMdOptions = {}, tail = ''): string {
+  const id = String(sender || ''), bot = id.startsWith('bot:') ? id.slice(4) : '';
+  return `<div class="${cls}"${bot ? ` data-fm-bot="${esc(bot)}"` : ''}>${fileMentionLinks(safeMd(body, options), bot)}${tail}</div>`;
 }
 
 // A named file opens in the review view over the page, with the bot's chat beside it, as its Files rail opens it.

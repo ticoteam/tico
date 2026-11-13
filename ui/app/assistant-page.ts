@@ -154,7 +154,7 @@ function assistantEarlier(earlier: AssistantEarlier | null | undefined, load: nu
   const line = (m: EarlierMessage) => {
     const mine = m.sender_id === 'human:' + (S.me?.id || '');
     return `<div class="asst-earlier-msg"><b>${esc(mine ? 'You' : earlier.name || 'Assistant')}</b>
-      <span class="muted" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></div>`;
+      <span class="muted" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span>${messageMd('md', m.body || '', m.sender_id, {shortLinks: true})}</div>`;
   };
   const more = async () => {
     if (busy) return;
@@ -215,7 +215,7 @@ async function assistantRail(slug: string, load: number) {
   if (u) {
     up.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
         <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span></header>
-      <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>
+      ${messageMd('upd-body md', u.body || '', `bot:${slug}`, {shortLinks: true})}
       <div class="rail-foot"><a class="rail-more" href="${UPDATES}" data-latest-all>All updates</a></div>`;
     up.hidden = false;
   }
