@@ -357,3 +357,52 @@ def test_the_eval_scores_each_case_on_its_checks_own_bar(monkeypatch):
     assert run.verdict(0.65, None) == "unsure" and run.verdict(0.25) == "unsure"
     result = run.score("qa-bar", lambda case: (0.65, 0.0, 5), [qa, own])
     assert [row["got"] for row in result["rows"]] == ["met", "unsure"]
+
+
+def _rows(check, parts_and_outcomes, today="met"):
+    return [{"parts": parts, "outcome": out, "today": today} for parts, out in parts_and_outcomes]
+
+
+def test_a_bot_rewrite_is_not_a_send_back_and_a_persons_no_is():
+    from evals.pipeline_judge import rebuild as R
+
+    assert R.outcome({"next": "new version"}) == "rewritten"
+    assert R.outcome({"next": "sent back"}) == "sent_back"
+    assert R.outcome({"next": "moved on unchanged"}) == "moved_on"
+
+
+def test_a_part_no_is_not_met_a_part_between_is_unsure_and_a_failed_call_is_never_met():
+    from evals.pipeline_judge import rebuild as R
+
+    yes = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    assert R.verdict_at("spec", yes, 0.75) == "met"
+    assert R.verdict_at("spec", yes | {"criteria": 0.1}, 0.75) == "not_met"
+    assert R.verdict_at("spec", yes | {"criteria": 0.6}, 0.75) == "unsure"
+    assert R.verdict_at("spec", yes | {"criteria": 0.6}, 0.6) == "met"
+    assert R.verdict_at("spec", {k: v for k, v in yes.items() if k != "goal"}, 0.5) == "unsure"
+    assert R.verdict_at("spec", {}, 0.5) == "unsure"
+
+
+def test_the_bar_chosen_is_the_lowest_that_keeps_send_backs_at_todays_and_unsure_under_ten_percent():
+    """Today 1 of 10 met pages is sent back. At 0.6 a bad page at p 0.65 becomes met and is sent back (2 of 10, worse
+    than today); at 0.7 it stays unsure, send-backs stay at today's, and unsure is 1 in 11 (9%): 0.7 is the bar."""
+    from backend import pipeline_judges as P
+    from evals.pipeline_judge import rebuild as R
+
+    good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    rows = _rows("spec", [(good, "moved_on")] * 9 + [(good, "sent_back")] + [(good | {"criteria": 0.65}, "sent_back")])
+    rows[-1]["today"] = "unsure"
+    result = R.choose("spec", rows, grid=(0.6, 0.7, 0.8))
+    assert result["today"]["mtsb_rate"] == 0.1
+    assert result["by_bar"][0.6]["mtsb_rate"] > 0.1
+    assert result["bar"] == (0.7, P.NOT_MET_AT)
+    assert result["by_bar"][0.7]["unsure_rate"] < R.UNSURE_UNDER
+
+
+def test_no_bar_is_chosen_when_none_gets_unsure_under_ten_percent():
+    from evals.pipeline_judge import rebuild as R
+
+    between = {"goal": 0.4, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    rows = _rows("spec", [(between, "moved_on")] * 2 + [(good, "moved_on")] * 8)
+    assert R.choose("spec", rows, grid=(0.5, 0.6))["bar"] is None
