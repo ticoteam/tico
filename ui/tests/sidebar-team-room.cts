@@ -1,11 +1,12 @@
 // The sidebar leaves room for the team and never cuts a name (spec "Sidebar: room for the team, names never cut").
 //  - With no fold kept, Company and Library are folded, so at 1440×900 at least nine bot rows sit wholly above the
 //    sidebar's footer (AC-4).
-//  - Every group and bot expanded, at the sidebar's 236px default and its 200px minimum, dark and light: no name is cut
-//    or clamped, no row's content is wider than the row, and at 236px no word is split across lines (AC-3).
+//  - Every group and bot expanded, at the sidebar's 236px default and its 200px minimum, dark and light, down to a seat
+//    four levels deep: no name is cut or clamped, no row's content is wider than the row, and at 236px no word is split across lines (AC-3).
 //  - At most one count per row: beside a Needs-you count the DM unread is a 6px dot with the same words; alone it stays
 //    a number. A folded manager whose report needs you puts its dot on the chevron, not in the row (AC-5).
-//  - A goal, branch or onboarding mark rides the name's last word (AC-6). A seat's name ends in "· Recruiting".
+//  - A goal, branch or onboarding mark rides the name's last word (AC-6). A seat's "Recruiting" and applicants count sit
+//    on a line under its name, so they take none of its room (Validate, rc.31).
 //  - The Team header holds TEAM, its chevron, + and ⋯ only; ⋯ opens Contacts, Only bots I can open and Recently viewed
 //    first, in words, by mouse and by keyboard, and says on itself which switch is on (AC-7).
 // Fixtures only, no network.
@@ -18,6 +19,8 @@ const {unrouted} = require('./support/routes.cts') as import('./support/routes.c
 const t = (ms: number) => ms * (Number(process.env.TICO_TEST_TIMEOUT_SCALE) || 1);
 declare function renderTree(): void;
 declare const THREADS: {dms: Record<string, number> | null};
+declare const RECRUIT: {counts: Record<string, number>};
+declare function renderTree(): void;
 
 const ORIGIN = 'https://tico-ui.test';
 const FULL = {see: true, read: true, write: true};
@@ -39,12 +42,21 @@ const BOTS: Bot[] = [
   bot('partnerships', 'Partnerships Development Manager', 'sales', 'retail', {goal_active: true}),
   bot('supply', 'Supply Chain Coordinator', 'sales', 'retail'),
   bot('support', 'Customer Support Lead', 'sales', 'retail'),
+  // Seats as deep as production's (group › Growth Manager › seat: a 93px name box at the 200px minimum, where rc.31 cut
+  // two of them at three lines) and a level deeper (› Demand Generation Lead › seat: 72px).
+  bot('growth', 'Growth Manager', 'growth', 'human:chris'),
+  bot('demand', 'Demand Generation Lead', 'growth', 'growth'),
 ];
 const PEOPLE = [{id: 'chris', name: 'Chris Lee', email: 'chris@acme.example', org_parent: '', team: ''}];
 const GROUPS = [{id: 'product', name: 'Product', org_parent: '', order: 0}, {id: 'engineering', name: 'Engineering', org_parent: '', order: 1},
-  {id: 'sales', name: 'Sales and Partners', org_parent: '', order: 2}];
+  {id: 'sales', name: 'Sales and Partners', org_parent: '', order: 2}, {id: 'growth', name: 'Growth', org_parent: '', order: 3}];
 // A seat comes with the roster (/api/humans), placed by org_parent like a bot.
-const SEATS = [{id: 's-ops', title: 'Operations Analyst', team: 'sales', org_parent: 'b:retail', reports_to: 'retail', kind: 'seat', stage: 'recruiting', description: ''}];
+const seat = (id: string, title: string, team: string, reports_to: string, extra: Bot = {}): Bot => ({id, title, team, org_parent: 'b:' + reports_to,
+  reports_to, kind: 'seat', stage: 'recruiting', description: '', ...extra});
+const SEATS = [seat('s-ops', 'Operations Analyst', 'sales', 'retail'),
+  seat('s-cro', 'Conversion Rate Optimization Owner', 'growth', 'growth'), seat('s-leads', 'Lead Generation Owner', 'growth', 'growth'),
+  seat('s-cro-deep', 'Conversion Rate Optimization Owner', 'growth', 'demand'),
+  seat('s-cloud', 'Marketing Attribution Analyst', 'growth', 'demand', {agent: 'cloud'})];
 
 async function open(browser: import('playwright').Browser, {width = 1440, height = 900, keep = {} as Record<string, string>} = {}) {
   const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', reducedMotion: 'reduce'});
@@ -147,11 +159,15 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
     // AC-3, AC-6 and the seat: every name whole at 236px and 200px, dark and light; marks on the last word's line.
     {
       const {context, page, errors} = await open(browser, {keep: {'tico.theme': 'dark'}});
+      // Production's recruiting seats show their applicants count, which takes room from the name.
+      await page.evaluate(() => { Object.assign(RECRUIT.counts, {'s-ops': 2, 's-leads': 4, 's-cro-deep': 12}); renderTree(); });
       await expandAll(page);
       for (const theme of ['dark', 'light']) {
         await page.evaluate(th => { document.documentElement.dataset.theme = th; }, theme);
         for (const width of [236, 200]) {
           await page.evaluate(w => { document.documentElement.style.setProperty('--rail-left', w + 'px'); }, width);
+          // The rail eases to its new width: measure once it is there (light 200px used to measure the 236px rail).
+          await page.waitForFunction(w => Math.round(document.querySelector('#side')!.getBoundingClientRect().width) === w, width, {timeout: t(5000)});
           const seen = await names(page);
           assert.ok(seen.length >= 12, `${theme} ${width}px: the whole team is listed (${seen.length})`);
           for (const n of seen) {
@@ -159,6 +175,17 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
             assert.equal(n.wide, false, `${theme} ${width}px: "${n.name}"'s row holds its content`);
             if (width === 236) assert.equal(n.split, false, `${theme} 236px: "${n.name}" breaks between words`);
           }
+          // The deep seats are really deep: at 200px the name box is production's 93px, and 72px a level down.
+          const room = (id: string) => page.locator(`#tree [data-seat="${id}"]`).evaluate(a => {
+            const cs = getComputedStyle(a), others = [...a.children].filter(el => !el.classList.contains('seat-text'));
+            return a.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - parseFloat(cs.columnGap) * others.length
+              - others.reduce((w, el) => w + el.getBoundingClientRect().width, 0);
+          });
+          if (width === 200) {
+            assert.ok(await room('s-cro') <= 95, `${theme} 200px: s-cro's name box is as narrow as production's`);
+            assert.ok(await room('s-cro-deep') <= 75, `${theme} 200px: s-cro-deep's name box is a level narrower`);
+          }
+          assert.equal(seen.filter(n => n.name === 'Conversion Rate Optimization Owner').length, 2, `${theme} ${width}px: both deep seats listed`);
           if (width === 236) {
             const pdm = seen.find(n => n.name.startsWith('Partnerships Development Manager'))!;
             assert.ok(pdm.lines >= 2, 'a long name wraps rather than being cut');
@@ -178,15 +205,29 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
         }, mark);
         assert.equal(same, true, `${org}: ${mark} on the same line as the last word`);
       }
-      // A seat's state is a word at the end of its name, no pill.
+      // A seat's state word and applicants count are a line under its name, no pill, taking none of the name's room.
       const seat = page.locator('#tree [data-seat="s-ops"]');
       assert.equal(await seat.count(), 1, 'the seat is listed');
       assert.equal(await seat.locator('.pill').count(), 0, 'no Recruiting pill');
-      assert.equal((await seat.locator('.nm').innerText()).replace(/\s+/g, ' ').trim(), 'Operations Analyst · Recruiting');
-      // The state words wrap like the name (not held to its last word, which overflowed a 200px rail), and the dot stays
-      // with its word.
-      assert.equal(await seat.locator('.nm-end .seat-word').count(), 0, 'the state words follow the last word');
-      assert.equal(await seat.locator('.seat-word').evaluate(el => el.textContent), ' ·\u00a0Recruiting');
+      assert.equal((await seat.locator('.nm').innerText()).replace(/\s+/g, ' ').trim(), 'Operations Analyst', 'the name is the title alone');
+      assert.equal(await seat.locator('.nm .seat-word').count(), 0, 'the state word is not inside the name');
+      assert.equal(await seat.locator('.seat-line .cnt').innerText(), '2', 'the applicants count sits beside the state word');
+      assert.equal((await seat.locator('.seat-word').innerText()).replace(/\s+/g, ' ').trim(), '· Recruiting', 'read as "· Recruiting"');
+      // At the 200px minimum, three levels down: every seat's name and its state word whole, the word under the name.
+      await page.evaluate(() => { document.documentElement.style.setProperty('--rail-left', '200px'); });
+      for (const id of ['s-ops', 's-cro', 's-leads', 's-cro-deep', 's-cloud']) {
+        const box = await page.locator(`#tree [data-seat="${id}"]`).evaluate(a => {
+          const nm = a.querySelector<HTMLElement>('.nm')!, word = a.querySelector<HTMLElement>('.seat-word')!;
+          const seen = [...word.childNodes].filter(n => n.nodeType === Node.TEXT_NODE);
+          const r = document.createRange(); r.selectNodeContents(seen[seen.length - 1]!);
+          return {nameBottom: nm.getBoundingClientRect().bottom, wordTop: r.getBoundingClientRect().top, word: word.textContent,
+            cut: word.scrollWidth > word.clientWidth + 0.5 || a.scrollWidth > a.clientWidth + 0.5};
+        });
+        assert.ok(box.wordTop >= box.nameBottom - 0.5, `${id}: the state word is on its own line under the name`);
+        assert.equal(box.cut, false, `${id}: the state word and row are whole at 200px`);
+        assert.equal(box.word, id === 's-cloud' ? ' · Connecting' : ' · Recruiting');
+      }
+      await page.evaluate(() => { document.documentElement.style.setProperty('--rail-left', '236px'); });
       assert.deepEqual(errors, []);
       await context.close();
     }

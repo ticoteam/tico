@@ -690,10 +690,9 @@ function treeBadge(n: number, st: string, slug: string): string {
 }
 // A row's name, with its marks (branch, onboarding, goal) riding its last word so a mark never sits alone on a line and
 // the name wraps between words rather than being cut (ui/styles/sidebar.css .tree .nm).
-// `tail` is words after the name (a seat's "· Recruiting"): they wrap like the name, so they are not held to its last word.
-function treeName(name: string, marks = '', lead = '', tail = ''): string {
+function treeName(name: string, marks = '', lead = ''): string {
   const text = name.trimEnd(), cut = text.search(/\S+$/), first = cut > 0 ? text.slice(0, cut) : '', last = cut > 0 ? text.slice(cut) : text;
-  return `<span class="nm">${lead}${esc(first)}<span class="nm-end">${esc(last)}${marks}</span>${tail}</span>`;
+  return `<span class="nm">${lead}${esc(first)}<span class="nm-end">${esc(last)}${marks}</span></span>`;
 }
 // A folded row whose subtree needs you: the dot rides its chevron, so the row keeps its room for the name.
 function treeChev(key: string, name: string, isCol: boolean, needs: boolean): string {
@@ -925,7 +924,8 @@ function renderTree() {
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
     if (node.kind === 'seat') {
-      // A role still being recruited: its title, marked Recruiting, with the job description on hover. Not a drop
+      // A role still being recruited: its title, and under it Recruiting and the applicants count, so neither takes the
+      // title's room (a long title three levels down at the 200px minimum stays whole); the job description on hover. Not a drop
       // target or dragged here (data-seat, not data-org): it is opened and moved from its own page.
       const key = 's:' + node.id, kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
       const cloud = !!node.agent;                    // its cloud agent is requested: Connecting (ui/app/cloud-agents.ts)
@@ -934,8 +934,8 @@ function renderTree() {
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
         ${kids ? treeChev(key, node.title, !!isCol, !!isCol && subtreeNeeds(key)) : ''}
         <a class="node seat" href="${esc(recruitAddress(node.id))}" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
-          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span>${treeName(node.title, '', '', cloud ? '<span class="seat-word connecting"> ·\u00a0Connecting</span>' : '<span class="seat-word"> ·\u00a0Recruiting</span>')}${
-            applicants === undefined || cloud ? '' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
+          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="seat-text">${treeName(node.title)}<span class="seat-line"><span class="seat-word${cloud ? ' connecting' : ''}"><span class="sr-only"> · </span>${cloud ? 'Connecting' : 'Recruiting'}</span>${
+            applicants === undefined || cloud ? '' : `<span class="cnt" title="Applicants">${applicants}</span>`}</span></span></a></div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
     if (node.kind === 'person') {
