@@ -69,6 +69,9 @@ class Net:
         outer, sent = self, []
 
         class Sock:
+            def settimeout(self, value):
+                pass
+
             def sendall(self, data):
                 sent.append(data.decode())
 

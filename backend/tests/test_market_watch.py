@@ -160,6 +160,21 @@ def test_a_failing_page_marks_its_watch_and_the_others_still_run(seeded, monkeyp
     assert by[PAGE]["last_status"] == "error" and by["https://brightline.example/pricing"]["last_status"] == "ok"
 
 
+def test_a_page_that_cannot_be_reached_logs_its_category_errno_and_reason(seeded, monkeypatch, caplog):
+    def unreachable(ip, port, tls, host, timeout):
+        raise OSError(101, "Network is unreachable")
+
+    monkeypatch.setattr(W, "RESOLVER", lambda host, port: ["93.184.216.34"])
+    monkeypatch.setattr(W, "OPENER", unreachable)
+    watch(seeded)
+    with caplog.at_level("WARNING", logger="tico.market_watch"):
+        assert check(seeded) == {"read": 1, "changed": 0, "errors": 1}
+    row = get(seeded, "market/watches")["watches"][0]
+    assert row["last_status"] == "error" and "[Errno 101] Network is unreachable" in row["error"]
+    logged = [r.getMessage() for r in caplog.records if r.name == "tico.market_watch"]
+    assert any("northwind.example" in m and "network" in m and "[Errno 101]" in m for m in logged), logged
+
+
 def test_stopping_keeps_the_row_and_a_stopped_page_is_not_read(seeded, monkeypatch):
     made = watch(seeded)["watch"]
     stopped = post(seeded, f"market/watches/{made['id']}/stop", {})["watch"]
