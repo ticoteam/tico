@@ -535,9 +535,13 @@ def at_once(c, runner_id, start, end):
     `ran` counts every turn of the window and splits a bot by model (a turn still running has none yet), so a bot
     limited to 3 turns at once read "x4, x4"."""
     edges = {}
+    lo = _iso(start)
     for r in _runs(c, runner_id, start, end):
+        # `_runs` reads finished_at>=start: a turn that ended exactly at the start ran before the window, not in it.
+        if r["finished_at"] and r["finished_at"] <= lo:
+            continue
         bot = edges.setdefault(r["bot_id"].removeprefix("bot:"), [])
-        bot.append((r["started_at"], 1))
+        bot.append((max(r["started_at"], lo), 1))
         # A turn with no end runs to the window's end, even a lease that lapsed and is not yet swept, which
         # start_places.bot_held no longer counts: the alert may read one turn high for a sweep interval at most.
         if r["finished_at"]:

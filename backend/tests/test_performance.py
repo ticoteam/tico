@@ -437,3 +437,17 @@ def test_an_overload_lists_each_bot_once_with_the_most_turns_it_ran_at_once(api)
     assert o["bots"] == [{"bot": "ops", "runs": 3}]  # the claimed turn, c and d
     load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
     assert load.count("Operations Lead") == 1 and "running: Operations Lead x3" in load
+
+
+def test_turns_that_ended_as_the_window_opened_are_not_counted_in_it():
+    """_runs reads finished_at>=start, so three turns ending exactly at the start came back and their earlier peak of 3
+    was reported for a window where one turn ran."""
+    import sqlite3
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute("CREATE TABLE attempts(id,bot_id,runner_id,started_at,created_at,finished_at,state,usage_model)")
+    rows = [(str(i), "ops", "r", P._iso(0), P._iso(0), P._iso(100), "completed", "m") for i in range(3)]
+    rows.append(("new", "ops", "r", P._iso(100), P._iso(100), None, "running", None))
+    c.executemany("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?)", rows)
+    assert P.at_once(c, "r", 100, 200) == [{"bot": "ops", "runs": 1}]
