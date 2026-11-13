@@ -216,7 +216,9 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // A page filed on the task is one row in its Pages (task #409), its icon and name; the old weekly, filed there too, is
   // left out as replaced. The row opens its page, which says where it is pinned.
   await go(page, '#/task/' + launch.task_id);
-  const tab = page.locator('#task-modal[open]').getByRole('tab', {name: /^Pages/});
+  // A phone shows the pages in the Pages tab: wait for the window to draw before reading whether the tabs show.
+  const tab = page.locator('#task-modal[open] [data-task-tab="pages"]');
+  await tab.waitFor({state: 'attached', timeout: t(10000)});
   if (await tab.isVisible()) await tab.click();
   const cards = page.locator('.task-pages .tp-row');
   await cards.first().waitFor({timeout: t(10000)})

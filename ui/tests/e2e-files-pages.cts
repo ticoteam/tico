@@ -208,6 +208,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     await go(page, '#/tasks');
     await section.waitFor({state: 'hidden', timeout: t(10000)});
     await go(page, '#/task/' + id);
+    await pagesTab(page);
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
     await page.waitForFunction(cid => LIVE.es?.readyState === EventSource.OPEN &&
       new URL(LIVE.es.url).searchParams.get('conversation')?.split(',').includes(cid),
@@ -223,6 +224,9 @@ async function makePage({hub, browser, phone}: PassContext) {
     });
     await card.waitFor({state: 'hidden', timeout: t(10000)});
 
+    // Made: the Describe box folds away; a second page starts from "+" › Make page again.
+    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
+    await section.locator('[data-tp-make]').click();
     await field.fill('A second page.');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});

@@ -458,6 +458,7 @@ interface TaskPagesSlot extends HTMLDivElement {
   tpFollow?: (() => void) | null;
   tpFollowCid?: string | null | undefined;
   tpMakeOpen?: boolean;
+  tpCanLink?: boolean;
 }
 // The task's dialog, which holds its section (tpEl) and the release of its live handlers (tpOff).
 interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null; tpOff?: (() => void) | null; }
@@ -573,6 +574,11 @@ function taskPageMakeDraw(d: TaskPagesHost, status: MakePageStatus | null) {
     finally { retry.disabled = false; }
   };
   $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
+  taskPageMakeShow(slot);
+}
+// The Describe box shows once Make page is chosen, while a draft is kept, or while a request is on its way or failed.
+function taskPageMakeShow(slot: TaskPagesSlot) {
+  $('.tp-make', slot).hidden = !slot.tpCanLink || !(slot.tpMakeOpen || ['making', 'update_required', 'failed'].includes(slot.tpMaking?.state ?? ''));
 }
 async function taskPageMakeLoad(d: TaskPagesHost) {
   const slot = d.tpEl;
@@ -591,7 +597,8 @@ async function taskPagesLoad(d: TaskPagesHost) {
     const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
     $('[data-tp-add]', slot).hidden = !r.can_link;
-    $('.tp-make', slot).hidden = !r.can_link || !(slot.tpMakeOpen || ['making', 'update_required', 'failed'].includes(slot.tpMaking?.state ?? ''));
+    slot.tpCanLink = !!r.can_link;
+    taskPageMakeShow(slot);
     // The Pages tab counts them (a phone's task window, ui/app/task-modal.ts TASK_TABS).
     const count = d.querySelector<HTMLElement>('[data-task-page-count]');
     if (count) count.textContent = pins.length ? String(pins.length) : '';
