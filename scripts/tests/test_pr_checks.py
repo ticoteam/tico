@@ -707,6 +707,20 @@ def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
     assert len(trees) == 6 and graph.unparsed == {"broken.py"}  # each readable file twice: imports, then the scans
 
 
+def test_a_dotted_name_in_typescript_is_a_variable_not_a_bare_python_module(tmp_path):
+    # `run.closest` in a UI file is a JavaScript variable. Read as `import run` (a sys.path module, since a script
+    # imports run bare), it ran every run.py; #3335's e2e/website-tools/run.py reaches the conftest, so every UI file
+    # selected the whole suite. A shell script naming `python -m run.main` still runs it.
+    source(tmp_path, "e2e/website-tools/run.py", "def main(): pass\n")
+    source(tmp_path, "e2e/website-tools/practice.py", "import run\nrun.main()\n")
+    source(tmp_path, "ui/app/page.ts", "const run = document.body;\nrun.closest('x');\n")
+    source(tmp_path, "scripts/go.sh", "python -m run.main\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "run" in graph.bare
+    assert "e2e/website-tools/run.py" not in graph.runs["ui/app/page.ts"]
+    assert "e2e/website-tools/run.py" in graph.runs["scripts/go.sh"]
+
+
 def test_docs_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.
