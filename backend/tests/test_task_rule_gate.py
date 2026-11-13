@@ -235,6 +235,27 @@ def asks_on(api, task):
     )
 
 
+def test_a_bots_ask_whose_short_title_alone_breaks_a_rule_is_refused(ruled):
+    """The person reads the title first, so the check reads it with the line (task #390)."""
+    api, judge = ruled
+    color_rule(api)
+    task = task_for_ops(api)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={
+            "to": "ana",
+            "line": "Which line should the launch post lead with?",
+            "title": "Our favorite color is red: say it?",
+            "version": task["version"],
+            "why": "It sets what goes out on launch day.",
+        },
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert judge.calls, "the check was asked"
+    assert asks_on(api, task) == []
+
+
 @pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
 def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, monkeypatch, cause):
     api, judge = ruled

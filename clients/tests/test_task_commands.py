@@ -417,6 +417,11 @@ def test_an_asks_short_title_is_sent_and_an_ask_without_one_sends_none():
     hubtools.task_ask(api, plain)
     [(_, _, body)] = api.writes()
     assert "title" not in body, "an ask without a title sends none, as older clients do"
+    bound = {**plain, "kind": "ok", "subject": "hq_reply:t-1", "content": {"text": "hi"}, "title": "Reply"}
+    api = Recorder()
+    with pytest.raises(ValueError, match="title"):
+        hubtools.task_ask(api, bound)
+    assert api.calls == [], "an OK bound to a subject has no title: refused, not dropped"
 
 
 TASK = {

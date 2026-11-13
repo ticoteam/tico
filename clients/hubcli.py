@@ -1037,7 +1037,9 @@ def parser():
     s.add_argument(
         "--recommend", metavar="LABEL", help="the choice you recommend (a bot asking a person, with choices)"
     )
-    s.add_argument("--title", help="a short title for the ask, at most 60 characters: its heading above the question")
+    s.add_argument(
+        "--title", help="a short title, at most 60 characters: the heading above the question (not with --for)"
+    )
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")

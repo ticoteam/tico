@@ -559,6 +559,8 @@ def task_ask(api, args):
     if args.get("subject"):
         if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
             raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
+        if args.get("title"):
+            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]

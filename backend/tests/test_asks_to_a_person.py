@@ -193,6 +193,14 @@ def test_an_asks_short_title_is_on_its_entry_and_in_needs_you(ruled):
     assert entry["title"] == "Launch note tone"
     assert entry["line"] == GOOD["line"], "the full question stays the line"
     assert needs_you_ask(api, rid)["title"] == "Launch note tone"
+    post(api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "Plain", "version": version(api, task)})
+    # The bot's next ask replaces it; the answered one stays on the task as decided, title and all.
+    again = ask(api, {**task, "version": version(api, task)}, {**GOOD, "line": "Which day should it go out?"})
+    assert again.status_code == 200, again.text
+    view = get(api, f"tasks/{task['id']}")
+    view = view.get("task", view)
+    [answered] = [e for e in view["to_leave"] if e["requirement_id"] == rid]
+    assert answered.get("replaced") and answered["title"] == "Launch note tone", "a decided ask keeps its title"
 
 
 def test_an_asks_title_over_60_characters_is_refused_and_nothing_is_asked(ruled):
