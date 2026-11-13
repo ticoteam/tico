@@ -277,6 +277,11 @@ interface PreviewState {
       state.status.recording!.sources[0]!.level = 0;
       state.status.recording!.sources[0]!.no_signal = true;
     },
+    // The Meet call is in a background tab, so no names: one line above the dock until it is in front.
+    'speaker-tab': () => {
+      scenes.recording();
+      state.status.speaker_tab = 'Meet';
+    },
     // Shared live with the team: the top bar says who can join.
     live: () => { state.meetings.m2 = liveMeeting(); state.transcripts.m2 = { id: 'm2', blocks: longBlocks.slice(0, 22) }; },
     paused: () => { scenes.live(); Object.assign(state.meetings.m2!, { live_state: 'paused', place: 'Paused · Tico Team' }); },

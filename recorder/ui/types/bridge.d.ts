@@ -107,6 +107,8 @@ export interface Status {
   notice: string | null;
   speaker_permission: boolean;
   speaker_access: boolean | null;
+  /** The meeting app whose call is in a background browser tab, so no names until it is in front. */
+  speaker_tab?: string | null;
   speech: Speech;
   update: UpdateStatus;
   /** Never sent: the page reads it as a fallback for a build that put the desktop orgs here. */

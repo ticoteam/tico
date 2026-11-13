@@ -1029,6 +1029,23 @@ fn teams_detection_takes_teams_pages_and_rejects_other_sites() {
         "Weekly update | Microsoft Teams - Camera and microphone recording - Google Chrome"
     ));
     assert!(!teams::window_title("Inbox - Google Chrome"));
+    // A tab strip's call tab, told from Meet's home page and from other sites mentioning Meet.
+    for title in [
+        "Meet - abc-defg-hij",
+        "Meet – Weekly sync",
+        "meet — abc-defg-hij",
+    ] {
+        assert!(meet::GoogleMeet.call_tab(title), "{title}");
+    }
+    for title in [
+        "Google Meet",
+        "Google Meet - Online video calls",
+        "Inbox - Google Chrome",
+        "Meeting notes",
+    ] {
+        assert!(!meet::GoogleMeet.call_tab(title), "{title}");
+    }
+    assert!(!teams::Teams.call_tab("Weekly update | Microsoft Teams"));
     // The transport picks the adapter by the document's address.
     let pick = |url: &str| {
         ADAPTERS

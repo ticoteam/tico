@@ -3833,6 +3833,9 @@ impl Recorder {
             "speaker_permission": self.active.is_some()
                 && tico_recorder_native::speaker_names::permission_pending(),
             "speaker_access": tico_recorder_native::speaker_names::access(),
+            // The meeting app ("Meet") whose call is in a background tab, so no names yet.
+            "speaker_tab": self.active.as_ref()
+                .and_then(|_| tico_recorder_native::speaker_names::hidden_call()),
             "speech": speech::view(&self.config, self.key_saved("transcription"),
                 self.streaming() && self.key_saved(stream::KEY_NAME)),
         })
