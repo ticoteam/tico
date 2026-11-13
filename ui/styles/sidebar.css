@@ -239,3 +239,5 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
   transform-origin:0 0;pointer-events:none}
 .nav-ind.slide{transition:transform var(--dur-fast) var(--ease)}
 @media (prefers-reduced-motion:reduce){.nav-ind.slide{transition:none}}
+/* On a phone ⋯ is the only way to Contacts and the list's switches: the 40px target the rail's other row buttons have. */
+@media (max-width:760px){.org-head .org-history{width:40px;height:40px}}

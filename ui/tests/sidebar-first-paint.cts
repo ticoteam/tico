@@ -228,7 +228,15 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
         assert.equal(shows(again.painted, 'docs'), true, 'Library open from the first paint once opened');
         assert.equal(shows(again.painted, 'strategy'), false, 'Company still folded');
         assert.equal(await again.page.locator('#side .rd-lib-toggle:not(.rd-co-toggle)').getAttribute('aria-expanded'), 'true');
+        // Same for Company.
+        await again.page.locator('#side .rd-co-toggle').click();
+        assert.equal(await again.page.evaluate(() => localStorage.getItem('tico.nav.company')), 'open');
         await again.page.close();
+        const third = await visit(context, {hash: '#/updates'});
+        same(third, 'Company opened here');
+        assert.equal(shows(third.painted, 'strategy'), true, 'Company open from the first paint once opened');
+        assert.equal(await third.page.locator('#side .rd-co-toggle').getAttribute('aria-expanded'), 'true');
+        await third.page.close();
       }
       await context.close();
     }

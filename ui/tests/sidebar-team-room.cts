@@ -43,7 +43,8 @@ const BOTS: Bot[] = [
 const PEOPLE = [{id: 'chris', name: 'Chris Lee', email: 'chris@acme.example', org_parent: '', team: ''}];
 const GROUPS = [{id: 'product', name: 'Product', org_parent: '', order: 0}, {id: 'engineering', name: 'Engineering', org_parent: '', order: 1},
   {id: 'sales', name: 'Sales and Partners', org_parent: '', order: 2}];
-const SEATS = [{id: 's-ops', title: 'Operations Analyst', team: 'sales', reports_to: 'retail', kind: 'seat', stage: 'recruiting'}];
+// A seat comes with the roster (/api/humans), placed by org_parent like a bot.
+const SEATS = [{id: 's-ops', title: 'Operations Analyst', team: 'sales', org_parent: 'b:retail', reports_to: 'retail', kind: 'seat', stage: 'recruiting', description: ''}];
 
 async function open(browser: import('playwright').Browser, {width = 1440, height = 900, keep = {} as Record<string, string>} = {}) {
   const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', reducedMotion: 'reduce'});
@@ -70,8 +71,7 @@ async function open(browser: import('playwright').Browser, {width = 1440, height
     if (p === '/api/me') return json({id: 'chris', name: 'Chris Lee', email: 'chris@acme.example', role: 'owner', company_role: 'owner', cloud: true,
       config: {company_name: 'Acme', onboarding_needed: false}});
     if (p === '/api/employees') return json(BOTS);
-    if (p === '/api/humans') return json({people: PEOPLE, org_groups: GROUPS});
-    if (p === '/api/v2/seats') return json({seats: SEATS});
+    if (p === '/api/humans') return json({people: PEOPLE, seats: SEATS, org_groups: GROUPS});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/needs-you') return json({items: [], count: 0, version: 'v0'});
@@ -180,10 +180,9 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
       }
       // A seat's state is a word at the end of its name, no pill.
       const seat = page.locator('#tree [data-seat="s-ops"]');
-      if (await seat.count()) {
-        assert.equal(await seat.locator('.pill').count(), 0, 'no Recruiting pill');
-        assert.equal((await seat.locator('.nm').innerText()).replace(/\s+/g, ' ').trim(), 'Operations Analyst · Recruiting');
-      }
+      assert.equal(await seat.count(), 1, 'the seat is listed');
+      assert.equal(await seat.locator('.pill').count(), 0, 'no Recruiting pill');
+      assert.equal((await seat.locator('.nm').innerText()).replace(/\s+/g, ' ').trim(), 'Operations Analyst · Recruiting');
       assert.deepEqual(errors, []);
       await context.close();
     }
