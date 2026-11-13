@@ -20,14 +20,22 @@ not run it: go to step 2.
 ## 2. Check the version production runs
 
 Find the version production runs now, from the release record or the product's own version line. If it is older than
-the release that carries this change, production does not run it yet. Wait for the release, not for a clock time, and
-never with a snooze: make the task depend on the Engineering task that ships the change, until it is released,
+the release that carries this change, production does not run it yet. Wait for the release, not for a clock time.
+
+When production is the Tico server your company runs on (the change is in its own repository), make the task depend on
+the Engineering task that ships the change, until it is released,
 
     tico task relate <id> depends_on <Engineering task> --until released
 
 and stop. The task shows Blocked by that task, with no date. When production runs a release that holds that task's
 merged pull requests, you are woken once with the version it runs; check again then. One dependency for each Engineering
 task whose change production does not run yet.
+
+Any other product's production version is not seen by Tico, and that command refuses its tasks ("merged nothing into
+... whose release this server runs"). Snooze to the day you will read its version again, a day or two out,
+`tico task snooze <id> --until <date> -m "look again on <date>: read the version production runs" --version N`, and stop.
+Check again then; if production still runs an older version than the one that carries the change, snooze again the same
+way.
 
 ## 3. Check each criterion in production
 
