@@ -109,7 +109,7 @@ const STATE_STEPS: &[(&str, &str)] = &[
         "If ${1} has not finished (Tico marks you Needs setup)",
     ),
     (
-        r"(\b[Aa]nswers?)\s+in\s+`state\.md`",
+        r"(\b[Rr]ecord\s+(?:each|every)\s+answer)\s+in\s+`state\.md`",
         "${1} in `knowledge/`",
     ),
     (
@@ -429,6 +429,7 @@ mod tests {
         for own in [
             "Our own rule: the owner keeps a copy of state.md in the wiki.\n",
             "- Look in `state.md` of the old export when asked.\n",
+            "- Compare the answers in `state.md` of the old export.\n",
         ] {
             assert_eq!(retire_state_steps(own), own);
         }
