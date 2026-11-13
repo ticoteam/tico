@@ -335,7 +335,11 @@ def test_a_remap_moves_spend_so_growth_still_equals_finance(api: Any):
     store: Store = api.app.state.store
     month = GS.this_month()
     day = f"{month}-01"
-    _finance_with_spend(store, [(day, "brand", 421000), (day, "retarget", 188000), (day, "podcast", 31000)])
+    before = GS._month(GS._index(month) - 1)  # a month the window rewrites too, not only the current one
+    _finance_with_spend(
+        store,
+        [(day, "brand", 421000), (day, "retarget", 188000), (day, "podcast", 31000), (f"{before}-15", "brand", 5000)],
+    )
     post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
     post(api, "growth/channels", {"slug": "social", "name": "Social"})
     keys = ["meta_ads:111:brand", "meta_ads:111:retarget"]
@@ -343,16 +347,18 @@ def test_a_remap_moves_spend_so_growth_still_equals_finance(api: Any):
     src = post(api, "growth/sources", {**body, "sync_map": {"campaigns": dict.fromkeys(keys, "search-ads")}})
     assert post(api, f"growth/sources/{src['id']}/sync", {})["ok"]
 
-    def spends() -> dict[str, float | None]:
-        rows = get(api, f"growth/cohorts?month={month}")["cohorts"]
+    def spends(m: str = month) -> dict[str, float | None]:
+        rows = get(api, f"growth/cohorts?month={m}")["cohorts"]
         return {str(r["channel"] or "unknown"): r["spend"] for r in rows}
 
     assert spends() == {"search-ads": 6090.0, "unknown": 310.0}
+    assert spends(before) == {"search-ads": 50.0}
     every = {"campaigns": dict.fromkeys([*keys, "meta_ads:111:podcast"], "social")}
     r = api.patch(f"/api/v2/growth/sources/{src['id']}", json={"sync_map": every}, headers=_headers())
     assert r.status_code == 200, r.text
     assert post(api, f"growth/sources/{src['id']}/sync", {})["ok"]
     assert spends() == {"search-ads": 0.0, "social": 6400.0, "unknown": 0.0}
+    assert spends(before) == {"search-ads": 0.0, "social": 50.0}
     with store.read() as c:
         logged = [str(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='growth.source.update'")]
     assert logged and not any("meta_ads:111" in p for p in logged)  # the log names no campaign (AC-15)

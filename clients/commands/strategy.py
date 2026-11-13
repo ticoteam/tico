@@ -433,7 +433,8 @@ SOURCE_PROPS = {
         "type": "array",
         "items": {"type": "string"},
         "description": "With finance_ad_spend: KEY=CHANNEL for each campaign (keys from tico growth source campaigns); "
-        "a campaign left out, or mapped to unknown, counts on Unknown",
+        "a campaign left out, or mapped to unknown, counts on Unknown. On update the campaigns sent replace the whole "
+        "map, so send every campaign you want kept",
     },
     "map": {
         "type": "array",

@@ -200,7 +200,8 @@ it. Map each campaign to a channel once. A campaign left out, or mapped to `unkn
 only the channel-month totals, never a campaign. The source runs after each Finance import, so a day the platform
 restates reaches Growth on the next import. An ad account in another currency than the books makes the source failing,
 naming the account; nothing is converted. Connecting or remapping it also needs someone who sees every connected ad
-account in Finance (a finance admin):
+account in Finance (a finance admin). The `--campaign` flags of an update replace the whole map, so a remap lists
+every campaign to keep:
 
 ```
 tico growth source campaigns
