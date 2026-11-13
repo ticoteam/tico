@@ -1297,3 +1297,26 @@ def test_a_private_task_that_waits_on_someone_who_cannot_read_it_is_stuck_at_onc
     assert NS.rules_hold(c) == []
     H.set_task_readers(c, ANA, shared, add=[ben])  # Ana shares it again: Ben's OK is his
     assert any(n.get("task_id") == shared and n["kind"] == "ask" for n in W.needs(c, ben))
+
+
+def test_a_bot_whose_own_pr_checks_are_running_has_not_stopped_early(c, general, later):
+    """Its PR's checks are running: the turn is GitHub's, so no try is counted and no wake is sent however long the
+    checks run (under GitHub's 2-hour silence). Checks that finish failed give the turn back and the owner is woken."""
+    from backend import item_metadata as IM
+    from backend.tests.helpers import stage_inputs as T
+
+    build = {"name": "Build", "owner": BUILDER, "requirements": [X.github("pr_open"), X.github("checks_pass")]}
+    X.github_installed(c)
+    X.pipeline(c, "eng", "Engineering", (build,), manager=MANAGER)
+    task_id = X.new_task(c, ANA, "Add a login page", "eng")["id"]
+    T._link_pr(c, task_id, 12, "a" * 40)  # the bot's run links its PR, whose checks are pending
+    X.ran(c, task_id, BUILDER)
+    for gap in (120, 900, 3000):  # past the first try and the later ones
+        assert later(seconds=gap) == {}
+    assert _ladder(c, task_id) == ("owner", 0) and _queued(c, task_id) == []
+    assert _states(c, task_id) == [("source", "github")]
+    key = f"{T.REPO}#12"
+    IM.save(c, "github", "pr", key, {**IM.get(c, "github", "pr", key)["fields"], "checks_state": "failure"}, 1)
+    assert _states(c, task_id) == [("bot", BUILDER)]
+    assert later(seconds=1) == {}  # the pass sees the turn come back to the bot, and wakes it FIRST_TRY_S on
+    assert later(seconds=E.FIRST_TRY_S) == {"woken": 1} and _queued(c, task_id) == [BUILDER]
