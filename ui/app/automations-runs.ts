@@ -15,11 +15,12 @@ interface AuStepView {
   status: string;
   cost: unknown;
   outputs: Record<string, unknown>;
+  missed: number;  // a listening's items this step did not deliver: they went back to waiting
 }
 
 const AU_RUNS_PAGE = 25;
 const AU_RUN_STATUS: Record<string, string> = {ok: 'Done', failed: 'Failed', skipped: 'Skipped', empty: 'Nothing found', waiting: 'Waiting', running: 'Running',
-  queued: 'Queued', held: 'Held'};
+  queued: 'Queued', held: 'Held', partial: 'Partly delivered'};
 const AU_STEP_STATUS: Record<string, string> = {skipped: 'skipped', failed: 'failed', spend_cap: 'spend cap', held: 'held'};
 // A run's outcome in one to three words: what its last action did.
 const AU_DONE: Record<string, string> = {archive: 'Archived', leave_for_you: 'Left for you', draft_reply: 'Draft reply', send_reply: 'Replied',
@@ -37,6 +38,7 @@ function auStepView(raw: Record<string, unknown>): AuStepView {
     status: typeof raw.status === 'string' ? raw.status : '',
     cost: raw.cost,
     outputs: auIsRecord(raw.outputs) ? raw.outputs : {},
+    missed: typeof raw.missed === 'number' ? raw.missed : 0,
   };
 }
 function auRunSteps(run: AuRunRow): AuStepView[] {
@@ -116,7 +118,7 @@ const auMoney = (n: unknown): string => {
 };
 function auRunDot(run: AuRunRow): string {
   if (run.status === 'failed') return 'fail';
-  if (run.status === 'held') return 'wait';
+  if (run.status === 'held' || run.status === 'partial') return 'wait';
   if (auRunSteps(run).some(s => s.status === 'spend_cap' || s.status === 'failed')) return 'wait';
   return run.status === 'ok' ? 'ok' : 'idle';
 }
@@ -137,8 +139,9 @@ function auRunStepText(rs: AuStepView): string {
   // A step that is waiting (a queued mail action, a bot's turn) has already said what it did.
   if (rs.status === 'waiting') return [auRunStepDid({...rs, status: 'ok'}), 'waiting'].filter(Boolean).join(' · ');
   if (rs.status !== 'ok') {
-    const reason = o.error || (rs.status === 'failed' ? auFailedDetail(o.actions) : '');
-    return (AU_STEP_STATUS[rs.status] || rs.status || '') + (reason ? ' · ' + auFirstLine(reason).slice(0, 80) : '');
+    const reason = o.error || (rs.status === 'failed' ? auFailedDetail(o.actions) : '') || (o.delivered === 'before' ? 'delivered in an earlier run' : '');
+    const missed = rs.missed ? ` · ${rs.missed} not delivered, back to waiting` : '';
+    return (AU_STEP_STATUS[rs.status] || rs.status || '') + (reason ? ' · ' + auFirstLine(reason).slice(0, 80) : '') + missed;
   }
   return auRunStepDid(rs);
 }

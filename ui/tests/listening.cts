@@ -190,6 +190,15 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.match(await page.locator('.lst-sent pre').innerText(), /^Market listening · Tue Nov 10, 14:00 · 3 of 30\n\n1\. competitor {2}Northwind Team plan is now \$15 a seat/);
       assert.equal(await page.locator('.au-rx .au-sl:not(.muted)').count(), 4, tag + ': then what the steps did');
       await shot(page, 's3-run-desktop');
+      // A send the spend cap partly stopped reads Partly delivered: Sent is what a step got, the rest went back to waiting.
+      const partly = page.locator('.au-rr').nth(1);
+      assert.equal(await partly.locator('.au-dot').getAttribute('aria-label'), 'Partly delivered');
+      assert.equal(await partly.locator('.au-ro').innerText(), 'Partly delivered · 1 of 3 not delivered (spend cap)');
+      await partly.click();
+      await page.waitForFunction(() => document.querySelectorAll('.lst-run').length === 2);
+      assert.deepEqual(await page.locator('.lst-run').nth(1).locator('.lst-cr').allInnerTexts().then(t => t.map(x => x.replace(/\s+/g, ' ').trim())),
+        ['Read 212', 'Duplicates removed 41', 'Dropped by rules 136', 'Could not score 2', 'Kept 33', 'Sent 2', 'Back to waiting 1', 'Waiting 27']);
+      assert.ok((await page.locator('.au-rx').nth(1).innerText()).includes('spend cap · 1 not delivered, back to waiting'), tag + ': the stopped step names what it missed');
 
       // +: a new one is the viewer's, off, 10 a day, with one step that posts what was sent.
       await page.locator('.au-crumb a').click();

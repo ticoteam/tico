@@ -2,6 +2,7 @@
 and sends within the rate limits as one run of the listening's automation."""
 
 import importlib
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -641,3 +642,190 @@ def test_ten_small_posts_with_three_rules_take_one_call_and_each_is_decided_as_a
     assert together == one_by_one and len(together) == 10
     calls = sql(api, "SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid DESC LIMIT 1")
     assert '"items": 10' in calls[0]["detail"]
+
+
+# ---------------------------------------------------------------------------------------------- delivery
+# An item counts as sent only once a step delivered it; what a stopped or failed step missed goes back to waiting
+# (backend/automation_engine.py `delivery`, backend/listening.py `settle`).
+TURN = {"id": "look", "type": "bot_turn", "bot": "ops", "prompt": "{{listening.text}}"}
+CAP = {"per_30m": 0.2}
+
+
+def cap_full(api, aid):
+    """A turn still going holds more than the cap: the next turn is stopped."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO automation_holds(ref,automation_id,run_id,amount,created_at) VALUES('t_old',?,'run_old',0.25,?)",
+            (aid, H.now()),
+        )
+
+
+def cap_free(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM automation_holds WHERE ref='t_old'")
+
+
+def words(n):
+    return " ".join(WORDS[n * 10 : n * 10 + 10])
+
+
+def by_status(api, aid):
+    rows = sql(api, "SELECT native_id, status FROM listening_items WHERE automation_id=?", (aid,))
+    return {r["native_id"]: r["status"] for r in rows}
+
+
+def room(api, aid, when):
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()
+        return L.allowance(c, aid, json.loads(row["flow"])["trigger"], when)
+
+
+def test_a_send_the_spend_cap_stopped_fails_and_its_items_wait_without_using_the_limit(api):
+    aid, source = started(api, steps=[TURN], spend_cap=CAP, limits=[{"count": 10, "per": "day"}])
+    saved(api, source, [item(n, story(n)) for n in range(10)])
+    cap_full(api, aid)
+    run(api, at(1))
+    first = runs(api, aid)
+    assert first[0]["status"] == "failed" and [s["status"] for s in first[0]["steps"]] == ["spend_cap"]
+    assert first[0]["summary"] == "Nothing delivered: spend cap · 10 back to waiting"
+    assert first[0]["listening"]["counts"]["sent"] == 0 and first[0]["listening"]["counts"]["back"] == 10
+    assert first[0]["steps"][0]["missed"] == 10
+    assert statuses(api, aid) == {"kept": 10}
+    assert room(api, aid, at(1)) == 10
+    assert get(api, f"automations/{aid}")["listening"]["waiting"] == 10
+    # The next send, with room in the cap, sends the same ten in the same order, each to the bot once.
+    cap_free(api)
+    run(api, at(1, days=1))
+    second = runs(api, aid)
+    assert second[1]["status"] == "ok" and second[1]["summary"] == "10 sent"
+    lines = [line for line in first[0]["listening"]["text"].split("\n")[2:]]
+    assert second[1]["listening"]["text"].split("\n")[2:] == lines
+    assert [s["status"] for s in second[1]["steps"]] == ["ok"]
+    assert statuses(api, aid) == {"sent": 10}
+
+
+def test_paths_where_the_cap_stops_one_tag_deliver_the_other_and_read_partly_delivered(api):
+    turn_path = {**path("leads"), "steps": [TURN]}
+    steps = [{"id": "split", "type": "paths", "by": "tag", "paths": [turn_path, path("news")]}]
+    aid, source = started(
+        api, rules=[KEEP, KEEP_NEWS], steps=steps, spend_cap=CAP, limits=[{"count": 10, "per": "day"}]
+    )
+    leads = [item(n, f"{words(n)} [r0]") for n in range(4)]
+    news = [item(n, f"{words(n)} [r1]") for n in range(4, 10)]
+    saved(api, source, leads + news)
+    with api.app.state.store.transaction() as c:  # scored as the rules say, without spending toward the cap
+        for n in range(10):
+            tag = "leads" if n < 4 else "news"
+            c.execute(
+                "UPDATE listening_items SET status='kept',tag=?,score=0.9,scored_at=? WHERE automation_id=? "
+                "AND native_id=?",
+                (tag, H.now(), aid, str(n)),
+            )
+    cap_full(api, aid)
+    run(api, at(1), FakeJudge())
+    done = runs(api, aid)[0]
+    assert done["status"] == "partial"
+    assert done["summary"] == "Partly delivered · 4 of 10 not delivered (spend cap)"
+    assert done["listening"]["counts"]["sent"] == 6 and done["listening"]["counts"]["back"] == 4
+    looked = [s for s in done["steps"] if s["id"] == "look"]
+    assert [(s["status"], s["missed"]) for s in looked] == [("spend_cap", 4)]
+    assert by_status(api, aid) == {**{str(n): "kept" for n in range(4)}, **{str(n): "sent" for n in range(4, 10)}}
+    sent = get(api, f"listening/items?automation={aid}&run={done['id']}")["items"]
+    assert sorted(i["native_id"] for i in sent) == [str(n) for n in range(4, 10)]
+    # The next send takes the four, they reach the bot turn, and nothing is noted again for the news path.
+    cap_free(api)
+    run(api, at(1, days=1), FakeJudge())
+    again = runs(api, aid)[1]
+    assert again["status"] == "ok" and again["listening"]["count"] == 4
+    assert [(s["id"], s["status"]) for s in again["steps"] if s["type"] != "paths"] == [("look", "ok")]
+    assert statuses(api, aid) == {"sent": 10}
+
+
+def test_a_step_that_delivered_items_before_gets_only_the_new_ones_when_they_come_back(api):
+    note = {"id": "tell", "type": "action", "do": "note", "args": {"text": "{{listening.count}}: {{listening.text}}"}}
+    aid, source = started(api, steps=[note, TURN], spend_cap=CAP, limits=[{"count": 10, "per": "day"}])
+    saved(api, source, [item(n, story(n)) for n in range(3)])
+    cap_full(api, aid)
+    run(api, at(1))
+    first = runs(api, aid)[0]
+    assert first["status"] == "failed" and statuses(api, aid) == {"kept": 3}
+    cap_free(api)
+    saved(api, source, [item(n, story(n)) for n in range(3, 5)], when=at(2))
+    run(api, at(1, days=1))
+    second = runs(api, aid)[1]
+    assert second["status"] == "ok" and second["listening"]["count"] == 5
+    told = next(s for s in second["steps"] if s["id"] == "tell")["outputs"]["note"]
+    assert told.startswith("2: ") and story(3) in told and story(4) in told and story(0) not in told
+    assert [s["status"] for s in second["steps"]] == ["ok", "ok"]
+    assert statuses(api, aid) == {"sent": 5}
+
+
+def test_a_run_whose_only_action_fails_sends_nothing_and_says_why(api, monkeypatch):
+    def refuse(c, auto, run_id, args, values):
+        return {"ok": False, "detail": "the post was refused"}
+
+    monkeypatch.setitem(automations.A.ACTIONS, "note", refuse)
+    aid, source = started(api)
+    saved(api, source, [item(n, story(n)) for n in range(3)])
+    run(api, at(1))
+    done = runs(api, aid)[0]
+    assert done["status"] == "failed" and done["error"] == "nothing delivered: the post was refused"
+    assert done["summary"] == "Nothing delivered: the post was refused · 3 back to waiting"
+    assert statuses(api, aid) == {"kept": 3}
+
+
+def test_a_second_send_does_not_take_the_items_a_running_send_holds(api):
+    brief = {"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "{{listening.text}}"}
+    post_it = {"id": "post", "type": "action", "do": "note", "args": {"text": "{{brief.text}}"}}
+    aid, source = started(api, steps=[brief, post_it], limits=[{"count": 3, "per": "day"}])
+    saved(api, source, [item(n, story(n)) for n in range(6)])
+    run(api, at(1))
+    first = runs(api, aid)[0]
+    assert first["status"] == "waiting" and first["listening"]["counts"]["sending"] == 3
+    assert first["summary"] == "3 sending"
+    assert statuses(api, aid) == {"sending": 3, "kept": 3}
+    assert room(api, aid, at(1.5)) == 0  # what a running send holds counts toward the limit
+    run(api, at(1, days=1))
+    second = runs(api, aid)[1]
+    taken = [i["native_id"] for i in get(api, f"listening/items?automation={aid}&run={second['id']}")["items"]]
+    held = [i["native_id"] for i in get(api, f"listening/items?automation={aid}&run={first['id']}")["items"]]
+    assert len(taken) == 3 and not set(taken) & set(held)
+
+
+def test_a_send_that_ends_outside_its_save_puts_its_items_back_once(api):
+    brief = {"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "{{listening.text}}"}
+    post_it = {"id": "post", "type": "action", "do": "note", "args": {"text": "{{brief.text}}"}}
+    aid, source = started(api, steps=[brief, post_it], limits=[{"count": 3, "per": "day"}])
+    saved(api, source, [item(n, story(n)) for n in range(3)])
+    run(api, at(1))
+    assert statuses(api, aid) == {"sending": 3}
+    rid = runs(api, aid)[0]["id"]
+    with api.app.state.store.transaction() as c:  # dropped by a guard, or given up on: no save settles it
+        c.execute("UPDATE automation_runs SET status='skipped' WHERE id=?", (rid,))
+    run(api, at(2))  # the pass settles it
+    assert statuses(api, aid) == {"kept": 3}
+    with api.app.state.store.transaction() as c:
+        assert L.settle(c, rid) == 0  # once
+    delivered = sql(api, "SELECT delivered FROM listening_items WHERE automation_id=?", (aid,))
+    assert {r["delivered"] for r in delivered} == {'["brief"]'}  # its turn started: the next send does not ask again
+
+
+def test_deleting_a_listening_while_it_sends_expires_what_the_send_held(api):
+    brief = {"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "{{listening.text}}"}
+    post_it = {"id": "post", "type": "action", "do": "note", "args": {"text": "{{brief.text}}"}}
+    aid, source = started(api, steps=[brief, post_it], limits=[{"count": 3, "per": "day"}])
+    saved(api, source, [item(n, story(n)) for n in range(4)])
+    run(api, at(1))
+    assert statuses(api, aid) == {"sending": 3, "kept": 1}
+    api.delete(f"/api/v2/automations/{aid}", headers=headers("ana-test"))
+    assert statuses(api, aid) == {"expired": 4}
+
+
+def test_an_item_back_in_waiting_still_expires_a_week_after_it_arrived(api):
+    aid, source = started(api, steps=[TURN], spend_cap=CAP)
+    saved(api, source, [item(1, story(1))])
+    cap_full(api, aid)
+    run(api, at(1, days=6))
+    assert statuses(api, aid) == {"kept": 1}
+    run(api, at(1, days=7))
+    assert statuses(api, aid) == {"expired": 1}

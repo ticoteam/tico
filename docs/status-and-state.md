@@ -19,7 +19,7 @@ they stay greppable.
 | [`tasks.status`](#tasksstatus) | trigger | refused | `open`, `done`, `closed` |  |
 | [`jobs.state`](#jobsstate) | trigger | refused | `queued`, `leased`, `running`, `input`, `completed`, `failed`, `uncertain`, `canceled` | `cancelled` (`canceled`), `done` (`completed`) |
 | [`attempts.state`](#attemptsstate) | trigger | allowed | `leased`, `running`, `input`, `completed`, `failed`, `interrupted`, `expired` |  |
-| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `failed`, `empty`, `skipped`, `held` |  |
+| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `partial`, `failed`, `empty`, `skipped`, `held` |  |
 | [`webhook_sends.state`](#webhook_sendsstate) | trigger | refused | `ready`, `sending`, `delivered`, `failed`, `canceled`, `withheld` | `cancelled` (`canceled`) |
 | [`bots.state`](#botsstate) | check | allowed | `active`, `paused`, `planned`, `quarantined`, `archived` |  |
 | [`bot_config.onboarding_state`](#bot_configonboarding_state) | check | allowed | `needs_setup`, `onboarded` | `needs_onboarding` (`needs_setup`) |
@@ -235,7 +235,8 @@ Trigger. NOT NULL, no default. One run of an automation.
 - `running`: claimed by a worker.
 - `waiting`: parked until `wake_at` (a wait step in the flow).
 - `ok`: finished successfully.
-- `failed`: finished with an error.
+- `partial`: a listening's run that finished with some of its items delivered and others missed (a step stopped by the spend cap, held or failed); the missed ones went back to waiting (`backend/listening.py` `settle`).
+- `failed`: finished with an error. A listening's run that delivered none of its items also ends here.
 - `empty`: finished with nothing to do.
 - `skipped`: not run, because the automation was paused or a newer run replaced it. `finished_at` is set.
 
@@ -247,7 +248,7 @@ Transitions (`backend/automations.py`):
 - `queued` to `running` on claim.
 - `running` to `waiting` when a wait step sets `wake_at`.
 - `waiting` to `queued` or `held` when `wake_at` passes (`RUNNABLE` picks `held` if a guard hold is still active, else `queued`).
-- `running` to `ok`, `failed` or `empty` when the flow finishes; any state to `failed` on a fatal error.
+- `running` to `ok`, `partial`, `failed` or `empty` when the flow finishes; any state to `failed` on a fatal error.
 - A `running` row whose worker stopped is reclaimed by recovery, which clears its `claim_token`. Every save and the
   settle that ends the run carry the worker's token, so a worker that lost the row changes nothing and is told to stop.
 

@@ -42,7 +42,7 @@ BOT_STATUS_STATES = (
 TASK_STATUSES = ("open", "done", "closed")
 JOB_STATES = ("queued", "leased", "running", "input", "completed", "failed", "uncertain", "canceled")
 ATTEMPT_STATES = ("leased", "running", "input", "completed", "failed", "interrupted", "expired")
-RUN_STATUSES = ("queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held")
+RUN_STATUSES = ("queued", "running", "waiting", "ok", "partial", "failed", "empty", "skipped", "held")
 WEBHOOK_SEND_STATES = ("ready", "sending", "delivered", "failed", "canceled", "withheld")
 PAYMENT_STATUSES = (
     "queued",

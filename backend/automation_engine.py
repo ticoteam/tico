@@ -8,7 +8,9 @@ the forks it took (`trail`) and the next step in that list. Paths never rejoin a
 that cursor is the whole position. A run starts with one thread; a `find` replaces it with one per item.
 
 A thread stops when its list ends, a filter rule ends it (`next` end, or `to` a destination), a fork has no
-path or a step fails. A turn over the spend
+path or a step fails. A listening's run also says which of its items a step delivered (`delivery`): one where a step
+missed some ends `partial`, one where every item was missed `failed`, and an item back from an earlier run goes only
+to the steps that did not deliver it then (`_fresh`). A turn over the spend
 cap is recorded as `spend_cap` and the thread goes on without it; a decision with Decide off is `skipped` likewise. It waits for two things: the answer of an `llm` turn that has steps after it, or of a `bot_turn` a later step reads
 (`{{brief.text}}`, or a `post_update` with no text of its own; `answer` fills it, a bot turn's under its step id) and,
 with `batch` times, the next batch time once the leading filters ran (`advance` picks it up when the time comes).
@@ -39,6 +41,7 @@ import json
 import re
 
 from backend import automation_flow as F
+from backend import listening_text as LT
 from clients import judge as J
 
 READY, WAITING, DONE, FAILED = "ready", "waiting", "done", "failed"
@@ -88,10 +91,12 @@ def steps_at(flow, trail):
 def values_of(state, thread):
     """What a condition, a prompt and an action's args read: the payload (also as `trigger`), the thread's outputs,
     and the item a `find` gave it."""
-    payload = state["payload"]
+    payload, view = state["payload"], thread.get("view")
+    if view:  # a step that delivered some of a listening's items in an earlier run gets only the rest (`_fresh`)
+        payload = {**payload, "listening": view["listening"]}
     out = {**payload, "trigger": payload, **thread["outputs"]}
     if thread["item"] is not None:
-        out["item"] = thread["value"]
+        out["item"] = view["item"] if view and "item" in view else thread["value"]
     return out
 
 
@@ -120,6 +125,7 @@ def answer(state, ref, text, cost=0.0, ok=True, flow=None):
             thread.update(state=READY if ok else FAILED, wait=None)
             if not ok:
                 state["status"] = _status(state)
+                conclude(state)
             return True
     return False
 
@@ -152,9 +158,7 @@ def advance(flow, state, services):
         else:
             n += 1
     state["status"] = _status(state)
-    if state["status"] == "failed" and _all_capped(state):
-        state.setdefault("error", CAPPED)
-    return state
+    return conclude(state)
 
 
 def _status(state):
@@ -163,26 +167,143 @@ def _status(state):
         return "running"
     if WAITING in states:
         return "waiting"
-    if FAILED in states or _all_capped(state):
-        return "failed"
     if state["empty"] and not state["threads"]:
         return "empty"
-    if state["steps"] and all(r["status"] == "skipped" for r in state["steps"]):
+    if FAILED not in states and state["steps"] and all(r["status"] == "skipped" for r in state["steps"]):
         return "skipped"
-    return "ok"
+    return outcome(state, "failed" if FAILED in states else "ok")
 
 
-CAPPED = "every turn was stopped by the spend cap"
+# ----------------------------------------------------------------------------- a listening's delivery
+# A listening's send (backend/listening.py `send`) carries its items in the payload's `listening`. An item is delivered
+# when every step that took it handed it over: a turn was started with it, an action ran, a filter's actions ran, or
+# the team's own Paths and filter rules sent it to no further step. A step stopped by the spend cap, held, or failed
+# missed the items it carried, and they go back to waiting (`listening.settle`). Which items a step carried is its
+# record's `ids`: a Paths by tag or by item thread's group or item, else every item sent.
+EFFECTS = ("action", "bot_turn", "llm", "filter")  # the steps that hand items over
+MISSED = {"spend_cap": "spend cap", "held": "held", "failed": "failed"}  # a record's status: why its items missed
 
 
-def _all_capped(state):
-    """A listening's run whose every turn the spend cap stopped: what it sent reached nobody, so it did not go well."""
-    if "listening" not in state["payload"]:
-        return False
-    turns = [r for r in state["steps"] if r["type"] in ("llm", "bot_turn")]
-    return bool(turns) and all(
-        r["status"] == "spend_cap" or (r.get("outputs") or {}).get("skipped") == "spend_cap" for r in turns
-    )
+def _sent(state):
+    sent = state["payload"].get("listening")
+    return sent if isinstance(sent, dict) and isinstance(sent.get("items"), list) else None
+
+
+def _all_ids(sent):
+    return [e.get("id") for e in sent["items"] if isinstance(e, dict)]
+
+
+def _carried(state, thread):
+    """The ids of the listening items a thread carries: a split thread's group or item, else all that was sent."""
+    value = thread["value"]
+    if thread.get("split") and isinstance(value, dict):
+        items = value.get("items")
+        return [e.get("id") for e in items if isinstance(e, dict)] if isinstance(items, list) else [value.get("id")]
+    return _all_ids(_sent(state))
+
+
+def _fresh(state, thread, step):
+    """The items this step carries that it did not deliver in an earlier run (the send's `delivered`: item id -> the
+    steps that delivered it), or None when it delivered none of them before and runs as it is."""
+    sent = _sent(state)
+    before = (sent or {}).get("delivered")
+    if not isinstance(before, dict) or not before or step["type"] not in EFFECTS:
+        return None
+    carried = _carried(state, thread)
+    fresh = [i for i in carried if step["id"] not in (before.get(i) or [])]
+    return None if len(fresh) == len(carried) else fresh
+
+
+def _view(state, thread, ids):
+    """What a step reads instead of the whole send: the send, and a split thread's group or item, cut to `ids`."""
+    view = {"listening": LT.narrow(_sent(state) or {}, ids)}
+    if thread.get("split") and isinstance(thread["value"], dict) and isinstance(thread["value"].get("items"), list):
+        view["item"] = LT.narrow_group(thread["value"], ids)
+    return view
+
+
+class _Delivered:
+    """The services for a filter whose items its actions all delivered in an earlier run: the rules still route the
+    thread, and no action runs again."""
+
+    def __init__(self, services):
+        self._services = services
+
+    def act(self, do, args, ctx):
+        return {"ok": True, "detail": "delivered in an earlier run", "again": True}
+
+    def __getattr__(self, name):
+        return getattr(self._services, name)
+
+
+def delivery(state):
+    """A listening run's items as its steps left them: `sent` (delivered), `missed` (id -> why: spend cap, held,
+    failed) and `got` (id -> the steps that delivered it in this run). None for a run that is not a listening's."""
+    sent = _sent(state)
+    if sent is None:
+        return None
+    every = _all_ids(sent)
+    got, missed = {i: [] for i in every}, {}
+    for record in state["steps"]:
+        ids = record.get("ids", every)
+        why = MISSED.get(record["status"])
+        if why:
+            for i in ids:
+                missed.setdefault(i, why)
+            continue
+        outputs = record.get("outputs") or {}
+        handed = record["type"] != "filter" or any(not a.get("again") for a in outputs.get("actions") or [])
+        # A turn that waits for its answer was started with the items: its task is open, so it has them.
+        turned = record["status"] == "waiting" and record["type"] in ("llm", "bot_turn")
+        if (record["status"] == "ok" or turned) and record["type"] in EFFECTS and handed:
+            for i in ids:
+                if record["id"] not in got.setdefault(i, []):
+                    got[i].append(record["id"])
+    return {
+        "sent": [i for i in every if i not in missed],
+        "missed": {i: missed[i] for i in every if i in missed},
+        "got": {i: got[i] for i in every if got.get(i)},
+    }
+
+
+def outcome(state, status):
+    """A run's ending status (ok or failed), as a listening's reads it: partial when a step missed some items and
+    others were delivered, failed when every item was missed, ok when none was. Any other run keeps `status`."""
+    found = delivery(state) if status in ("ok", "failed", "partial") else None
+    if not found or not (found["sent"] or found["missed"]):
+        return "failed" if status == "partial" else status
+    if not found["missed"]:
+        return "ok"
+    return "partial" if found["sent"] else "failed"
+
+
+def _missed_why(record):
+    """Why a record missed its items, in a few words: the spend cap, a hold, or the step's own error."""
+    if record["status"] != "failed":
+        return MISSED[record["status"]]
+    outputs = record.get("outputs") or {}
+    bad = next((a for a in outputs.get("actions") or [] if isinstance(a, dict) and not a.get("ok")), {})
+    return str(outputs.get("error") or outputs.get("detail") or bad.get("detail") or "failed")[:200]
+
+
+def conclude(state):
+    """A listening run that ended (a skipped one too: every step it reached had delivered its items before):
+    `delivery` is kept on the state for `listening.settle` and the run page, each
+    step that missed items says how many (`missed`), and a run that delivered nothing says why (`error`)."""
+    if state["status"] not in ("ok", "failed", "partial", "skipped"):
+        return state
+    found = delivery(state)
+    if found is None:
+        return state
+    state["delivery"] = found
+    every = _all_ids(_sent(state))
+    for record in state["steps"]:
+        if record["status"] in MISSED:
+            record["missed"] = len(record.get("ids", every))
+    first = next((r for r in state["steps"] if r["status"] in MISSED), None)
+    if state["status"] == "failed" and first is not None and not found["sent"]:
+        state.setdefault("error", "nothing delivered: " + _missed_why(first))
+    return state
 
 
 def _record(state, thread, step, status, outputs=None, cost=0.0):
@@ -195,6 +316,10 @@ def _record(state, thread, step, status, outputs=None, cost=0.0):
     }
     if thread["item"] is not None:
         record["item"] = thread["item"]
+    if thread.get("ids") is not None:
+        record["ids"] = thread["ids"]
+    elif thread.get("split") and _sent(state) is not None:
+        record["ids"] = _carried(state, thread)
     state["steps"].append(record)
     state["cost"] = round(state["cost"] + cost, 6)
     return len(state["steps"]) - 1
@@ -226,11 +351,25 @@ def _step(flow, state, thread, services):
             _record(state, thread, step, "skipped")
             return
         run = RUN[step["type"]]
+        fresh = _fresh(state, thread, step)
+        if fresh is not None:
+            # A listening item back from a run where this step delivered it goes only to the steps that missed it.
+            thread["ids"] = fresh
+            if not fresh and step["type"] != "filter":
+                _record(state, thread, step, "skipped", {"delivered": "before"})
+                thread.pop("ids")
+                return
+            thread["view"] = _view(state, thread, fresh)
+            if not fresh:
+                services = _Delivered(services)
     try:
         run(flow, state, thread, step, services)
     except Exception as exc:  # noqa: BLE001 - a service's failure is the step's, recorded on the run
         _record(state, thread, step, "failed", {"error": (str(exc) or type(exc).__name__)[:300]})
         thread["state"] = FAILED
+    finally:
+        thread.pop("ids", None)
+        thread.pop("view", None)
 
 
 def _chain(services, chain, values, step, key):
