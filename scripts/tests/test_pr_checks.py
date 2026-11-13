@@ -707,6 +707,22 @@ def test_the_map_holds_one_syntax_tree_at_a_time(tmp_path, monkeypatch):
     assert len(trees) == 6 and graph.unparsed == {"broken.py"}  # each readable file twice: imports, then the scans
 
 
+def test_a_sys_path_name_in_javascript_is_a_property_not_a_python_module(tmp_path):
+    # backend/tests/test_botops_evals.py imports evals' `run` through sys.path, so `run.x` names every run.py in Python.
+    # In JavaScript `run.state` is a property: when ui/app/issues.ts's comment ran e2e/website-tools/run.py (#3335),
+    # which runs scripts/heavy.sh and through it the selector, every page edit selected the whole suite.
+    source(tmp_path, "evals/x/run.py", "STATE = 1\n")
+    source(tmp_path, "e2e/y/run.py", "STATE = 1\n")
+    source(tmp_path, "backend/tests/test_evals.py", "import run as live\ndef test_x(): pass\n")
+    source(tmp_path, "ui/app/issues.ts", "// A failed run (run.state) shows its reason.\nconst run = {};\n")
+    source(tmp_path, "scripts/eval.sh", "python -c 'import run.STATE'\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "run" in graph.bare
+    assert not graph.runs["ui/app/issues.ts"] & {"evals/x/run.py", "e2e/y/run.py"}
+    # Shell still resolves a sys.path name the way Python would.
+    assert {"evals/x/run.py", "e2e/y/run.py"} <= graph.runs["scripts/eval.sh"]
+
+
 def test_docs_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.

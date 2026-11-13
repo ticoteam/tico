@@ -190,6 +190,7 @@ def git_files(root):
 TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts"}
+JAVASCRIPT = {".js", ".cjs", ".mjs", ".ts"}
 PATHLIKE = {
     "Path",
     "PurePath",
@@ -698,12 +699,15 @@ class DependencyMap:
         if len(raw) > 512 * 1024 or b"\0" in raw[:4096]:
             return
         folder = str(Path(path).parent)
+        script = Path(path).suffix in JAVASCRIPT
         for token in TOKEN.findall(raw.decode("utf-8", "replace")):
             self.path(token, self.runs[path], self.reads[path])
             if token.startswith(("./", "../")) and folder != ".":
                 self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
             if IDENTIFIER.match(token) and "." in token:
-                self.runs[path] |= self.module(token, bare=True)
+                # A sys.path name (`import run` with evals/x/ on the path) is only Python's: in JavaScript `run.state`
+                # is a property, which would make ui/app/issues.ts run every run.py (and reach the suite through one).
+                self.runs[path] |= self.module(token, bare=not script)
 
     def tokens(self):
         """Each text file's path-like tokens, indexed by token (built on first use). A relative token also indexes the
