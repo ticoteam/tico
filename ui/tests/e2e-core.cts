@@ -23,8 +23,12 @@ const tasks = (() => {
   const CREATED = /[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/;
 
   async function detail(page: Page) {
+    // A phone shows the rows on its Info tab: the Chat tab hides them.
+    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click());
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      // Details is one line until opened: its rows are read open.
+      m?.querySelectorAll<HTMLDetailsElement>('details.task-details').forEach(x => { x.open = true; });
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
@@ -296,8 +300,12 @@ const newBot = (() => {
     go(page, '#/task/' + task);
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
       && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
-    const owner = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
-      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '');
+    const owner = await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click();
+      document.querySelectorAll<HTMLDetailsElement>('#task-modal details.task-details').forEach(x => { x.open = true; });
+      return [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '';
+    });
     assert.match(owner, /Sales Helper|revenue-helper/, `${where}: the task's owner row names the bot`);
     assert.doesNotMatch(owner, new RegExp(bot), `${where}: the owner row shows no id`);
     assertClean(page, `${where}: after the rename`);
