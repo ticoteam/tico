@@ -14,6 +14,10 @@ def lapse(api, machine, attempt):
     ex.served_at = None  # no server-stall grace: the computer alone lost the run
     with api.app.state.store.transaction() as c:
         ex.expire(c)
+        c.execute(  # a lapse after the first waits before the next try; make that wait over
+            "UPDATE attempts SET finished_at=? WHERE id=?",
+            (H.shift(H.now(), seconds=-execution.HAND_BACK_MAX - 1), attempt["id"]),
+        )
     ready(api, machine, ["ops"])
 
 
