@@ -702,11 +702,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let (exe, runs) = (dir.join("chromium"), dir.join("runs"));
         // Chromium where no sandbox can start: it says so and exits, unless told --no-sandbox (then it exits anyway:
-        // this one speaks no CDP).
+        // this one speaks no CDP). `--version` (asked before a headless start on Linux) is not a start.
         std::fs::write(
             &exe,
             format!(
-                "#!/bin/sh\ncase \"$*\" in *--no-sandbox*) echo unsandboxed >> {runs} ;; *) echo sandboxed >> {runs}; \
+                "#!/bin/sh\ncase \"$*\" in --version) echo 'Chromium 156.0.8078.79'; exit 0 ;; \
+                 *--no-sandbox*) echo unsandboxed >> {runs} ;; *) echo sandboxed >> {runs}; \
                  echo '[1:1:FATAL:zygote_host_impl_linux.cc(128)] No usable sandbox! See the docs.' >&2 ;; esac\nexit 1\n",
                 runs = runs.display()
             ),
@@ -736,7 +737,7 @@ mod tests {
         std::fs::write(
             &other,
             format!(
-                "#!/bin/sh\necho \"$*\" >> {}\nexit 1\n",
+                "#!/bin/sh\n[ \"$*\" = --version ] && exit 0\necho \"$*\" >> {}\nexit 1\n",
                 dir.join("other").display()
             ),
         )
