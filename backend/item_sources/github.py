@@ -433,7 +433,8 @@ def diff_of(compare: object) -> Row:
     commits is told how many came and what they changed (`since`)."""
     body: Row = cast("Row", compare) if isinstance(compare, dict) else {}
     commits: list[list[str]] = []
-    for found in body.get("commits") or []:
+    listed: list[object] = cast("list[object]", body.get("commits") or [])
+    for found in listed:
         if isinstance(found, dict):
             entry = cast("Row", found)
             message = str((cast("Row", entry.get("commit") or {})).get("message") or "")
