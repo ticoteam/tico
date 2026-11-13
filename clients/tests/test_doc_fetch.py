@@ -128,6 +128,31 @@ def test_a_tls_failure_on_a_later_address_is_reported():
     assert "Network is unreachable" in failed.value.message and "bad cert" in failed.value.message
 
 
+def test_a_tls_failure_is_not_retried_on_the_next_address():
+    import ssl
+
+    net = Net({"syften.com": [GOOGLE_V4, GOOGLE_V6]}, reply(), down={GOOGLE_V4: ssl.SSLError(1, "bad cert")})
+    with pytest.raises(F.FetchError) as failed:
+        net.fetch("https://syften.com/")
+    assert "bad cert" in failed.value.message
+    assert [ip for ip, *_ in net.connected] == [GOOGLE_V4]  # the certificate is the name's, not the address's
+
+
+def test_an_address_that_hangs_leaves_time_for_the_next_one():
+    now = [0.0]
+    net = Net({"syften.com": [GOOGLE_V6, GOOGLE_V4]}, reply(body=b"<p>Hello</p>"))
+    real = net.opener
+
+    def opener(ip, port, tls, host, timeout):
+        if ip == GOOGLE_V6:  # a firewall drops the packets: the connect waits out its whole timeout
+            now[0] += timeout
+            raise TimeoutError("timed out")
+        return real(ip, port, tls, host, timeout)
+
+    result = F.fetch("https://syften.com/", resolver=net.resolver, opener=opener, clock=lambda: now[0])
+    assert result["text"] == "Hello" and [ip for ip, _ in net.sent] == [GOOGLE_V4]
+
+
 def test_the_name_is_tried_in_the_order_the_system_resolves_it(monkeypatch):
     infos = [(None, None, 6, "", (GOOGLE_V4, 443)), (None, None, 6, "", (GOOGLE_V6, 443, 0, 0))] * 2
     monkeypatch.setattr(F.socket, "getaddrinfo", lambda *a, **k: infos)

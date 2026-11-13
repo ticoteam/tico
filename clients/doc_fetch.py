@@ -130,9 +130,12 @@ class _Connection(http.client.HTTPConnection):
         self.failures = []  # (address, exception) for each address that could not be reached
 
     def connect(self):
-        for ip in self._ips:
+        for n, ip in enumerate(self._ips):
+            # An address that hangs instead of refusing gets only its share of the time left, so the
+            # addresses after it are still tried.
+            share = self._left() / (len(self._ips) - n)
             try:
-                self.sock = self._opener(ip, self.port, self._tls, self.host, min(self._left(), TIMEOUT_S))
+                self.sock = self._opener(ip, self.port, self._tls, self.host, min(share, TIMEOUT_S))
                 self.connected_to = ip
                 return
             except ssl.SSLError:
