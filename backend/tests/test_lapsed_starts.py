@@ -1,6 +1,6 @@
 """A computer that claims a bot's run and then says nothing (never starts it, never renews its lease, never hands it
 back) does not loop silently (Tico Team, Nov 12: the shared machine did that to Performance Owner's runs ~344 times in
-a day; each job failed after PRE_START_TRIES lapses, the next wake started over, nobody was told, and the bot's Runs
+a day; each job failed after ten lapses, the next wake started over, nobody was told, and the bot's Runs
 card showed none of it)."""
 
 import json
@@ -50,10 +50,11 @@ def botops_tasks(api):
 def test_runs_that_only_lapse_go_to_botops_and_pause_the_task(api):
     machine, task_id, attempt = start(api)
     job_id = attempt["job_id"]
-    for n in range(execution.PRE_START_TRIES):
+    # SAME silent lapses in a row, as for hand-backs: not PRE_START_TRIES.
+    for n in range(start_holds.SAME):
         assert attempt and attempt["job_id"] == job_id
         lapse(api, machine, attempt)
-        if n < execution.PRE_START_TRIES - 1:
+        if n < start_holds.SAME - 1:
             assert job_state(api, job_id) == "queued"
             assert not botops_tasks(api)
             attempt = claim(api, machine)
@@ -62,8 +63,9 @@ def test_runs_that_only_lapse_go_to_botops_and_pause_the_task(api):
     [review] = botops_tasks(api)
     assert review["title"] == "Find why ops's runs can't start" and review["status"] == "open"
     assert start_holds.LAPSED_WHY in review["body"] and "Review the negate PR" in review["body"]
-    # Worded for silence, not as SAME hand-backs that each gave a reason.
-    assert f"took {execution.PRE_START_TRIES} runs" in review["body"] and "handed back" not in review["body"]
+    # Worded for silence, not as SAME hand-backs that each gave a reason, and names the computer.
+    assert f"(Test Mac) took its last {start_holds.SAME} runs" in review["body"]
+    assert "handed back its last" not in review["body"]
     # The try that stopped the job says why in Runs, not that a process failed: nothing ran.
     [last] = [t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"]]
     assert last["end_reason"].endswith(start_holds.BOTOPS_HAS_IT) and start_holds.LAPSED_WHY in last["end_reason"]
@@ -72,10 +74,46 @@ def test_runs_that_only_lapse_go_to_botops_and_pause_the_task(api):
     assert line["state"] == "idle"
     stop = line["last_stop"]
     assert stop["needs_person"] is False and stop["text"].endswith(start_holds.BOTOPS_HAS_IT)
-    assert stop["reason"] == f"Its computer took this run {execution.PRE_START_TRIES} times and never started it."
+    assert stop["reason"] == f"Its computer took this run {start_holds.SAME} times and never started it."
     # The task waits on the bot, Paused, so the next wake does not start the loop over.
     with api.app.state.store.read() as c:
         assert task_wakes.task_cause(c, task_id, "bot:ops") == task_wakes.CANT_START
+
+
+def test_without_botops_three_silent_lapses_still_fail_the_job_and_say_so(api):
+    machine, _, attempt = start(api, botops=False)
+    job_id = attempt["job_id"]
+    for n in range(start_holds.SAME):
+        lapse(api, machine, attempt)
+        if n < start_holds.SAME - 1:
+            attempt = claim(api, machine)
+    assert job_state(api, job_id) == "failed"
+    stop = get(api, "status?bot=ops")["status"]["last_stop"]
+    assert stop["needs_person"] is True
+    assert stop["reason"] == f"Its computer took this run {start_holds.SAME} times and never started it."
+    assert "Test Mac" in stop["text"]
+
+
+def test_a_try_that_started_resets_the_count_of_silent_lapses(api):
+    machine, _, attempt = start(api)
+    job_id = attempt["job_id"]
+    for _ in range(start_holds.SAME - 1):
+        lapse(api, machine, attempt)
+        attempt = claim(api, machine)
+    # This try starts, then its computer is lost: not a silent lapse, and the row of them is broken.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=machine["token"])
+    lapse(api, machine, attempt)
+    # A run that started and was lost waits for review; a person retries it.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='queued' WHERE id=?", (job_id,))
+    for _ in range(start_holds.SAME - 1):
+        attempt = claim(api, machine)
+        assert attempt and attempt["job_id"] == job_id
+        lapse(api, machine, attempt)
+    assert job_state(api, job_id) == "queued" and not botops_tasks(api)
+    attempt = claim(api, machine)
+    lapse(api, machine, attempt)
+    assert job_state(api, job_id) == "failed" and botops_tasks(api)
 
 
 def test_every_lapse_is_logged_with_its_category_and_named_in_runs(api):
@@ -91,19 +129,27 @@ def test_every_lapse_is_logged_with_its_category_and_named_in_runs(api):
     assert detail["cause"] == "lapsed_unstarted"
     r = api.get("/api/runs", headers={"Authorization": "Bearer ana-test"})
     [row] = [x for x in r.json() if x["id"] == attempt["id"]]
-    assert row["end_reason"] == LAPSED and row["outcome"] == "expired"
+    # Runs reads "Didn't start", and its reason names the computer that took the run.
+    named = "Test Mac took it and never started it"
+    assert row["didnt_start"] is True and row["outcome"] == "expired"
+    assert row["end_reason"] == named and row["failure_reason"] == named
     [turn] = [t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"]]
-    assert turn["end_reason"] == LAPSED
+    assert turn["end_reason"] == named
 
 
-def test_a_second_lapse_in_a_row_waits_before_the_job_is_handed_out_again(api):
+def test_a_run_that_started_is_not_called_didnt_start(api):
+    machine, _, attempt = start(api, botops=False)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=machine["token"])
+    lapse(api, machine, attempt)
+    r = api.get("/api/runs", headers={"Authorization": "Bearer ana-test"})
+    [row] = [x for x in r.json() if x["id"] == attempt["id"]]
+    assert row["didnt_start"] is False and "never started" not in row["failure_reason"]
+
+
+def test_the_first_lapse_waits_before_the_job_is_handed_out_again(api):
     machine, _, attempt = start(api, botops=False)
     job_id = attempt["job_id"]
-    # The first lapse already waited out a whole lease: the job goes out again at once.
-    lapse(api, machine, attempt, wait_over=False)
-    attempt = claim(api, machine)
-    assert attempt and attempt["job_id"] == job_id
-    # From the second, it waits as a hand-back does, instead of being handed to the same silent computer at once.
+    # Not handed to the same silent computer at once: it waits as a hand-back does, from the first lapse.
     lapse(api, machine, attempt, wait_over=False)
     assert claim(api, machine) is None and job_state(api, job_id) == "queued"
     with api.app.state.store.transaction() as c:
@@ -144,8 +190,6 @@ def test_a_run_cut_by_tico_itself_is_not_called_the_computers_silence(api):
             )
         ]
     assert "cause" not in detail
-    # Nor does it count toward the wait: the next lapse is the first the computer caused, and goes out again at once.
+    # Nor does it wait: Tico cut it, not the computer, so the job goes out again at once.
     again = claim(api, machine)
     assert again and again["job_id"] == attempt["job_id"]
-    lapse(api, machine, again, wait_over=False)
-    assert claim(api, machine)["job_id"] == attempt["job_id"]

@@ -66,8 +66,8 @@ def test_lost_heartbeat_records_end_reason_even_before_start(api):
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
         api.app.state.execution.expire(c)
     row = listed(api, a['id'])
-    # Taken and never started: the run names that, not a lost computer (run_diagnostics.LAPSED).
-    assert row['end_reason'] == 'Its computer took the run and never started it, renewed its lease or handed it back'
+    # Taken and never started: the run names that and the computer that took it, not a lost computer.
+    assert row['end_reason'] == 'Test Mac took it and never started it'
     assert row['ended_at'] and row['exit'] == 'expired'
 
 

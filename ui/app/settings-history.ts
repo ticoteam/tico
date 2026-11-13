@@ -209,6 +209,7 @@ interface HistoryRun {
   exit: number | null;
   outcome?: string | null;
   failure_reason?: string | null;
+  didnt_start?: boolean;
   cost_usd?: number | null;
   output_tokens?: number | null;
   ran_on?: RanOn | null;
@@ -242,7 +243,7 @@ function settingsRunsHTML(list: HistoryRun[], failed = false) {
     ${list.map(r => {
       const live = runLive(r), unfinished = runUnfinished(r), ok = !unfinished && r.exit === 0;
       // A failed or expired run reads its outcome alone; its id is in the pill's tooltip.
-      const result = ok ? 'Done' : r.outcome || `exit ${r.exit}`;
+      const result = ok ? 'Done' : unfinished && r.didnt_start ? RUN_DIDNT_START : r.outcome || `exit ${r.exit}`;
       const why = unfinished ? r.failure_reason || '' : '';
       const cost = r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : r.output_tokens != null ? `${settingsRunTokens.format(r.output_tokens)} out` : '';
       return `<div class="run-row">

@@ -796,8 +796,8 @@ def last_stop(c, bot, status):
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
         if str(attempt["final_text"] or "").endswith(start_holds.BOTOPS_HAS_IT):
-            # Handed back for the same reason start_holds.SAME times, or taken and dropped in silence PRE_START_TRIES
-            # times: BotOps has it, so it is no person's to fix.
+            # Handed back for the same reason start_holds.SAME times, or taken and dropped in silence that many times
+            # in a row: BotOps has it, so it is no person's to fix.
             return {
                 "kind": "never_started",
                 "tone": "soft",
@@ -806,13 +806,15 @@ def last_stop(c, bot, status):
                 "at": at,
                 "attempt_id": attempt["id"],
                 "reason": (
-                    f"Its computer took this run {PRE_START_TRIES} times and never started it."
+                    f"Its computer took this run {start_holds.SAME} times and never started it."
                     if start_holds.LAPSED_WHY in str(attempt["final_text"])
                     else f"Its computer handed this run back {start_holds.SAME} times for the same reason."
                 ),
                 "text": attempt["final_text"],
             }
-        # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
+        # start_holds.SAME silent lapses in a row (LAPSED_WHY in its text), or PRE_START_TRIES missed starts: the
+        # text names the computer and what to do about it (expire()).
+        tries = start_holds.SAME if start_holds.LAPSED_WHY in str(attempt["final_text"]) else PRE_START_TRIES
         return {
             "kind": "never_started",
             "tone": "alert",
@@ -820,7 +822,7 @@ def last_stop(c, bot, status):
             "action": None,
             "at": at,
             "attempt_id": attempt["id"],
-            "reason": f"Its computer took this run {PRE_START_TRIES} times and never started it.",
+            "reason": f"Its computer took this run {tries} times and never started it.",
             "text": (attempt["final_text"] or "Last run couldn't start on its computer").rstrip(".") + ".",
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "expired":
@@ -3181,9 +3183,8 @@ def handed_back_until(c, job):
     A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
     all PRE_START_TRIES in seconds and fail a run over a short hiccup; with it, ten hand-backs take about half an
     hour, as ten lapsed leases used to take about fifteen minutes.
-    A run its computer took and went silent on (LAPSED) waits the same way from its second lapse in a row: the first
-    already waited out a whole lease, but on Nov 12 a computer that lapsed every run was handed the job again at once,
-    ten times, for every wake."""
+    A run its computer took and went silent on (LAPSED) waits the same way, from its first lapse: on Nov 12 a computer
+    that lapsed every run was handed the job again at once, ten times, for every wake."""
     last = (
         c.execute(
             "SELECT state,started_at,finished_at,final_text FROM attempts WHERE id=?", (job["attempt_id"],)
@@ -3199,7 +3200,7 @@ def handed_back_until(c, job):
         "SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL AND state='expired' "
         "AND substr(final_text,1,?)=?",
         (job["id"], len(kind), kind),
-    ).fetchone()[0] - (kind == LAPSED)
+    ).fetchone()[0]
     if count < 1:
         return None
     return H.shift(last["finished_at"], seconds=min(HAND_BACK_WAIT * 2 ** max(count - 1, 0), HAND_BACK_MAX))
@@ -4247,7 +4248,9 @@ class Execution:
                     )
                 if lapsed:
                     tries = failed_starts(c, row["job_id"])
-                    if tries >= PRE_START_TRIES:
+                    # SAME silent lapses in a row are as stuck as SAME hand-backs for one reason (start_holds).
+                    lapses = start_holds.lapsed_in_a_row(c, row["job_id"]) if silent else 0
+                    if tries >= PRE_START_TRIES or lapses >= start_holds.SAME:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
                         label = (computer["label"] if computer else None) or "its Computer"
                         bot = H.bot(c, row["bot_id"])
@@ -4265,9 +4268,11 @@ class Execution:
                             else "check that Computer"
                         )
                         reason = f"Your {name} couldn't start on {label}; {remedy}"
-                        # Every try lapsed in silence: no wait clears that, and the next wake would loop again. BotOps
-                        # gets it and the task waits on it, as for hand-backs (start_holds.file).
-                        botops = bool(start_holds.file(c, row, start_holds.LAPSED_WHY, label, lapses=tries))
+                        if lapses >= start_holds.SAME:
+                            reason = f"Your {name} couldn't start on {label}: {start_holds.LAPSED_WHY}; {remedy}"
+                        # Its last tries lapsed in silence: no wait clears that, and the next wake would loop again.
+                        # BotOps gets it and the task waits on it, as for hand-backs (start_holds.file).
+                        botops = bool(start_holds.file(c, row, start_holds.LAPSED_WHY, label, lapses=lapses or tries))
                         if botops:
                             reason = (
                                 f"Your {name} couldn't start on {label}: {start_holds.LAPSED_WHY}. "
