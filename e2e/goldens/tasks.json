@@ -75,7 +75,6 @@
         "stage_id": "general-todo",
         "stage_since": "<time>",
         "status": "open",
-        "stuck": false,
         "tags": [],
         "title": "Check the vendor list",
         "turn": {
@@ -159,7 +158,6 @@
         "stage_id": "general-done",
         "stage_since": "<time>",
         "status": "done",
-        "stuck": false,
         "tags": [],
         "title": "Draft the launch plan",
         "turn": null,

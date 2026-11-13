@@ -2615,7 +2615,7 @@ SCHEMAS = {
             },
             "stuck": {
                 "type": "boolean",
-                "description": "The never-stuck ladder brought it to a person (stuck or late)",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
             },
             "lane": "s",
             "labels": items({"type": "string"}),
@@ -3689,7 +3689,7 @@ SCHEMAS = {
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
             "stuck": {
                 "type": "boolean",
-                "description": "The never-stuck ladder brought it to a person (stuck or late)",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
             },
             "snoozed": "b",
             "pushed_past": "b",

@@ -209,13 +209,13 @@ def _could_read(c, visible_sql, tid, ref):
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
-    `pushed_past` (it entered its stage pushed past a requirement), `stuck` (the ladder brought it to a person: stuck or
-    late with them; its Needs you card is the stuck card, task #392), `stage_since` (when it entered its stage: its open
-    visit, else when it was filed; a board card's age) and `on_person` (it waits only on a person's OK or
-    answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one read of the
-    open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
-    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed turn's
-    line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
+    `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
+    person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
+    entered its stage: its open visit, else when it was filed; a board card's age) and `on_person` (it waits only on a
+    person's OK or answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one
+    read of the open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is
+    named by neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed
+    turn's line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
     keeps it whole."""
     from . import waiting_on as W
     from .store import H
@@ -227,7 +227,8 @@ def brief(c, rows, visible_sql="1"):
     marks = json.dumps(ids)
     late, pushed, entered, stuck = {}, set(), {}, set()
     for r in c.execute(
-        "SELECT task_id, late_told_at, late_person_at, entered_how, entered_at, level FROM visits WHERE left_at IS NULL "
+        "SELECT task_id, late_told_at, late_person_at, entered_how, entered_at, level FROM visits "
+        "WHERE left_at IS NULL "
         "AND task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
@@ -270,7 +271,8 @@ def brief(c, rows, visible_sql="1"):
                 turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
         row["late"] = late.get(row["id"])
-        row["stuck"] = row["id"] in stuck
+        if row["id"] in stuck:
+            row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         row["snoozed"] = row["id"] in snoozed
         row["pushed_past"] = row["id"] in pushed
         row["stage_since"] = entered.get(row["id"]) or row.get("created_at")
