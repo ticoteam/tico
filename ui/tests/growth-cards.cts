@@ -559,6 +559,7 @@ async function shot(page: Page, name: string) {
       assert.ok(words.every(w => !/step \d/i.test(w)), `${me.id}: no step named once set up: ${words}`);
       assert.ok(words.some(w => /kept 30 days/.test(w)), `${me.id}: Retention says what fills it`);
       assert.equal(await page.locator('.toast').count(), 0);
+      if (me === OWNER) await shot(page, 'desktop-growth-set-up-empty-card');
       assert.deepEqual(errors, []);
       await page.close();
     }
