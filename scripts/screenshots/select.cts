@@ -58,7 +58,7 @@ const UNSHOWN: string[] = [
   'ui/app/integrations.ts', 'ui/app/mail.ts', 'ui/app/email-preview.ts', 'ui/app/messaging.ts', 'ui/app/sql.ts',
   'ui/app/assistant-page.ts', 'ui/app/skills*.ts', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
   'ui/app/computer-*.ts', 'ui/app/dashboard.ts', 'ui/app/overview*.ts', 'ui/app/pages.ts', 'ui/app/replay.ts',
-  'ui/app/person-page.ts', 'ui/app/shared-edit.ts', 'ui/overview/**', 'ui/replay-player.ts', 'ui/first-run.ts',
+  'ui/app/person-page.ts', 'ui/app/shared-edit.ts', 'ui/app/view-only.ts', 'ui/overview/**', 'ui/replay-player.ts', 'ui/first-run.ts',
   'ui/changelog.ts', 'ui/lenses-page.ts', 'ui/org-builder.ts', 'ui/connect-agent.ts', 'ui/credential-card.ts',
   'ui/directory-sync.ts', 'ui/github-connect.ts', 'ui/google-connect.ts', 'ui/model-login.ts',
   'ui/slack-channels.ts', 'ui/slack-connect.ts', 'ui/setup-strategy.ts',

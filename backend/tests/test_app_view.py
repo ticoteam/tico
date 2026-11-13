@@ -170,3 +170,24 @@ def test_the_page_starts_for_a_view_and_offers_it_nothing_that_writes(api):
     assert not any(me[key] for key in ("bot_admin", "can_create_bots", "can_see_sql", "credential_access", "mover"))
     for path in ("/api/employees", "/api/humans", "/api/status", "/api/v2/needs-you"):
         assert api.get(path, headers=bearer(token)).status_code == 200, path
+
+
+def test_a_views_home_is_one_card_of_the_bots_own_tasks(api):
+    """Company › Mine (person:me) is a person's own page; a view opens it as one card, "<bot>'s tasks", not an error."""
+    _, _, attempt = setup_attempt(api)
+    turned_on(api)
+    token = opened(api, attempt)["token"]
+    with api.app.state.store.read() as c:
+        bot = H.resolve_bot(c, "ops")
+        name = H.actor_name(c, "bot:" + bot["id"])
+    post(api, "tasks", {"title": "The bot's own", "body": "Its work.", "owner": "bot:" + bot["id"]})
+    home = api.get("/api/v2/places/person:me", headers=bearer(token))
+    assert home.status_code == 200, home.text
+    home = home.json()
+    assert home["can_edit"] is False and len(home["pins"]) == 1
+    card = home["pins"][0]["card"]
+    assert card["template"] == "my_tasks" and card["heading"] == f"{name}'s tasks"
+    assert [t["title"] for t in card["data"]["tasks"]] == ["The bot's own"]
+    # A person's own page is as before: its default cards.
+    mine = get(api, "places/person:me")
+    assert len(mine["pins"]) > 1 and mine["pins"][0]["card"]["template"] != "my_tasks"
