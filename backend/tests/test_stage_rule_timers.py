@@ -229,6 +229,28 @@ def test_a_snooze_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machin
     assert len(_told(c)) == 1
 
 
+def test_a_block_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machine):
+    """A task blocked by another (backend/task_depends.py) has no timer, even under a rule with no condition (the
+    default one asks for the bot's turn); when the block ends its owner is woken and the quiet hours start again."""
+    from backend import task_relations as TR
+
+    _rule(c, timer={"kind": "quiet", "hours": 6}, then="tell_manager")
+
+    blocker = _task(c, "eng", "Build", "bot:fixer", "The fix")
+    task_id = _task(c, "eng", "Build", "bot:builder", "Blocked one")
+    TR.relate(c, ANA, task_id, blocker, "depends_on")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=24))
+    NS.check(c)
+    assert not any(_title(c, task_id) in body for _, body in _told(c))
+    E.move(c, blocker, E.DONE, ANA, "Fixed")
+    NS.check(c)
+    assert not any(_title(c, task_id) in body for _, body in _told(c))  # just woken to pick it up: not quiet
+    time_machine.shift(timedelta(hours=6, minutes=1))
+    NS.check(c)
+    assert any(_title(c, task_id) in body for _, body in _told(c))
+
+
 def test_a_manager_who_cannot_be_woken_is_not_said_to_be_told(c, time_machine):
     task_id = _task(c, "eng", "Build", "bot:builder", "Nobody hears")
     c.execute("UPDATE bots SET state='archived' WHERE slug='lead'")

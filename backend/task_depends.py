@@ -250,6 +250,17 @@ def deleted(conn: "sqlite3.Connection", task_id: str, number: object, by: str) -
     return sum(release_one(conn, waiter, task_id, said) for waiter in waiting)
 
 
+def restores(conn: "sqlite3.Connection", row: Row, restored_id: str) -> bool:
+    """Whether a trashed dependency goes back with the task restored from the trash. A dependency on that task does not:
+    the tasks that waited on it were released when it was deleted (`deleted`), and their owners may have moved on.
+    One of that task on another goes back only while the other is still open: a dependency holds until its task first
+    ends."""
+    if str(row["to_task"]) == restored_id:
+        return False
+    found = conn.execute("SELECT status FROM tasks WHERE id=?", (row["to_task"],)).fetchone()
+    return bool(found) and found[0] == "open"
+
+
 def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: str) -> int:
     """One task whose dependency `ended_id` came off. Still blocked by another: nothing, and nobody is woken. Else it
     moves on if everything is met and there is room; if not, its owner is woken once with `said`. A move the engine

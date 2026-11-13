@@ -901,7 +901,8 @@ def task_followers(api, args):
 def task_relate(api, args):
     kind = args.get("kind") or "related"
     if args.get("other"):  # the CLI's three words, `tico task relate <id> depends_on <task>`
-        if args.get("kind") not in (None, "related", args["task"]):
+        named = str(args.get("kind") or "related").strip().lower().replace("-", "_")
+        if named not in ("related", str(args["task"]).strip().lower().replace("-", "_")):
             raise ValueError(f"Two kinds given: {args['task']} and --kind {args['kind']}. Give one.")
         kind, args = str(args["task"]), {**args, "task": args["other"]}
     kind = kind.strip().lower().replace("-", "_")

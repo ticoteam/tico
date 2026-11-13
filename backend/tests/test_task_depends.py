@@ -287,3 +287,37 @@ def test_a_refused_move_of_the_dependent_never_stops_its_blocker_ending(c, monke
     assert E.task(c, blocker)["status"] == "done"
     (body,) = bodies(c, blocked)
     assert f"{ref(c, blocker)} is done" in body
+
+
+@pytest.mark.parametrize("how", ["done", "unrelate", "delete"])
+def test_the_late_clock_runs_again_once_the_block_has_ended(c, how):
+    """Review 2: the blocked span must end when the block does, or the task could never be Late again."""
+    from backend import task_delete
+
+    build(c, minutes=60)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    blocked_since(c, blocked, 180)
+    if how == "done":
+        ended(c, blocker)
+    elif how == "unrelate":
+        TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
+    else:
+        assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
+    NS.check(c, later(90))
+    assert "late" in X.events(c, blocked)
+
+
+def test_a_blocker_restored_from_the_trash_does_not_block_again(c):
+    """Review 2: the dependents were released (and told) when the blocker was deleted; restoring it changes nothing
+    for them."""
+    from backend import task_delete
+
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
+    told = bodies(c, blocked)
+    task_delete.restore_tasks(c, [blocker], actor=X.ANA)
+    assert E.task(c, blocker) and not D.blocked(c, blocked)
+    assert bodies(c, blocked) == told

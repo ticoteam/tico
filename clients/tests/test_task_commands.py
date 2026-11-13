@@ -258,6 +258,9 @@ def test_depends_on_takes_three_words_and_unrelate_takes_it_off(monkeypatch):
     api = Recorder()
     hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "depends_on"})
     assert api.writes() == [write]
+    same = Recorder()
+    hubtools.task_relate(same, {"id": "T1", "task": "depends_on", "other": "T2", "kind": "depends-on"})
+    assert same.writes() == [write]
     with pytest.raises(ValueError, match="Two kinds"):
         hubtools.task_relate(Recorder(), {"id": "T1", "task": "depends_on", "other": "T2", "kind": "follow_up"})
 

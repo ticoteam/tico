@@ -286,13 +286,6 @@ def _refusals(c, ids, conversations, messages):
     ]
     if outside:
         refusals["subtasks outside the list"] = len(outside)
-    blocked = [
-        r
-        for r in _column(c, "SELECT to_task FROM task_relations WHERE kind='blocks' AND from_task IN ({})", ids)
-        if r not in chosen
-    ]
-    if blocked:
-        refusals["tasks blocked by one outside the list"] = len(blocked)
     pointing = (
         [
             r
@@ -588,6 +581,8 @@ def restore_tasks(c, ids, actor=None):
     for e, snap in snapshots:
         tid = e["task_id"]
         for row in snap["rows"].get("task_relations", []):
+            if row["kind"] == "depends_on" and not task_depends.restores(c, row, tid):
+                continue  # its dependents were released when it was deleted (task_depends.restores)
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])
     for e, snap in snapshots:
