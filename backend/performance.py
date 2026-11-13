@@ -480,7 +480,7 @@ def _update(c, oid, runner_id, started, last, why):
         "AND span=? AND created_at>=? AND created_at<=?",
         (runner_id, MINUTE, started, last),
     ).fetchone()
-    bots = ran(c, runner_id, started, last + MINUTE)[:8]
+    bots = at_once(c, runner_id, started, last + MINUTE)[:8]
     procs = c.execute(
         "SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
         "span=? AND created_at>=? AND created_at<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
@@ -528,6 +528,26 @@ def ran(c, runner_id, start, end):
         key = (r["bot_id"].removeprefix("bot:"), r["model"] or "")
         counts[key] = counts.get(key, 0) + 1
     return [{"bot": b, "model": m, "runs": n} for (b, m), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def at_once(c, runner_id, start, end):
+    """Who ran during [start, end): each bot once, with the most of its turns that ran at the same moment, most first.
+    `ran` counts every turn of the window and splits a bot by model (a turn still running has none yet), so a bot
+    limited to 3 turns at once read "x4, x4"."""
+    edges = {}
+    for r in _runs(c, runner_id, start, end):
+        bot = edges.setdefault(r["bot_id"].removeprefix("bot:"), [])
+        bot.append((r["started_at"], 1))
+        if r["finished_at"]:
+            bot.append((r["finished_at"], -1))
+    peaks = {}
+    for bot, marks in edges.items():
+        now = peak = 0
+        for _, step in sorted(marks):  # an end (-1) sorts before a start at the same instant: never side by side
+            now += step
+            peak = max(peak, now)
+        peaks[bot] = peak
+    return [{"bot": b, "runs": n} for b, n in sorted(peaks.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def overload_view(row):
