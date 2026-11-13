@@ -849,7 +849,8 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   it that change the same lines (GitHub's diff of each from where it branched off, without line numbers or context,
   as `git patch-id` reads it) keep it. Others are read by Reviewer 2 the same way, the 2 rounds counted from the OK:
   its OK keeps the person's; its send back goes to the Builder, and the person is asked again once the next commits
-  were read. Until Tico has read what the new commits change, the page waits on GitHub.
+  were read. Until Tico has read what the new commits change, the page waits on GitHub. A new version of the same page
+  published at the commits the person OK'd keeps the OK: nobody is asked again (Nov 13); another page is asked again.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
