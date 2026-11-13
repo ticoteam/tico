@@ -75,12 +75,24 @@ function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''
     + `<span class="tk-who">${holder ? actorFace(holder, 18) : ''}</span>`
     + `<span class="tk-age">${esc(taskAge(t))}</span></div>`;
 }
-/** A task in a column: a small one-line box, the mark after the title (S7). */
+/** A task in a column (S7; task #220): the title on up to two lines, then a meta line with who asked (face and name),
+    the marks (Late, the mark), how long it has been in this stage and, when someone else owns it, the owner's face at
+    the right. Pointing at the card shows the whole title and its line; at the owner's face, "Owner: <name>". */
 function taskCardHTML(t: TaskAny): string {
-  const holder = taskHolder(t), tip = esc(taskLine(t));
-  return `<div class="tk-card" data-task="${esc(t.id)}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}>`
-    + `<span class="tk-title">${esc(t.title || '')}</span>${lateTagHTML(t)}${taskMarkHTML(t, {space: false})}`
-    + `<span class="tk-who">${holder && taskMark(t) === 'person' ? actorFace(holder, 16) : ''}</span></div>`;
+  const title = t.title || '', line = taskLine(t);
+  // Who asked, as the task page's "Asked by" names it: who really filed it (a schedule's person, BotOps, a built-in such
+  // as Health check, which has no face) over the requester whose rights it carries.
+  const asker = taskAsker(t) || null, owner = t.owner_id || null, builtin = !!taskFiledByBuiltin(t);
+  const since = t.stage_since || ('created_at' in t ? t.created_at : null);
+  const who = asker
+    ? `<span class="tk-asker">${builtin ? '' : actorFace(asker, 16)}<span class="tk-name">${esc(taskAskerLabel(t))}</span></span>` : '';
+  const ownerTip = owner && owner !== asker ? esc(`Owner: ${actorLabel(owner)}`) : '';
+  return `<div class="tk-card" data-task="${esc(t.id)}" role="button" tabindex="0" title="${esc([title, line].filter(Boolean).join('\n'))}">`
+    + `<span class="tk-title">${esc(title)}</span>`
+    + `<span class="tk-meta">${who}<span class="tk-sp"></span>${lateTagHTML(t)}${taskMarkHTML(t, {space: false})}`
+    + `<span class="tk-age">${esc(ageShort(since))}</span>`
+    + (ownerTip ? `<span class="tk-owner" role="img" aria-label="${ownerTip}" title="${ownerTip}">${actorFace(owner, 16)}</span>` : '')
+    + '</span></div>';
 }
 
 // ---- search and filter (S7): the same on every list, General included

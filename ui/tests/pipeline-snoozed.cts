@@ -107,7 +107,7 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     await phone.goto('http://tico-ui.test/#/tasks?pipeline=eng');
     await phone.locator('.pv-is-phone').waitFor();
     await phone.locator('[data-pv-tab="build"]').click();
-    check('phone', await drawn(phone, '.pv-phone .tk-row'));
+    check('phone', await drawn(phone, '.pv-phone .tk-card'));
     const wide = await phone.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(wide <= 390, `the phone page does not scroll sideways (${wide} px)`);
 

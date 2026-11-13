@@ -178,7 +178,7 @@ async function phonePolish(browser: Browser) {
     r = await smallTargets(page, '.tasks-page');
     assert.deepEqual(r.small, [], 'a pipeline: 44 px');
     assert.ok(r.sideways <= 1, 'a pipeline: no sideways scroll');
-    const rows = await page.locator('.pv-rows .tk-row').evaluateAll(els => els.map(e => [e.getBoundingClientRect().height, !!e.querySelector('.tk-who .av, .tk-who img, .tk-who span')]));
+    const rows = await page.locator('.pv-phone .tk-card').evaluateAll(els => els.map(e => [e.getBoundingClientRect().height, !!e.querySelector('.tk-asker .av, .tk-asker img')]));
     assert.ok(rows.every(([h]) => Number(h) >= 44), `rows 44 px: ${JSON.stringify(rows)}`);
     await shot(page, '2-pipeline');
     await page.locator('.pv-phone-head [data-pv-play]').click();
@@ -201,7 +201,7 @@ async function phonePolish(browser: Browser) {
     // On a pipeline's board a card opens at its conversation (pipeline-ask.ts); Details shows the rest. A task with no
     // ask of Ana's opens so (one that waits on her ask opens the ask, ask-screen-open-task.cts).
     await page.locator('.pv-tab[data-pv-tab="build"]').click();
-    await page.locator('.pv-rows .tk-row', {hasText: 'Rounding in the API'}).click();
+    await page.locator('.pv-phone .tk-card', {hasText: 'Rounding in the API'}).click();
     await page.locator('#task-modal[open] .tthread-title').waitFor();
     await page.waitForTimeout(300);
     r = await smallTargets(page, '#task-modal');

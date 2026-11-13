@@ -31,6 +31,10 @@ const ctx = vm.createContext({
   localStorage: {getItem: () => null, setItem() {}},
   actorFace: (who: string) => `<i data-face="${who}"></i>`,
   actorLabel: (who: string) => who.replace(/^(bot|human):/, ''),
+  // hub-v2.ts's asker, as the task page names it (the browser check pipeline-cards.cts runs the real one).
+  taskAsker: (t: {filer?: string | null; requester_id?: string | null}) => t.filer || t.requester_id,
+  taskFiledByBuiltin: (t: {filer?: string | null}) => t.filer === 'check-health' ? 'Health check' : '',
+  taskAskerLabel: (t: {filer?: string | null; requester_id?: string | null}) => t.filer === 'check-health' ? 'Health check' : String(t.filer || t.requester_id || '').replace(/^(bot|human):/, ''),
   ageShort: () => '2h',
   skelRows: () => '<i class="skel"></i>',
   errorMessage: (_e: unknown, fallback: string) => fallback,
@@ -90,6 +94,34 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal((phone.match(/role="tab"/g) || []).length, 3, 'a tab per stage');
   assert.match(phone, /class="pv-tab on" data-pv-tab="ideas"/, 'the first stage with tasks shows first');
   assert.match(phone, /pv-is-phone/);
+}
+
+// ---- a card (task #220): two lines of title, who asked, time in this stage, the owner's face when someone else owns it
+{
+  const card = (extra: Record<string, unknown>) => vm.runInContext('taskCardHTML', ctx)(task('c1', 'Product brief: saved carts for guests', 'ideas', extra)) as string;
+  const aged: string[] = [];
+  const age = ctx.ageShort;
+  ctx.ageShort = (iso: string) => { aged.push(iso); return '3d'; };
+  const other = card({requester_id: 'human:ana', owner_id: 'bot:pm', stage_since: '2026-11-09T10:00:00Z', created_at: '2026-11-01T10:00:00Z',
+    updated_at: '2026-11-12T10:00:00Z', late: {since: '2026-11-11T10:00:00Z', level: 'told'}, turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana'}});
+  ctx.ageShort = age;
+  assert.match(other, /title="Product brief: saved carts for guests\nWaiting on Ana"/, 'pointing at the card shows the whole title');
+  assert.match(other, /<span class="tk-title">Product brief: saved carts for guests<\/span><span class="tk-meta">/, 'the meta line is under the title');
+  assert.match(other, /<span class="tk-asker"><i data-face="human:ana"><\/i><span class="tk-name">ana<\/span><\/span>/, "the asker's face and name");
+  assert.deepEqual(aged, ['2026-11-09T10:00:00Z'], 'the age is time in this stage, not since filed or last changed');
+  assert.match(other, /<span class="tk-age">3d<\/span><span class="tk-owner" role="img" aria-label="Owner: pm" title="Owner: pm"><i data-face="bot:pm"><\/i><\/span><\/span><\/div>$/,
+    "the owner's face last, saying whose it is");
+  const meta = other.slice(other.indexOf('class="tk-meta"'));
+  assert.match(meta, /tk-late/, 'Late is on the meta line');
+  assert.match(meta, /tk-mark-person/, 'the mark is on the meta line');
+  const own = card({requester_id: 'human:ana', owner_id: 'human:ana'});
+  assert.equal((own.match(/data-face=/g) || []).length, 1, 'the asker owns it: one face, the name once');
+  assert.doesNotMatch(own, /tk-owner/);
+  const filed = card({requester_id: null, owner_id: 'bot:pm', created_at: '2026-11-01T10:00:00Z'});
+  assert.doesNotMatch(filed, /tk-asker/, 'no asker, no name');
+  assert.match(filed, /title="Owner: pm"/, 'the owner still shows');
+  const phone = view.html(rec(), TASKS, opts({phone: true}));
+  assert.match(phone, /<div class="pv-phone"><div class="tk-card" data-task="t1"[^]*class="tk-asker"/, "a phone's stage shows the same card");
 }
 
 // ---- a limited stage counts bot work; tasks waiting only on a person's OK hold no slot and are counted beside it

@@ -147,7 +147,7 @@ const tasks = (() => {
     // The pipeline's columns draw the task, and the page does not scroll sideways.
     go(page, `#/tasks?pipeline=${pipeline}&layout=columns`);
     // A phone shows one stage at a time, under its tabs.
-    await page.locator(phone ? `.pv-phone .tk-row[data-task="${id}"]` : `.tk-card[data-task="${id}"]`).waitFor({timeout: t(20000)});
+    await page.locator(phone ? `.pv-phone .tk-card[data-task="${id}"]` : `.tk-card[data-task="${id}"]`).waitFor({timeout: t(20000)});
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 1, `${where}: the columns scroll the page sideways by ${overflow}px`);
     assertClean(page, `${where}: columns`);

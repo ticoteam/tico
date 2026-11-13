@@ -1437,6 +1437,9 @@ Today: the Engineering and Product pipelines.
   - "In development", 2: "Guest checkout"; "Refund flow" with the Late tag.
   - "Validate", 1: "Address lookup" with a spinner.
 - In a column, the mark sits after the title.
+- A box (task #220) is the title on up to two lines, then a meta line: the asker's face and name, the marks, time in
+  this stage ("3d") and, when someone else owns it, the owner's face at the right ("Owner: name" when pointed at). The
+  marks sit on that meta line. Pointing at the box shows the whole title. A phone's stage shows the same boxes.
 
 **New, list, grouped by stage** (Engineering):
 
