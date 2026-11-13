@@ -1656,8 +1656,17 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
         "assignee_id": assignee,
         "updated_at": ts,
     }
+    picked = None
     if status == "open":
         fields["owner_id"] = owner_for(target, assignee)
+        # A stage that picks from several picks for a restored task as for any task that enters it.
+        picked = _pick(
+            conn, {**row, "pipeline_id": pipe["id"], "assignee_id": assignee}, target, fields["owner_id"], ""
+        )
+        if picked and picked[0].bot:
+            fields["owner_id"] = picked[0].bot
+            if picked[1].owns_task:
+                fields["assignee_id"] = picked[0].bot
     else:
         fields["owner_id"] = was.get("owner_id")
         fields["done_at"] = was.get("done_at") if status == "done" else None
@@ -1665,7 +1674,9 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
         fields["closed_by_id"] = was.get("closed_by_id") if status == "closed" else None
     _write(conn, task_id, **fields)
     how = {"open": "new", "done": "met", "closed": "closed"}[status]
-    _open_visit(conn, task_id, target["id"], how, ts)
+    restored_visit = _open_visit(conn, task_id, target["id"], how, ts)
+    if picked:
+        _picked(conn, task_id, restored_visit, target, picked[0])
     _event(conn, task_id, by, "move", None, target["id"], "Restored", {"move": "restored", "owner": fields["owner_id"]})
     if status == "open":
         _owned(conn, {**row, "owner_id": was.get("owner_id")}, _task(conn, task_id), by)

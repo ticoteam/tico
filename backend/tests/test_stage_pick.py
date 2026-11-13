@@ -284,3 +284,18 @@ def test_ac11_a_pick_makes_no_model_call(c, bots, monkeypatch):
         _through(c, _file(c, f"Fix {n}"))
     never_stuck.check(c)
     assert calls == []
+
+
+def test_a_restored_task_in_a_pick_stage_is_picked_for(c, bots):
+    from backend import task_delete
+
+    eng = _eng(c)
+    _last(c, eng["stages"]["Review 1"], "bot:reviewer1")
+    row = _through(c, _file(c, "Fix the legend"))
+    assert row["owner_id"] == "bot:reviewer2"
+    assert task_delete.delete_tasks(c, [row["id"]], apply=True, keep_work=True)["applied"]
+    task_delete.restore_tasks(c, [row["id"]], ANA)
+    back = E.task(c, row["id"])  # its visits went with the delete: a fresh pick, new to the task
+    assert (back["stage_id"], back["owner_id"]) == (eng["stages"]["Review 1"], "bot:reviewer1")
+    assert _lines(c, row["id"])[-1] == "Review 1 given to reviewer1 · new to this task"
+    assert [who for _, who in X.wakes(c, row["id"])][-1] == "bot:reviewer1"

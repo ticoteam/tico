@@ -372,6 +372,15 @@ def from_rule() -> bool:
     return bool(TTR._CHAIN.get())
 
 
+def _picks_owner(stage_row: Any) -> bool:
+    """Whether the stage picks its owner from several and the pick becomes the task's owner (backend/stage_pick.py):
+    there, as in a stage owned by the assignee, an owner a rule clears takes the assignee with it."""
+    from . import stage_pick
+
+    pick = stage_pick.config(stage_row)
+    return bool(pick and pick.owns_task)
+
+
 def record(conn: Any, task_id: str, rule: Any, line: str, by: str, what: str = "refused", data: Any = None) -> None:
     """A Block, Tell or Move back on the task's history, naming the rule, and its event."""
     H = _h()
@@ -593,7 +602,7 @@ def sweep_owners(conn: Any) -> list[str]:
             continue
         line = _line(rule, said)
         fields = {"owner_id": None, "version": int(row.get("version") or 0) + 1, "updated_at": _h().now()}
-        if row["stage"].get("owner") == "assignee":
+        if row["stage"].get("owner") == "assignee" or _picks_owner(row["stage"]):
             fields["assignee_id"] = None
         E._write(conn, task_id, **fields)
         record(conn, task_id, rule, line, _core.KEEPER, data={"owner": row.get("owner_id"), "sweep": True})

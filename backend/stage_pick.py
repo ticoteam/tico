@@ -250,35 +250,57 @@ class _Screen:
     free: list[str]  # of those, under their limit
     paused: list[str]
     unreadable: list[str]
+    refused: list[str]  # a Block rule of the stage refuses it as an owner: each rule's name, once
 
 
-def _screen(conn: "sqlite3.Connection", row: Row | None, stage_id: str, pick: Pick) -> _Screen:
+def refused_by(conn: "sqlite3.Connection", row: Row | None, stage: Row, bot: str) -> str | None:
+    """The name of the stage's Block rule that refuses `bot` as the task's owner as it enters (stage_rules.owner_check,
+    the one place that rule is enforced: a picked bot is held to it as a named one is), or None. With no task (the
+    next-task sentence) no rule is read: a rule's condition may be about the task."""
+    if row is None:
+        return None
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules
+    found = stage_rules.owner_check(conn, row, stage, bot, "enters")
+    return str(found[0]["name"]) if found else None
+
+
+def _screen(conn: "sqlite3.Connection", row: Row | None, stage: Row, pick: Pick) -> _Screen:
     from . import task_wakes as _task_wakes
 
     task_wakes: Any = _task_wakes
     H = _h()
+    stage_id = str(stage["id"])
     seen: dict[str, str | None] = {}
     can: list[str] = []
     paused: list[str] = []
     unreadable: list[str] = []
+    refused: list[str] = []
     private = bool(row) and bool(H.task_private(conn, row))
     for bot in pick.bots:
         if task_wakes.cannot_run(conn, bot, seen):
             paused.append(bot)
         elif private and not H.task_private_readable(conn, bot, row):
             unreadable.append(bot)
+        elif rule := refused_by(conn, row, stage, bot):
+            if rule not in refused:
+                refused.append(rule)
         else:
             can.append(bot)
     free = [bot for bot in can if pick.limit_each is None or held(conn, stage_id, bot) < pick.limit_each]
-    return _Screen(can, free, paused, unreadable)
+    return _Screen(can, free, paused, unreadable, refused)
 
 
 def _nobody_why(screen: _Screen) -> str:
-    if screen.paused and not screen.unreadable:
+    causes = [bool(screen.paused), bool(screen.unreadable), bool(screen.refused)]
+    if causes == [True, False, False]:
         return "every bot it picks from is paused"
-    if screen.unreadable and not screen.paused:
+    if causes == [False, True, False]:
         return "none of the bots it picks from can see this private task"
-    return "each bot it picks from is paused or cannot see this private task"
+    if causes == [False, False, True]:
+        return f"rule {' and '.join(screen.refused)} refuses every bot it picks from"
+    return "each bot it picks from is paused, cannot see this private task or is refused by a stage rule"
 
 
 def _preferred(conn: "sqlite3.Connection", row: Row | None, prefer: str, free: list[str]) -> list[str]:
@@ -302,9 +324,10 @@ def choose(conn: "sqlite3.Connection", row: Row | None, stage: Row, pick: Pick, 
     stage_id = str(stage["id"])
     if row is not None and not pick.owns_task:
         before = had_here(conn, str(row["id"]), stage_id)
-        if before and before in pick.bots:
+        # A rule added since it was picked holds for a returning bot too: refused, it goes to another.
+        if before and before in pick.bots and not refused_by(conn, row, stage, before):
             return Choice(before, "had it here before", back=True)
-    screen = _screen(conn, row, stage_id, pick)
+    screen = _screen(conn, row, stage, pick)
     if not screen.can:
         return Choice(None, _nobody_why(screen), NOBODY)
     if not screen.free:
