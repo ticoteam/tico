@@ -2241,12 +2241,23 @@ class SettingsAdmin:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         before = self.snapshot(c, bot, "compact_at")
         declared = _json(config["config"], {}) or {}
-        declared["compact_at"] = body.compact_at
+        if body.compact_at is None:
+            # Null takes the saved size away: the bot compacts at its model's default and moves with the model.
+            if declared.get("compact_at") is None:
+                return {"bot": bot, "compact_at": None, "compacts_at": before, "revision": config["revision"]}
+            declared.pop("compact_at", None)
+        else:
+            declared["compact_at"] = body.compact_at
         BS.write(c, bot, declared)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
-        return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
+        return {
+            "bot": bot,
+            "compact_at": body.compact_at,
+            "compacts_at": compact_at(declared, providers.bot_choice(c, self.settings, declared)[1]),
+            "revision": config["revision"] + 1,
+        }
 
     def set_turns_at_once(self, c, who, bot, body, undo_change_id=None):
         """The most turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
