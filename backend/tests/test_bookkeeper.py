@@ -23,8 +23,7 @@ PDF = b"%PDF-1.4 Acme invoice 1042"
 
 
 def sees_everything(api):
-    """The owner's Everything grant to the Bookkeeper, which its queue needs to list bills (spec §7.5: the Bookkeeper gets no
-    view by default; the owner is asked to grant it Everything, since it cannot keep the books without seeing them)."""
+    """The owner's own Everything grant to the Finance Owner, as an install from before the default view made it."""
     store = api.app.state.store
     with store.transaction() as c:
         owner = "human:" + api.app.state.auth.owner_id(c)
@@ -46,9 +45,7 @@ def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(
     with api.app.state.store.read() as c:
         assert H.bot(c, BK.SLUG)["state"] == "active" and BK.built(c)
         assert rights(c) == DEFAULT_RIGHTS
-        assert c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.view_asked'").fetchone()[0] == 1
-        asks = c.execute("SELECT owner_id FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchall()
-        assert len(asks) == 1 and asks[0]["owner_id"].startswith("human:")
+        assert not c.execute("SELECT 1 FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchone()
     assert api.app.state.auth.system_bot(BK.SLUG) and BK.SLUG in groups.SYSTEM_BOTS
     assert "finance-owner" in helper_templates(api.app.state.store.settings)
     store = api.app.state.store
@@ -92,6 +89,128 @@ def test_an_install_from_before_rules_gets_that_one_right_once(environment):
     ensure(api)
     with store.read() as c:
         assert "finance.rules" not in rights(c)
+
+
+def _view(c):
+    from backend.finance.context import load
+
+    return load(c).view(BK.ACTOR)
+
+
+def _view_grants(c, status=None):
+    sql = "SELECT id, status FROM fin_view_grants WHERE subject=? AND what='everything'"
+    rows = c.execute(sql, (BK.ACTOR,)).fetchall()
+    return [r["id"] for r in rows if status is None or r["status"] == status]
+
+
+def _granted_events(c):
+    return c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.view_granted'").fetchone()[0]
+
+
+def _private_payroll(c):
+    from backend.finance.context import owner as finance_owner
+
+    owner = finance_owner(c)
+    made = FA.act(c, owner, "account_create", {"code": "6500", "name": "Salaries", "type": "expense"}, "acct-6500")
+    assert made.status == "committed", made
+    account = str(made.result["account_id"])
+    assert (
+        FA.act(
+            c, owner, "private_lines_set", {"account_id": account, "private": True, "others_see": "hidden"}, "pl-6500"
+        ).status
+        == "committed"
+    )
+    return account
+
+
+def _revoke(api, grant_id, tag):
+    with api.app.state.store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "view_revoke", {"grant_id": grant_id}, tag).status == "committed"
+
+
+def test_a_new_install_lets_the_finance_owner_see_the_books_but_not_private_payroll(environment):
+    api = built(environment)
+    ensure(api)
+    ensure(api)  # a second start grants nothing more
+    with api.app.state.store.transaction() as c:
+        payroll = _private_payroll(c)
+        view = _view(c)
+        assert view.everything and payroll not in view.full_detail and view.full_detail == frozenset()
+        assert len(_view_grants(c, "active")) == 1 and _granted_events(c) == 1
+        assert not c.execute("SELECT 1 FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchone()
+
+
+def test_an_older_install_gets_the_view_once_and_its_open_ask_is_closed_for_the_owner(environment):
+    api = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:  # an install from before: the view was asked for, never granted
+        FA.ensure_setup(c, store.settings.owner_email)
+        BK.grant_defaults(c)
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        ask = H.task_create(c, H.KEEPER, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
+    ensure(api)
+    ensure(api)
+    with store.read() as c:
+        assert len(_view_grants(c, "active")) == 1 and _granted_events(c) == 1
+        assert H.task(c, ask)["status"] == "closed"
+        notes = c.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move'", (ask,)
+        ).fetchall()
+        assert [r["note"] for r in notes if r["note"]] == [BK.VIEW_CLOSED_NOTE]
+
+
+def test_an_older_install_whose_owner_already_granted_everything_gets_no_second_grant(environment):
+    api = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        BK.grant_defaults(c)
+    sees_everything(api)
+    ensure(api)
+    with store.read() as c:
+        assert len(_view_grants(c, "active")) == 1 and _granted_events(c) == 1
+
+
+def test_an_older_install_whose_owner_revoked_the_view_gets_nothing(environment):
+    api = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        BK.grant_defaults(c)
+    sees_everything(api)
+    with store.read() as c:
+        (grant,) = _view_grants(c, "active")
+    _revoke(api, grant, "revoke-old")
+    ensure(api)
+    with store.read() as c:
+        assert _view_grants(c, "active") == [] and _granted_events(c) == 0
+        assert not _view(c).everything
+
+
+def test_a_revoke_after_the_default_grant_sticks(environment):
+    api = built(environment)
+    ensure(api)
+    with api.app.state.store.read() as c:
+        (grant,) = _view_grants(c, "active")
+    _revoke(api, grant, "revoke-default")
+    ensure(api)
+    check(api)
+    with api.app.state.store.read() as c:
+        assert _view_grants(c, "active") == [] and _granted_events(c) == 1
+        assert not _view(c).everything
+
+
+def test_a_paused_finance_owner_is_not_granted_the_view(environment):
+    api = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        BK.grant_defaults(c)
+        c.execute("UPDATE bots SET state='paused' WHERE id=?", (BK.SLUG,))
+    ensure(api)
+    with store.read() as c:
+        assert _view_grants(c) == [] and _granted_events(c) == 0
 
 
 def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(environment):

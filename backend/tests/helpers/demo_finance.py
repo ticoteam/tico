@@ -128,20 +128,23 @@ def _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana(book):
     assert (status, kind) == ("needs_approval", "ok")
 
 
-def _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again(book):
-    settings, now = book
+def _the_finance_owner_sees_the_books_by_default_and_a_start_does_not_ask_or_grant_again(book):
+    settings, _ = book
     with signed_in(settings) as api:
         access = api.get("/api/v2/finance/access").json()
     bot = next(t for t in access["teammates"] if t["teammate"] == FINANCE_OWNER)
     assert [(g["what"], g["status"]) for g in bot["grants"]] == [("everything", "active")]
-    with sqlite3.connect(settings.db_path) as db:
-        tasks = db.execute("SELECT owner_id, status, created_at FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchall()
-    assert [(owner, status) for owner, status, _ in tasks] == [("human:ana", "done")]
-    assert tasks[0][2][:10] == (now - timedelta(days=6)).date().isoformat()
     with TestClient(create_app(settings)):  # a start of the app, as the demo is opened
         pass
     with sqlite3.connect(settings.db_path) as db:
-        assert db.execute("SELECT COUNT(*) FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM events WHERE action = 'bookkeeper.view_granted'").fetchone()[0] == 1
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM fin_view_grants WHERE subject = ? AND what = 'everything'", (FINANCE_OWNER,)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 # Every check takes `book` (settings, now). test_demo_finance.py runs them on its early-month build and
@@ -152,5 +155,5 @@ CHECKS = (
     _invoices_one_paid_and_one_overdue_that_the_chase_task_covers,
     _bills_are_drafted_by_accounts_payable_and_approved_by_ana,
     _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana,
-    _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again,
+    _the_finance_owner_sees_the_books_by_default_and_a_start_does_not_ask_or_grant_again,
 )

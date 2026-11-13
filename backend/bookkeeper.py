@@ -5,9 +5,11 @@ before it gets it at the next start (`ensure`, after Finance's own setup). It is
 
 Its Finance rights come with the hire, once (`finance.actions.grant_defaults`: finance.book, ap, ar, pay, cards and
 rules), recorded by one `bookkeeper.rights_granted` event so a later revoke sticks. An install built before rules was
-a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). Its view is not
-granted for it: the owner is asked once, with one task, to let it see the books (spec §7.5: the owner grants it
-Everything; payroll's private lines stay private either way).
+a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). It sees the books
+by default: one Finance view grant of Everything, made once per install (`grant_view`, one `bookkeeper.view_granted`
+event), so revoking it in Finance → Access sticks. Payroll's private lines stay private: an Everything grant gives no
+full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
+the Finance Owner was ever revoked, and its open "Let the Finance Owner see the books" task is closed for the owner.
 
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
 finance.invoice.overdue and finance.period.ready, one task each. Everything that arrives in volume or is a standing
@@ -44,7 +46,8 @@ WATCH_EVENT = "bookkeeper_watch"
 DIGEST_TITLE = "Rules digest"  # the weekly digest of posting rules made that week (rules_digest)
 DIGEST_EVENT = "bookkeeper_rules_digest"
 RULES_DAYS = 7
-VIEW_TITLE = "Let the Finance Owner see the books"
+VIEW_TITLE = "Let the Finance Owner see the books"  # the owner's old to-do, kept only to close it (grant_view)
+VIEW_CLOSED_NOTE = "Done for you: the Finance Owner now sees the books. Change it any time in Finance → Access."
 REPEAT_HOURS = 24  # an item already listed is not news for this long, unless its facts changed
 KEEP_DAYS = 7  # the ledger forgets an item this long after it was last seen
 PER_KIND = 25  # lines one kind contributes to the body; the rest are counted
@@ -139,25 +142,45 @@ def grant_defaults(c):
     return []
 
 
-def ask_for_view(c, owner):
-    """One task, once, asking the owner to let the Finance Owner see the books (Finance → Access, Everything)."""
-    if not owner or not built(c):
+def grant_view(c, at: str | None = None):
+    """The Finance Owner's Finance view, once per install: one grant of Everything (company-wide), recorded by one
+    `bookkeeper.view_granted` event so a later revoke in Finance → Access sticks. An install from before (no event)
+    is granted the same way unless an Everything grant to the Finance Owner was ever revoked (the owner's no stands);
+    one it already holds is recorded, not doubled. Either way the owner's old open ask (VIEW_TITLE) is closed for them.
+    Payroll's private lines stay private: full detail comes only from a private line's own list, never from a grant.
+    A paused or archived Finance Owner gets nothing. The grant id made now, or None."""
+    from .finance import reads as FR
+    from .finance.core import view as VW
+    from .finance.core.org import SYSTEM
+    from .finance.store import access as SA
+    from .finance.store.ledger import new_id
+
+    if not FR.is_set_up(c) or not active(c) or _has_event(c, "bookkeeper.view_granted"):
         return None
-    if c.execute("SELECT 1 FROM events WHERE action='bookkeeper.view_asked' LIMIT 1").fetchone():
+    mine = c.execute(
+        "SELECT id, status FROM fin_view_grants WHERE subject_kind='teammate' AND subject=? AND what='everything'",
+        (ACTOR,),
+    ).fetchall()
+    if any(r["status"] == "revoked" for r in mine):
         return None
-    body = (
-        "The Finance Owner keeps the books through Finance's own actions and approvals, and it can only work on what "
-        "it can see. Open Finance → Access and give the Finance Owner Everything (payroll's private lines stay "
-        "private). Until then it sees only its own spend, and its checks find little to do."
-    )
-    made = H.task_create(c, H.KEEPER, VIEW_TITLE, body, owner, deduplicate=True, lint=False)
-    H.event(c, H.KEEPER, "bookkeeper.view_asked", made["id"], {})
-    return made["id"]
+    when = at or H.now()
+    made = None
+    if not any(r["status"] == "active" for r in mine):
+        made = new_id()
+        grant = VW.Grant(id=made, subject_kind="teammate", subject=ACTOR, what="everything", granted_by=SYSTEM)
+        SA.insert_grant(c, grant, SYSTEM, when)
+        SA.bump_view(c, f"grant {made}", when)
+    H.event(c, H.KEEPER, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything"})
+    for row in c.execute(
+        f"SELECT id FROM {H.TASKS} tasks WHERE title=? AND requester_id=? AND status='open'", (VIEW_TITLE, H.KEEPER)
+    ).fetchall():
+        H.task_close(c, H.KEEPER, row["id"], VIEW_CLOSED_NOTE)
+    return made
 
 
 def ensure(c, onboarding, auth):
     """At start and when a computer enrolls: once Finance is set up, build the Finance Owner if this install has none,
-    then its default rights, the outside due dates it owns (finance/tax.py seed_dues), and the one view ask. Best
+    then its default rights, its default view, and the outside due dates it owns (finance/tax.py seed_dues). Best
     effort: a start never fails because of it."""
     from .finance import reads as FR
 
@@ -165,10 +188,10 @@ def ensure(c, onboarding, auth):
         return None
     made = onboarding.ensure_bookkeeper(c)
     grant_defaults(c)
+    grant_view(c)
     from .finance import tax as FT
 
     FT.seed_dues(c, H.now())
-    ask_for_view(c, _owner(c, auth))
     from . import pipeline_settings
 
     pipeline_settings.ensure_private(c)  # the Finance pipeline, once the Finance Owner is here
@@ -182,7 +205,7 @@ def filing(c, owner):
     """Where a task for `owner` goes, as (pipeline, stage): the private Finance pipeline when the owner is the
     Finance Owner and Finance's last work stage is its own, else (None, None) (General). Its own checks, digests and routine turns
     are filed already taken in and done, so they enter at that last stage (Review) and one "done" finishes them, as in
-    General. A person's task (the view ask, Finance's own Needs-you tasks) never goes there."""
+    General. A person's task (Finance's own Needs-you tasks) never goes there."""
     if owner != ACTOR:
         return None, None
     found = c.execute(
@@ -589,7 +612,7 @@ def check(c, auth, at):
     from . import bills_address
 
     grant_defaults(c)
-    ask_for_view(c, _owner(c, auth))
+    grant_view(c)
     bills_address.reconcile(c)
     items, counts = collect(c)
     fresh = _fresh(c, items, at)
