@@ -303,9 +303,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         await p.evaluate(v => window.ticoTheme.set(v), scheme);
         await p.screenshot({path: `${shots}/updates-tree-nones-${label}-${scheme}.png`, fullPage: true});
       }
-      // One line from the manager's avatar down the left of its reports, with an elbow into each one's avatar; it stops
-      // at the last (tree-lines.css). Measured from the boxes: the rail runs under the middle of the manager's avatar,
-      // and each elbow ends where the report's avatar starts.
+      // One line from the manager's avatar down the left of its reports, with an elbow to each one's card; it stops at
+      // the last (tree-lines.css). Measured from the boxes: the rail runs under the middle of the manager's avatar, and
+      // each elbow ends on the report's card edge (its outer left), level with its avatar, never drawn inside the card.
       const line = await p.locator('#upd-feed .upd-node[data-depth="1"] > .upd-sub').evaluate(sub => {
         const box = (el: Element) => el.getBoundingClientRect(), mid = (el: Element) => box(el).left + box(el).width / 2;
         const parentCard = sub.parentElement!.firstElementChild!, parentAv = parentCard.querySelector('.upd-av .av')!;
@@ -314,7 +314,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
           const el = node.querySelector(':scope>.upd-none') || node, r = box(el), b = getComputedStyle(el, '::before'), a = getComputedStyle(node, '::after');
           const w = parseFloat(b.borderLeftWidth), left = r.left + el.clientLeft + parseFloat(b.left), top = r.top + el.clientTop + parseFloat(b.top);
           const av = node.firstElementChild!.querySelector('.upd-av .av, .upd-who .av')!;
-          return {i, railX: left + w / 2, parentCx: mid(parentAv), elbowRight: left + parseFloat(b.width), avLeft: box(av).left,
+          return {i, railX: left + w / 2, parentCx: mid(parentAv), elbowRight: left + parseFloat(b.width), cardLeft: box(node.firstElementChild!).left,
                   elbowY: top + parseFloat(b.height) - parseFloat(b.borderBottomWidth) / 2, avCy: box(av).top + box(av).height / 2, top,
                   prevBottom: i ? box(sub.children[i - 1]!).bottom : sb.top + parentCard.clientTop + parseFloat(stub.top) + parseFloat(stub.height),
                   stubX: sb.left + parentCard.clientLeft + parseFloat(stub.left) + parseFloat(stub.borderLeftWidth) / 2,
@@ -324,7 +324,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       for (const n of line) {
         assert.ok(n.same, `${label}: report ${n.i}'s elbow is one weight, and round`);
         assert.ok(Math.abs(n.railX - n.parentCx) <= 1, `${label}: the line runs under the middle of the manager's avatar (${n.railX} vs ${n.parentCx})`);
-        assert.ok(Math.abs(n.elbowRight - n.avLeft) <= 1, `${label}: report ${n.i}'s elbow meets its avatar (${n.elbowRight} vs ${n.avLeft})`);
+        assert.ok(Math.abs(n.elbowRight - n.cardLeft) <= 0.5, `${label}: report ${n.i}'s elbow ends at its card's edge, not inside it (${n.elbowRight} vs ${n.cardLeft})`);
         assert.ok(Math.abs(n.elbowY - n.avCy) <= 1, `${label}: report ${n.i}'s elbow turns into its avatar's middle (${n.elbowY} vs ${n.avCy})`);
         // the first from the manager's stub (overlapping it), each next one from the foot of the report above
         assert.ok(n.i ? Math.abs(n.top - n.prevBottom) <= 1 : n.top <= n.prevBottom + 1, `${label}: report ${n.i}'s line joins the one above it (${n.top} vs ${n.prevBottom})`);
