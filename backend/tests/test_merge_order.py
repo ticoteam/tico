@@ -356,7 +356,7 @@ def test_tico_task_after_from_the_cli_sends_the_order_and_remove_takes_it_off(mo
 
 
 def test_every_task_command_the_cli_parses_reaches_the_remote_api(monkeypatch, tmp_path):
-    """No `tico task <sub>` falls through to "not supported by the remote API" (`task after` and `task caps` did). Each
+    """No `tico task <sub>` falls through to "not supported by the remote API" (`task after`, `task caps` and `task cap set` did). Each
     is run with a placeholder for each positional; what the server would say does not matter here, only that the CLI
     sends something. `task wait` runs in hubcli itself, in a person's shell (clients/hubcli_pipelines.py)."""
     import argparse
@@ -369,16 +369,34 @@ def test_every_task_command_the_cli_parses_reaches_the_remote_api(monkeypatch, t
     (tmp_path / "X").write_text("x")
     task = next(a for a in hubcli.parser()._actions if isinstance(a, argparse._SubParsersAction)).choices["task"]
     subs = next(a for a in task._actions if isinstance(a, argparse._SubParsersAction)).choices
+
+    def leaves(words, parser):
+        """Each runnable command under `parser`, two-word ones (`task cap set`) included."""
+        nested = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not nested:
+            yield words + ["X" for a in parser._actions if not a.option_strings and a.nargs != argparse.SUPPRESS]
+        for action in nested:
+            for word, child in sorted(action.choices.items()):
+                yield from leaves(words + [word], child)
+
     unsupported = []
     for name, sub in sorted(subs.items()):
         if name == "wait":
             continue
-        argv = ["task", name] + ["X" for a in sub._actions if not a.option_strings and a.nargs != argparse.SUPPRESS]
-        try:
-            cli(*argv)
-        except APIError as e:
-            if e.code == "unsupported":
-                unsupported.append(name)
-        except (SystemExit, Exception):  # a placeholder the command cannot use: not a routing gap
-            pass
+        for argv in leaves(["task", name], sub):
+            try:
+                cli(*argv)
+            except APIError as e:
+                if e.code == "unsupported":
+                    unsupported.append(" ".join(argv[1:]))
+            except (SystemExit, Exception):  # a placeholder the command cannot use: not a routing gap
+                pass
     assert unsupported == []
+
+
+def test_tico_task_cap_set_from_the_cli_sets_a_cap_and_without_per_day_removes_it(monkeypatch):
+    sent, cli = _cli_sent(monkeypatch)
+    cli("task", "cap", "set", "bot:writer", "bot:manager", "--per-day", "3")
+    assert sent[-1] == ("PUT", "task-caps", {"sender": "bot:writer", "receiver": "bot:manager", "per_day": 3})
+    cli("task", "cap", "set", "bot:writer", "bot:manager")
+    assert sent[-1] == ("PUT", "task-caps", {"sender": "bot:writer", "receiver": "bot:manager", "per_day": None})

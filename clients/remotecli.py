@@ -834,6 +834,8 @@ def run(args, who=None):
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))
+        if sub == "cap":  # `task cap set`: no --per-day removes the cap, so null is sent, never left out
+            return via_tool(client, args, per_day=args.per_day)
         if sub == "give":  # `--to <person>`, or the person as a third word
             args.to = args.to or args.to_person
             del args.to_person
