@@ -1,7 +1,8 @@
 // The board's bots on a phone: a floating face instead of the Ask block (ui/app/pipeline-ask.ts; spec "Pipeline board:
 // one-row header, one count per stage, a floating face", part C), offline on the fake server of tasks-page.cts. Checks:
 //  - at 390 px the manager's 44 px round face floats 12 px from the right and 12 px above the bottom bar; no context
-//    line, no bot picker and no box sit on the board, and the list keeps 64 px under its last row;
+//    line, no bot picker and no box sit on the board;
+//  - a long stage scrolled to its end: the last row and More end at least 8 px above the face (AC-7);
 //  - tapped, a menu above the face lists the board's bots: the manager first, then the open stage's holder, each with
 //    its role ("Manager", "Holds Spec"); Escape closes it and gives the face the focus back;
 //  - picked, the bot's direct chat opens over the board, the chat alone (no Log, no Tasks), its box focused, with the
@@ -88,8 +89,6 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       assert.equal(await page.locator('#task-ask textarea, #task-ask .pa-ctx, #task-ask .pa-to, #task-ask form').count(), 0, 'no context line, picker or box');
       assert.equal(await face(page).getAttribute('aria-label'), 'Chat with…');
       assert.equal(await page.locator('#task-body .pv-phone [data-task]').count(), 3);
-      // The last row clears the face: the list keeps 64 px under it.
-      assert.equal(await page.locator('#tasks-pane').evaluate(el => getComputedStyle(el).paddingBottom), '64px');
 
       // A field on the board raises a keyboard (the Why of a refused move): the face hides while it has the focus.
       await page.evaluate(() => { const i = document.createElement('input'); i.name = 'why'; i.id = 'why-probe'; document.querySelector('#task-body')!.prepend(i); i.focus(); });
@@ -182,6 +181,23 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       await modal.locator('.task-chat textarea').waitFor();
       assert.equal(await modal.evaluate(d => d.classList.contains('thread')), true, 'the conversation, not the details');
       await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#task-modal .task-chat textarea')?.placeholder === 'Ask PM about this task…');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A long stage (16 tasks, as Product › Validate), scrolled to its end: the last row and More clear the face by 8 px.
+      const many = [...fixtures(), ...Array.from({length: 16}, (_, i) => task(`t-long-${i}`, `Long stage task ${i + 1}`, 'spec', {owner_id: 'bot:writer'}))];
+      const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, tasks: many, needs: [], hash: '#/tasks?pipeline=product'});
+      await page.locator('#task-body .pv-tab[data-pv-tab="spec"]').click();
+      await face(page).waitFor();
+      await page.evaluate(() => { const more = document.querySelector<HTMLElement>('#task-more'); if (more) more.hidden = false; });
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.waitForTimeout(50);
+      const f = await rect(page, '#task-ask .pa-fab');
+      const last = await page.locator('#task-body .pv-phone [data-task]').last().evaluate(el => el.getBoundingClientRect().toJSON() as DOMRect);
+      const more = await rect(page, '#task-more');
+      assert.ok(last.bottom <= f.top - 8, `the last row ends 8 px above the face: row ${last.bottom}, face ${f.top}`);
+      assert.ok(more.bottom <= f.top - 8, `More ends 8 px above the face: ${more.bottom}, face ${f.top}`);
       assert.deepEqual(errors, []);
       await page.close();
     }

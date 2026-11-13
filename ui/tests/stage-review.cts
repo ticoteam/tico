@@ -1,7 +1,7 @@
 // A stage's review (the ▶ on a stage, ui/app/decide.ts decideStageOpen), offline against the Tasks page's fake server
 // (tasks-page.cts). Checks, as the spec's acceptance criteria give them:
 //  - a pipeline shows "▶ n" on each stage with items waiting on the person, and no ▶ on a stage with none (columns, the
-//    list's group headers, and beside a phone's stage tabs);
+//    list's group headers; a phone has none beside its tabs, the header's ▶ Review opens the open stage's items);
 //  - nothing moves when Needs you arrives after the board draws: ▶ keeps its 40 px slot at the right of a stage's
 //    header (columns and list alike), and a phone's tabs and tab strip keep their widths as Needs you and the Rules
 //    counts arrive and across stages whose Rules counts differ in digits, a stage with items getting a dot;
@@ -65,7 +65,8 @@ async function playOnStages(browser: Browser) {
   const {page, errors} = await opened(browser, {hash: '#/tasks?pipeline=product&layout=columns'});
   await page.locator('[data-pv-play]').first().waitFor();
   assert.deepEqual(await plays(page), [['spec', '3'], ['review', '2']], 'Spec and Review show ▶ with their counts; Build none');
-  await page.locator('#task-layout [data-layout="list"]').click();
+  await page.locator('#task-menu').click();
+  await page.locator('#task-mi-layout [data-layout="list"]').click();
   await page.locator('.pv-group-head [data-pv-play]').first().waitFor();
   assert.deepEqual(await plays(page), [['spec', '3'], ['review', '2']], 'the list layout\'s group headers too');
   assert.deepEqual(errors, []);
@@ -143,8 +144,9 @@ async function nothingMoves(browser: Browser) {
 async function walkOnAPhone(browser: Browser) {
   const {page, errors, posts} = await opened(browser, {viewport: PHONE, hash: '#/tasks?pipeline=product'});
   await page.locator('.pv-tab[data-pv-tab="spec"]').click();
-  assert.deepEqual(await plays(page), [['spec', '3']], 'beside the tabs, the shown stage\'s ▶');
-  await page.locator('.pv-phone-head [data-pv-play]').click();
+  assert.deepEqual(await plays(page), [], 'no ▶ beside the tabs');
+  await page.waitForFunction(() => document.querySelector('#task-play .tl-review-n')?.textContent === '5');
+  await page.locator('#task-play').click();      // the header's ▶ Review: the open stage first
   await page.locator('#need-card[open]').waitFor();
   const box = await page.locator('#need-card').boundingBox();
   assert.ok(box && box.width === PHONE.width && box.height >= PHONE.height - 1, `full screen on a phone: ${JSON.stringify(box)}`);
@@ -251,7 +253,7 @@ async function phonePolish(browser: Browser) {
     const rows = await page.locator('.pv-phone .tk-card').evaluateAll(els => els.map(e => [e.getBoundingClientRect().height, !!e.querySelector('.tk-asker .av, .tk-asker img')]));
     assert.ok(rows.every(([h]) => Number(h) >= 44), `rows 44 px: ${JSON.stringify(rows)}`);
     await shot(page, '2-pipeline');
-    await page.locator('.pv-phone-head [data-pv-play]').click();
+    await page.locator('#task-play').click();
     await page.locator('#need-card[open] [data-dc-choice]').first().waitFor();
     r = await smallTargets(page, '#need-card');
     assert.deepEqual(r.small, [], 'the review screen, a question: 44 px');

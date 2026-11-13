@@ -20,7 +20,7 @@ const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
-  {name: 'Tasks', hash: '#/tasks', button: true, iconRow: true},
+  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true, more: ['New task', 'Archived']},
   {name: 'Automations', hash: '#/automations', button: true},
   {name: 'Listening', hash: '#/listening', button: true},
   {name: 'Rules', hash: '#/rules', tabs: true},
@@ -95,18 +95,20 @@ function desktopProblems(page: Page, s: Screen) {
   }, s);
 }
 
-// Tasks on a phone: one row (every shown control centred on the scope button's line), the + alone and named "New task",
+// Tasks on a phone: one 44 px row (every shown control centred on the scope button's line, ⋯ last), nothing accent on it,
 // the title only for screen readers, nothing sideways.
 function iconRowProblems(page: Page) {
   return page.evaluate(() => {
     const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!;
     const mid = (el: Element) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
     const scope = head.querySelector<HTMLElement>('#task-scope')!, line = mid(scope);
-    const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tools > *, :scope > .ph-act .primary')].filter(el => el.getClientRects().length);
+    const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tools > *, :scope > .ph-more')].filter(el => el.getClientRects().length);
     for (const el of shown) if (Math.abs(mid(el) - line) > 4) bad.push(`${el.id || el.className} is off the one row`);
-    const plus = head.querySelector<HTMLElement>('.ph-act .primary')!, pr = plus.getBoundingClientRect();
-    if (pr.width > 44.5 || pr.right > document.documentElement.clientWidth) bad.push(`+ is ${Math.round(pr.width)}px wide, right edge ${Math.round(pr.right)}`);
-    if ((plus.textContent || '').trim() !== 'New task') bad.push('+ is not named New task');
+    if (head.querySelector('.primary')) bad.push('a filled button on the row');
+    const more = head.querySelector<HTMLElement>(':scope > .ph-more');
+    if (!more || shown.at(-1) !== more) bad.push('⋯ is not last on the row');
+    const h = head.getBoundingClientRect().height - parseFloat(getComputedStyle(head).borderBottomWidth);
+    if (Math.abs(h - 44) > 0.5) bad.push(`the row is ${h}px high`);
     if (head.querySelector<HTMLElement>(':scope > h1.ph-t')!.getBoundingClientRect().width > 1) bad.push('the title shows');
     const de = document.documentElement;
     if (de.scrollWidth > de.clientWidth) bad.push(`the page scrolls sideways (${de.scrollWidth} > ${de.clientWidth})`);

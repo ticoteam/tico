@@ -83,7 +83,8 @@ const tasks = (() => {
 
     // Dana makes the task in the page, for the engineering-manager bot, in the Launch pipeline: it opens once made.
     const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?pipeline=${pipeline}`});
-    await page.click('#task-new');
+    await page.click('#task-menu');      // New task is in the header's ⋯
+    await page.click('#task-mi-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
     // For whom: Give to…, searched by the bot's slug.
@@ -256,7 +257,8 @@ const newBot = (() => {
 
     // A task for it, made in the Tasks page: the owner choice is its id, labelled with its name.
     go(page, '#/tasks');
-    await page.click('#task-new');
+    await page.locator('#task-scope').waitFor();
+    await page.keyboard.press('c');      // C makes a task (the ⋯ › New task case is above)
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
     await form.locator('button[data-give-to]').click();
