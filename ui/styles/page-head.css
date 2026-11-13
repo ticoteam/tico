@@ -29,6 +29,14 @@
 .ph>.ph-act:empty{display:none}
 .ph>.ph-act .primary{box-sizing:border-box;height:var(--ctl);white-space:nowrap}
 .ph [hidden]{display:none!important}
+/* Too narrow for one row (page-head.ts pageHeadFit): tabs keep their width; the tools move to a row of their own under
+   the title's, then the tabs do too, wrapping inside it. The title, ⋯ and the filled button keep the first row. */
+@media (min-width:761px){
+  .ph>.ph-tabs{flex:none}
+  .ph.ph-wrap{flex-wrap:wrap;row-gap:6px}
+  .ph.ph-wrap>.ph-tools{order:9;flex:1 1 100%;flex-wrap:wrap;justify-content:flex-end}
+  .ph.ph-wrap2>.ph-tabs{order:8;flex:1 1 100%;flex-wrap:wrap;overflow:visible}
+}
 @media (max-width:760px){
   .ph{flex-wrap:wrap;row-gap:6px}
   .ph.ph-pad{padding:8px 12px}
