@@ -539,6 +539,7 @@ def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answe
     ).fetchone()
     return bool(shown) and shown[0] == page["file_id"] and shown[1] == answer.get("page_version")
 
+
 def _ok_line(conn: "sqlite3.Connection", person: str | None, page: Row) -> str:
     """What a page a person OKs says while it waits on them and nothing is missing: who OKs which version."""
     from . import hubdb
