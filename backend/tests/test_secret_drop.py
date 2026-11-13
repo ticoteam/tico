@@ -201,3 +201,27 @@ def test_grant_makes_exactly_the_cards_grants_and_the_check_uses_the_username(ap
     again = _propose(api, dm, [{'key': 'JIRA_LOGIN', 'tool': tid, 'level': 'read', 'bots': ['support']}], bot)
     failed = post(api, f"tools-chat/proposals/{again['id']}/grant", {})
     assert failed['results'][0]['ok'] is False and failed['results'][0]['detail'].startswith("Didn't work")
+
+
+def test_a_key_that_replaces_the_tools_key_keeps_everyone_who_had_it_and_the_card_says_so(api, monkeypatch):
+    # Review 1: Grant used to take the tool's old key away from every bot holding it, silently. Now each bot and person
+    # holding the old key keeps their level on the new one, and the card names the key replaced and who keeps access.
+    from backend import api_tools
+    from backend.tests.helpers.api_tools import key, level
+
+    dm, tid, saved, bot, _, _ = _proposal_world(api, monkeypatch)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('builder','builder','Builder','active')")
+    old = key(api, tid, 'acme-close-synthetic-old-5566778899', 'read')
+    level(api, tid, 'bot:support', 'read')
+    card = _propose(api, dm, [{'key': 'JIRA_LOGIN', 'tool': tid, 'level': 'read', 'bots': ['builder']}], bot)
+    row = card['refs']['key_grant']['rows'][0]
+    assert row['replaces'] == {'key': old['name'], 'keeps': ['Support'], 'loses': []}
+    post(api, f"tools-chat/proposals/{card['id']}/grant", {})
+    with api.app.state.store.read() as c:
+        assert api_tools.subject_level(c, tid, 'bot:support') == 'read'
+        assert api_tools.subject_level(c, tid, 'bot:builder') == 'read'
+        held = c.execute(
+            "SELECT credential_id FROM credential_grants WHERE subject='bot:support' AND revoked_at IS NULL"
+        ).fetchall()
+        assert [r['credential_id'] for r in held] == [saved['id']]

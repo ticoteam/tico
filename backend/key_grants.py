@@ -146,7 +146,50 @@ def _rows(c: Any, rows: Any, person: str, owner: str) -> list[Row]:
                 "bots": _bots(c, row.get("bots"), owner),
             }
         )
+        built[-1]["replaces"] = _replaced(c, built[-1], owner)
     return built
+
+
+def _holders(c: Any, credential_id: str) -> list[Row]:
+    """Who holds a key now ({subject, level}): each live grant's subject and level, the vault's effective rule."""
+    effective_grant = _credentials().effective_grant
+    out: list[Row] = []
+    for g in c.execute(
+        "SELECT DISTINCT subject FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL", (credential_id,)
+    ).fetchall():
+        grant: Any = effective_grant(c, credential_id, g["subject"])
+        if grant is not None:
+            out.append({"subject": str(g["subject"]), "level": str(grant["access_level"] or "read_write")})
+    return out
+
+
+def _who(c: Any, subject: str) -> str:
+    if subject.startswith("bot:"):
+        bot: Row | None = H.resolve_bot(c, subject)
+        return str((bot or {}).get("display_name") or (bot or {}).get("slug") or subject[4:])
+    if subject.startswith("human:"):
+        row = c.execute("SELECT name FROM humans WHERE id=?", (subject[6:],)).fetchone()
+        return str(row["name"] if row and row["name"] else subject[6:])
+    return "Every computer" if subject == "computers" else subject
+
+
+def _replaced(c: Any, row: Row, owner: str) -> Row | None:
+    """The tool's key at the row's level that this key replaces, and who keeps their access on the new key (every bot
+    and person who holds it) or loses it (the owner bot, which holds none of these keys, and every-computer grants)."""
+    old = c.execute(
+        "SELECT id, name FROM credentials WHERE tool_id=? AND access_level=? AND id<>? LIMIT 1",
+        (row["tool_id"], row["level"], row["credential_id"]),
+    ).fetchone()
+    if not old:
+        return None
+    holders = _holders(c, old["id"])
+    keeps = [h for h in holders if h["subject"].startswith(("bot:", "human:")) and h["subject"] != owner]
+    loses = [h for h in holders if h not in keeps]
+    return {
+        "key": old["name"],
+        "keeps": [_who(c, h["subject"]) for h in keeps],
+        "loses": [_who(c, h["subject"]) for h in loses],
+    }
 
 
 def _card(message: Row) -> Row | None:
@@ -188,18 +231,21 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
 
 
 def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
-    """The key becomes its tool's key at the row's level (a password kind counts as the tool's key from now on); a key
-    the tool held at that level moves off it, its grants with it."""
+    """The key becomes its tool's key at the row's level (a password kind counts as the tool's key from now on). A key
+    the tool held at that level moves off it, and each bot and person who held it keeps their level on the new key:
+    replacing a key never takes a tool away from anyone silently (the card names who keeps it and who loses it)."""
     api_tools = _api_tools()
+    owner = _owner(c)
     old = c.execute(
         "SELECT id FROM credentials WHERE tool_id=? AND access_level=? AND id<>?",
         (row["tool_id"], row["level"], row["credential_id"]),
     ).fetchall()
+    moving: list[Row] = []
     for key in old:
-        for grant in c.execute(
-            "SELECT subject FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL", (key["id"],)
-        ).fetchall():
-            api_tools._revoke(c, who, key["id"], grant["subject"])
+        for held in _holders(c, key["id"]):
+            if held["subject"].startswith(("bot:", "human:")) and held["subject"] != owner:
+                moving.append(held)
+            api_tools._revoke(c, who, key["id"], held["subject"])
         c.execute("UPDATE credentials SET tool_id=NULL WHERE id=?", (key["id"],))
     c.execute(
         "UPDATE credentials SET tool_id=?, access_level=?, kind=CASE WHEN kind IN ('api_key','token') THEN kind ELSE "
@@ -212,6 +258,10 @@ def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
         # would drop the username and fail.
         c.execute("UPDATE tools SET auth_scheme='basic_password' WHERE id=?", (row["tool_id"],))
         H.event(c, who.actor, "tool.updated", row["tool_id"], {"auth_scheme": "basic_password", "via": "tools-chat"})
+    for held in moving:
+        if held["subject"] not in [b["id"] for b in row["bots"]]:
+            kept = "read" if "read" in (row["level"], held["level"]) else "read_write"  # never above the key's level
+            api_tools.set_level(c, who, vault, row["tool_id"], held["subject"], kept)
     for bot in row["bots"]:
         api_tools.set_level(c, who, vault, row["tool_id"], bot["id"], row["level"])
     H.event(c, who.actor, "tool.key_added", row["tool_id"], {"credential": row["credential_id"], "via": "tools-chat"})

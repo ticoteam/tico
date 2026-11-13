@@ -339,7 +339,8 @@ function kdForget(view: ThvView): void {
 
 // ---- the Tools owner's proposal card (backend/key_grants.py): rows the server built, Grant, then each key's check
 interface KgBot { id: string; name: string }
-interface KgRow { key: string; tool_id: string; tool_name: string; level: string; bots: KgBot[]; username?: string }
+interface KgReplaced { key: string; keeps: string[]; loses: string[] }
+interface KgRow { key: string; tool_id: string; tool_name: string; level: string; bots: KgBot[]; username?: string; replaces?: KgReplaced | null }
 interface KgResult { key: string; tool_id: string; ok: boolean; detail: string }
 interface KgCard { id: string; state: string; rows: KgRow[]; results: KgResult[] }
 const KG_LEVELS: Record<string, string> = {read: 'Read', read_write: 'Read and write'};
@@ -360,9 +361,19 @@ function kgCardHTML(m: ThvMessage): string {
   return `<div class="kg-card" data-kg="${esc(m.id)}" role="group" aria-label="Proposed key grants">
     <div class="kg-title">${esc(m.body?.split('\n')[0]?.startsWith('Proposal:') ? 'Proposal' : (m.body || '').split('\n')[0] || 'Proposal')}</div>
     ${card.rows.map((r, i) => dropped.has(i) ? '' : `<div class="kg-row" data-kg-row="${i}"><b>${esc(r.key)}</b> → ${esc(r.tool_name)} · ${esc(KG_LEVELS[r.level] || r.level)} · ${esc(r.bots.map(b => b.name).join(', '))}
-      <button type="button" class="ghost small kd-x" data-kg-remove="${i}" aria-label="Remove ${esc(r.key)}" title="Remove">✕</button></div>`).join('')}
+      <button type="button" class="ghost small kd-x" data-kg-remove="${i}" aria-label="Remove ${esc(r.key)}" title="Remove">✕</button>${kgReplacesHTML(r)}</div>`).join('')}
     <div class="kg-acts"><button type="button" class="primary small" data-kg-grant${kept.length ? '' : ' disabled'}>Grant ${kept.length}</button></div>
     <p class="kg-err" role="alert" hidden></p></div>`;
+}
+
+// A key that takes the tool's place of another says so before Grant: the key replaced, who keeps their access on the
+// new key, and who loses it (the server's own list, backend/key_grants.py _replaced).
+function kgReplacesHTML(r: KgRow): string {
+  const x = r.replaces;
+  if (!x) return '';
+  return `<span class="kg-replaces">Replaces ${esc(r.tool_name)}'s ${esc(KG_LEVELS[r.level] || r.level)} key ${esc(x.key)}.`
+    + (x.keeps.length ? ` ${esc(x.keeps.join(', '))} keep${x.keeps.length === 1 ? 's' : ''} access on the new key.` : '')
+    + (x.loses.length ? ` <b>${esc(x.loses.join(', '))} lose${x.loses.length === 1 ? 's' : ''} access.</b>` : '') + '</span>';
 }
 
 /** A press on a proposal card: remove a row, Grant, or Paste a new key. True when it was the card's. */

@@ -43,7 +43,8 @@ type Sent = ThreadsFakeSupport.ThreadsPost;
 const CARD = {id: 'kg-1', sender_id: 'bot:' + OWNER, kind: 'notice', body: 'Proposal: JIRA_LOGIN → Jira; POSTHOG_API_KEY → PostHog; NPM_TOKEN → npm',
   refs: {card: 'key_grant', key_grant: {id: 'g1', state: 'proposed', results: [], rows: [
     {key: 'JIRA_LOGIN', tool_id: 'jira', tool_name: 'Jira', level: 'read_write', bots: [{id: 'bot:support', name: 'Support'}, {id: 'bot:builder', name: 'Builder'}]},
-    {key: 'POSTHOG_API_KEY', tool_id: 'posthog', tool_name: 'PostHog', level: 'read', bots: [{id: 'bot:analyst', name: 'Product Analyst'}]},
+    {key: 'POSTHOG_API_KEY', tool_id: 'posthog', tool_name: 'PostHog', level: 'read', bots: [{id: 'bot:analyst', name: 'Product Analyst'}],
+      replaces: {key: 'PostHog read', keeps: ['Support', 'Builder'], loses: ['Every computer']}},
     {key: 'NPM_TOKEN', tool_id: 'npm', tool_name: 'npm', level: 'read', bots: [{id: 'bot:builder', name: 'Builder'}]}]}}};
 async function start(browser: import('playwright').Browser, {width = 1280, admin = true, failSaves = 0, card = false} = {}) {
   const saved: Saved[] = [], sent: Sent[] = [], grants: unknown[] = [];
@@ -223,6 +224,9 @@ async function openChat(page: Page) {
       assert.equal(await card.locator('[data-kg-row]').count(), 3);
       const words = async (l: import('playwright').Locator) => ((await l.textContent()) || '').replace(/\s+/g, ' ').trim();
       assert.match(await words(card.locator('[data-kg-row]').first()), /JIRA_LOGIN → Jira · Read and write · Support, Builder/);
+      // Review 1: a key that replaces the tool's key names it, who keeps access and who loses it, before Grant.
+      assert.match(await words(card.locator('[data-kg-row="1"] .kg-replaces')),
+        /Replaces PostHog's Read key PostHog read\. Support, Builder keep access on the new key\. Every computer loses access\./);
       await card.locator('[data-kg-remove="2"]').click();
       assert.equal(await card.locator('[data-kg-grant]').innerText(), 'Grant 2');
       await card.locator('[data-kg-grant]').click();
