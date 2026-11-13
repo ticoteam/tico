@@ -141,7 +141,7 @@ def test_an_attach_that_quotes_the_send_back_or_breaks_the_forms_is_refused_and_
     assert _attach(c, row, "page:" + fid, changed=["Sources on every row"])["version"] == 2
 
 
-def test_the_rounds_route_reads_for_a_task_reader_and_the_attach_route_takes_the_new_fields(api):
+def test_the_rounds_route_reads_for_a_task_reader_and_the_attach_route_takes_the_new_fields(api, monkeypatch):
     store = api.app.state.store
     store.blobs = store.blobs or Blobs(store.settings)
     with store.transaction() as conn:
@@ -170,12 +170,17 @@ def test_the_rounds_route_reads_for_a_task_reader_and_the_attach_route_takes_the
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "lint", bad.text
     got = api.get(f"/api/v2/tasks/{row['id']}/asks/{rid}/rounds", headers=headers("ana-test"))
     assert got.status_code == 200, got.text
+    assert got.json()["notices"] == [], "nothing besides Jev while no commits or conflict came"
     (only,) = got.json()["rounds"]
     assert (only["version"], only["note"], only["changed"]) == (
         1,
         "First draft for the importer",
         ["Wrote the importer spec"],
     )
+    # The notices the standing keeps (new commits, a merge conflict) reach the decision view through this route.
+    monkeypatch.setattr(PR, "notices", lambda conn, task_id, requirement_id: ["New commits since Ana's OK."])
+    again = api.get(f"/api/v2/tasks/{row['id']}/asks/{rid}/rounds", headers=headers("ana-test"))
+    assert again.json()["notices"] == ["New commits since Ana's OK."]
     with store.transaction() as conn:
         conn.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
     hidden = api.get(f"/api/v2/tasks/{row['id']}/asks/{rid}/rounds", headers=headers("cara-test"))
