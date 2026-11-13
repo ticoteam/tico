@@ -53,6 +53,7 @@ type Data = {machines: Machine[]; subs: Sub[]; assignments: Assignment[]; capabl
 declare var SETTINGS_TAB: string;
 declare function settingsShow(tab: string): void;
 declare function settingsEditBot(slug?: string, inline?: boolean): void;
+declare function subsUsageHTML(sub: {id: string; name: string; kind: string; usage?: {window?: string | null; used_pct?: number | null} | null}): string;
 
 const KINDS: Kind[] = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true, owned: true},
@@ -1039,6 +1040,14 @@ async function usageLeft(browser: Browser) {
     assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 30h$/);
     assert.equal(await use('h').locator('.subs-bar').getAttribute('class'), 'subs-bar bad');
     assert.equal(await use('h').locator('.subs-bar b').getAttribute('style'), 'width:0%');
+    const edge = (id: string) => use(id).locator('.subs-bar').evaluate(e => getComputedStyle(e).boxShadow);
+    assert.notEqual(await edge('h'), await edge('w'), 'the empty bar keeps a red edge');
+    // The colour's edges: green above 20% left, amber from 20% to 6%, red at 5% or less.
+    assert.deepEqual(await page.evaluate(() => [79, 80, 94, 95].map(used => {
+      const span = document.createElement('span');
+      span.innerHTML = subsUsageHTML({id: 'x', name: 'x', kind: 'claude_token', usage: {window: 'week', used_pct: used}});
+      return span.querySelector('.subs-bar')!.className;
+    })), ['subs-bar', 'subs-bar warn', 'subs-bar warn', 'subs-bar bad']);
     // AC-6: no reading, muted, the server's reason in the tooltip.
     assert.equal(await use('n').innerText(), 'No reading yet');
     assert.equal(await use('n').locator('.subs-none').getAttribute('title'), 'Waiting for a computer to report');
@@ -1058,6 +1067,8 @@ async function usageLeft(browser: Browser) {
     // AC-9: on a phone each percent and reset is on screen, and nothing scrolls sideways.
     if (viewport.width === 390) {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 0, 'no sideways scroll');
+      const dot = (await pane.locator('[data-subs-row=w] [data-subs-offline]').boundingBox())!;
+      assert.ok(dot.width >= 40 && dot.height >= 40 && dot.x + dot.width <= 390, `the offline dot is a thumb-sized target (${dot.width}x${dot.height})`);
       for (const id of ['w', 'f', 'h', 'g']) {
         const box = (await use(id).locator('.subs-reset').boundingBox())!;
         assert.ok(box.x >= 0 && box.x + box.width <= 390, `${id}: the reset is on screen`);
