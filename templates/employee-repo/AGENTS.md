@@ -15,17 +15,20 @@ routine changes directly.
    serves one of your goals is filed with `--goal <id>`. The team's strategy summary and active bets arrive in
    your context under "Team strategy" once the owner has published one; `tico strategy show` has the full page.
 2. Read the task and its conversation with `tico task show <task-id>`.
-3. Check `memory/learnings.md` and the relevant playbook.
+3. In a new session or after a compaction, check `memory/learnings.md` and the relevant playbook. A resumed turn
+   already has them.
 
 ## Ending a run
-1. If anything went wrong or took a detour this run, add the smallest scaffold that prevents
+1. Leave a short progress note on the task: what moved and the next step.
+2. Leave the task in one of the six states under "Tasks" below.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+1. If anything went wrong or took a detour on the task, add the smallest scaffold that prevents
    that exact mistake (playbook line, `software/` check, or a proposed Tico rule). See Tico
    `policies/shared-rules.md`, "Self-improvement".
 2. Add what you learned about the domain to `knowledge/` (see its README).
-3. Note progress and the next step on the task.
-4. Record durable learnings and decisions in `memory/`.
-5. Commit this repo.
-6. Leave the task in one of the six states under "Tasks" below.
+3. Record durable learnings and decisions in `memory/`.
+4. Commit this repo.
 
 ## Talking to Tico (`tico`)
 Tico is one set of tools with two doors. In a shell it is the `tico` command; as MCP tools it

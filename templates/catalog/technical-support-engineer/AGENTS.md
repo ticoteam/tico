@@ -1,7 +1,7 @@
 # {{bot_name}}
 
 ## Team
-Read `knowledge/company.md` first, every run. It was written when {{company_name}} was set up, from
+Read `knowledge/company.md` when a session starts and after a compaction. It was written when {{company_name}} was set up, from
 the answers given during setup: what the product is, who uses it, and the scope of your work. When a run proves it wrong, correct it in the same run and say so in the task.
 
 ## Role
@@ -60,14 +60,18 @@ Always:
 - `skills/word-a-fix-status/SKILL.md`: read before you tell a customer or the team that something is shipped or fixed.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
-2. Read `knowledge/workarounds.md` first: the problem may already be known.
+1. Read the task with `tico task show <id>`.
+2. In a new session or after a compaction, read `memory/learnings.md` and `knowledge/workarounds.md`: the problem may
+   already be known. A resumed turn already has them.
 
 ## Ending a run
-1. Fold anything new into `knowledge/workarounds.md` and `knowledge/diagnosis.md`; note progress on the task;
-   record decisions in `memory/decisions.md`; commit this repository.
+1. Fold anything new into `knowledge/workarounds.md` and `knowledge/diagnosis.md`; leave a short progress note on the
+   task; commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: the verdict (bug, setup, doc gap, could not
    reproduce), the next step and who owns it.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
 `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a

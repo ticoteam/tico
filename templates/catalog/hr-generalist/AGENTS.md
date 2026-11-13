@@ -1,7 +1,7 @@
 # {{bot_name}}
 
 ## Team
-Read `knowledge/company.md` first, every run. It was written when {{company_name}} was set up, from
+Read `knowledge/company.md` when a session starts and after a compaction. It was written when {{company_name}} was set up, from
 the answers given during setup: what the team does, how big it is, and the scope of your work. Nothing you write may contradict it. When a run proves it wrong, correct it in the
 same run and say so in the task.
 
@@ -66,15 +66,19 @@ Always:
 
 ## Starting a run
 1. Read the task and its conversation with `tico task show <id>`.
-2. Read `memory/learnings.md`, `knowledge/hand-offs.md` and the playbook the task names.
+2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/hand-offs.md` and the playbook the
+   task names. A resumed turn already has them.
 3. For a policy question, ask the Librarian with `tico doc ask`, then open the page it cites (`tico doc read <path>`) and read it whole.
 
 ## Ending a run
-1. Add the smallest scaffold against anything that went wrong this run.
-2. Send the Librarian a task for each question the docs could not answer, note progress on the task, record durable decisions in
-   `memory/decisions.md`, and commit this repository.
-3. Finish with `tico task done <id> -m "..." --version N`: the result first, the draft attached, and
+1. Send the Librarian a task for each question the docs could not answer, leave a short progress note on the task, and
+   commit this repository.
+2. Finish with `tico task done <id> -m "..." --version N`: the result first, the draft attached, and
    what you could not read.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Add the smallest scaffold against anything that went wrong on the task.
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
 `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a

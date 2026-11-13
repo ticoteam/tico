@@ -321,7 +321,8 @@ Every run is the same shape, and `AGENTS.md` should say so plainly:
 
 1. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
    the thread is the context, and the task's notes say where the last run stopped.
-2. **Check `memory/learnings.md` and the playbook the task names** before touching anything.
+2. **Check `memory/learnings.md` and the playbook the task names** when the session is new or was compacted. A
+   resumed turn already has them in context: reading them again on every run costs a full context of tokens each time.
 3. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 4. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENTS.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
@@ -396,14 +397,17 @@ See the shared approvals policy. In addition:
 
 ## Starting a run
 1. Read the task and its conversation.
-2. Read `memory/learnings.md` and the playbook the task names.
-3. Skim `knowledge/README.md` so you update the right file, not a new one.
+2. In a new session or after a compaction, read `memory/learnings.md`, the playbook the task names and
+   `knowledge/README.md`. A resumed turn already has them.
 
 ## Ending a run
-1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/`; that is the work, not an afterthought.
-3. Note progress on the task, record durable decisions in `memory/decisions.md`, commit.
-4. Mark the task done with the result in the first line. The requester closes it.
+1. Update `knowledge/`; that is the work, not an afterthought.
+2. Leave a short progress note on the task and commit.
+3. Mark the task done with the result in the first line. The requester closes it.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Add the smallest scaffold against anything that went wrong on the task.
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 ## Working style              <- three to six habits, one or two sentences each
 - Quote the source. A claim you cannot quote goes in `open-questions.md`.

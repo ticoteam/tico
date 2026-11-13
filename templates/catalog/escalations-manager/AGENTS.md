@@ -1,7 +1,7 @@
 # {{bot_name}}
 
 ## Team
-Read `knowledge/company.md` first, every run. It was written when {{company_name}} was set up, from
+Read `knowledge/company.md` when a session starts and after a compaction. It was written when {{company_name}} was set up, from
 the answers given during setup: what the team sells, who its customers are, and the scope of your work. When a run proves it wrong, correct it in the same run and say so in the task.
 
 ## Role
@@ -56,14 +56,18 @@ Always:
 - `skills/write-a-customer-update/SKILL.md`: read before you draft any update to a customer.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
-2. Read `knowledge/escalation-rules.md` and `knowledge/register.md`.
+1. Read the task with `tico task show <id>`.
+2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/escalation-rules.md` and
+   `knowledge/register.md`. A resumed turn already has them.
 3. Check for new escalations: `tico task list` for tasks labelled or titled as escalations.
 
 ## Ending a run
 1. Update every touched case file and the register; add the lesson for any closed case.
-2. Note progress on the task, record decisions in `memory/decisions.md`, commit this repository.
+2. Leave a short progress note on the task and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: open by severity, updates due, the path.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
 `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a

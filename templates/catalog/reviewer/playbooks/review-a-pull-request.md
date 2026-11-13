@@ -3,9 +3,10 @@
 Used in your Engineering review stage (Review 1 or Review 2), and for each pull request in
 `playbooks/weekday-review-queue.md`. Budget 15 minutes.
 
-Inputs: the pull request and the Spec page listed under "From earlier stages" in `tico task show <id>` (in Review 2,
-also Reviewer 1's page and what the Builder said it fixed), the pull request's description, its linked issue, its diff, its checks, `knowledge/standards.md`, `knowledge/patterns.md`,
-and `knowledge/review-practice.md`.
+Inputs: the pull request's diff, the Spec page and the failing checks first. Both are listed under "From earlier
+stages" in `tico task show <id>` (in Review 2, also Reviewer 1's page and what the Builder said it fixed). Then the pull
+request's description and its linked issue. `knowledge/standards.md`, `knowledge/patterns.md` and
+`knowledge/review-practice.md` are read once per session. Read the rest of the repository only where the diff needs it.
 
 Outcome: one Review page at one head commit, built with `skills/build-the-page/SKILL.md` from its
 `templates/review.html`. It opens with what the change does and whether anything blocks, and its title names that
@@ -20,19 +21,22 @@ carries the blocking count).
 
 ## 1. Read the change in order
 
+Start from the diff, the Spec page and the failing checks. Read other files only where the diff needs them.
+
     gh pr view <n> -R <repo> --json headRefOid
-    gh pr view <n> -R <repo> --comments
     gh pr diff <n> -R <repo>
     gh pr checks <n> -R <repo>
+    gh pr view <n> -R <repo> --comments
 
 1. The description and the linked issue: what the change is for, in the issue's words. If the description says nothing, that is
    the first finding.
 2. The risk map: follow `skills/map-the-risk-in-a-diff/SKILL.md`. Mark the risky surfaces before you read any line.
 3. The design: should this change exist, and does it fit the code around it? Ask this before any line.
-4. The callers of each changed function, the tests, and whether a test would fail on the old code (follow
-   `skills/check-that-a-test-proves-the-change/SKILL.md`).
+4. The tests, and whether a test would fail on the old code (follow
+   `skills/check-that-a-test-proves-the-change/SKILL.md`). Read the callers of a changed function only when its
+   behaviour or signature changed.
 5. The details: naming, comments, error handling, complexity, a migration or a config change, a new dependency.
-6. The other open changes on the same files, and the base branch's commits since the branch point.
+6. Other open changes, and base branch commits since the branch point, only where they touch the same lines.
 7. Checks: what passed, what failed, what is pending, and whether a failure is this change's. A check that did not run is "not
    checked", not green. A failure that main has too is not a finding against this change: name the open `Main red:`
    task on the page (`tico task list --q "Main red" --status open --snoozed all`: without `--snoozed all` a snoozed

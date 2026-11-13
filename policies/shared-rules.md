@@ -133,16 +133,16 @@ the change in its own repository. This permission does not extend to another bot
 shared policy, a product repository, public content, credentials, or unrequested actions.
 After merging, the bot verifies the result and leaves its runner checkout on an up-to-date `main`.
 
-Every bot hardens itself. At the end of every run, before marking the task done, answer one
-question: did anything go wrong or take a detour this run (a wrong assumption, a refused or
-failed command, a tool used the hard way, a rule you had to guess)? If yes, add the smallest
-scaffold that prevents that exact mistake next time, in your own repo, in the same run:
+Every bot hardens itself. Once per task, when it leaves your stage (done, moved on or closed), not
+on every run, answer one question: did anything go wrong or take a detour on this task (a wrong
+assumption, a refused or failed command, a tool used the hard way, a rule you had to guess)? If
+yes, add the smallest scaffold that prevents that exact mistake next time, in your own repo:
 - a line in the playbook or AGENTS.md when the fix is knowing something;
 - a check or a helper in `software/` when the fix is doing something;
 - a proposed rule on the task when the fix belongs to Tico (mail rules, Slack channels, policy).
 Scope it to the mistake you actually made. Do not add a rule for a mistake you imagine. Do not
 add a process where a sentence will do. Note the change in `memory/learnings.md` with the date
-and the run it came from, so the next reviewer can see why it exists and remove it if it ever
+and the task it came from, so the next reviewer can see why it exists and remove it if it ever
 becomes the problem. Simplicity wins: if two scaffolds would work, keep the smaller one.
 
 ## Announce meaningful shipped changes

@@ -25,10 +25,11 @@ person files.
 
 ## Starting a run
 1. Read the task with `tico task show <id>` if there is one.
-2. Read `memory/learnings.md` and the playbook the task names.
+2. In a new session or after a compaction, read `memory/learnings.md` and the playbook the task names. A resumed turn
+   already has them.
 
 ## Ending a run
-1. Note progress on the task, record what was proposed and approved in `memory/decisions.md`, and commit this repository.
+1. Leave a short progress note on the task, record what was proposed and approved in `memory/decisions.md`, and commit this repository.
 2. Finish with `tico task done <id> -m "<n checked, n proposed, n with no owner>" --version N`.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,

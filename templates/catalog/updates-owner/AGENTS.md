@@ -37,11 +37,15 @@ edition from it, approves it and publishes it. Say that on the task, so the owne
 
 ## Starting a run
 1. Read the task with `tico task show <id>` if there is one.
-2. Read `memory/learnings.md` and the playbook the task names.
+2. In a new session or after a compaction, read `memory/learnings.md` and the playbook the task names. A resumed turn
+   already has them.
 
 ## Ending a run
-1. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
+1. Leave a short progress note on the task and commit this repository.
 2. Finish with `tico task done <id> -m "<headline, the draft's path, what teammates did not report>" --version N`.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
 `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
