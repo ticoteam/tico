@@ -32,7 +32,7 @@ async function call<T = Record<string, unknown>>(hub: RealHubSupport.Hub, token:
 // The reads a view may offer, by what the control is: moving between places, opening, searching, filtering, closing
 // and showing more. Anything else visible and enabled is a write a screenshot must not offer.
 const READS = [
-  '#side a', '#side button', '#account', '#side-search', '#nav-toggle',
+  '#side a', '#side button', '#mobile-nav button', '#account', '#side-search', '#nav-toggle',
   '#task-scope', '#task-q', '#task-filter', '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x',
   '#task-archives button',
   '.tl-mi', '#task-more button', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
@@ -162,6 +162,12 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await go(page, `#/bot/${BOT}`);
     await page.locator('#main .view-only-line').waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'a thread offers nothing that writes');
+    // A phone: the bottom bar moves between places (Team, Assistant, More), so none of it is greyed out.
+    await page.setViewportSize({width: 390, height: 844});
+    await go(page, '#/tasks');
+    await page.locator('#task-body .tk-row').first().waitFor({timeout: t(15000)});
+    assert.deepEqual(await page.locator('#mobile-nav button:visible').evaluateAll(bs => bs.filter(b => (b as HTMLButtonElement).disabled).map(b => b.id)), [], 'the phone bar is all reads');
+    assert.deepEqual(await writesShown(page), [], 'Tasks on a phone offers nothing that writes');
     assert.deepEqual(writes, [], 'the view sent no write');
     await context.close();
 

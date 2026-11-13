@@ -19,7 +19,7 @@ const VIEW_HIDDEN = [
     ui/tests/app-view-read-only.cts keeps its own list on purpose: the test checks this one rather than reading it, so
     a write added here by mistake fails the test. Do not make one list from the other. */
 const VIEW_READS = [
-  '#side a', '#side button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
+  '#side a', '#side button', '#mobile-nav button', '#org-fan a', '#org-fan button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
   '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x', '#task-archives button', '.tl-mi',
   '.tl-chip button', '#task-more button', '.tk-row', '[data-task]',
   '[data-need]', '[data-reload]', '[data-dash-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
