@@ -101,8 +101,12 @@ def test_keys_that_are_emails_or_phone_numbers_are_refused_without_showing_a_val
         refused = load(api, rows, expected=422)["error"]
         assert refused["rule"] == "personal_key" and "email addresses or phone numbers" in refused["detail"]
         assert key not in refused["detail"] and "row 7" in refused["detail"]
-    # A database id of digits is a key, not a phone number.
-    assert load(api, [{**customer(1, "2026-09-01"), "customer_key": "1004217"}])["customers"] == 1
+    # A database id of digits, or with one dash, is a key, not a phone number.
+    for key in ("1004217", "1234-5678"):
+        assert load(api, [{**customer(1, "2026-09-01"), "customer_key": key}])["customers"] == 1
+    assert load(api, [{**customer(1, "2026-09-01"), "customer_key": "415-555-0134"}], expected=422)["error"][
+        "rule"
+    ] == ("personal_key")
 
 
 def test_a_label_column_with_a_value_per_row_is_refused_as_an_identifier(api):  # AC-2b
@@ -406,3 +410,20 @@ def test_pure_parse_reads_human_headers_and_refuses_an_empty_file():
     with pytest.raises(Exception) as refused:
         GC.parse_csv("\n\n")
     assert "no header" in str(refused.value)
+
+
+def test_weekly_cohorts_asked_for_by_month_hold_each_whole_week(api):  # AC-10 with a month (Review 1)
+    channel(api)
+    # 5 customers on Monday 31 August and 30 across September: the week of 31 August spans both months.
+    rows = [customer(n, "2026-08-31") for n in range(5)] + september()
+    load(api, rows)
+    by_week = cohort(get(api, "growth/computed?grain=week&week=2026-09-01"), "search-ads", "2026-08-31")
+    in_month = cohort(get(api, "growth/computed?grain=week&month=2026-09"), "search-ads", "2026-08-31")
+    assert in_month["new_customers"] == by_week["new_customers"]
+    assert in_month["new_customers"]["value"] == 5 + sum(1 for r in september() if r["became_customer"] <= "2026-09-06")
+
+
+def test_a_revenue_of_infinity_is_refused_like_any_other_non_number(api):
+    rows = [customer(n, "2026-09-01", revenue="inf" if n == 3 else "40") for n in range(4)]
+    refused = load(api, rows, expected=422)["error"]
+    assert refused["rule"] == "number" and "revenue per month is not a number" in refused["detail"]

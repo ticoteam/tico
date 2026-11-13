@@ -687,7 +687,6 @@
    [
     "tico_growth_economics",
     {
-     "customers": false,
      "operation_id": null
     }
    ]
@@ -956,7 +955,8 @@
  {
   "argv": [
    "growth",
-   "economics",
+   "cohort",
+   "list",
    "--by",
    "segment",
    "--grain",
@@ -965,7 +965,7 @@
   ],
   "tools": [
    [
-    "tico_growth_economics",
+    "tico_growth_cohort_list",
     {
      "by": "segment",
      "customers": false,

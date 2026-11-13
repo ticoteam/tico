@@ -254,7 +254,6 @@ tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep 
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]
                  [--segment LABEL] [--plan LABEL] [--customers] [--json]
-tico growth economics [--month YYYY-MM] [--by ...] [--grain ...]
 tico growth customers load customers.csv | delete
 tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N]
                  [--d30 N] [--d90 N] [--d180 N] [--revenue N] [--margin N]

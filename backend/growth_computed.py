@@ -371,6 +371,10 @@ def computed(
         if month:
             since = date.fromisoformat(month + "-01")
             until = period(since, "month")[2]
+            if grain == "week":
+                # Every week that touches the month, whole: a week cut at the month's edge would count part of its
+                # cohort under a rule that names the whole week.
+                since, until = period(since, "week")[1], period(until, "week")[2]
         if week:
             _, since, until = period(date.fromisoformat(week), "week")
             grain = "week"

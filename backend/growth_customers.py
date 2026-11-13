@@ -30,6 +30,7 @@ Who may: the owner and admins load and delete (people acting on their own click,
 
 import csv
 import io
+import math
 import re
 import sqlite3
 from collections.abc import Callable, Sequence
@@ -56,8 +57,8 @@ LABEL_DISTINCT_MAX = 50
 ROW_NUMBERS_SHOWN = 3
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-# A phone number: an international + prefix, or the punctuation people write numbers with, around 7 to 15 digits. A bare
-# run of digits is a database id far more often than a phone number, so it passes.
+# A phone number: 7 to 15 digits written the way people write them (see _looks_personal). A bare run of digits is a
+# database id far more often than a phone number, so it passes.
 PHONE_CHARS = re.compile(r"^\+?[\d\s().\-/]+$")
 
 # (field, what a person calls it, required). The order is the order help and refusals list them in.
@@ -140,8 +141,11 @@ def _looks_personal(key: str) -> bool:
     if "@" in key and EMAIL.match(key):
         return True
     if PHONE_CHARS.match(key):
+        # A + prefix, a space, brackets or two separators is how people write a phone number; one dash in a run of
+        # digits (1234-5678) is how systems write an id, so it passes.
         digits = sum(ch.isdigit() for ch in key)
-        return 7 <= digits <= 15 and not key.isdigit()
+        written = key.startswith("+") or any(ch in key for ch in " ()") or sum(key.count(ch) for ch in "-./") >= 2
+        return 7 <= digits <= 15 and written
     return False
 
 
@@ -235,7 +239,7 @@ def check(headers: Sequence[Cell], rows: Sequence[Sequence[Cell]], tz: ZoneInfo)
         if revenue not in (None, ""):
             try:
                 amount = float(cast(str | float, revenue))
-                if amount < 0 or amount != amount:
+                if amount < 0 or not math.isfinite(amount):
                     raise ValueError
                 spell.revenue_month = amount
             except (TypeError, ValueError):
