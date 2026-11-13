@@ -4699,7 +4699,7 @@ SCHEMAS = {
             "tasks": items(
                 {
                     "type": "object",
-                    "description": "?bot only: its top 10 tasks by spend, as group=task names them (value and name), "
+                    "description": "?bot only: its top 10 tasks by spend, as group=task names them (value and name), plus runs with no task, "
                     "each with the usage figures and `share`, its part of the bot's spend",
                     "additionalProperties": True,
                 }

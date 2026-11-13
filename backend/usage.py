@@ -523,7 +523,10 @@ def install(app, store, auth, mutate, settings):
                         for r in query(c, task_key(auth.task_sql(c, who)), "", {bot}, first, last, filters)
                     ]
                 )
-                rest = tasks[DETAIL_TASKS:]
+                # Runs with no task keep their own row: the rest line counts tasks only.
+                named = [t for t in tasks if t["value"]]
+                rest = named[DETAIL_TASKS:]
+                tasks = [t for t in tasks if t not in rest]
                 rest_figures = totals([raw(r) for r in rest]) if rest else dict(EMPTY_DAY)
                 models = ranked(
                     [
@@ -540,7 +543,7 @@ def install(app, store, auth, mutate, settings):
                     "totals": total,
                     "daily": series,
                     "routines": routines[:TOP_ROUTINES],
-                    "tasks": tasks[:DETAIL_TASKS],
+                    "tasks": tasks,
                     "tasks_more": {"count": len(rest), **rest_figures},
                     "models": models,
                 }

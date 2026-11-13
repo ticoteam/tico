@@ -75,7 +75,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
         if (q.bot) {
           const days = [], from = new Date(q.from + 'T00:00:00Z'), to = new Date(q.to + 'T00:00:00Z');
           for (let d = from, n = 0; d <= to; d = new Date(+d + 864e5), n++)
-            days.push({day: d.toISOString().slice(0, 10), ...figures(n % 2 ? 2 : 0, 100, 0, 10, n % 3 ? 1 + n : 0, n % 2 ? 0.5 : 0, 5)});
+            days.push({day: d.toISOString().slice(0, 10), ...(n === 3 ? figures(2, 100, 0, 10, null, 0, 5) : figures(n % 2 ? 2 : 0, 100, 0, 10, n % 3 ? 1 + n : 0, n % 2 ? 0.5 : 0, 5))});   // day 3: unpriced runs only
           if (q.bot === 'inbox')   // runs that reported no tokens
             return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', bot: q.bot, name: 'Inbox', totals: figures(3, 0, 0, 0, null), daily: days, routines: [],
                          tasks: [{value: null, name: 'Chats and other runs', ...figures(3, 0, 0, 0, null), share: 0}], tasks_more: {count: 0, ...figures(0, 0, 0, 0, 0)},
@@ -353,6 +353,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     const shortDay = (d: string) => page.evaluate(d => new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'}), d);
     assert.deepEqual(await detail.locator('.use-axis span').allInnerTexts(), [await shortDay(day(6)), await shortDay(day(0))]);
     assert.equal(await detail.locator('.use-col').nth(1).getAttribute('title'), `${await shortDay(day(5))} · $2.50 · 2 runs · 0% from cache`);
+    assert.equal(await detail.locator('.use-col').nth(3).getAttribute('title'), `${await shortDay(day(3))} · — · 2 runs · 0% from cache`, 'a day of unpriced runs has no cost, not $0.00');
     assert.doesNotMatch(await detail.innerText(), /a day at most/);
     assert.match(await support.locator('.use-routines tbody tr').first().innerText(), /Morning triage\s+7\s+\$4\.20/);
     assert.match(await support.locator('.use-routines tbody tr').nth(1).innerText(), /Other runs.*\$3\.40/s);

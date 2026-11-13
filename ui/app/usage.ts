@@ -417,7 +417,7 @@ function useDetailHtml(data: UseData): string {
     <div class="use-plot"><span class="use-top tnum">${useMoney(peak)}</span>
       <div class="use-chart" role="img" aria-label="API-equivalent cost per day, ${esc(useShortDay(days[0]!.day))} to ${esc(useShortDay(days[days.length - 1]!.day))}, at most ${esc(useMoney(peak))}">${days.map(d => {
         const v = useSpend(d), r = useCacheRate(d);
-        const tip = `${useShortDay(d.day)} · ${useMoney(useEquiv(d) ?? 0)} · ${useRuns(d.runs)}${r == null ? '' : ` · ${usePct(r)} from cache`}`;
+        const tip = `${useShortDay(d.day)} · ${useMoney(useEquiv(d))} · ${useRuns(d.runs)}${r == null ? '' : ` · ${usePct(r)} from cache`}`;
         return `<span class="use-col" title="${esc(tip)}" data-day="${esc(d.day)}">${v && peak ? `<i class="use-api" style="height:${(100 * v / peak).toFixed(1)}%"></i>` : ''}</span>`;
       }).join('')}</div></div>
     <div class="use-axis"><span>${esc(useShortDay(days[0]!.day))}</span><span>${esc(useShortDay(days[days.length - 1]!.day))}</span></div></section>`;

@@ -45,7 +45,7 @@ Click a bot on the Usage page to see what explains its spend, under the page's r
   whole percent. A dash when no input tokens were reported. A runtime that counts cache reads differently (or not at all)
   reads lower.
 - **Tasks**: the bot's top 10 tasks by cost, each with its runs, tokens, cache rate, cost and share of the bot's cost, then
-  how many more and what they cost. Runs are grouped by task title, so a routine's runs add up on one row; a private
+  how many more and what they cost. Runs with no task always keep their own row. Runs are grouped by task title, so a routine's runs add up on one row; a private
   task reads "A private task", one you can't open "A task you can't open", and runs with no task "Chats and other runs".
 - **Models**: every model the bot used, with the same columns; a model with no list price shows a dash for cost.
 - **Cost per day**, only when the range has two days or more; hover a column for its cost, runs and cache rate.

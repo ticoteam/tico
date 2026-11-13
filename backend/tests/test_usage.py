@@ -253,14 +253,14 @@ def test_a_bots_detail_lists_its_top_tasks_with_the_rest_summed_and_every_model_
             )
     got = usage(api, bot="ops")
     tasks, more, total = got["tasks"], got["tasks_more"], got["totals"]
-    assert len(tasks) == 10
+    assert len(tasks) == 11  # ten tasks and the runs with none
     assert [t["name"] for t in tasks[:3]] == ["Job 11", "Job 09", "Job 07"]
     spends = [(t["est_cost_usd"] or 0) + t["subscription_equiv_usd"] for t in tasks]
     assert spends == sorted(spends, reverse=True)
     assert "Board deck" not in json.dumps(got) and "A private task" in [t["name"] for t in tasks]
     assert "Chats and other runs" in [t["name"] for t in tasks] and all("share" in t for t in tasks)
     # The 10 rows and the rest add up to the bot's figures.
-    assert more["count"] == 4
+    assert more["count"] == 3
     assert sum(t["runs"] for t in tasks) + more["runs"] == total["runs"]
     assert sum(t["cached_tokens"] for t in tasks) + more["cached_tokens"] == total["cached_tokens"]
     whole = (total["est_cost_usd"] or 0) + total["subscription_equiv_usd"]
@@ -276,6 +276,13 @@ def test_a_bots_detail_lists_its_top_tasks_with_the_rest_summed_and_every_model_
     only = usage(api, bot="ops", model="mystery-model")
     assert {m["value"] for m in only["models"]} == {"mystery-model"}
     assert sum(t["runs"] for t in only["tasks"]) + only["tasks_more"]["runs"] == only["totals"]["runs"] == 6
+    # Runs with no task are never counted as "more tasks": they keep their own row even when they cost least.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET est_cost_usd=0, billing='api' WHERE bot_id='ops' AND task_id IS NULL")
+    cheap = usage(api, bot="ops")
+    assert "Chats and other runs" in [t["name"] for t in cheap["tasks"]]
+    assert cheap["tasks_more"]["count"] == 3 and len(cheap["tasks"]) == 11
+    assert sum(t["runs"] for t in cheap["tasks"]) + cheap["tasks_more"]["runs"] == cheap["totals"]["runs"]
     # Ten tasks or fewer: nothing more.
     assert usage(api, bot="cpo")["tasks_more"] == {**usage(api, bot="cpo")["tasks_more"], "count": 0, "runs": 0}
 
