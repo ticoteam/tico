@@ -14,6 +14,7 @@
 .tk-mark-working::before{content:"";width:10px;height:10px;border:2px solid var(--run-bg);border-top-color:var(--run);border-radius:50%;animation:tk-turn .9s linear infinite}
 .tk-mark-person{border-radius:50%;background:var(--wait);color:var(--bg);font-size:10px;font-weight:700;line-height:1}
 .tk-mark-cant::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--fail)}
+.tk-mark-pick::before{content:"";width:6px;height:6px;border:1.5px solid var(--muted);border-radius:50%}
 @keyframes tk-turn{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.tk-mark-working::before{animation:none}}
 

@@ -5,14 +5,17 @@
    you point at a row. */
 'use strict';
 
-/** working: a bot is at it (spinner). person: it needs a person (amber "!"). cant: it can't run (red dot). '' is no
-    mark: queued, checks running, waiting on a task or a full stage, snoozed, done or closed. */
-type TaskMarkKind = 'working' | 'person' | 'cant' | '';
+/** working: a bot is at it (spinner). person: it needs a person (amber "!"). cant: it can't run (red dot). pick: it
+    waits for a free bot of a stage's "One of several" (hollow ring; its label is the line, "Waiting for a free
+    Reviewer"). '' is no mark: queued, checks running, waiting on a task or a full stage, snoozed, done or closed. */
+type TaskMarkKind = 'working' | 'person' | 'cant' | 'pick' | '';
 function taskMark(t: TaskAny | null | undefined): TaskMarkKind {
   if (!t || t.status !== 'open') return '';
-  const state = t.turn?.state;
+  // A string: `pick` (a stage's "One of several" has nobody free) is newer than some readers of the wait's type.
+  const state: string | undefined = t.turn?.state;
   if (state === 'person') return 'person';
   if (state === 'paused') return 'cant';
+  if (state === 'pick') return 'pick';
   // The spinner only while a run is going (`turn.running`); a bot's turn between runs has no mark.
   if (state === 'bot' && (t.turn as {running?: boolean} | null)?.running) return 'working';
   return '';
@@ -22,7 +25,8 @@ const TASK_MARK_TIP: Record<string, string> = {working: 'Working', person: 'Need
 function taskMarkHTML(t: TaskAny | null | undefined, {space = true}: {space?: boolean} = {}): string {
   const kind = taskMark(t);
   if (!kind) return space ? '<span class="tk-mark" aria-hidden="true"></span>' : '';
-  return `<span class="tk-mark tk-mark-${kind}" role="img" aria-label="${TASK_MARK_TIP[kind]}">${kind === 'person' ? '!' : ''}</span>`;
+  const label = kind === 'pick' ? t?.turn?.line || 'Waiting for a free bot' : TASK_MARK_TIP[kind];
+  return `<span class="tk-mark tk-mark-${kind}" role="img" aria-label="${esc(label)}">${kind === 'person' ? '!' : ''}</span>`;
 }
 const taskLate = (t: TaskAny | null | undefined) => !!t && t.status === 'open' && !!t.late;
 const lateTagHTML = (t: TaskAny | null | undefined) => taskLate(t) ? '<span class="tk-late">Late</span>' : '';
