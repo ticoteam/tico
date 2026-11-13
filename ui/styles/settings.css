@@ -142,6 +142,8 @@ p:empty{display:none}
 .mp-seg{display:flex;flex-wrap:wrap;gap:0;min-width:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .mp-seg .mp-opt{flex:1 1 auto;justify-content:center;padding:6px 8px;border-right:1px solid var(--line);text-align:center}
 .mp-seg .mp-opt:last-child{border-right:0}
+/* Harnesses run three to a row, so six make two even rows rather than a lone one under five. */
+[data-choice-harness] .mp-seg .mp-opt{flex:1 1 30%;border-bottom:1px solid var(--line);margin-bottom:-1px}
 .mp-list{display:grid;min-width:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .mp-list .mp-opt{padding:7px 10px;border-bottom:1px solid var(--line)}
 .mp-list .mp-opt:last-child{border-bottom:0}

@@ -66,7 +66,8 @@ const settingsModelShort = (id: string) => {
   const name = words || settingsModelName(id);
   return name.charAt(0).toUpperCase() + name.slice(1);
 };
-const settingsHarnessShort = (id: string) => (settingsHarnessName(id) || id).replace(/\s*\(.*\)$/, '');
+// "Claude Code", "Antigravity", "Pi": the catalog's name without its provider, first letter raised (some are lower case).
+const settingsHarnessShort = (id: string) => { const name = (settingsHarnessName(id) || id).replace(/\s*\(.*\)$/, ''); return name.charAt(0).toUpperCase() + name.slice(1); };
 
 // What a box's pick reads as: `short` on the closed button ("Opus 5.5 MED 400K", "Same as bot 150K") and `long` for
 // its tooltip and accessible name ("Claude Code, opus 5.5, medium effort, compacts at 400k").
