@@ -596,3 +596,16 @@ def test_the_release_check_rides_on_the_worker_at_most_every_10_seconds(monkeypa
         worker.pass_once()
     assert calls == [0.0, 10.0, 20.0]
     assert telemetry.seen == [("scheduler", "RuntimeError")], "a failure is captured; the next pass tries again"
+
+
+def test_a_worker_whose_thread_died_hands_the_github_steps_back_to_the_beat(api, fake):
+    ran, _ = fake
+    scheduler = scheduler_of(api)
+    worker = outside_of(api, scheduler).start()
+    beat(api, scheduler, AT)
+    assert not set(OUTSIDE) & set(ran), "a live worker takes them"
+    worker.halt(5)  # the thread ends, as a crash outside a pass would end it
+    assert not worker.alive()
+    ran.clear()
+    beat(api, scheduler, AT + timedelta(minutes=10))
+    assert [k for k in ran if k in OUTSIDE] == OUTSIDE, "the beat runs them again, in its order"

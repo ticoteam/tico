@@ -477,11 +477,13 @@ class Ran:
 
 def _lane(ctx: Context, outside: bool) -> list[Step]:
     """The steps one pass runs. The beat: every step, but the outside ones while the server's `Outside` worker runs
-    them. The worker's pass (`outside`): only those."""
-    worker = getattr(ctx.scheduler, "outside", None)
+    them (a worker whose thread died leaves them to the beat again, so they never stop unnoticed). The worker's pass
+    (`outside`): only those."""
     if outside:
         return [s for s in STEPS if s.outside]
-    return [s for s in STEPS if not (s.outside and worker is not None)]
+    worker: Outside | None = getattr(ctx.scheduler, "outside", None)
+    taken = worker is not None and worker.alive()
+    return [s for s in STEPS if not (s.outside and taken)]
 
 
 def _run(ctx: Context, step: Step) -> Ran:
@@ -952,6 +954,7 @@ class Outside:
         self._failures: list[dict[str, str]] = []
         self._also_at: float | None = None
         self.thread: threading.Thread | None = None
+        # Read by tests only, written without the lock: never base a decision on them.
         self.passes = 0
         self.running = False
 
@@ -968,6 +971,11 @@ class Outside:
 
     def is_set(self) -> bool:
         return self.stop.is_set() or bool(self.stopping and self.stopping())
+
+    def alive(self) -> bool:
+        """Whether it takes the outside steps from the beat: not started (a test drives `pass_once`), or its thread
+        still runs. A thread that died hands them back to the beat, which runs them inline as before."""
+        return self.thread is None or self.thread.is_alive()
 
     def pass_once(self) -> dict[str, list[str]]:
         """One pass, on the calling thread (the worker's own, or a test's)."""
