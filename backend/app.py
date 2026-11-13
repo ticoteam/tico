@@ -853,6 +853,9 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A file source's signed address (backend/growth.py): its HMAC signature is the right to post.
+            if request.url.path.startswith("/api/v2/growth/in/") and request.method == "POST":
+                return await call_next(request)
             # A listening's push address carries its own token (backend/listening.py).
             if request.url.path.startswith(LISTENING_PUSH_PATH) and request.method == "POST":
                 return await call_next(request)

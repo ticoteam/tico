@@ -1193,7 +1193,7 @@ def _close_idle(conns):
 
 
 # Secrets an answer shows once: never kept with the idempotency record, so a replay answers without them.
-SHOWN_ONCE = ("requester_token", "push_addresses", "push_address")
+SHOWN_ONCE = ("requester_token", "push_addresses", "push_address", "signing_secret")
 
 
 class Store:
