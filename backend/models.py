@@ -376,6 +376,9 @@ class TaskAsk(Contract):
     why: Annotated[str, Field(max_length=200)] | None = None
     details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
     recommend: Annotated[str, Field(max_length=60)] | None = None
+    # A short title the decision view shows as the ask's heading, with `line` once under it. Optional: an ask without
+    # one is headed by its line.
+    title: Annotated[str, Field(max_length=60)] | None = None
     version: Version | None = None
 
 

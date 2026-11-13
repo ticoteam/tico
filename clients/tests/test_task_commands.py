@@ -420,6 +420,27 @@ def test_a_bots_question_to_a_person_sends_its_why_each_choice_with_what_happens
         hubtools.task_ask(Recorder(), {**args, "choices": ["A", "B"]})
 
 
+def test_an_asks_short_title_is_sent_and_an_ask_without_one_sends_none():
+    """`tico task ask ... --title "<at most 60 characters>"`: the decision view's heading (task #390)."""
+    argv = ["task", "ask", "T1", "Which tone should the launch note take?", "--to", "chris", "--version", "3"]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, "--title", "Launch note tone"])).items()}
+    args = {k: v for k, v in args.items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, args)
+    [(_, _, body)] = api.writes()
+    assert body["title"] == "Launch note tone"
+    plain = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, plain)
+    [(_, _, body)] = api.writes()
+    assert "title" not in body, "an ask without a title sends none, as older clients do"
+    bound = {**plain, "kind": "ok", "subject": "hq_reply:t-1", "content": {"text": "hi"}, "title": "Reply"}
+    api = Recorder()
+    with pytest.raises(ValueError, match="title"):
+        hubtools.task_ask(api, bound)
+    assert api.calls == [], "an OK bound to a subject has no title: refused, not dropped"
+
+
 TASK = {
     "id": "t_9f3a",
     "number": 214,

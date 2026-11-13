@@ -502,7 +502,7 @@ def _own_ask(api, task_id, requirement=None):
 @tool(
     "tico_task_ask",
     "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
-    "wakes you once; asking again replaces your ask. A rule may refuse it: act on the rule. `withdraw` takes it back.",
+    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
@@ -527,6 +527,7 @@ def _own_ask(api, task_id, requirement=None):
             "description": "Instead of choices",
         },
         "recommend": _s("The choice you recommend", maxLength=60),
+        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
@@ -534,11 +535,11 @@ def _own_ask(api, task_id, requirement=None):
             "description": "What they look at, shown with the ask",
         },
         "subject": _s(
-            "An OK bound to what you will do, <kind>:<id> (budget_raise:launch-video), covering exactly `content`; "
+            "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
             "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
+        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
         "requirement": _s("With withdraw: the ask's requirement id, if several"),
         "why": _s("Why it matters (with withdraw: why)"),
         "version": VERSION,
@@ -558,11 +559,13 @@ def task_ask(api, args):
     if args.get("subject"):
         if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
             raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
+        if args.get("title"):
+            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show", "why", "recommend"):
+    for field in ("kind", "choices", "show", "why", "recommend", "title"):
         if args.get(field):
             body[field] = args[field]
     if args.get("choice"):

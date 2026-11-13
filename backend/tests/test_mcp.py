@@ -331,6 +331,7 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
         "choice": ["Yes|The trial runs once.", "No|Nothing runs."],
         "recommend": "Yes",
         "why": "It decides what ships next.",
+        "title": "Vendor trial: run it once?",
     }
     err, refused = call(api, "tico_task_ask", {**ask, "version": version - 1}, token=attempt["token"])
     assert err and refused["error"] == "task_changed" and refused["version"] == version, refused
@@ -340,6 +341,7 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1, "an ask is not a task"
     item = next(i for i in get(api, "needs-you")["items"] if i["kind"] == "ask")
     assert item["line"] == "Run the vendor trial once?"
+    assert item["ask"]["title"] == "Vendor trial: run it once?", "the short title reaches Needs you"
     err, out = call(api, "tico_task_ask", {"id": work["id"], "withdraw": True}, token=attempt["token"])
     assert not err, out
     assert not [i for i in get(api, "needs-you")["items"] if i["kind"] == "ask"]

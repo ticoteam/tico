@@ -451,6 +451,7 @@ def register(
             for i, label in enumerate(body.choices or [])
         ]
         return [
+            ("Title", body.title),
             ("Ask", body.line),
             ("Why", body.why),
             ("Choices", "\n".join(choices)),
@@ -537,6 +538,7 @@ def register(
             seen_version=version,
             mover=mover(c, who) or None,
             brief=ask_brief(body),
+            title=(body.title or "").strip() or None,
         )
         if gate and gate.get("late"):
             saved: dict[str, Any] = H.task(c, task_id) or {}
