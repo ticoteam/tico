@@ -162,7 +162,7 @@ function auRunStepDid(rs: AuStepView): string {
     return rule ? `${auCondsText(rule.when, rule.match) || 'rule ' + (n + 1)} → ${auThenWords(rule.then).join(', ')}` : 'rule ' + (n + 1);
   }
   if (rs.type === 'decide') return Object.entries(o).filter(([, v]) => v && typeof v === 'object').map(([q, v]) => auAnswer(q, v as AuJudge).text).join(' · ');
-  if (rs.type === 'llm') return [String(auActorName(step?.as)), o.text ? auFirstLine(o.text).slice(0, 80) : ''].filter(Boolean).join(' · ');
+  if (rs.type === 'llm') return [step?.as ? auActorName(step.as) : '', o.text ? auFirstLine(o.text).slice(0, 80) : ''].filter(Boolean).join(' · ');
   if (rs.type === 'find') return `${o.count ?? auItemCount(o.items)} found`;
   if (rs.type === 'bot_turn') return String(auActorName(step?.bot)) + ' · turn started';
   if (rs.type === 'paths') {

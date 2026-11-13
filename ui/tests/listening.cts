@@ -200,6 +200,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
         ['Read 212', 'Duplicates removed 41', 'Dropped by rules 136', 'Could not score 2', 'Kept 33', 'Sent 2', 'Back to waiting 1', 'Waiting 27']);
       const missedLines = (await page.locator('.au-rx').nth(1).innerText()).split('spend cap · 1 not delivered, back to waiting').length - 1;
       assert.equal(missedLines, 2, tag + ': each stopped step names what it missed, a capped choose step too');
+      assert.ok(!(await page.locator('.au-rx').nth(1).innerText()).includes('undefined'), tag + ': a step no longer in the flow names no one');
 
       // +: a new one is the viewer's, off, 10 a day, with one step that posts what was sent.
       await page.locator('.au-crumb a').click();
