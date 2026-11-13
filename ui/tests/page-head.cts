@@ -2,7 +2,8 @@
 // on every week-one screen, on a real hub as Dana: at 1440x900 the title is the header's first item, 16px/600, at the same
 // left edge on every screen (AC-1); at most one filled button, worded, no "+", 32px, last in the header, and none on Usage,
 // Updates and Learnings (AC-2); every tab is a .ph-tab at 13px with only the current one on --surface2 at 600, and every
-// single-choice filter (.ph-seg) has that look with no shadow (AC-3); at 390x844 the title and the button share a row,
+// single-choice filter (.ph-seg) has that look with no shadow (AC-3); at 390x844 the title and the button share a row
+// (Tasks instead is one row of icons at 390 and 360, the UI Owner's call),
 // tabs are 40px in their own row and nothing scrolls sideways (AC-4); at 1100x800 the header is one row and the button in
 // view (AC-5); Docs', Tools', Meetings' and Updates' ⋯ list what moved there and Escape closes it (AC-6).
 import type * as RealHubSupport from './support/real-hub.cts';
@@ -12,13 +13,14 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
-type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]};
+// `iconRow`: on a phone the header is one dense row of icons with the title kept for screen readers only (Tasks).
+type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean};
 // The week-one table. `button: false` = no filled button allowed; undefined = at most one.
 const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
-  {name: 'Tasks', hash: '#/tasks', button: true},
+  {name: 'Tasks', hash: '#/tasks', button: true, iconRow: true},
   {name: 'Automations', hash: '#/automations', button: true},
   {name: 'Listening', hash: '#/listening', button: true},
   {name: 'Rules', hash: '#/rules', tabs: true},
@@ -93,6 +95,25 @@ function desktopProblems(page: Page, s: Screen) {
   }, s);
 }
 
+// Tasks on a phone: one row (every shown control centred on the scope button's line), the + alone and named "New task",
+// the title only for screen readers, nothing sideways.
+function iconRowProblems(page: Page) {
+  return page.evaluate(() => {
+    const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!;
+    const mid = (el: Element) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
+    const scope = head.querySelector<HTMLElement>('#task-scope')!, line = mid(scope);
+    const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tools > *, :scope > .ph-act .primary')].filter(el => el.getClientRects().length);
+    for (const el of shown) if (Math.abs(mid(el) - line) > 4) bad.push(`${el.id || el.className} is off the one row`);
+    const plus = head.querySelector<HTMLElement>('.ph-act .primary')!, pr = plus.getBoundingClientRect();
+    if (pr.width > 44.5 || pr.right > document.documentElement.clientWidth) bad.push(`+ is ${Math.round(pr.width)}px wide, right edge ${Math.round(pr.right)}`);
+    if ((plus.textContent || '').trim() !== 'New task') bad.push('+ is not named New task');
+    if (head.querySelector<HTMLElement>(':scope > h1.ph-t')!.getBoundingClientRect().width > 1) bad.push('the title shows');
+    const de = document.documentElement;
+    if (de.scrollWidth > de.clientWidth) bad.push(`the page scrolls sideways (${de.scrollWidth} > ${de.clientWidth})`);
+    return bad;
+  });
+}
+
 const titleLeft = (page: Page) => page.evaluate(() =>
   document.querySelector<HTMLElement>('#main header.ph')!.firstElementChild!.getBoundingClientRect().left);
 
@@ -161,6 +182,14 @@ const titleLeft = (page: Page) => page.evaluate(() =>
         await ready(page);
         for (const s of SCREENS) {
           try { await open(page, s); } catch { say(s, '390', ['no header']); continue; }
+          if (s.iconRow) {
+            for (const width of [390, 360]) {
+              await page.setViewportSize({width, height: 844});
+              say(s, String(width), await iconRowProblems(page));
+            }
+            await page.setViewportSize({width: 390, height: 844});
+            continue;
+          }
           say(s, '390', await page.evaluate(() => {
             const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!;
             const h1 = head.querySelector<HTMLElement>(':scope > h1.ph-t')!.getBoundingClientRect();

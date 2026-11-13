@@ -34,6 +34,9 @@
 .tl-ib:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-ib.active{color:var(--ink)}
 .tl-fbadge{position:absolute;top:1px;right:0;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--ink);color:var(--bg);font:600 10px/15px var(--sans);text-align:center}
+/* "New task" is words above a phone; its + shows only there (below) */
+.tl-new-i{display:none}
+.tl-new-i svg{width:14px;height:14px}
 /* the layout pair and the finished views are single-choice filters: .ph-seg (page-head.css) draws them */
 .tl-pair{flex:none}
 .tl-pair button{display:inline-grid;place-items:center;min-width:26px}
@@ -404,7 +407,28 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tasks-pane .tl-search:focus-within{box-shadow:inset 0 0 0 1px var(--focus)}
   .tasks-pane .tl-search input{height:var(--ctl)}
   .tl-ib{width:44px}
-  .tasks-pane .ph-tools .tl-search{flex:1 1 auto}
+  /* Tasks on a phone is one dense row of icons: the scope ▾ at the left, then search, filter, archive, edit, Catch up and
+     +. No title (the bottom bar says Tasks) and no tools row; List/Columns and Manager stay off. */
+  .tasks-pane>.ph{position:relative;flex-wrap:nowrap;gap:2px}
+  .tasks-pane>.ph>.ph-t{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);flex:none}
+  .tasks-pane>.ph>#task-scope{flex:0 1 auto;min-width:0;margin-right:auto;overflow:hidden;text-overflow:ellipsis}
+  .tasks-pane>.ph>.ph-tools{order:0;flex:none;flex-wrap:nowrap;gap:2px}
+  .tasks-pane .ph-tools .tl-search{order:1}
+  .tasks-pane #task-filter{order:2}
+  .tasks-pane #task-archive{order:3}
+  .tasks-pane #task-pipeline-edit{order:4}
+  .tasks-pane #task-play{order:5}
+  #task-manager{display:none!important}
+  /* the search folds to its icon; focused, it opens over the whole row; holding words, its line stays */
+  .tasks-pane .tl-search:not(:focus-within){flex:none;position:relative;width:44px;min-width:0;padding:0;justify-content:center;background:none;box-shadow:none}
+  .tasks-pane .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+  .tasks-pane .tl-search:not(:focus-within) kbd{display:none}
+  .tasks-pane .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+  .tasks-pane .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;max-width:none;background:var(--surface)}
+  /* + alone, 44 px square; "New task" stays its accessible name */
+  .tasks-pane #task-new{display:inline-grid;place-items:center;width:44px;padding:0;margin-left:2px}
+  .tasks-pane #task-new .tl-new-i{display:inline-grid;place-items:center}
+  .tasks-pane #task-new .tl-new-w{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
   .tl-pair.ph-seg>button{min-width:44px;min-height:44px}
   /* a phone shows a pipeline one stage at a time whatever the layout: list or columns changes nothing there */
   #task-layout{display:none!important}
