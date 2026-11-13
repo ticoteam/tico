@@ -243,3 +243,28 @@ def test_the_reads_answer_people_and_refuse_nobody_signed_in(api, path):
     publish(api)
     assert api.get("/api/v2/" + path).status_code in (401, 403)
     assert api.get("/api/v2/" + path, headers=headers("cara-test")).status_code == 200
+
+
+def test_an_install_on_the_skill_page_is_removable_only_with_the_rights_to_add_it(api):
+    publish(api)
+    ops, finance = bot_id(api, "ops"), bot_id(api, "finance")
+    with api.app.state.store.transaction() as c:
+        restrict(c, ops, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
+    for target_type, target_id, policy in (
+        ("Bot", ops, "pinned"),
+        ("Bot", finance, "latest"),
+        ("Human", "cara", "latest"),
+    ):
+        body = {"target_type": target_type, "target_id": target_id, "version_policy": policy}
+        if policy == "pinned":
+            body["pinned_version"] = 1
+        assert api.post("/api/v2/skills/triage/installs", json=body, headers=headers("ana-test")).status_code == 200
+
+    def rows(token):
+        return {
+            i["target"]["id"]: (i["removable"], i["pinned_version"])
+            for i in get(api, "skills/triage/usage", token)["installs"]
+        }
+
+    assert rows("ana-test") == {ops: (True, 1), finance: (True, None), "cara": (True, None)}
+    assert rows("cara-test") == {ops: (False, 1), finance: (True, None), "cara": (True, None)}

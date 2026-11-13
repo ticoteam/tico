@@ -1,10 +1,12 @@
-/* ui/app/skills.ts — Library › Skills (#/library/skills): the company's approved skills, the proposals waiting on an
-   admin, and what is installed for me and the bots I can write. Backend: backend/skills.py (directory, versions,
-   proposals, installs), backend/skill_usage.py (usage, install targets, my installs) and backend/skill_suggestions.py
-   (admins' Remove / Ask to submit suggestions); docs/skills.md.
+/* ui/app/skills.ts — Library › Skills (#/library/skills): one page, no tabs. On top, the proposals waiting for an OK
+   (pending only, hidden when there are none: a decided proposal is history, kept as the skill's versions); then the
+   company's skills, each with who it is on, its version and when it was last used; then an admin's Suggestions and Not
+   in directory. A skill's own page is where it is installed, removed, and its versions and files are read. Backend:
+   backend/skills.py (directory, versions, proposals, installs), backend/skill_usage.py (usage, install targets) and
+   backend/skill_suggestions.py (admins' Remove / Ask to submit suggestions); docs/skills.md.
    Addresses:
-     #/library/skills[?tab=proposals|installed]    the three tabs (Directory is the default)
-     #/library/skills/<name>                       one skill: versions, files, Install, usage
+     #/library/skills                              the list (an old ?tab= shows it too)
+     #/library/skills/<name>                       one skill: versions, files, Install, Remove, usage
      #/library/skills/proposals/<id>               one proposal: screening, diff, Approve / Decline
    The server decides who sees what (admins see who used a skill; anyone else totals and their own rows); this page
    only draws it. Classic script: its globals are shared with the other files under ui/app/. */
@@ -14,12 +16,12 @@
 // reads may be absent or null; a field the page reads only inside a check is optional.
 interface SkillActor { id?: string; type?: string; name?: string | null; }
 interface SkillRef { number: number; }
-interface SkillRow { name: string; description?: string | null; installs_count?: number; latest?: SkillRef | null; }
+interface SkillRow { name: string; description?: string | null; installs_count?: number; latest?: SkillRef | null; on?: SkillActor[]; }
 interface SkillUsageRow { name: string; uses: number; last_used_at?: string | null; }
 interface SkillUsageTotals { uses?: number; people?: number; bots?: number; by_trigger?: Record<string, number>; }
 interface SkillUsageActor extends SkillActor { uses: number; last_used_at?: string | null; }
 interface SkillUsageRecent { actor?: SkillActor | null; requested_by?: SkillActor | null; trigger?: string; used_at?: string; task_id?: string | null; thread_id?: string | null; }
-interface SkillInstallCoverage { target?: SkillActor | null; coverage: string; uses_30d: number; }
+interface SkillInstallCoverage { id?: string; target?: SkillActor | null; coverage: string; uses_30d: number; pinned_version?: number | null; removable?: boolean; }
 interface SkillElsewhere { name: string; uses: number; bots: SkillActor[]; bots_count: number; }
 interface SkillUsage {
   admin?: boolean; totals?: SkillUsageTotals; actors?: SkillUsageActor[]; recent?: SkillUsageRecent[];
@@ -40,11 +42,6 @@ interface SkillFileRow { path: string; content: string; }
 interface SkillVersionRow { number: number; sha256?: string | null; approved_at?: string | null; approved_by_id?: string | null; }
 interface SkillInfo { name: string; description?: string | null; latest?: SkillRef | null; }
 interface SkillDetail { skill: SkillInfo; versions?: SkillVersionRow[]; }
-interface SkillInstallRow {
-  id: string; name: string; target?: SkillActor | null; version_policy?: string; pinned_version?: number | null;
-  update_available?: boolean; latest?: number | null;
-  desired?: { number: number; sha256?: string | null } | null; staged?: { sha256?: string | null } | null;
-}
 interface SkillTargetRef { type?: string; id: string; }
 interface SkillInstallTargets {
   me?: { type?: string; id: string } | null;
@@ -60,10 +57,10 @@ interface SkillProposalDetail {
 interface SkillsPage { run: number; name?: string; days?: number | undefined; }
 
 const SKILLS_ROUTE = '#/library/skills';
-const SKILLS_TABS: [string, string][] = [['', 'Directory'], ['proposals', 'Proposals'], ['installed', 'Installed']];
 const SKILLS_TRIGGERS: [string, string][] = [['model', 'Model'], ['person', 'Person'], ['nested', 'Nested']];
-const SKILLS_SCREEN_CAP = 50;   // proposal rows whose screening risk is read for the list
+const SKILLS_SCREEN_CAP = 50;   // waiting proposals whose screening risk is read for the list
 let SKP: SkillsPage | null = null;                 // {run}: the page on screen, so a slow answer for a page left behind draws nothing
+let SKILLS_Q = '';                                 // the list's search, kept across redraws
 
 const skillsHref = (name: string) => SKILLS_ROUTE + '/' + encodeURIComponent(name);
 const skillsProposalHref = (id: string) => SKILLS_ROUTE + '/proposals/' + encodeURIComponent(id);
@@ -85,12 +82,10 @@ function skillsScreenPill(p: SkillProposal, screen?: SkillScreening | null) {
 }
 const skillsStatusPill = (s: string) => s === 'pending' ? '' : `<span class="pill${s === 'approved' ? ' ok' : ''}" data-sk-status="${esc(s)}">${esc(s.charAt(0).toUpperCase() + s.slice(1))}</span>`;
 
-// ----------------------------------------------------------------- the frame: title, Claude Code, tabs
-function skillsHead(tab: string | null) {
+// ----------------------------------------------------------------- the frame: title, Claude Code
+function skillsHead() {
   return `<header class="tt-head"><h1>Skills</h1><span class="spacer"></span>
-      <button type="button" class="ghost small" data-sk-helper><span class="nav-icon" aria-hidden="true">content_copy</span>Use in my Claude Code</button></header>
-    <nav class="tt-tabs sk-tabs" aria-label="Skills">${SKILLS_TABS.map(([k, label]) =>
-      `<a href="${SKILLS_ROUTE}${k ? '?tab=' + k : ''}" data-sk-tab="${k || 'directory'}"${tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+      <button type="button" class="ghost small" data-sk-helper><span class="nav-icon" aria-hidden="true">content_copy</span>Use in my Claude Code</button></header>`;
 }
 function skillsBindHead(root: HTMLElement) {
   root.querySelector<HTMLElement>('[data-sk-helper]')?.addEventListener('click', skillsHelperDialog);
@@ -129,40 +124,64 @@ const skillsDialogError = (dialog: HTMLDialogElement, e: unknown) => {
   p.textContent = errorMessage(e, String(e)); p.hidden = false;
 };
 
-// ----------------------------------------------------------------- the tabs
-async function pageSkills(tab: string | null) {
+// ----------------------------------------------------------------- the list
+async function pageSkills() {
   const run = (SKP?.run || 0) + 1;
   SKP = {run};
-  $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="${tab || 'directory'}">${skillsHead(tab)}
+  $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="skills">${skillsHead()}
     <div data-sk-body>${skelRows(5)}</div></div>`;
   const root = $('#skills-root');
   skillsBindHead(root);
   const body = root.querySelector('[data-sk-body]');
-  try {
-    if (tab === 'proposals') await skillsProposals(body, run);
-    else if (tab === 'installed') await skillsInstalled(body, run);
-    else await skillsDirectory(body, run);
-  } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); }
+  try { await skillsList(body, run); } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); }
 }
 
-async function skillsDirectory(body: HTMLElement, run: number) {
-  const [list, usage] = await Promise.all([get<{skills?: SkillRow[]}>('/v2/skills', {fresh: true}), get<SkillUsage>('/v2/skills/usage?days=30', {fresh: true})]);
+async function skillsList(body: HTMLElement, run: number) {
+  const [list, usage, waiting] = await Promise.all([get<{skills?: SkillRow[]}>('/v2/skills', {fresh: true}),
+    get<SkillUsage>('/v2/skills/usage?days=30', {fresh: true}),
+    get<{proposals?: SkillProposal[]}>('/v2/skills/proposals', {fresh: true})]);
   // Suggestions are for admins: the usage read says who is one, so a member never asks.
   const ideas: {suggestions?: SkillIdea[]} = usage.admin ? await get<{suggestions?: SkillIdea[]}>('/v2/skills/suggestions', {fresh: true}).catch((): {suggestions?: SkillIdea[]} => ({})) : {};
+  const pending = (waiting.proposals || []).filter(p => p.status === 'pending');
+  // The proposal list has no screening risk: read it for the screened rows (the newest first, capped).
+  const screens: Record<string, SkillScreening | null | undefined> = {};
+  await Promise.all(pending.filter(p => p.screen_status === 'screened').slice(0, SKILLS_SCREEN_CAP).map(p =>
+    get<{screening?: SkillScreening | null}>('/v2/skills/proposals/' + encodeURIComponent(p.id)).then(d => { screens[p.id] = d.screening; }, () => {})));
   if (!skillsLive(run)) return;
   const used = Object.fromEntries((usage.skills || []).map((u): [string, SkillUsageRow] => [u.name, u]));
   const rows = list.skills || [];
-  const table = rows.length ? `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>Version</th><th>Installs</th><th>Uses 30d</th><th>Last used</th></tr></thead>
-    <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}">
-      <td class="sk-name"><a href="${skillsHref(s.name)}"><strong>${esc(s.name)}</strong><span class="muted sk-desc">${esc(s.description || '')}</span></a></td>
+  const table = rows.length ? `<div class="tt-bar"><input type="search" class="tt-q" data-sk-q placeholder="Search" aria-label="Search skills" autocomplete="off" spellcheck="false" value="${esc(SKILLS_Q)}"></div>
+    <table class="tt-list sk-list"><thead><tr><th>Skill</th><th>On</th><th>Version</th><th>Last used</th></tr></thead>
+    <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}" data-sk-find="${esc((s.name + ' ' + (s.description || '')).toLowerCase())}">
+      <td class="sk-name"><a href="${skillsHref(s.name)}"><strong>${esc(s.name)}</strong></a></td>
+      <td class="sk-on" data-sk-on>${skillsOnHTML(s)}</td>
       <td class="sk-ver tnum">${s.latest ? 'v' + s.latest.number : ''}</td>
-      <td class="sk-num tnum" data-label="Installs">${skillsN(s.installs_count)}</td>
-      <td class="sk-num tnum" data-label="Uses 30d" data-sk-uses>${skillsN(u.uses)}</td>
       <td class="sk-when">${u.last_used_at ? agoSpan(u.last_used_at) : '<span class="muted">Never</span>'}</td></tr>`; }).join('')}</tbody></table>`
     : '<div class="empty" data-sk-empty>No skills yet.</div>';
-  body.innerHTML = skillsIdeasHTML(ideas.suggestions || []) + table + skillsElsewhereHTML(usage.popular_elsewhere || []);
+  body.innerHTML = skillsWaitingHTML(pending, screens) + table + skillsIdeasHTML(ideas.suggestions || []) + skillsElsewhereHTML(usage.popular_elsewhere || []);
   skillsRowLinks(body);
   skillsBindIdeas(body, ideas.suggestions || []);
+  const q = body.querySelector<HTMLInputElement>('[data-sk-q]');
+  if (q) { q.oninput = () => { SKILLS_Q = q.value; skillsFilter(body); }; skillsFilter(body); }
+}
+// Who a skill is on: the first few the server names (the ones the caller may see), then +N for the rest of its installs.
+function skillsOnHTML(s: SkillRow) {
+  const on = s.on || [], more = Math.max(0, (s.installs_count || 0) - on.length);
+  return esc(on.map(skillsWho).join(', ')) + (more ? `${on.length ? ' ' : ''}<span class="muted">+${more}</span>` : '');
+}
+function skillsFilter(body: HTMLElement) {
+  const q = SKILLS_Q.trim().toLowerCase();
+  body.querySelectorAll<HTMLElement>('tr[data-sk-row]').forEach(tr => { tr.hidden = !!q && !(tr.dataset.skFind || '').includes(q); });
+}
+// The proposals waiting for an OK; nothing at all when none are.
+function skillsWaitingHTML(pending: SkillProposal[], screens: Record<string, SkillScreening | null | undefined>) {
+  if (!pending.length) return '';
+  return `<section class="card sk-waiting" data-sk-waiting><header><h2>Waiting for OK</h2></header>
+    <table class="tt-who-table">${pending.map(p => `<tr data-sk-proposal="${esc(p.id)}" data-sk-status="pending">
+      <td class="tt-who-name"><a href="${skillsProposalHref(p.id)}"><strong>${esc(p.name)}</strong></a></td>
+      <td class="sk-screen">${skillsScreenPill(p, screens[p.id])}</td>
+      <td class="tt-used muted sk-by">${esc(skillsWho(p.proposed_by))}</td>
+      <td class="tt-used muted sk-when">${agoSpan(p.created_at)}</td></tr>`).join('')}</table></section>`;
 }
 // Remove / Ask to submit suggestions from the maintenance run (backend/skill_suggestions.py). Admins only.
 function skillsIdeasHTML(ideas: SkillIdea[]) {
@@ -214,7 +233,7 @@ function skillsElsewhereHTML(rows: SkillElsewhere[]) {
 }
 // A table's whole row opens its first link.
 function skillsRowLinks(box: HTMLElement) {
-  // Every table's body: Directory has Suggestions above its own (rows without a link do nothing).
+  // Every table's body: Waiting for OK, the skills, Suggestions (rows without a link do nothing).
   box.querySelectorAll('tbody').forEach(tbody => { tbody.onclick = ev => {
     const target = eventElement(ev);
     if (target?.closest('a, button, input, select')) return;
@@ -223,53 +242,9 @@ function skillsRowLinks(box: HTMLElement) {
   }; });
 }
 
-async function skillsProposals(body: HTMLElement, run: number) {
-  const {proposals = []} = await get<{proposals?: SkillProposal[]}>('/v2/skills/proposals', {fresh: true});
-  if (!skillsLive(run)) return;
-  if (!proposals.length) { body.innerHTML = '<div class="empty" data-sk-empty>No proposals.</div>'; return; }
-  // The list has no screening risk: read it for the screened rows (the newest first, capped).
-  const screens: Record<string, SkillScreening | null | undefined> = {};
-  await Promise.all(proposals.filter(p => p.screen_status === 'screened').slice(0, SKILLS_SCREEN_CAP).map(p =>
-    get<{screening?: SkillScreening | null}>('/v2/skills/proposals/' + encodeURIComponent(p.id)).then(d => { screens[p.id] = d.screening; }, () => {})));
-  if (!skillsLive(run)) return;
-  body.innerHTML = `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>Kind</th><th>Proposed by</th><th>Screen</th><th>When</th></tr></thead>
-    <tbody>${proposals.map(p => `<tr data-sk-proposal="${esc(p.id)}" data-sk-status="${esc(p.status)}">
-      <td class="sk-name"><a href="${skillsProposalHref(p.id)}"><strong>${esc(p.name)}</strong></a> ${skillsStatusPill(p.status)}</td>
-      <td class="sk-kind">${p.base_version ? 'Update' : 'New'}</td>
-      <td class="sk-by">${esc(skillsWho(p.proposed_by))}</td>
-      <td class="sk-screen">${skillsScreenPill(p, screens[p.id])}${p.screen_status === 'not_screened' && p.status === 'pending'
-        ? ` <button type="button" class="ghost small" data-sk-rescreen="${esc(p.id)}">Re-run</button>` : ''}</td>
-      <td class="sk-when">${agoSpan(p.created_at)}</td></tr>`).join('')}</tbody></table>`;
-  skillsRowLinks(body);
-  body.querySelectorAll<HTMLButtonElement>('[data-sk-rescreen]').forEach(b => { b.onclick = () => skillsRescreen(b.dataset.skRescreen ?? ''); });
-}
 async function skillsRescreen(id: string) {
   try { await post(`/v2/skills/proposals/${encodeURIComponent(id)}/rescreen`, {}); toast('Screening'); skillsRedraw(); }
   catch (e) { toast(errorMessage(e, ''), true); }
-}
-
-async function skillsInstalled(body: HTMLElement, run: number) {
-  const {installs = []} = await get<{installs?: SkillInstallRow[]}>('/v2/skills/installed', {fresh: true});
-  if (!skillsLive(run)) return;
-  if (!installs.length) { body.innerHTML = '<div class="empty" data-sk-empty>Nothing installed.</div>'; return; }
-  body.innerHTML = `<table class="tt-list sk-list sk-installed"><thead><tr><th>Skill</th><th>For</th><th>Version</th><th>Desired</th><th>Staged</th><th aria-hidden="true"></th></tr></thead>
-    <tbody>${installs.map(i => {
-      const staged = i.staged?.sha256, desired = i.desired?.sha256, behind = desired && staged && staged !== desired;
-      return `<tr data-sk-install="${esc(i.id)}">
-      <td class="sk-name"><a href="${skillsHref(i.name)}"><strong>${esc(i.name)}</strong></a></td>
-      <td class="sk-by">${esc(skillsWho(i.target))}</td>
-      <td class="sk-ver">${i.version_policy === 'pinned' ? `Pinned v${i.pinned_version}` : 'Latest'}${i.update_available
-        ? ` <span class="pill waiting" data-sk-update>v${i.latest} out</span>` : ''}</td>
-      <td class="sk-sha-cell">${i.desired ? `v${i.desired.number} ${skillsSha(desired)}` : ''}</td>
-      <td class="sk-sha-cell">${staged ? skillsSha(staged) + (behind ? ' <span class="pill waiting">Behind</span>' : '') : '<span class="muted">Not yet</span>'}</td>
-      <td class="sk-act"><button type="button" class="ghost small" data-sk-remove="${esc(i.id)}" data-sk-remove-name="${esc(i.name)}">Remove</button></td></tr>`; }).join('')}</tbody></table>`;
-  skillsRowLinks(body);
-  body.querySelectorAll<HTMLButtonElement>('[data-sk-remove]').forEach(b => { b.onclick = async () => {
-    const ok = await settingsConfirm({title: 'Remove ' + b.dataset.skRemoveName, text: 'It leaves on the next session.', ok: 'Remove'});
-    if (!ok) return;
-    try { await writeRequest('DELETE', '/v2/skills/installs/' + encodeURIComponent(String(b.dataset.skRemove))); toast('Removed'); skillsRedraw(); }
-    catch (e) { toast(errorMessage(e, ''), true); }
-  }; });
 }
 
 // ----------------------------------------------------------------- one skill
@@ -303,9 +278,10 @@ async function pageSkill(name: string) {
         ${versions.length ? `<table class="tt-who-table">${versions.map(v => `<tr data-sk-v="${v.number}"><td class="tt-who-name"><strong>v${v.number}</strong> ${skillsSha(v.sha256)}</td>
           <td class="tt-used muted">${v.approved_at ? agoSpan(v.approved_at) : ''}${v.approved_by_id ? ' · ' + esc(actorLabel('human:' + v.approved_by_id)) : ''}</td></tr>`).join('')}</table>`
           : '<p class="muted">None yet.</p>'}</section>
-      <section class="card" id="skill-installs"><header><h2>Installs</h2></header>${skillsCoverageHTML(usage.installs || [])}</section>
+      <section class="card" id="skill-installs"><header><h2>Installs</h2></header><div data-sk-installs>${skillsCoverageHTML(usage.installs || [])}</div></section>
     </div></div>`;
   body.querySelector('[data-sk-install]')?.addEventListener('click', () => skillsInstallDialog(d.skill, versions));
+  skillsBindRemove(body);
   body.querySelector('#skill-usage .theme-seg').onclick = async (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-sk-days]'); if (!b) return;
     if (!SKP) return;
@@ -341,8 +317,19 @@ function skillsUsageHTML(u: SkillUsage) {
 function skillsCoverageHTML(installs: SkillInstallCoverage[]) {
   if (!installs.length) return '<p class="muted">Not installed.</p>';
   const pill = (c: string) => c === 'used' ? '<span class="pill ok">Used</span>' : c === 'unused' ? '<span class="pill waiting">Unused</span>' : '<span class="pill">Unknown</span>';
-  return `<table class="tt-who-table">${installs.map(i => `<tr data-sk-coverage="${esc(i.coverage)}"><td class="tt-who-name">${esc(skillsWho(i.target))}</td>
-    <td class="tnum tt-used">${skillsUses(i.uses_30d)}</td><td>${pill(i.coverage)}</td></tr>`).join('')}</table>`;
+  return `<table class="tt-who-table">${installs.map(i => `<tr data-sk-coverage="${esc(i.coverage)}"${i.id ? ` data-sk-install-row="${esc(i.id)}"` : ''}>
+    <td class="tt-who-name">${esc(skillsWho(i.target))}${i.pinned_version ? ` <span class="pill" title="Pinned" data-sk-pinned>v${i.pinned_version}</span>` : ''}</td>
+    <td class="tnum tt-used">${skillsUses(i.uses_30d)}</td><td>${pill(i.coverage)}</td>
+    <td class="sk-act">${i.removable && i.id ? `<button type="button" class="ghost small" data-sk-remove="${esc(i.id)}" data-sk-remove-name="${esc(skillsWho(i.target))}">Remove</button>` : ''}</td></tr>`).join('')}</table>`;
+}
+// Remove an install from the skill's page: the same rights as installing it, which the server says per row (`removable`).
+function skillsBindRemove(box: HTMLElement) {
+  box.querySelectorAll<HTMLButtonElement>('[data-sk-remove]').forEach(b => { b.onclick = async () => {
+    const ok = await settingsConfirm({title: 'Remove from ' + b.dataset.skRemoveName, text: 'It leaves on the next session.', ok: 'Remove'});
+    if (!ok) return;
+    try { await writeRequest('DELETE', '/v2/skills/installs/' + encodeURIComponent(String(b.dataset.skRemove))); toast('Removed'); skillsRedraw(); }
+    catch (e) { toast(errorMessage(e, ''), true); }
+  }; });
 }
 async function skillsFiles(name: string, number: number | undefined, run: number) {
   const box = $('#skills-root [data-sk-files]'); if (!box) return;
@@ -409,7 +396,7 @@ async function pageSkillProposal(id: string) {
   const run = (SKP?.run || 0) + 1;
   SKP = {run};
   $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="proposal">
-    <div class="tt-crumb"><a href="${SKILLS_ROUTE}">Skills</a><span aria-hidden="true">›</span><a href="${SKILLS_ROUTE}?tab=proposals">Proposals</a></div>
+    <div class="tt-crumb" data-sk-crumb><a href="${SKILLS_ROUTE}">Skills</a></div>
     <div data-sk-body>${skelRows(4)}</div></div>`;
   const body = $('#skills-root [data-sk-body]');
   let d: SkillProposalDetail, admin = false;
@@ -421,6 +408,7 @@ async function pageSkillProposal(id: string) {
   } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); return; }
   if (!skillsLive(run)) return;
   const p = d.proposal, s = d.screening, pending = p.status === 'pending';
+  $('#skills-root [data-sk-crumb]')?.insertAdjacentHTML('beforeend', `<span aria-hidden="true">›</span><span>${esc(p.name)}</span>`);
   const mine = p.proposed_by?.id === S.me?.id && p.proposed_by?.type === 'Human';
   const ack = !!s && (s.risk === 'high' || s.verdict === 'unsafe');
   const canApprove = admin && pending && p.screen_status === 'screened' && !d.stale;
@@ -496,13 +484,12 @@ function skillsDiffHTML(diff: string | null | undefined) {
 function skillsRedraw() { skillsRoute(S.route || ''); }
 // The redesign's router asks first (ui/app/redesign.ts).
 function skillsRoute(r: string) {
-  const [path = '', query = ''] = r.split('?');
+  const [path = ''] = r.split('?');
   if (!rdUnder(path, SKILLS_ROUTE)) return false;
   const parts = path.slice(SKILLS_ROUTE.length).split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
   if (parts[0] === 'proposals' && parts[1]) { void pageSkillProposal(parts[1]); return true; }
   if (parts.length) { void pageSkill(parts.join('/')); return true; }
-  const tab = new URLSearchParams(query).get('tab');
-  void pageSkills(SKILLS_TABS.some(([k]) => k && k === tab) ? tab : '');
+  void pageSkills();
   return true;
 }
 // Leaving the page drops its state, so a late answer draws nothing.

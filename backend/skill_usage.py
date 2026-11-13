@@ -304,8 +304,9 @@ def _bots_reporting(c, bots):
 
 
 def coverage(c, auth, who, skill, at):
-    """The installs the caller may see, each with its uses in the last 30 days and whether Tico can tell it is used:
-    used | unused | unknown."""
+    """The installs the caller may see, each with its uses in the last 30 days, whether Tico can tell it is used
+    (used | unused | unknown), its pinned version (null for latest) and whether the caller may take it off
+    (`removable`: the rights of installing it, backend/skills.py `_target`)."""
     since = _stamp(at - timedelta(days=UNUSED_DAYS))
     rows = [
         r
@@ -325,7 +326,14 @@ def coverage(c, auth, who, skill, at):
             "SELECT DISTINCT person_id FROM skill_devices WHERE reporting_enabled=1 AND revoked_at IS NULL"
         )
     }
-    reporting_bots = _bots_reporting(c, {r["target_id"] for r in rows if r["target_type"] == "Bot"})
+    bot_ids = {r["target_id"] for r in rows if r["target_type"] == "Bot"}
+    reporting_bots = _bots_reporting(c, bot_ids)
+    admin, me = SK._admin(auth, who), H.actor_id(who.actor)
+    writable = (
+        {b for b, level in auth.bot_accesses(c, who, sorted(bot_ids)).items() if level.get("write")}
+        if bot_ids
+        else set()
+    )
     out = []
     for r in rows:
         uses = counts.get((r["target_type"], r["target_id"]), 0)
@@ -337,7 +345,17 @@ def coverage(c, auth, who, skill, at):
         else:
             state = "unknown"
         view = SK._install_view(r)
-        out.append({"id": view["id"], "target": view["target"], "uses_30d": uses, "coverage": state})
+        removable = r["target_id"] in writable if r["target_type"] == "Bot" else admin or r["target_id"] == me
+        out.append(
+            {
+                "id": view["id"],
+                "target": view["target"],
+                "uses_30d": uses,
+                "coverage": state,
+                "pinned_version": view["pinned_version"],
+                "removable": removable,
+            }
+        )
     return out
 
 
@@ -351,6 +369,9 @@ class _Everyone:
 
     def bot_access(self, c, who, bot_id):
         return {"see": True}
+
+    def bot_accesses(self, c, who, bot_ids):
+        return {b: {"see": True, "write": False} for b in bot_ids}
 
 
 _EVERYONE = _Everyone()

@@ -74,18 +74,20 @@ skills helper reports as staged (`staged`: the sha it actually has). A differenc
 
 ## The Skills page
 
-Library › Skills (`#/library/skills`) has three tabs.
+Library › Skills (`#/library/skills`) is one page.
 
-- **Directory**: every approved skill with its version, installs, uses in the last 30 days and when it was last used. A skill opens
-  its page: versions (when and by whom each was approved), the files of any version, **Install** (for yourself, a bot you can write,
-  a person if you're an admin, or a team: a team installs for its current members at once, and nobody who joins later), and its
-  usage over 7 or 30 days by trigger (model, person, nested), by who and the last 20 uses.
-- **Proposals**: admins see every proposal, anyone else their own. Each shows new or update, who proposed it and its screen:
-  Pending, Screened with its risk, or Not screened with **Re-run**. A proposal opens its screening (summary, findings by file and line,
-  pattern hits), its diff (or its files when it's new) and a Stale flag when the skill moved on. **Approve** for a high-risk or
-  unsafe screen needs the "I've read this" tick, as the server does (422 `acknowledgement_required`). **Decline** asks for a reason.
-- **Installed**: your installs and those of the bots you can write: Latest or pinned (with the newer version when there is one),
-  what is wanted against what is staged there (short sha), and **Remove**.
+- **Waiting for OK**, on top: the proposals still pending (admins see every one, anyone else their own), each with its
+  screen (Pending, Screened with its risk, or Not screened), who proposed it and when. It isn't shown when nothing waits. A
+  decided proposal isn't listed: an approved one is the skill's next version, on the skill's page. A proposal opens its
+  screening (summary, findings by file and line, pattern hits, **Re-run** when it wasn't screened), its diff (or its files
+  when it's new) and a Stale flag when the skill moved on. **Approve** for a high-risk or unsafe screen needs the "I've read
+  this" tick, as the server does (422 `acknowledgement_required`). **Decline** asks for a reason.
+- **Skills**: every approved skill with who it's on (the first few bots and people you can see, then +N), its version and
+  when it was last used, with a search box. A skill opens its page: versions (when and by whom each was approved), the files
+  of any version, **Install** (for yourself, a bot you can write, a person if you're an admin, or a team: a team installs for
+  its current members at once, and nobody who joins later), its installs (Used, Unused or Unknown, a pinned one's version, and
+  **Remove** where you have the rights to install it), and its usage over 7 or 30 days by trigger (model, person, nested), by
+  who and the last 20 uses.
 
 **Use in my Claude Code** shows the one line that sets up the skills helper on your computer, with Copy:
 `curl -fsSL --create-dirs <your Tico>/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs && node ~/.tico/skills-helper.mjs setup`.
@@ -106,13 +108,13 @@ reporting on), has had the install for 30 days, and has no use
 in those 30 days. Anything else is Unknown, never Unused.
 
 Not in directory. A bot's use of a skill the directory doesn't have (its repository's own, one in its home) is kept only as a
-daily count by name and bot, 90 days. Admins see the most used under the Directory as **Not in directory**: name, uses in 30 days,
+daily count by name and bot, 90 days. Admins see the most used below the skills as **Not in directory**: name, uses in 30 days,
 bots. People's own computers report directory skills only, so no person is counted there.
 
 ## Suggestions
 
 The maintenance run's Suggest step looks at this install's own data each day (no Gateway or consent needed) and puts two kinds
-of suggestion on the Directory for admins:
+of suggestion on the Skills page for admins:
 
 - **Remove**: an install that is Unused (above). Unknown is never suggested.
 - **Ask to submit**: a skill outside the directory that 2 or more bots, or 10 or more uses, ran in 30 days. It names the bot that
@@ -125,13 +127,14 @@ carries Gateway suggestions only.
 
 ## API
 
-Under `/api/v2/skills`: the directory (`GET skills`), a skill with its versions and installs (`GET skills/{name}`), a version with
-its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`,
+Under `/api/v2/skills`: the directory (`GET skills`, each with its install count and the first few it's `on`), a skill with its versions and installs (`GET skills/{name}`), a version with
+its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`: the pending ones, or `?status=` one status or `all`,
 `GET skills/proposals/{id}`, and `approve`, `decline`, `withdraw`, `rescreen` under it), and installs (`POST skills/{name}/installs`,
 `POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`), and an approved
-version's files by sha (`GET skills/bundles/{sha256}`). The Skills page reads four more: usage per skill
-(`GET skills/usage?days=7|30`), one skill's usage (`GET skills/{name}/usage?days=7|30`), who the caller may install for
-(`GET skills/install-targets`) and the caller's own installs with those of the bots they can write (`GET skills/installed`).
+version's files by sha (`GET skills/bundles/{sha256}`). The Skills page reads three more: usage per skill
+(`GET skills/usage?days=7|30`), one skill's usage with its installs (`GET skills/{name}/usage?days=7|30`, each install
+`removable` when the caller may take it off) and who the caller may install for (`GET skills/install-targets`).
+`GET skills/installed` lists the caller's own installs with those of the bots they can write.
 Admins also read and act on suggestions: `GET skills/suggestions`, then `POST skills/suggestions/{id}/remove` (takes the install
 off, with the rights of uninstalling it), `/asked` (after the page sent the bot its message) or `/dismiss`; these four are internal,
 not in the OpenAPI contract. Route words such as `usage`, `installed`, `install-targets`, `suggestions`, `proposals` and

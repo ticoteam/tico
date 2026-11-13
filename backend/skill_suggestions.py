@@ -1,6 +1,6 @@
 # pyright: strict
 """Remove and promote suggestions for company skills (docs/skills.md#suggestions), made by the maintenance run's Suggest
-step and shown to admins on Library › Skills, Directory.
+step and shown to admins on Library › Skills.
 
 - remove: an install skill_usage's coverage calls unused (a receipt, a target that reports usage, the install 30 days
   old, no use in 30 days). An install Tico cannot judge ("unknown") is never suggested for removal.

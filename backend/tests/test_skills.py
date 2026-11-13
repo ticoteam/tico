@@ -154,6 +154,23 @@ def test_a_member_sees_only_their_own_proposals_and_admins_see_all(api):
     assert len(get(api, "skills/proposals", "ben-test")["proposals"]) == 2
 
 
+def test_the_proposal_list_is_what_waits_for_an_ok_and_a_decided_one_is_history(api):
+    approved = proposal(api, token="ana-test")["id"]
+    screen(api, approved)
+    assert approve(api, approved).status_code == 200
+    declined = proposal(api, name="billing", token="cara-test")["id"]
+    decide(api, declined, "decline", {"reason": "Not yet"})
+    waiting = proposal(api, name="refunds", token="cara-test")["id"]
+    assert [p["id"] for p in get(api, "skills/proposals", "ben-test")["proposals"]] == [waiting]
+    assert {p["id"] for p in get(api, "skills/proposals?status=all", "ben-test")["proposals"]} == {
+        approved,
+        declined,
+        waiting,
+    }
+    assert [p["id"] for p in get(api, "skills/proposals?status=declined", "ben-test")["proposals"]] == [declined]
+    assert api.get("/api/v2/skills/proposals?status=nope", headers=headers("ben-test")).status_code == 422
+
+
 # ------------------------------------------------------------------ the approval checks
 def test_approval_waits_for_the_exact_screened_version_and_its_base(api):
     pid = proposal(api)["id"]
@@ -286,3 +303,27 @@ def test_a_skill_page_shows_only_the_installs_the_caller_may_see(api):
     )
     assert [i["target"]["id"] for i in get(api, "skills/triage", "cara-test")["installs"]] == ["cara"]
     assert len(get(api, "skills/triage", "ben-test")["installs"]) == 2
+
+
+def test_the_directory_names_who_a_skill_is_on_only_where_the_caller_may_see_and_at_most_three(api):
+    publish(api)
+    ops, finance = bot_id(api, "ops"), bot_id(api, "finance")
+    with api.app.state.store.transaction() as c:
+        restrict(c, ops, see={"people": ["ana"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    for target_type, target_id in (("Bot", ops), ("Bot", finance), ("Human", "cara"), ("Human", "ben")):
+        r = api.post(
+            "/api/v2/skills/triage/installs",
+            json={"target_type": target_type, "target_id": target_id, "version_policy": "latest"},
+            headers=headers("ana-test"),
+        )
+        assert r.status_code == 200, r.text
+
+    admin = get(api, "skills", "ben-test")["skills"][0]
+    assert admin["installs_count"] == 4
+    assert len(admin["on"]) == 3 and [t["type"] for t in admin["on"]] == ["Bot", "Bot", "Human"]  # bots first
+
+    member = get(api, "skills", "cara-test")["skills"][0]
+    assert {(t["type"], t["id"]) for t in member["on"]} == {("Bot", finance), ("Human", "cara")}, (
+        "a bot she can't see and another person's install stay hidden"
+    )
+    assert member["installs_count"] == 4
