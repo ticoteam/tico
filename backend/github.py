@@ -1137,9 +1137,10 @@ def _set_dropped(detail, dropped, pending=False):
 
 
 def _still_going(detail):
-    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out."""
+    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out. Tico's own
+    gate is not a check that is going (`_counted`)."""
     return (
-        "pending" in (detail.get("checks") or {}).values()
+        "pending" in _counted(detail.get("checks") or {}, detail.get(SUITE_RUNS)).values()
         or detail.get("checks_dropped") == "pending"
         or bool(detail.get(DROPPED_PENDING))
     )
@@ -1333,7 +1334,8 @@ def apply_checks(c, link_id, head, checks, since=None):
     dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
     # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
     # even when its state stays the same.
-    held = _still_going(detail) and "pending" not in checks.values()
+    counted = _counted(checks, suite_runs)
+    held = _still_going(detail) and "pending" not in counted.values()
     if (
         detail.get("checks") == kept
         and link.get("checks") == state
@@ -1348,7 +1350,7 @@ def apply_checks(c, link_id, head, checks, since=None):
     _set_dropped(detail, dropped, dropped_pending)
     changed = state != link.get("checks")
     # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
-    finished = state != "pending" and "pending" not in checks.values() and (changed or held)
+    finished = state != "pending" and "pending" not in counted.values() and (changed or held)
     if finished:
         _finish(c, task, link, detail, head, checks)
     record_health_wait({**link, "checks": state}, detail)
@@ -1454,7 +1456,9 @@ def pr_signal(c, event, payload):
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
             # can be the last one, so it counts too.
-            suite_done = any(k.startswith("suite:") and v != "pending" for k, v in checks.items())
+            # Tico's own gate and its App's suite are not CI (`_counted`): one queued that never runs holds nothing.
+            counted = _counted(checks, suite_runs)
+            suite_done = any(k.startswith("suite:") and v != "pending" for k, v in counted.items())
             if (
                 (
                     event == "check_suite"
@@ -1464,12 +1468,12 @@ def pr_signal(c, event, payload):
                     and state != "pending"
                     or event not in ("check_suite", "workflow_run")
                     and left_pending
-                    and (suite_done or not any(k.startswith("suite:") for k in checks))
+                    and (suite_done or not any(k.startswith("suite:") for k in counted))
                 )
-                and "pending" not in checks.values()
-                and not set(checks.values()) <= {"skipped"}
+                and "pending" not in counted.values()
+                and not set(counted.values()) <= {"skipped"}
                 # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
-                and (not dropped or "failing" in checks.values())
+                and (not dropped or "failing" in counted.values())
                 # A check the copy left out may still be going: the next fresh read (apply_checks) finishes the head.
                 and not _still_going(detail)
             ):

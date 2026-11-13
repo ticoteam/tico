@@ -695,6 +695,23 @@ def test_ticos_own_merge_gate_is_not_a_ci_check(api):
         assert G.apply_checks(c, link['id'], 'a' * 40, read) == 'passing'
 
 
+def test_a_queued_gate_suite_does_not_hold_a_green_head_unfinished(api):
+    """GitHub queues a suite of the company App on every head, and it never runs unless the Merge stage posts the
+    gate. Left out of the state, it must be left out of "still going" too, or a green head reads passing but never
+    finishes: no "Checks finished", and nothing waiting on the checks is woken."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gate queued', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _suite(api, 'example-app', 'queued', id=9)
+    _suite(api, 'github-actions', 'queued', id=1)
+    _run(api, 'python', 1, 'in_progress')
+    _run(api, 'python', 1, 'completed', 'success', suite_status='completed')
+    _suite(api, 'github-actions', 'completed', 'success', id=1)
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert link['checks'] == 'passing'
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
+
+
 def test_an_all_skipped_head_reads_pending_never_green(api):
     """A draft pull request's run skips every job; nothing on main requires a check, so a head whose every check was
     skipped has not been checked. It reads pending and finishes nothing; one real pass beside the skips is green."""
