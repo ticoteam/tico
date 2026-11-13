@@ -99,3 +99,35 @@ def test_the_human_is_set_on_create_changed_and_cleared_on_edit_and_only_ever_a_
         X.no_sign_in(c, "human:cara")
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara"}, token="ana-test", expected=422)
     assert get(api, "tasks/" + t["id"])["task"]["human_id"] is None
+
+
+def test_a_private_tasks_human_must_already_read_it(api):
+    """Naming a Human never adds a reader: one who cannot read the private task is refused, on create and on edit."""
+    body = {"owner": "ops", "title": "Payroll fix", "body": "x", "private": True}
+    refused = post(api, "tasks", {**body, "human": "ben"}, token="ana-test", expected=422)
+    assert "Ben" in str(refused) and "can't read this private task" in str(refused)
+    t = post(api, "tasks", {**body, "human": "ben", "readers": ["human:ben"]}, token="ana-test")
+    assert t["human_id"] == BEN
+    t = post(api, "tasks", {**body, "title": "Payroll report"}, token="ana-test")
+    refused = post(api, "tasks/" + t["id"], {"version": t["version"], "human": "ben"}, token="ana-test", expected=422)
+    assert "can't read this private task" in str(refused)
+    assert get(api, "tasks/" + t["id"])["task"]["human_id"] is None
+    # Made private in the same edit that names a Human who cannot read it: judged as it lands.
+    t = post(api, "tasks", {**body, "title": "Payroll export", "private": False}, token="ana-test")
+    edit = {"version": t["version"], "human": "ben", "private": True}
+    assert "can't read this private task" in str(post(api, "tasks/" + t["id"], edit, token="ana-test", expected=422))
+    t = post(api, "tasks/" + t["id"], {"version": t["version"], "human": "ana"}, token="ana-test")
+    assert t["human_id"] == ANA  # the one who asked for it reads it
+
+
+def test_the_owner_bots_wake_says_to_ask_the_human_while_they_can_act(c, spec):
+    from backend import task_wakes as TW
+
+    row = X.new_task(c, ANA, "Add CSV export", "dev", assignee="bot:builder")
+    said = "is this task's Human, so ask them the questions and OKs it needs from a person (--to human:ben)."
+    assert "this task's Human" not in TW.body(c, E.task(c, row["id"]), to="bot:builder")
+    X.H.task_update(c, ANA, row["id"], human_id="ben")
+    lines = TW.body(c, E.task(c, row["id"]), to="bot:builder").splitlines()
+    assert [line for line in lines if "this task's Human" in line] == [f"{X.H.actor_name(c, BEN)} {said}"]
+    X.left(c, BEN)  # passed over by the ladder: the wake names nobody
+    assert "this task's Human" not in TW.body(c, E.task(c, row["id"]), to="bot:builder")

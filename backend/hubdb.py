@@ -5506,6 +5506,14 @@ def task_human(conn, actor, value):
     return found
 
 
+def _task_human_reads(conn, actor, row):
+    """Refuse a private task's Human who cannot read it: naming them never adds a reader. Checked once the task's
+    privacy and readers are written, so a write that sets both is judged as it lands."""
+    who = row.get("human_id")
+    if who and task_private(conn, row) and not task_private_readable(conn, who, row):
+        refuse(conn, actor, "kind", f"{actor_name(conn, who)} can't read this private task")
+
+
 def task_create(
     conn,
     actor,
@@ -5867,6 +5875,7 @@ def task_create(
         if goal_id:
             _task_event(conn, row["id"], actor, "goal_id", None, goal_id, "")
         if human_id:
+            _task_human_reads(conn, actor, task(conn, row["id"]) or row)
             _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
         if plain:
             # warn mode: the problem is on the record, the task still exists (the refuse week follows)
@@ -6352,6 +6361,8 @@ def task_update(
             event(conn, actor, "task.lint", task_id, {"problems": plain})
         event(conn, actor, "task.update", task_id, {"note": note})
         after = isolate_private_task(conn, task(conn, task_id) or row)
+        if args.get("human_id"):
+            _task_human_reads(conn, actor, after)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
         if task_private(conn, after) and not task_private(conn, row):
