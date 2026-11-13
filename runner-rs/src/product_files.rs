@@ -135,7 +135,7 @@ pub async fn bootstrap_missing(config: &Config, candidates: &[Value]) {
             let path = crate::sessions::local_path(config, &bot, &entry["config"]);
             if mine.is_empty()
                 || text_of(&entry["runner_id"]) != mine
-                || path.join("AGENT.md").is_file()
+                || crate::instructions::present(&path)
             {
                 tried.remove(&bot);
                 continue;

@@ -219,6 +219,10 @@ pub struct Settings {
     pub require_existing_session: bool,
     /// Packet-only tidy turns have no checkout tools or Hub MCP server.
     pub packet_only: bool,
+    /// Where Claude Code keeps its auto memory for this turn: `memory/claude/` in the turn's checkout of the bot's
+    /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
+    /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).
+    pub memory_dir: Option<String>,
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.

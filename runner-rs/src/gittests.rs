@@ -2754,3 +2754,63 @@ async fn a_released_tree_with_a_commit_nowhere_upstream_is_kept() {
     );
     assert!(path.join("task.md").exists());
 }
+
+/// A bot repository from before AGENTS.md: its next turn's checkout gets AGENTS.md (the old text and Tico's section),
+/// state.md kept under memory/archive, in one commit the turn's push sends; a second turn changes nothing.
+#[tokio::test]
+async fn an_old_bot_repository_is_brought_to_agents_md_in_one_pushed_commit() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-ops");
+    commit_and_push(&seed, "state.md", "Working on the Acme release.\n");
+    let main = tmp.0.join("bot-ops");
+    sh(
+        &tmp.0,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let home = tmp.0.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let env = turn_env(&home, &[]);
+    assert!(crate::instructions::ensure(&main, &env, "Tico", false)
+        .await
+        .unwrap());
+    assert!(!main.join("AGENT.md").exists() && !main.join("state.md").exists());
+    let agents = std::fs::read_to_string(main.join("AGENTS.md")).unwrap();
+    assert!(
+        agents.starts_with("# Ops\n") && agents.contains(crate::instructions::START),
+        "{agents}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(main.join("memory/archive/state.md")).unwrap(),
+        "Working on the Acme release.\n"
+    );
+    assert_eq!(
+        sh(&main, &["status", "--porcelain"]),
+        "",
+        "everything is in the commit"
+    );
+    assert_eq!(
+        sh(&main, &["log", "--format=%s", "-1"]),
+        crate::instructions::COMMIT
+    );
+    assert!(
+        !crate::instructions::ensure(&main, &env, "Tico", false)
+            .await
+            .unwrap(),
+        "nothing left to change"
+    );
+    assert_eq!(sessions::finish(&main, "run", &env, &[], true).await, "");
+    sh(&main, &["push", "-q", "origin", "HEAD:main"]);
+    let pushed = sh(&seed, &["ls-remote", "origin", "main"]);
+    assert!(
+        pushed.starts_with(&sh(&main, &["rev-parse", "HEAD"])),
+        "{pushed}"
+    );
+    sh(&seed, &["pull", "-q", "--rebase"]);
+    assert!(seed.join("AGENTS.md").is_file() && !seed.join("AGENT.md").exists());
+    assert!(crate::instructions::present(&seed));
+}
