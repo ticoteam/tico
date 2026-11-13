@@ -223,6 +223,8 @@ interface AutomationsState {
   all: AuAll | null;
   /** The scroll position each tab was left at (automations-overview.js). */
   scroll: Record<string, number>;
+  /** The optional columns the table keeps, decided once the range's stats arrive; null until then: all (auTableHTML). */
+  cols: AuColKey[] | null;
   /** The timer that re-reads the Runs tab after a change (automations-overview.js). */
   allSoon?: number;
 }

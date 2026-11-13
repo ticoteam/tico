@@ -118,6 +118,8 @@ section.card.tt-soon>header .pill{margin-left:auto}
 @media (max-width:760px){
   .tt-head{min-height:0}
   .tt-q{flex:1 1 100%;margin-left:0}
+  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. */
+  .tt-filters button{min-height:40px}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */
   .tt-list thead,.tt-log thead,.tt-limits thead{display:none}
@@ -128,6 +130,8 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tt-list .tt-way{grid-column:1;padding-left:42px}
   .tt-list .tt-st{grid-column:2;grid-row:2;text-align:right}
   .tt-list .tt-who{grid-column:1 / -1;padding-left:42px;white-space:normal}
+  /* Nobody can use it yet: the words are for screen readers only, so the cell leaves no empty line. */
+  .tt-list .tt-who:not(:has(.tt-faces)){position:absolute}
   .tt-list .tt-chev{display:none}
   .tt-log tr,.tt-limits tr{display:flex;flex-wrap:wrap;gap:4px 10px;padding:8px 0;border-bottom:1px solid var(--line)}
   .tt-log td,.tt-limits td{display:block;padding:0;border:0;min-width:0}

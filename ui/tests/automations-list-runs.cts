@@ -175,13 +175,40 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       await page.waitForFunction(() => (document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n') as HTMLElement).innerText === '4');
       assert.match(await page.locator('tr.au-row[data-row="au_inbox"]').innerText(), /now/, 'its last run');
 
-      await page.locator('.au-range [data-range="24h"]').click();
+      // The exception shows, not the default: no cell holds a 0 or a dash, an automation with no runs has no sparkline,
+      // and a column no automation has a value in (Failed, in the last hour) is left out, the Name column taking its room.
+      const heads = () => page.locator('.au-tbl-t thead th').evaluateAll(t => t.map(x => (x as HTMLElement).innerText.trim()));
+      const cells = await page.locator('tr.au-row td').evaluateAll(t => t.map(x => (x as HTMLElement).innerText.trim()));
+      assert.deepEqual(cells.filter(c => c === '0' || c === '—'), [], 'no 0 or — in the list');
+      assert.equal(await page.locator('tr.au-row[data-row="au_deploy"] .au-spark').count(), 0, 'no empty sparkline');
+      assert.equal(await page.locator('tr.au-row[data-row="au_deploy"] td.au-cn').innerText(), '', 'no runs is blank');
+      const hourHeads = await heads();
+      assert.ok(!hourHeads.includes('FAILED') && hourHeads.includes('COST'), 'Failed leaves; Cost stays: ' + hourHeads);
+      assert.equal(await page.locator('.au-tbl-t').evaluate(t => (t as HTMLElement).style.getPropertyValue('--au-cols')), String(hourHeads.length));
+      const nameAt1h = (await page.locator('th.au-tn').boundingBox())!.width;
+      // Filters with nothing in them are left out; a search does not move a column.
+      assert.deepEqual(await page.locator('.au-fb .au-fn').allInnerTexts().then(n => n.filter(x => x === '0')), [], 'no filter at 0');
+      assert.equal(await page.locator('[data-fstatus="paused"]').count(), 0, 'nothing paused, no Paused filter');
+      await page.fill('.au-rail .au-q', 'deploy');
+      assert.deepEqual(await heads(), hourHeads, 'typing keeps the columns');
+      await page.fill('.au-rail .au-q', '');
+
+      // A range with a failure brings Failed back, and while it loads no column leaves and none comes and goes.
+      const atClick = await page.evaluate(() => {
+        (document.querySelector('.au-range [data-range="24h"]') as HTMLElement).click();
+        return [...document.querySelectorAll('.au-tbl-t thead th')].map(x => (x as HTMLElement).innerText.trim());
+      });
+      assert.deepEqual(atClick.filter(h => !h.startsWith('LAST ')), hourHeads.filter(h => !h.startsWith('LAST ')), 'no column leaves while the range loads');
       await page.waitForFunction(() => (document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n') as HTMLElement).innerText === '30');
+      await page.waitForSelector('th.au-cf');
+      assert.equal(await page.locator('tr.au-row[data-row="au_inbox"] td.au-cf').innerText(), '3');
+      assert.match(await page.locator('tr.au-row[data-row="au_inbox"] td.au-cf').getAttribute('class') || '', /au-bad/, 'a failure count is red');
+      assert.ok((await page.locator('th.au-tn').boundingBox())!.width < nameAt1h, 'Name is wider without Failed');
       await page.reload();
       await page.waitForSelector('tr.au-row');
       assert.equal(await page.locator('.au-range [aria-pressed="true"]').innerText(), '24h', 'the range is kept');
       await page.waitForFunction(() => (document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n') as HTMLElement | null)?.innerText === '30');
-      assert.equal(await runsOf('au_deploy').innerText(), '0');
+      assert.equal(await runsOf('au_deploy').innerText(), '', 'no runs is blank');
 
       // Sort by most failures puts the one with failures first.
       await page.locator('[data-group]').selectOption('none');

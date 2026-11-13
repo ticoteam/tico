@@ -425,7 +425,7 @@ button.au-chip:hover{background:var(--surface2)}
   .au-ctl{display:none}
   /* the table scrolls sideways in its own box; the page scrolls down */
   .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:24px}
-  .au-tbl-t{min-width:820px}
+  .au-tbl-t{min-width:min(820px, calc(var(--au-cols, 9) * 92px))}
   .au-crumb{padding:8px 12px 0}
   .au-hd{padding:8px 12px;border:0;flex-wrap:wrap}
   .au-own,.au-hd>.au-sp{display:none}
