@@ -2103,7 +2103,7 @@ def parser():
     for window in ("hour", "day"):
         s.add_argument(
             "--" + window,
-            type=_compact_at,
+            type=lambda v: v if v == "default" else int(v),
             help=f"runs allowed per {window}: a number, 0 for no limit, or default to follow the team",
         )
     s.set_defaults(fn="bot budget")
@@ -2153,7 +2153,7 @@ def parser():
     s.add_argument("--effort")
     s.add_argument(
         "--compact-at",
-        type=lambda v: v if v == "default" else int(v),
+        type=_compact_at,
         help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
         "600000, 700000, 800000, 900000 or 1000000; default puts it back on its model's default",
     )
