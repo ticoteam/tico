@@ -29,6 +29,9 @@ declare const window: Window & typeof globalThis & {
 };
 
 const T = 't-big', N = 250;
+// The random bursts are the slow part (each one draws a 250-message view after every event). This script runs seeds 1-4;
+// thread-redraw-bursts-a/-b.cts run 5-14 and 15-24 through TICO_REDRAW_SEEDS, so each script stays well under the limit.
+const SEEDS = (process.env.TICO_REDRAW_SEEDS ?? '1-4').split('-').map(Number) as [number, number];
 const now = Date.now(), at = (sec: number) => new Date(now - sec * 1000).toISOString();
 const me = {member: true, following: true, notify: 'live', last_read_seq: N - 5, unread: 5, activity: false, can_post: true, can_manage: true, pinned: false};
 const thread = {id: T, title: 'Launch review', audience: 'team', audience_group_id: 'ops', last_seq: N, last_message_at: at(1), me, members: []};
@@ -298,7 +301,7 @@ let browser: import('playwright').Browser | null = null;
   }, k);
   assert.deepEqual(await snap(B), await snap(A), 'the two views start the same');
   const ids = Array.from({length: N}, (_, i) => 'm' + (i + 1));
-  for (let seed = 1; seed <= 24; seed++) {
+  for (let seed = SEEDS[0]; seed <= SEEDS[1]; seed++) {
     const events = randomBurst(seed, 1 + (seed * 7) % 12, ids, seq);
     // B: drawn after each event, as before this change. A: drawn by the frame.
     await page.evaluate(([b, evs]) => { const vb = [...THV_VIEWS].find(v => v.key === b)!; for (const [kind, d] of evs) { threadViewsLive(kind, d); thvDraw(vb); } }, [B, events] as [number, Live[]]);
