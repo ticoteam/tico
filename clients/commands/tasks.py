@@ -44,8 +44,8 @@ def task_context(api, args):
     "task, use tico_task_ask.",
     {
         "owner": _s(
-            "Who does it: a bot slug, a person id, or `me`. Leave it out to file into a pipeline whose first stage "
-            "picks from several: the stage picks one; naming one always wins"
+            "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
+            "picks one"
         ),
         "title": _s("Task title: plain words, no reference numbers or all-caps"),
         "body": _s("The details", default=""),
@@ -111,21 +111,18 @@ def task_context(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
-        "human": _s(
-            "The person accountable for it, whoever owns it (a human id or `me`); optional. Asks that name nobody "
-            "go to them"
-        ),
+        "human": _s("Its Human: a person or `me`"),
         "after": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
-            "each has merged. Build and review go ahead side by side",
+            "description": "Tasks it merges after (ids or 8+ leading characters): its PRs queue in Merge only once "
+            "each has merged; build and review go ahead",
         },
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            "description": "Who is on it by role, {role: [people or bots]}: a named role's people are replaced, [] clears "
-            "it, an unnamed role stays. Roles are short names the team picks (developer, reviewer, qa); one person may hold several",
+            "description": "Who is on it by role, {role: [people or bots]}, e.g. reviewer: each role named is "
+            "replaced ([] clears it), others stay",
         },
         "model": _s(
             "A bot-owned task's own model, from tico_bot_model's list: its runs use it, not the bot's task model"
@@ -667,8 +664,8 @@ def task_give(api, args):
         "after": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
-            "each has merged. Build and review go ahead side by side",
+            "description": "Tasks it merges after (ids or 8+ leading characters): its PRs queue in Merge only once "
+            "each has merged; build and review go ahead",
         },
     },
     required=("parent", "title"),
@@ -781,8 +778,8 @@ def task_list(api, args):
 
 @tool(
     "tico_task_update",
-    "Edit a task's fields: title, body, due, labels, privacy, goal, Human, with a note. Where it is and who has it "
-    "change by tico_task_done, tico_task_move, tico_task_close and tico_task_reassign, never here.",
+    "Edit a task's fields: title, body, due, labels, privacy, goal, with a note. Where it is and who has it change "
+    "by tico_task_done, tico_task_move, tico_task_close and tico_task_reassign, never here.",
     {
         "id": TASK_ID,
         "title": _s("A new title; it is checked as a new task's title would be"),
@@ -794,7 +791,7 @@ def task_list(api, args):
             "description": "Tighten visibility; only the direct human requester can publish",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
-        "human": _s("The person accountable for it (a human id or `me`); an empty string takes them off"),
+        "human": _s("Its Human: a person, `me`, or \"\" for none"),
         "note": _s("What changed, in a sentence"),
         "version": VERSION,
         "on_behalf_of": ASKED,
