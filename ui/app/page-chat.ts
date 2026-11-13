@@ -87,10 +87,13 @@ function pgcAside(): HTMLElement {
   document.body.appendChild(aside);
   return aside;
 }
-/** The column starts where #main starts: below the top bar and any banner. */
+/** The column starts where #main starts: below the top bar and any banner. A banner that comes or goes resizes #main,
+    so the column follows it while open. */
+const PGC_MAIN_WATCH = window.ResizeObserver ? new ResizeObserver(() => { if (pageChatShown()) pgcPlace(); }) : null;
 function pgcPlace(): void {
   const main = document.getElementById('main');
   if (main) document.body.style.setProperty('--pgc-top', Math.max(0, Math.round(main.getBoundingClientRect().top)) + 'px');
+  if (main) PGC_MAIN_WATCH?.observe(main);
 }
 
 /** Puts Chat in the page's header once the page's owner is known; a page without one gets nothing. Call it each time
@@ -135,6 +138,8 @@ function pageChatToggle(open?: boolean, focus = false): void {
 /** ⌘J: on a desktop page with a chat, opens it with the cursor in its composer, or closes it. False: not ours (Ask's). */
 function pageChatKey(): boolean {
   if (!PGC || pgcPhone()) return false;
+  // A window over the page (a goal's) keeps the keyboard: the key is taken, and nothing opens behind it.
+  if (document.querySelector('dialog[open]')) return true;
   pageChatToggle(!pageChatShown(), true);
   return true;
 }

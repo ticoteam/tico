@@ -112,6 +112,26 @@ async function openGoals(viewport: {width: number; height: number}, sent: Sent[]
       await page.waitForFunction(() => !document.querySelector('#goal-panel[open]'));
       assert.equal(await page.locator('aside.pgc .thv').evaluate(el => (el as HTMLElement & {_kept?: number})._kept), 1, 'the same chat, not a new one');
       assert.equal(await chip.innerText(), 'Book 40 demos a month');
+      // An owner's line opens their panel: the goal it opens becomes the chip.
+      await page.locator('#goal-tree .gt-row[data-goal="g-co"] .gt-name').click();
+      await page.locator('#goal-panel[open]').waitFor();
+      await page.locator('#goal-panel [data-gp-close]').click();
+      await page.waitForFunction(() => !document.querySelector('#goal-panel[open]'));
+      assert.equal(await chip.innerText(), 'Reach 100 paying customers', 'the goal opened from an owner\'s line');
+      // ⌘J with a goal's window open: nothing changes behind it, and Ask stays closed.
+      await page.locator('#goal-tree .gt-row[data-goal="g-sales"] .gt-goal').click();
+      await page.locator('#goal-sheet[open]').waitFor();
+      await page.keyboard.press('ControlOrMeta+j');
+      assert.equal(await chatShown(page), true, '⌘J under a window leaves the chat as it was');
+      assert.equal(await askShown(page), false, '⌘J under a window opens no Ask');
+      assert.equal(await page.evaluate(() => document.activeElement?.closest('#goal-sheet') != null), true, 'the cursor stays in the window');
+      await page.locator('#goal-sheet [data-gs-close]').click();
+      // A banner that comes while the chat is open: the column still starts where #main starts.
+      // The demo strip (html.strip, base.css) is such a banner.
+      await page.evaluate(() => document.documentElement.classList.add('strip', 'demo'));
+      await page.waitForFunction(() => Math.round(document.querySelector('aside.pgc')!.getBoundingClientRect().top) === Math.round(document.getElementById('main')!.getBoundingClientRect().top), null, {timeout: 3000});
+      await page.evaluate(() => document.documentElement.classList.remove('strip', 'demo'));
+      await page.waitForFunction(() => Math.round(document.querySelector('aside.pgc')!.getBoundingClientRect().top) === Math.round(document.getElementById('main')!.getBoundingClientRect().top), null, {timeout: 3000});
 
       // Esc inside the column closes it.
       await page.locator('aside.pgc .p-text').focus();
