@@ -46,8 +46,6 @@ type FinAccess = import('../types/api').FinanceAccess;
 interface FinRangeControls { start: HTMLInputElement; end: HTMLInputElement }
 // A form whose named controls are typed (form.elements is a collection; its fields are read by name).
 type FinFormOf<C> = HTMLFormElement & {elements: HTMLFormControlsCollection & C};
-const FIN_PNL: FinPnlControls = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: '', picked: false, compare: '', teams: [], mates: [],
-  who: 'both', unattributed: false, sel: null, budgetCol: -1, last: null};
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_AT_LIMIT: Record<string, string> = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
 

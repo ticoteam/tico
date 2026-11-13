@@ -218,7 +218,7 @@ done
 if [ "$rust_any" = 0 ]; then skip "rust fmt" "no Rust crate changed"; fi
 
 # 6. The UI's generated API types (the check imports the backend) and tsc over the UI, as CI runs check_ui_types.sh.
-if touched '\.pyi?$|^ui/|^scripts/(gen_ui_types\.py|check_ui_types\.sh|ui_baseline\.py)$'; then
+if touched '\.pyi?$|^ui/|^scripts/(gen_ui_types\.py|check_ui_types\.sh|check_ui_parts\.cjs|ui_baseline\.py)$'; then
   UI_TYPES_JOB=${#NAMES[@]}
   job "ui types (tsc, API types)" bash scripts/check_ui_types.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
 else

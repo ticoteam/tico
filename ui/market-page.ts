@@ -81,11 +81,7 @@ interface MarketSetupState {
   task: {id: string; status: string; created_at: string} | null;
 }
 
-let MARKET_VIEW: MarketView | null = null;   // what is mounted: {kind: 'page' | 'map', shell, open(at), stop()}
-// Old #/market links land here (ui/app/router.ts), keeping their query or note path.
-const MARKET_ROUTE = '#/strategy/market';
-const MARKET_MAP = MARKET_ROUTE + '/map';
-const isMarketRoute = (r: string) => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
+let MARKET_VIEW: MarketView | null = null;const MARKET_MAP = MARKET_ROUTE + '/map';
 // The tab's old views each land on the page at their question; Players opens the map. A note id always has a slash
 // in it, so a bare key is never a note.
 const MARKET_SECTIONS: Record<string, string> = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach'};

@@ -67,7 +67,6 @@ const MAIL_CHIPS = [
 ];
 const MAIL_LABEL: Record<string, string> = {INBOX: 'Messages', UNREAD: 'Unread', STARRED: 'Starred', SENT: 'Sent',
   IMPORTANT: 'Important', DRAFT: 'Drafts', SPAM: 'Spam', TRASH: 'Trash'};
-let MAIL_LOAD = 0, MAIL_SEARCH = 0;
 let MAIL_ACC: MailPageAcc = {key: '', messages: [], cursor: null};
 // A page element the drawn markup must hold: a missing one throws a plain Error that names it.
 function mailNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {

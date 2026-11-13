@@ -40,40 +40,12 @@ const botTabs = (slug: string): string[] => {
   // page then holds their own DM and tasks with the bot). Every teammate reads its Rules.
   return mine && !mine.read ? noDm.filter(t => t === 'info' || t === 'rules' || (mine.write && (t === 'dm' || t === 'tasks'))) : noDm;
 };
-const botLimited = (e: Employee | null | undefined) => !!e?.my_access && !e.my_access.read;
-const botPersonName = (id: string | null | undefined) => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
-// The open bot page (BotPageView, ui/types/bot-page.d.ts); null when no bot page is open.
-let BOT: BotPageView | null = null;
 // BOT where only an open bot page can reach (the old code read BOT.x there and threw when it was null).
 const botNow = (): BotPageView => BOT!;
 function botStopped() {
   BOT?.settingsCleanup?.();
   if (BOT?.thread) threadUnmount(BOT.thread.view);
   BOT = null;
-}
-function botStatePill(slug: string) {
-  const st = stateOf(slug);
-  const act = (S.status?.active || []).find(a => a.employee === slug);
-  const last = (S.status?.recent_runs || []).find(r => r.employee === slug);
-  if (st === 'running') return `<span class="pill in-progress">Running${act?.issue ? ` on #${esc(act.issue)}` : ''}</span>`;
-  if (st === 'needs') return '<span class="pill needs">Needs you</span>';
-  if (st === 'paused') return '<span class="pill">Paused</span>';
-  if (st === 'planned') return '<span class="pill">Setting up</span>';
-  if (st === 'failed') return `<span class="pill fail">Last run failed${last?.finished_at ? ` ${ago(last.finished_at)}` : ''}</span>`;
-  return `<span class="pill">Idle${last?.finished_at ? `, last active ${ago(last.finished_at)}` : ''}</span>`;
-}
-// The server cuts the Role section at 600 characters, so the lead can stop mid-sentence: end at the
-// last full sentence instead, and put whatever is left behind "more".
-function goalParts(role: string | null | undefined) {
-  const full = String(role || '').trim();
-  const para = (full.split(/\n\s*\n/)[0] || full).trim();
-  let lead = para;
-  if (!/[.!?]["'’)\]]?$/.test(para)) {
-    let cut = 0;
-    for (const m of para.matchAll(/[.!?]["'’)\]]?(?=\s|$)/g)) cut = m.index + m[0].length;
-    if (cut > 60) lead = para.slice(0, cut).trim();
-  }
-  return {lead, rest: full.slice(lead.length).trim()};
 }
 // The newest goal load (botGoalLoad, ui/app/bot-page-goals.ts): an older one that finishes late draws nothing.
 let BOT_GOAL_LOAD = 0;
@@ -206,23 +178,6 @@ function botLimitHTML(slug: string) {
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 // The Settings pause row re-reads HQ-backed state only when the page's view of paused is out of date, or a minute old.
 const PAUSE_STALE_MS = 60_000;
-function botAlertDraw() {
-  if (!BOT) return;
-  if (botPauseStale(BOT)) void botPauseLoad();
-  void botCantRunLoad(BOT.slug);
-  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host'), paused = $('#bot-paused');
-  if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
-  if (paused) patchLiveHTML(paused, botPausedBadge(BOT.slug));
-  if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
-  const review = $('#bot-review-host');
-  if (review) patchLiveHTML(review, botReviewHTML(BOT.slug));
-  if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
-}
-// Files dragged over any part of a bot's chat attach to its composer, which lights up to say so
-// (#524, after bot-desk). A file dropped anywhere else on the page is swallowed: the browser's own
-// answer is to navigate away to it, and nothing here wants that. A file input keeps its own drop.
-// A type guard: true only when the event carries files, so dataTransfer is there.
-const draggingFiles = (ev: DragEvent): ev is DragEvent & {dataTransfer: DataTransfer} => [...(ev.dataTransfer?.types || [])].includes('Files');
 (['dragover', 'drop'] as const).forEach(t => window.addEventListener(t, ev => {
   if (draggingFiles(ev) && !eventElement(ev)?.closest('input[type=file]')) ev.preventDefault();
 }));
@@ -523,9 +478,6 @@ async function pageBot(slug: string, tab: string | undefined) {
   showBotTab(tab);
   pausedRender();
 }
-// A desktop is wide enough for both: chat on the left, the bot's tasks on the right, each scrolling
-// on its own (#514). A phone keeps one at a time behind the Chat | Tasks switch.
-const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 // On a phone the top line is back, the bot and its tabs, nothing else. More is the rest, condensed: the Goals
 // card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
@@ -679,46 +631,15 @@ function botThreadStop() {
   BOT.thread = null;
 }
 
-// ----------------------------------------------------------------- slash commands
-// A message starting with "/" is a command to the hub, never a task for a bot: a typed /clear
-// once became an Issue that the bot then went and ran.
-const SLASH_HELP = [
-  ['/clear', 'start a fresh session for this bot on its next run'],
-  ['/help', 'show this list'],
-];
-const isCommand = (text: unknown) => /^\s*\//.test(String(text || ''));
-const commandWord = (text: unknown) => (String(text || '').trim().match(/^\/([a-z0-9-]*)/i) || [, ''])[1]!.toLowerCase();
-const helpHTML = () => `<div class="cmd-out"><div class="lbl">Commands</div>${SLASH_HELP.map(([c, d]) =>
-  `<div><code>${esc(c)}</code> <span class="muted">${esc(d)}</span></div>`).join('')}
-  <div class="muted" style="margin-top:6px">Anything starting with <code>/</code> stays here; it is never sent to a bot.</div></div>`;
-const unknownHTML = (word: string) => `<div class="cmd-out"><span class="err">Unknown command${word ? ` <code>/${esc(word)}</code>` : ''}.</span>
-  <span class="muted">Messages starting with <code>/</code> are not sent. Commands: ${SLASH_HELP.map(([c]) => `<code>${esc(c)}</code>`).join(', ')}.</span></div>`;
-// True when the text was a command and has been handled here, so the caller must not send it.
-function runCommand(text: unknown, out: Element | null | undefined, slug: string | null | undefined) {
-  if (!isCommand(text)) return false;
-  const word = commandWord(text);
-  const say = (html: string) => { if (out instanceof HTMLElement) { out.innerHTML = html; out.hidden = false; } };
-  if (word === 'help') { say(helpHTML()); return true; }
-  if (word === 'clear' && !slug) { say(`<div class="cmd-out"><span class="muted"><code>/clear</code> works on a bot's page, in its conversation box.</span></div>`); return true; }
-  if (word === 'clear' && slug) {
-    say(`<div class="cmd-out"><div>Start a fresh session for <strong>${empName(slug)}</strong> on its next run? Its history stays visible.</div>
-      <div class="row" style="margin-top:7px"><button class="primary" type="button" data-cmd="yes">Clear session</button>
-      <button class="ghost" type="button" data-cmd="no">Cancel</button><span class="muted" id="cmd-msg"></span></div></div>`);
-    if (!(out instanceof HTMLElement)) return true;
-    out.querySelector<HTMLElement>('[data-cmd="no"]')!.onclick = () => { out.hidden = true; out.innerHTML = ''; };
-    out.querySelector<HTMLElement>('[data-cmd="yes"]')!.onclick = async ev => {
-      const msg = out.querySelector<HTMLElement>('#cmd-msg')!, button = ev.target as HTMLButtonElement; button.disabled = true; msg.textContent = 'Clearing…';
-      try {
-        await post(`/employees/${encodeURIComponent(slug)}/session/clear`);
-        out.hidden = true; out.innerHTML = '';
-        toast('Session cleared: the next run starts fresh');
-      } catch (e) {
-        if (/\b403\b|only the owner|not shared|owner only/i.test(errorMessage(e, ''))) { out.hidden = true; out.innerHTML = ''; toast('only the owner can do that', true); return; }
-        msg.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; button.disabled = false;
-      }
-    };
-    return true;
-  }
-  say(unknownHTML(word));
-  return true;
+function botAlertDraw() {
+  if (!BOT) return;
+  if (botPauseStale(BOT)) void botPauseLoad();
+  void botCantRunLoad(BOT.slug);
+  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host'), paused = $('#bot-paused');
+  if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
+  if (paused) patchLiveHTML(paused, botPausedBadge(BOT.slug));
+  if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
+  const review = $('#bot-review-host');
+  if (review) patchLiveHTML(review, botReviewHTML(BOT.slug));
+  if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
 }

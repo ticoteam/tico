@@ -228,8 +228,6 @@ async function roadmapRankingLoad(state: RoadmapRankingState) {
     $('[data-roadmap-back]').disabled = !state.offset; $('[data-roadmap-next]').disabled = state.next == null; $('[data-roadmap-error]').textContent = '';
   } catch (error) { if (S.route === '#/roadmap' && seq === state.seq) $('[data-roadmap-error]').textContent = errorMessage(error, ''); }
 }
-// Set by the #/settings/roadmap route (Health's fix link): bring the Public roadmap card into view once it is drawn.
-let ROADMAP_SETTINGS_REVEAL = false;
 // Display names of a chosen bot the roster leaves out (archived bots are not in /employees), read on mount.
 const ROADMAP_BOT_NAMES: Record<string, string> = {};
 const roadmapBotName = (slug: string): string => ROADMAP_BOT_NAMES[slug] || botDisplayName(slug);

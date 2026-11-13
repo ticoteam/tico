@@ -27,6 +27,19 @@ naming its map (app.bundle.2.js.map): an index map whose sections place each fil
 the browser's tools and `python -m backend.ui_bundle --where app.bundle.2.js:1:4567` (a Sentry frame, which keeps only
 the file name, line and column) find the source file and line.
 
+Page parts (ui/parts.json). A cold open downloads only the shell: the files a page part names are cut out of the
+bundle and served as that part alone, `app.bundle.<part>.js?v=<hash of that part>`, fetched the first time a person
+goes to one of its pages (ui/app/parts.ts). Each part is named by its own content, so a release that changed one page's
+code changes that part's address only: the shell's `?v=` is the hash of the shell alone. The page lists every part's
+address in a JSON block (`<script type="application/json" id="ui-parts">`, no code, so the page's script-src stays
+'self') with `build`, the hash of all the app's code and styles, which an open page compares with the config's
+`ui_build`. A part's entries are names the shell or another part calls: the shell's first part declares each one
+as a stub before any file runs. A page (`pages`) or a call (`calls`) loads the part (with its `deps`, theirs and so
+on, in the order ui/parts.json lists the parts), then calls the
+real function, which the part's own declaration has put in the stub's place; an idle name (`idle`, a page's stop
+helper) does nothing until its part is loaded. A part is never larger than PART_BYTES (refused at build), and an old
+part address is a 404: an open tab from before a release reloads to the current one (ui/app/parts.ts).
+
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
@@ -44,7 +57,11 @@ PREFIX = "/tico/ui/"
 JS_PATH, CSS_PATH = PREFIX + "app.bundle.js", PREFIX + "app.bundle.css"
 # The largest part (decoded): a WebKit cache of 4 MB or more keeps it. The files are cut between, never inside.
 PART_BYTES = 512 * 1024
-PART = re.compile(re.escape(PREFIX) + r"app\.bundle(?:\.([2-9]|[1-9][0-9]))?\.(js|css)")
+PART = re.compile(re.escape(PREFIX) + r"app\.bundle(?:\.([2-9]|[1-9][0-9]|[a-z][a-z0-9-]*))?\.(js|css)")
+# A page part's name (ui/parts.json) and a name it lets others call.
+PART_NAME = re.compile(r"[a-z][a-z0-9-]*")
+ENTRY_NAME = re.compile(r"[A-Za-z_$][\w$]*")
+ENTRY_KINDS = ("pages", "calls", "idle")
 IMMUTABLE = "public, max-age=31536000, immutable"
 REGION = re.compile(r"[ \t]*<!-- bundle:(js|css):start -->\n(.*?)[ \t]*<!-- bundle:\1:end -->\n?", re.S)
 REF = re.compile(r'(?:src|href)="([^"]+)"')
@@ -75,9 +92,84 @@ def is_part(path):
     return bool(PART.fullmatch(path))
 
 
-def pack(chunks, limit=PART_BYTES):
-    """The indexes of the chunks (each one file's text, in order) packed into parts of at most `limit` bytes; a file
-    larger than that is a part of its own."""
+def page_part_path(name):
+    """The URL path of a page part (ui/parts.json)."""
+    return f"{PREFIX}app.bundle.{name}.js"
+
+
+def read_parts(ui_dir, js_names):
+    """ui/parts.json, checked against the files index.html bundles: {part: {"files", "deps", "pages", "calls",
+    "idle", "load"}}, empty when there is no such file."""
+    import json
+
+    path = Path(ui_dir) / "parts.json"
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text())
+    except ValueError as exc:
+        raise BundleError(f"ui/parts.json: {exc}") from None
+    parts, owner, entries = {}, {}, {}
+    for name, spec in raw.items():
+        if name.startswith("//"):
+            continue  # a comment
+        if not PART_NAME.fullmatch(name) or name.isdigit():
+            raise BundleError(f"ui/parts.json: {name!r} is not a part name (a-z, 0-9, -)")
+        part = {k: list(spec.get(k, [])) for k in ("files", "deps", *ENTRY_KINDS)}
+        for f in part["files"]:
+            if f not in js_names:
+                raise BundleError(f"ui/parts.json: {f} is not a script index.html bundles")
+            if f in owner:
+                raise BundleError(f"ui/parts.json: {f} is in two parts ({owner[f]}, {name})")
+            owner[f] = name
+        for kind in ENTRY_KINDS:
+            for e in part[kind]:
+                if not ENTRY_NAME.fullmatch(e):
+                    raise BundleError(f"ui/parts.json: {name}: {e!r} is not a name")
+                if e in entries:
+                    raise BundleError(f"ui/parts.json: {e} is an entry of two parts ({entries[e]}, {name})")
+                entries[e] = name
+        parts[name] = part
+    for name, part in parts.items():
+        for dep in part["deps"]:
+            if dep not in parts:
+                raise BundleError(f"ui/parts.json: {name} depends on {dep}, which is not a part")
+    # What a part needs loaded before its entries run: its deps, theirs, and so on (two parts may need each other), in
+    # the order ui/parts.json lists the parts, itself included. Scripts run in that order (ui/app/parts.ts).
+    rank = {name: n for n, name in enumerate(parts)}
+    for name, part in parts.items():
+        need, todo = {name}, [name]
+        while todo:
+            for dep in parts[todo.pop()]["deps"]:
+                if dep not in need:
+                    need.add(dep)
+                    todo.append(dep)
+        part["load"] = sorted(need, key=rank.__getitem__)
+    return parts
+
+
+def stubs(parts):
+    """The shell's stand-ins for the page parts' entries (ui/app/parts.ts uiPartCall), declared before any file runs."""
+    out = []
+    for name, part in parts.items():
+        for kind in ENTRY_KINDS:
+            for e in part[kind]:
+                if kind == "idle":
+                    out.append(f"function {e}() {{}}\n")
+                else:
+                    page = "true" if kind == "pages" else "false"
+                    out.append(f'function {e}(...a) {{ return uiPartCall("{name}", "{e}", a, {page}); }}\n')
+    called = [e for part in parts.values() for kind in ("pages", "calls") for e in part[kind]]
+    if called:
+        # So a call that finds a stand-in still there after its part loaded fails, rather than calling itself.
+        out.append("const UI_PART_STUBS = new Set([" + ", ".join(called) + "]);\n")
+    return "".join(out)
+
+
+def pack(chunks, limit=None):
+    """The indexes of the chunks (each one file's text, in order) packed into parts of at most `limit` bytes
+    (PART_BYTES); a file larger than that is a part of its own."""
+    limit = PART_BYTES if limit is None else limit
     parts, size = [[]], 0
     for i, chunk in enumerate(chunks):
         if parts[-1] and size + len(chunk) > limit:
@@ -88,7 +180,7 @@ def pack(chunks, limit=PART_BYTES):
     return parts
 
 
-def split(chunks, limit=PART_BYTES):
+def split(chunks, limit=None):
     """The chunks packed into parts (`pack`), each part's bytes."""
     return [b"".join(chunks[i] for i in p) for p in pack(chunks, limit)]
 
@@ -98,7 +190,7 @@ def map_path(kind, n):
     return part_path(kind, n) + ".map"
 
 
-def _parts(kind, chunks, prefix=lambda n: b"", digests=None):
+def _parts(kind, chunks, prefix=lambda n: b"", digests=None, at=None):
     """The parts of one bundle and, per part, its map's sections [(line, map file)]: `chunks` are (text, the lines
     before the file's own code, its map file or None). A part with any section ends by naming its map, `?v=` a hash of
     where each section is and its map's sha256 (`digests`, from the manifest), so the map's URL changes with them and
@@ -116,8 +208,8 @@ def _parts(kind, chunks, prefix=lambda n: b"", digests=None):
             line += text.count(b"\n")
         body = head + b"".join(texts[i] for i in indexes)
         if found:
-            key = hashlib.sha256(repr([(at, digests.get(path, path.name)) for at, path in found]).encode())
-            url = map_path(kind, n).rsplit("/", 1)[1] + "?v=" + key.hexdigest()[:16]
+            key = hashlib.sha256(repr([(line, digests.get(path, path.name)) for line, path in found]).encode())
+            url = ((at + ".map") if at else map_path(kind, n)).rsplit("/", 1)[1] + "?v=" + key.hexdigest()[:16]
             body += (f"//# sourceMappingURL={url}\n" if kind == "js" else f"/*# sourceMappingURL={url} */\n").encode()
         parts.append(body)
         sections.append(found)
@@ -136,16 +228,23 @@ def index_map(sections):
 
 
 class Bundle:
-    def __init__(self, page, js_parts, css_parts, versions=None, sections=None):
+    def __init__(self, page, js_parts, css_parts, versions=None, sections=None, page_parts=None):
         self.page, self.js, self.css = page, b"".join(js_parts), b"".join(css_parts)
+        # A page part's URL path -> its bytes (ui/parts.json), in an order their deps allow.
+        page_parts = dict(page_parts or {})
+        # All the app's code: what a page from before the split, which names only the first URL, needs.
+        self.js_whole = self.js + b"".join(page_parts.values())
         # STANDALONE path -> the `?v=` the page names it with.
         self.versions = dict(versions or {})
         # The bundle's URL path -> the part served there.
         self.parts = {
             **{part_path("js", n): b for n, b in enumerate(js_parts)},
             **{part_path("css", n): b for n, b in enumerate(css_parts)},
+            **page_parts,
         }
         self.etag = {path: _etag(body) for path, body in self.parts.items()}
+        # The shell's paths (every part but the page parts).
+        self.shell_paths = {path for path in self.parts if path not in page_parts}
         # A part's map path -> (its `?v=`, its sections); the map itself is read when it is asked for (`source_map`).
         self.sections = {}
         for path, found in (sections or {}).items():
@@ -157,12 +256,19 @@ class Bundle:
         self.gz = {path: gzip.compress(body, 6, mtime=0) for path, body in self.parts.items()}
         self.gz_etag = {k: v[:-1] + '-gzip"' for k, v in self.etag.items()}
         self.page_etag = _etag(page)
-        self.whole_etag = {kind: _etag(body)[:-1] + '-whole"' for kind, body in (("js", self.js), ("css", self.css))}
+        self.whole_etag = {
+            kind: _etag(body)[:-1] + '-whole"' for kind, body in (("js", self.js_whole), ("css", self.css))
+        }
         self.whole_gz = {}
-        # What the page's own tags carry (`?v=`, the hash of each whole bundle), joined: a page that finds a different
-        # one in the config is out of date.
-        self.version = {kind: tag[1:17] for kind, tag in self.whole_etag.items()}
-        self.build = self.version["js"] + "." + self.version["css"]
+        # What the shell's tags carry (`?v=`, the hash of the shell's script, and of the whole stylesheet).
+        self.version = {"js": _etag(self.js)[1:17], "css": _etag(self.css)[1:17]}
+        # The `?v=` each part is current under: the shell's parts carry the shell's, a page part its own.
+        self.part_version = {
+            **{path: self.version["js" if path.endswith(".js") else "css"] for path in self.parts},
+            **{path: _etag(body)[1:17] for path, body in page_parts.items()},
+        }
+        # All the app's code and styles: a page that finds a different build in the config is out of date.
+        self.build = self.whole_etag["js"][1:17] + "." + self.version["css"]
 
     def source_map(self, path, v):
         """The map at `path` (app.bundle.2.js.map) as the part names it (`?v=`), or None."""
@@ -175,7 +281,7 @@ class Bundle:
 
     def gzip_whole(self, kind):
         if kind not in self.whole_gz:
-            self.whole_gz[kind] = gzip.compress(getattr(self, kind), 6, mtime=0)
+            self.whole_gz[kind] = gzip.compress(self.js_whole if kind == "js" else self.css, 6, mtime=0)
         return self.whole_gz[kind]
 
 
@@ -220,30 +326,65 @@ def build(ui_dir):
             else:
                 text, map_file = path.read_text(), None
             sources[kind].append((name, text, map_file))
+    parts = read_parts(ui_dir, [name for name, _ in files["js"]])
+    owner = {f: part for part, spec in parts.items() for f in spec["files"]}
     # One script is one scope for 'use strict': a directive only counts at the top of a script, so the
     # bundle opens with it once, and every file must already be strict.
-    js = []
+    js, paged = [], {part: [] for part in parts}
     for name, text, map_file in sources["js"]:
         # esbuild writes the directive of a compiled or minified file with double quotes.
         if not re.search(r"""^(['"])use strict\1;""", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")
-        js.append((f"// file: {name}\n{text.rstrip()}\n\n".encode(), 1, map_file))
+        chunk = (f"// file: {name}\n{text.rstrip()}\n\n".encode(), 1, map_file)
+        (paged[owner[name]] if name in owner else js).append(chunk)
     css = [(f"/* file: {name} */\n{text.rstrip()}\n\n".encode(), 1, m) for name, text, m in sources["css"]]
     # Each part is a script of its own, so each opens with the directive; the first also marks where the run starts.
+    head = BUNDLE_MARK + stubs(parts)
     js_parts, js_sections = _parts(
-        "js", js, lambda n: b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n", digests
+        "js", js, lambda n: b"'use strict';\n" + (head.encode() if n == 0 else b"") + b"\n", digests
     )
     css_parts, css_sections = _parts("css", css, digests=digests)
     sections = {part_path("js", n): s for n, s in enumerate(js_sections)}
     sections |= {part_path("css", n): s for n, s in enumerate(css_sections)}
-    version = {"js": _etag(b"".join(js_parts))[1:17], "css": _etag(b"".join(css_parts))[1:17]}
+    page_parts = {}
+    for part, chunks in paged.items():
+        if not chunks:
+            raise BundleError(f"ui/parts.json: {part} has no files")
+        if sum(len(c[0]) for c in chunks) > PART_BYTES:
+            raise BundleError(
+                f"ui/parts.json: {part} is over {PART_BYTES} bytes, more than WebKit's cache keeps: split it"
+            )
+        cut, found = _parts("js", chunks, lambda n: b"'use strict';\n\n", digests, page_part_path(part))
+        page_parts[page_part_path(part)] = cut[0]
+        sections[page_part_path(part)] = found[0]
+    whole = Bundle(b"", js_parts, css_parts, page_parts=page_parts)
+    version, build_id = whole.version, whole.build
     count = {"js": len(js_parts), "css": len(css_parts)}
-    page = REGION.sub(
-        lambda m: "".join(
-            _tag(m.group(1), f"{part_path(m.group(1), n)}?v={version[m.group(1)]}") for n in range(count[m.group(1)])
-        ),
-        html,
-    )
+
+    def region(m):
+        kind = m.group(1)
+        tags = "".join(_tag(kind, f"{part_path(kind, n)}?v={version[kind]}") for n in range(count[kind]))
+        if kind == "js" and parts:
+            import json
+
+            table = {
+                "build": build_id,
+                "parts": {
+                    part: {
+                        "url": f"{page_part_path(part)}?v={whole.part_version[page_part_path(part)]}",
+                        "load": spec["load"],
+                    }
+                    for part, spec in parts.items()
+                },
+            }
+            # Data, not code: a JSON block runs nothing, so the page's script-src stays 'self'.
+            tags = (
+                f'<script type="application/json" id="ui-parts">{json.dumps(table, separators=(",", ":"))}</script>\n'
+                + tags
+            )
+        return tags
+
+    page = REGION.sub(region, html)
     versions, standalone = {}, []
     for url, name in STANDALONE.items():
         path, tag = ui_dir / name, f'src="{url}"'
@@ -262,7 +403,9 @@ def build(ui_dir):
     # A new build of the minified copies rewrites the manifest.
     if minified and ui_build.manifest_path(ui_dir) not in listed:
         listed.append(ui_build.manifest_path(ui_dir))
-    return Bundle(page.encode(), js_parts, css_parts, versions, sections), listed
+    if parts:
+        listed.append(Path(ui_dir) / "parts.json")
+    return Bundle(page.encode(), js_parts, css_parts, versions, sections, page_parts), listed
 
 
 class UiBundle:
@@ -366,9 +509,9 @@ def where(bundle, frame):
     `source:line:column`, or None when no minified file is there."""
     import json
 
-    m = re.fullmatch(r"(?:.*/)?(app\.bundle(?:\.\d+)?\.(?:js|css)):(\d+):(\d+)", frame)
+    m = re.fullmatch(r"(?:.*/)?(app\.bundle(?:\.(?:\d+|[a-z][a-z0-9-]*))?\.(?:js|css)):(\d+):(\d+)", frame)
     if not m:
-        raise ValueError(f"{frame}: not app.bundle[.N].js:line:column")
+        raise ValueError(f"{frame}: not app.bundle[.N|.part].js:line:column")
     path, line, column = PREFIX + m.group(1), int(m.group(2)) - 1, int(m.group(3)) - 1
     found = [s for s in bundle.sections.get(path + ".map", (None, []))[1] if s[0] <= line]
     if not found:

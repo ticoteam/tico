@@ -34,8 +34,6 @@ interface GoalPatch { title?: string; owner?: string; parent_id?: string; bet_id
 type GoalSheetState = GkState<GkPanel | null> | Pick<GkState<GkPanel | null>, 'goals'>;
 let GOALS_ST: GoalsState | null = null;
 const goalBuiltInOwner = (actor: string | undefined) => String(actor || '').startsWith('bot:') && isBuiltInBot(actor!.slice(4));
-const goalLive = (g: {status?: string | null}) => !['done', 'dropped'].includes(String(g.status));
-const goalRank = (a: GkGoal | GkStrategyBet, b: GkGoal | GkStrategyBet) => (a.rank ?? 1e9) - (b.rank ?? 1e9);
 const GOAL_COMPANY = 'company';
 function goalOwnerInfo(actor: string | undefined) {
   if (actor === GOAL_COMPANY) return {kind: 'company', id: GOAL_COMPANY, name: S.config?.company_name || 'Team', avatar: '', href: ''};
@@ -46,26 +44,6 @@ function goalOwnerInfo(actor: string | undefined) {
   }
   const p = (S.people || []).find(x => x.id === id);
   return {kind: 'person', id, name: p?.name || id, avatar: personAvatar(p || {id, name: id}, 20), href: `#/person/${encodeURIComponent(String(id))}`};
-}
-// Where an owner sits on the org chart: its node key and the chain of keys above it. Who is above whom is who reports
-// to whom, not the groups people are in.
-function goalOrgPlace(owner: string | null | undefined) {
-  const up: Record<string, string> = {};
-  for (const p of S.people || []) up['p:' + p.id] = orgBossKey({kind: 'person', person: p});
-  for (const e of S.emps || []) up['b:' + e.id] = orgBossKey({kind: 'bot', ...e});
-  const key = String(owner || '').startsWith('human:') ? 'p:' + owner!.slice(6) : String(owner || '').startsWith('bot:') ? 'b:' + (owner as string).slice(4) : '';
-  const above = new Set<string>();
-  for (let at = up[key]; at && !above.has(at); at = up[at]) above.add(at);
-  return {key, parent: up[key] || '', above};
-}
-// Mirrors the hub's rule: the goal's owner, the owner of the goal it supports, or anyone above the
-// owner on the org chart; the environment's owner edits every goal.
-function goalMayEdit(g: GoalRef, goals: GkGoal[] = []) {
-  if (S.me?.role === 'owner') return true;
-  const me = mePerson(), actor = me ? 'human:' + me.id : '';
-  if (!actor) return false;
-  const parent = goals.find(x => x.id === g.parent_id);
-  return g.owner_id === actor || parent?.owner_id === actor || goalOrgPlace(g.owner_id).above.has('p:' + me!.id);
 }
 // The options of a "Supports" select: Nothing first (a goal needs no parent), then team goals,
 // goals above the owner on the org chart, and goals alongside it. Never the goal itself or anything
@@ -89,18 +67,6 @@ function goalSupportOptions(g: GoalRef, owner: string | null | undefined, goals:
   const group = (label: string, list: GkGoal[]) => list.length ? `<optgroup label="${label}">${list.sort(goalRank).map(option).join('')}</optgroup>` : '';
   return `<option value=""${g.parent_id ? '' : ' selected'}>Nothing</option>`
     + group('Team', rows.company) + group('Above on the team chart', rows.above) + group('Alongside', rows.alongside);
-}
-const goalLinkOptions = (g: GkGoal, goals: GkGoal[]) => goalSupportOptions(g, g.owner_id, goals);
-// One goal, editable in place (the bot page's Goals card): the words, and what it supports.
-function goalEditorHtml(g: GkGoal, goals: GkGoal[]) {
-  const may = goalMayEdit(g, goals), parent = goals.find(x => x.id === g.parent_id);
-  return `<div class="goal-ed" data-goal-ed="${esc(g.id)}">
-      <div class="goal-ed-row"><input class="goal-ed-text" type="text" maxlength="300" value="${esc(g.title)}" aria-label="Goal"${may ? '' : ' readonly'}>
-        ${may ? `<button class="ghost goal-ed-link" type="button" title="Change the goal this supports" aria-label="Change the goal this supports"><span class="nav-icon" aria-hidden="true">link</span></button>` : ''}</div>
-      ${may ? `<button type="button" class="goal-ed-supports goal-ed-change" aria-label="Change the goal this supports">Supports <u>${esc(parent ? parent.title : 'nothing')}</u></button>`
-        : parent ? `<div class="goal-ed-supports">Supports <a href="${GOALS}/${encodeURIComponent(parent.id)}" data-goal-go="${esc(parent.id)}">${esc(parent.title)}</a></div>` : ''}
-      ${may ? `<select class="goal-ed-pick" hidden aria-label="The goal this supports">${goalLinkOptions(g, goals)}</select>` : ''}
-    </div>`;
 }
 // Enter or leaving the field saves; Escape puts the words back. An emptied goal is removed.
 function bindGoalEditor(el: HTMLElement, g: GkGoal, done?: (removed: boolean) => void) {

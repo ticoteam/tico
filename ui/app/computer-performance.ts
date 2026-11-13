@@ -61,7 +61,6 @@ const PERF_SERIES: [string, 1 | 3, string][] = [['cpu', 1, 'CPU'], ['mem', 3, 'M
 const PERF_REASONS: Record<string, string> = {cpu: 'CPU over 90%', memory: 'memory over 90%', swap: 'swapping', disk: 'disk nearly full'};
 let PERF: ComputerPerfState | null = null;
 
-const performanceHref = (id: string) => `#/computers/${encodeURIComponent(id)}/performance`;
 const perfPct = (v: number | null | undefined) => v == null ? '–' : `${Math.round(v)}%`;
 const perfBot = (slug: string | null | undefined) => !slug ? 'another bot' : typeof botDisplayName === 'function' ? botDisplayName(slug) : slug;
 const perfWhen = (ts: number) => fmt(new Date(ts * 1000).toISOString());

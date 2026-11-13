@@ -1,0 +1,504 @@
+{
+ "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "webhooks": {
+  "files": [
+   "app/settings-webhooks.ts",
+   "app/settings-webhooks-state.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageToolWebhooks"
+  ],
+  "calls": [
+   "whMount"
+  ],
+  "idle": []
+ },
+ "settings": {
+  "files": [
+   "app/bot-branches.ts",
+   "app/settings.ts",
+   "app/settings-search.ts",
+   "app/settings-recurring.ts",
+   "app/settings-tasks.ts",
+   "app/settings-release.ts",
+   "app/settings-devices.ts",
+   "app/skills-connect.ts",
+   "app/settings-bots.ts",
+   "app/settings-bots-choice.ts",
+   "app/settings-bots-tasks.ts",
+   "app/settings-bots-bulk.ts",
+   "app/settings-history.ts",
+   "app/settings-storage.ts",
+   "app/settings-company.ts",
+   "app/settings-billing.ts",
+   "app/settings-gateway.ts",
+   "app/inboxes-alerts.ts",
+   "app/settings-hosted.ts",
+   "app/settings-strategy-bot.ts",
+   "app/settings-bot-editor.ts",
+   "app/bot-budget.ts",
+   "app/cloud-machines.ts",
+   "app/bot-profile.ts",
+   "app/settings-repositories.ts",
+   "app/subscriptions.ts",
+   "app/plan-signin.ts",
+   "app/computer-detail.ts",
+   "app/team-build.ts",
+   "app/settings-providers.ts",
+   "app/settings-people.ts",
+   "app/cloud-agents.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageSettings",
+   "pageSkillsConnect"
+  ],
+  "calls": [
+   "botBranchCreate",
+   "botBranchesLoad",
+   "executionReview",
+   "loadSettings",
+   "renderSettingsMachines",
+   "renderSettingsPeople",
+   "renderSettingsTokens",
+   "renderSystemRoutines",
+   "settingsBeginTransition",
+   "settingsConfirmTransition",
+   "settingsDestinationSave",
+   "settingsFieldClear",
+   "settingsFieldError",
+   "settingsHistoryAddress",
+   "settingsMachinesRead",
+   "settingsReleasesOpen",
+   "teamBuildOpen"
+  ],
+  "idle": []
+ },
+ "connect": {
+  "files": [
+   "connect-agent.ts",
+   "github-connect.ts",
+   "google-connect.ts",
+   "meeting-importers.ts",
+   "slack-connect.ts",
+   "slack-channels.ts",
+   "directory-sync.ts",
+   "model-login.ts",
+   "app/inboxes.ts",
+   "app/inboxes-email.ts",
+   "app/inboxes-texts.ts",
+   "app/inboxes-letters.ts",
+   "app/inboxes-sending.ts",
+   "app/inboxes-outbox.ts"
+  ],
+  "deps": [
+   "webhooks"
+  ],
+  "pages": [],
+  "calls": [
+   "inboxesGo",
+   "inboxesRender",
+   "mountDirectorySync",
+   "mountGithubConnect",
+   "mountSlackChannels",
+   "mountSlackConnect",
+   "openMeetingImporter"
+  ],
+  "idle": []
+ },
+ "welcome": {
+  "files": [
+   "org-builder.ts",
+   "first-run.ts",
+   "setup-strategy.ts",
+   "app/welcome.ts"
+  ],
+  "deps": [
+   "settings"
+  ],
+  "pages": [
+   "pageWelcome"
+  ],
+  "calls": [
+   "frBotRefresh",
+   "frBotWire",
+   "onbWelcome"
+  ],
+  "idle": [
+   "onbStop"
+  ]
+ },
+ "bot": {
+  "files": [
+   "bot-files.ts",
+   "bot-tools.ts",
+   "app/bot-tasks.ts",
+   "app/bot-sidebar.ts",
+   "app/bot-learnings.ts",
+   "app/bot-page.ts",
+   "app/bot-page-pause.ts",
+   "app/bot-page-goals.ts",
+   "app/bot-page-view.ts",
+   "app/bot-details.ts",
+   "app/bot-conversation.ts",
+   "app/recruit.ts"
+  ],
+  "deps": [
+   "settings",
+   "task"
+  ],
+  "pages": [
+   "pageBot",
+   "pageSeat"
+  ],
+  "calls": [
+   "bindChatSwipe",
+   "botGoalLoad",
+   "botGoalsCardLoad",
+   "botInfoRefresh",
+   "botNeedsChanged",
+   "botNeedsPaint",
+   "botSettingsHistoryLoad",
+   "botTaskRowHTML",
+   "botTasksCatchUp",
+   "botTasksLive",
+   "chatDropZone",
+   "loadBotTasksV2",
+   "placeBotHead",
+   "recruitPostJob",
+   "recruitScratch",
+   "settingsRecruitFlow",
+   "settingsRecruitHandoff",
+   "showBotTab",
+   "v2PillTask"
+  ],
+  "idle": [
+   "botAlertDraw",
+   "botStopped",
+   "recruitStop"
+  ]
+ },
+ "computers": {
+  "files": [
+   "replay-player.ts",
+   "app/usage.ts",
+   "app/replay.ts",
+   "app/computer-screen.ts",
+   "app/computer-performance.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageComputerPerformance",
+   "pageComputerScreen",
+   "pageReplay",
+   "pageUsage"
+  ],
+  "calls": [
+   "botScreenRefresh",
+   "botScreenSettingsPaint",
+   "botScreenWire",
+   "useLimitDialog"
+  ],
+  "idle": [
+   "perfStop",
+   "replayStop",
+   "screenStop"
+  ]
+ },
+ "growth": {
+  "files": [
+   "app/goals-kpi-views.ts",
+   "app/growth-charts.ts",
+   "app/growth-page.ts",
+   "app/brand-page.ts",
+   "app/growth-channels.ts",
+   "app/growth-sources.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageBrand",
+   "pageGrowth"
+  ],
+  "calls": [],
+  "idle": [
+   "growthStop"
+  ]
+ },
+ "company": {
+  "files": [
+   "market-briefing.ts",
+   "market-page.ts",
+   "market-page-graph.ts",
+   "market-spend.ts",
+   "strategy-page.ts",
+   "lenses-page.ts",
+   "goals-kpis.ts",
+   "app/overview-factories.ts",
+   "app/org-factories.ts",
+   "app/goals.ts",
+   "app/overview.ts",
+   "app/overview-hours.ts",
+   "app/overview-graph.ts",
+   "app/strategy-budget.ts",
+   "app/company-page.ts",
+   "app/redesign-org.ts",
+   "app/redesign-market.ts",
+   "app/org-rules.ts"
+  ],
+  "deps": [
+   "computers",
+   "growth"
+  ],
+  "pages": [
+   "pageBudget",
+   "pageCompanyPage",
+   "pageGoals",
+   "pageLenses",
+   "pageMarket",
+   "pageOverview",
+   "pageOverviewCompany",
+   "pageOverviewFactories",
+   "pageOverviewGraph",
+   "pageRdOrg",
+   "pageRules",
+   "pageStrategy"
+  ],
+  "calls": [
+   "bindGoalEditor",
+   "botRulesLoad",
+   "goalFinishedMount",
+   "goalSheetOpen",
+   "goalSupportOptions",
+   "goalsFollowRoster",
+   "goalsRefresh",
+   "headGoalsLoad",
+   "openGoal",
+   "overviewNeedsDraw"
+  ],
+  "idle": [
+   "companyPageStop",
+   "graphStop",
+   "lensesStop",
+   "marketStop",
+   "overviewRefresh",
+   "overviewStop",
+   "overviewStuckDraw",
+   "rulesStop",
+   "strategyStop"
+  ]
+ },
+ "library": {
+  "files": [
+   "docs-editor.ts",
+   "docs-page.ts",
+   "app/skills.ts",
+   "app/directory.ts",
+   "app/directory-entity.ts",
+   "app/directory-settings.ts",
+   "app/integrations.ts",
+   "app/vault.ts",
+   "app/tools.ts",
+   "app/tools-api.ts",
+   "app/redesign-library.ts"
+  ],
+  "deps": [
+   "finance",
+   "webhooks"
+  ],
+  "pages": [
+   "pageCompanyDocs",
+   "pageDirectory",
+   "pageDirectoryEntity",
+   "pageRdTools",
+   "pageSkill",
+   "pageSkillProposal",
+   "pageSkills",
+   "pageToolApi",
+   "pageToolService",
+   "pageTools",
+   "toolsInboxPage"
+  ],
+  "calls": [
+   "directorySettingsShow",
+   "taCampaignsReload"
+  ],
+  "idle": [
+   "directoryStop",
+   "skillsStop",
+   "toolsStop"
+  ]
+ },
+ "finance": {
+  "files": [
+   "app/finance-pnl.ts",
+   "app/finance-budgets.ts",
+   "app/finance-books.ts",
+   "app/finance-docs.ts",
+   "app/finance-admin.ts",
+   "app/finance-tax.ts",
+   "app/finance-attribution.ts",
+   "app/finance-campaigns.ts",
+   "app/finance-receipts.ts",
+   "app/finance-subscriptions.ts",
+   "app/finance-brief.ts",
+   "app/finance-statement-upload.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "finAccessPage",
+   "finAttrPage",
+   "finBalancePage",
+   "finBudgetsPage",
+   "finCardsPage",
+   "finDocPage",
+   "finLinePage",
+   "finPnlPage",
+   "finSourcesPage",
+   "finTaxPage",
+   "finTxPage"
+  ],
+  "calls": [
+   "finBriefLoad",
+   "finCampaignOwnerChange"
+  ],
+  "idle": []
+ },
+ "automations": {
+  "files": [
+   "app/automations.ts",
+   "app/automations-state.ts",
+   "app/automations-flow.ts",
+   "app/automations-editors.ts",
+   "app/automations-runs.ts",
+   "app/automations-overview.ts",
+   "app/listening.ts",
+   "app/automations-maintenance.ts",
+   "app/automations-heartbeat.ts",
+   "app/automations-new.ts"
+  ],
+  "deps": [
+   "webhooks"
+  ],
+  "pages": [
+   "pageAutomations"
+  ],
+  "calls": [],
+  "idle": [
+   "automationsStop"
+  ]
+ },
+ "meetings": {
+  "files": [
+   "app/meetings.ts",
+   "app/live-meetings.ts",
+   "app/meetings-granola.ts",
+   "app/meetings-sources.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageLiveMeetings",
+   "pageNotes"
+  ],
+  "calls": [],
+  "idle": [
+   "liveMeetingsStop",
+   "meetStop"
+  ]
+ },
+ "calendar": {
+  "files": [
+   "app/calendar.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageCalendar"
+  ],
+  "calls": [],
+  "idle": [
+   "calendarStop"
+  ]
+ },
+ "updates": {
+  "files": [
+   "app/updates.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageUpdates"
+  ],
+  "calls": [
+   "botHistoryLoad",
+   "botLatestSeen",
+   "botLatestUpdate",
+   "botUpdatesCardLoad",
+   "updFlush"
+  ],
+  "idle": []
+ },
+ "misc": {
+  "files": [
+   "app/person-page.ts",
+   "app/assistant-page.ts",
+   "app/learned.ts",
+   "app/learnings.ts",
+   "app/new-message.ts",
+   "app/mail.ts",
+   "app/messaging.ts",
+   "app/sql.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageAssistant",
+   "pageLearned",
+   "pageLearnings",
+   "pageMail",
+   "pageMessaging",
+   "pageNewMessage",
+   "pagePerson",
+   "pageSql"
+  ],
+  "calls": [
+   "personTasksLive",
+   "personTasksReload",
+   "pushSubscribe"
+  ],
+  "idle": [
+   "mailForget"
+  ]
+ },
+ "task": {
+  "files": [
+   "app/github-nudge.ts",
+   "app/pipeline-editor.ts",
+   "app/task-requirements.ts",
+   "app/task-meetings.ts",
+   "app/task-modal.ts",
+   "app/roadmaps.ts",
+   "app/task-code.ts",
+   "app/task-runs.ts",
+   "app/task-props.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageRoadmap"
+  ],
+  "calls": [
+   "githubNudgeBot",
+   "openPipelineEditor",
+   "roadmapSettingsMount",
+   "taskChatLive",
+   "taskChatRead",
+   "taskCommentsRender",
+   "taskModalOpen",
+   "taskModalShow",
+   "taskPropsMsgPaint",
+   "taskRunCatalog",
+   "taskThreadOpen"
+  ],
+  "idle": [
+   "taskChatStop",
+   "taskModalRouteClose"
+  ]
+ }
+}

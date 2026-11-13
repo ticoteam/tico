@@ -53,14 +53,6 @@ function settingsVisualsLine() {
     <a href="${GH}/blob/main/docs/visuals.md#self-hosting" target="_blank" rel="noopener noreferrer">How visuals show</a>`;
 }
 
-// ----------------------------------------------------------------- settings
-// People stay deliberately compact. Bot ownership, model, and physical placement are separate
-// controls because changing who can use a bot must never silently move its runtime (or vice versa).
-// Teams come from the team's data; a name reads as its words (`success-owner` is Customer Success).
-const teamLabel = (t?: string) => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
-// Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
-const SETTINGS_PRESENCE: SettingsPresence = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
 function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTINGS_PRESENCE.request, coming: SettingsCloudComing[] = []) {
   if (request < SETTINGS_PRESENCE.applied) return;
   SETTINGS_PRESENCE.applied = request;
@@ -106,50 +98,16 @@ function settingsMachinesRefresh() {
   });
   return SETTINGS_PRESENCE.pending;
 }
-// Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner-rs/harnesses/*.toml): what the UI
-// asks instead of naming CLIs. Fetched once; until then, or if the fetch fails, every capability reads as unknown.
-let HARNESS_ROWS: HarnessRow[] = [];
-let HARNESS_ROWS_LOADING: Promise<void> | null = null;
-function loadHarnessRows() {
-  HARNESS_ROWS_LOADING ||= get('/v2/models').then(d => { HARNESS_ROWS = d?.harnesses || []; }, () => { HARNESS_ROWS_LOADING = null; });
-  return HARNESS_ROWS_LOADING;
-}
-const harnessRow = (id: string | undefined) => HARNESS_ROWS.find(row => row.id === id) || null;
-const harnessCaps = (id: string | undefined): HarnessCaps => harnessRow(id)?.capabilities || {};
 const harnessesWith = (test: (caps: HarnessCaps) => unknown) => HARNESS_ROWS.filter(row => row.capabilities && test(row.capabilities));
-const SETTINGS_TAB_KEY = 'tico.settings.tab';
-// Remembered per browser tab so a reload lands where the person was; a first visit opens General.
-let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'general'; } catch { return 'general'; } })();
-// The address the shown tab writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
-let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
 const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history',
   'health', 'billing'];
-// System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
-// subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
-// card on Models (settingsShow scrolls to it); repos: Repositories, now a card on General. Inboxes (and Mailboxes, Email & Phone and Mail
-// before it) moved to Tools; their addresses redirect there (ui/app/tools.ts toolsRoute).
-const SETTINGS_ALIAS: Record<string, string> = {humans: 'people', computers: 'devices', repositories: 'repos',
-  rules: 'system', routines: 'system', recurring: 'system', screening: 'security', chat: 'models', providers: 'models', subscriptions: 'models',
-  limits: 'models', 'turn-levels': 'models', gateway: 'models'};
 // Repositories is a card on General (owners and admins): its old tab's addresses scroll to it once drawn.
 const SETTINGS_REPOS_CARD = '#set-repos[data-drawn]';
 // The Gateway card once drawn (renderSettingsProviders marks it), so a link to the old Gateway page lands on it filled in.
 const SETTINGS_GATEWAY_CARD = '#settings-gateway-card[data-drawn]';
-// System's cards left Settings: its jobs are Automations' System jobs, Releases, General Manager and the Strategy Owner are
-// those built-in bots' Settings, Screening is Security. The router asks for an old address's new home (or '' to stay).
-const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-general-manager-card': 'general-manager', 'set-strategy-bot-card': 'strategy-owner'};
-function settingsMovedOut(tab: string, card = '') {
-  if (tab === 'strategy-bot') card = 'set-strategy-bot-card';
-  else if (tab === 'releases') card = 'set-release-card';
-  else if ((SETTINGS_ALIAS[tab] || tab) !== 'system') return '';
-  if (card === 'set-screening-card') return SETTINGS + '/security/' + card;
-  if (card === 'set-release-card') { void settingsReleasesOpen(); return 'wait'; }
-  if (SETTINGS_SYSTEM_BOTS[card]) return `#/bot/${SETTINGS_SYSTEM_BOTS[card]}/settings`;
-  return AUTOMATIONS + '/' + AU_SYSJOBS;
-}
 // Releases is the Release Owner's (the one the schedule names or finds); with none, Settings > Bots.
 async function settingsReleasesOpen() {
   let v = null;
@@ -157,12 +115,8 @@ async function settingsReleasesOpen() {
   const bot = v?.bot || v?.release_manager;
   location.replace(bot ? `#/bot/${encodeURIComponent(bot)}/settings` : SETTINGS + '/bots');
 }
-// Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
-const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway', '#set-turn-levels'];
 let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER: number | null = null;
-// A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
-let SETTINGS_REVEAL = '';
 // The old tabs that are now sections of General.
 const SETTINGS_GENERAL: Record<string, string> = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage',
   notifications: '#settings-notifications', alerts: '#settings-notifications'};
@@ -176,17 +130,6 @@ const settingsRevealSoon = (selector: string, tries = 20) => {
   if ($(selector)) { settingsReveal(selector); return; }
   if (tries > 0) setTimeout(() => settingsRevealSoon(selector, tries - 1), 150);
 };
-// Owners and admins always; a member unless an admin switched create_bots off (the server decides, and counts the limit).
-const settingsCanCreateBots = () => S.me?.role === 'owner' || !!S.me?.bot_admin || S.me?.can_create_bots !== false;
-// The owner, an admin, one of the bot's owners, or someone it reports up to: what the server says (`can_manage`).
-const settingsCanManageBot = (e: (object & {can_manage?: boolean}) | null | undefined) => S.me?.role === 'owner' || !!S.me?.bot_admin || !!e?.can_manage;
-const settingsIsAdmin = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
-// The team owner's name, for "who can change this" lines; '' when the roster has not loaded.
-function settingsOwnerName() {
-  const people: SettingsPerson[] = [...(SETTINGS_DATA.people || []), ...(S.people || [])], id = S.me?.owner_id;
-  const owner = people.find(p => (id && p.id === id) || p.owner || p.role === 'owner');
-  return owner?.name || S.config?.owner_name || '';
-}
 // "Only Ana, the owner, can change models." / "Only Ana (the owner) or an admin can change this."
 function settingsWhoCanHTML(what = 'this', {admins = false} = {}) {
   const name = settingsOwnerName();
@@ -251,22 +194,6 @@ function settingsFieldError(control: Element | null | undefined, message: string
   }
   else anchor.after(line);
 }
-// Ask before anything hard to undo. Resolves true only on the confirm button.
-function settingsConfirm({title, text, ok = 'Confirm', danger = true}: {title: string; text: string; ok?: string; danger?: boolean}) {
-  return new Promise<boolean>(resolve => {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'tmodal settings-confirm'; dialog.setAttribute('aria-label', title);
-    dialog.innerHTML = `<form method="dialog"><div class="tmodal-title">${esc(title)}</div><div class="tmodal-body"><p>${esc(text)}</p>
-      <div class="onb-actions"><button type="submit" class="ghost" value="cancel" data-confirm-cancel>Cancel</button><span class="spacer"></span>
-      <button type="submit" class="primary${danger ? ' people-danger' : ''}" value="ok" data-confirm-ok>${esc(ok)}</button></div></div></form>`;
-    dialog.addEventListener('close', () => { resolve(dialog.returnValue === 'ok'); dialog.remove(); });
-    document.body.appendChild(dialog); dialog.showModal();
-    (dialog.querySelector('[data-confirm-cancel]') as HTMLElement).focus();
-  });
-}
-// Whoever the server lets make a personal token (`can_create_tokens`); an admin also sees everyone's. Someone
-// who still holds a token keeps the card to revoke it.
-const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
   if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; SETTINGS_TAB = 'general'; return; }
@@ -711,7 +638,7 @@ async function loadSettings() {
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
     const fromCatalog = $('#settings-add-catalog');
     if (fromCatalog) { fromCatalog.onclick = () => void settingsCatalogPicker(); fromCatalog.disabled = false; }
-    settingsRecruitHandoff();
+    if (RECRUIT_HANDOFF) settingsRecruitHandoff();   // only then is the bot page's code needed (ui/parts.json)
   } catch (error) {
     for (const id of ['#set-bots','#set-machines','#set-services','#set-history']) {
       const el = $(id); if (el) el.innerHTML = `<div class="err">${esc(errorMessage(error, 'Settings could not be loaded'))}</div>`;

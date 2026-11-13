@@ -143,21 +143,9 @@ interface Element {
   updBound?: boolean;
 }
 
-let UPD: UpdState | null = null;
 const UPD_DRAFTS = new Map<string, string>();
 const UPD_CACHE = (state: UpdState): string => updIsTree(state) ? `tico.updates.tree.${state.kind}.${state.scope || 'auto'}${state.day ? '.' + state.day : ''}`
   : `tico.updates.${state.kind}.${state.view}.${state.mine ? 'mine' : 'all'}`;
-const updIsTree = (state: Pick<UpdState, 'view' | 'layout'>): boolean => state.view !== 'archive' && state.layout !== 'list';
-function updPrefs(): UpdPrefs {
-  const out: UpdPrefs = {mine: true, layout: 'tree', scope: null};
-  try {
-    out.mine = localStorage.getItem('tico.updates.mine') !== '0';
-    out.layout = localStorage.getItem('tico.updates.layout') === 'list' ? 'list' : 'tree';
-    const scope = localStorage.getItem('tico.updates.scope');
-    out.scope = scope === 'below' || scope === 'all' ? scope : null;
-  } catch {}
-  return out;
-}
 function updCacheRead(state: UpdState): UpdData | null {
   try { return JSON.parse(sessionStorage.getItem(UPD_CACHE(state)) || 'null'); } catch { return null; }
 }
@@ -255,25 +243,6 @@ function pageUpdates(): void {
   updRender(state);
   void updLoad(state);
 }
-function updFeedPath(state: UpdFeedQuery, more = false): string {
-  if (updIsTree(state)) {
-    const q = new URLSearchParams({kind: state.kind});
-    if (state.day) q.set('day', state.day);
-    if (state.scope) q.set('scope', state.scope);
-    return '/v2/updates/tree?' + q;
-  }
-  const q = new URLSearchParams({kind: state.kind, limit: '40'});
-  if (state.mine) q.set('mine', 'true');           // the count and the feed agree with My bots
-  if (state.view === 'archive') q.set('archive', 'true');
-  if (more && state.data?.next_before) q.set('before', state.data.next_before);
-  return '/v2/updates?' + q;
-}
-// Startup asks for the feed beside the roster when Updates is the page it opens on, a round trip sooner (boot.js).
-function updPrefetch(): void {
-  if (!(location.hash === UPDATES || location.hash.startsWith(UPDATES + '?'))) return;
-  const params = new URLSearchParams(location.hash.split('?')[1] || '');
-  getPrefetch(updFeedPath({...updPrefs(), kind: params.get('kind') === 'weekly' ? 'weekly' : 'daily', view: params.get('view') === 'archive' ? 'archive' : 'inbox'}));
-}
 async function updLoad(state: UpdState, more = false): Promise<void> {
   const request = ++state.loadSeq, asked = Date.now();
   const mutation = state.mutationSeq;
@@ -313,14 +282,6 @@ function updOrder(state: UpdState, fresh: boolean): void {
   }
   let next = state.order.size;
   for (const u of list) if (!state.order.has(u.id)) state.order.set(u.id, next++);
-}
-function updBadge(n: number): void {
-  S.updUnread = n;
-  // A new number ticks in (countSet, ui/app/motion.ts).
-  for (const el of document.querySelectorAll<HTMLElement>('[data-upd-badge]')) { el.hidden = !n; countSet(el, n > 99 ? '99+' : String(n || '')); }
-  // In the tree the badge also counts direct reports' updates from other days: the button follows it both ways.
-  const allRead = $('#upd-allread');
-  if (allRead && UPD && updIsTree(UPD)) allRead.hidden = !(n > 0) && !(UPD.list || []).some(u => !u.read && !u.quiet);
 }
 // An update's author is a bot slug or `human:<id>` for a person, who posts in the same shape. Its avatar is the
 // height of the name's line (--upd-av, ui/styles/updates.css), at the start of it.
@@ -698,16 +659,6 @@ function updWatch(state: UpdState): void {
   }, {threshold: [0, 0.25, 0.5, 0.6, 0.75, 1]});
   for (const el of document.querySelectorAll('#upd-feed .upd-card.unread, #upd-feed .upd-card.upd-quiet')) state.io.observe(el);
 }
-// Reads the server may not count yet: seen cards waiting to be sent (UPD.pending) and those in flight. A count or a
-// list asked for before they settle still has them unread, and would put the badge (and the cards) back: updLoad keeps
-// them read and takes them off its count, and updUnreadRefresh drops a count asked for then.
-// `landed` keeps when each read was counted, so a reply asked for before then is caught too (kept a minute).
-const UPD_READS = {sending: new Set<string>(), landed: new Map<string, number>(), at: 0};
-function updUnsent(asked = Date.now()): Set<string> {
-  const now = Date.now();
-  for (const [id, at] of UPD_READS.landed) if (now - at > 60000) UPD_READS.landed.delete(id);
-  return new Set([...(UPD?.pending || []), ...UPD_READS.sending, ...[...UPD_READS.landed].filter(([, at]) => at >= asked).map(([id]) => id)]);
-}
 function updSeen(state: UpdState, id: string): void {
   const u = state.data?.updates?.find(x => x.id === id);
   if (!u || u.read || state.manualUnread.has(id) || UPD !== state) return;
@@ -928,20 +879,6 @@ function updBind(state: UpdState): void {
     }
   };
   document.addEventListener('keydown', state.keys);
-}
-// The badge on the rail and the phone's bar, from the 30 s refresh (one small count).
-// Only your direct reports' updates alert, one level down the org chart.
-async function updUnreadRefresh(): Promise<UpdData | null> {
-  const asked = Date.now();
-  if (UPD?.pending.size) void updFlush(UPD);           // a read whose save failed is sent again, or its count stays held
-  const r = await v2Get('/v2/updates/unread?scope=direct');
-  if (r) {
-    // A count asked for while this page's reads were unsent, or before they settled, still counts them: the next
-    // refresh brings the right number.
-    if (!updUnsent(asked).size && asked > UPD_READS.at) updBadge(r.unread);
-    meetPendingBadge(r.meetings_pending || 0);
-  }
-  return r;
 }
 // The bot's latest update heads the Updates section of its right rail: its age, the text (long ones fold
 // behind a small "More"), and "All updates" beside it, to all of its updates. Once the rail shows it, it counts as read.

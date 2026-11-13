@@ -61,15 +61,6 @@ const PROP_ICON = {
   check: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M3 7.3l2.6 2.6L11 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   more: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg>',
 };
-// who may change what (the server holds the rules; this only hides controls that could never work)
-function taskPropRights(t: PropTask): PropRights {
-  const me = myActor(), mover = canMove();
-  const party = !!me && [t.owner_id, t.requester_id, taskRequester(t)].includes(me);
-  const live = !taskFinished(t);
-  const onTask = !!me && Object.values<string[]>(t.roles || {}).some(actors => actors.includes(me));
-  return {mover, party, live, edit: (mover || party) && live, links: mover && live, reopen: mover || party,
-    snooze: live && (mover || party || onTask)};
-}
 // Snooze choices: the start of that day, local time (backend/task_snooze.py).
 function snoozeItems(): {value: string; text: string; html: string}[] {
   const day = (n: number): Date => { const at = new Date(); at.setHours(0, 0, 0, 0); at.setDate(at.getDate() + n); return at; };

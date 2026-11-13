@@ -2,13 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const plural = (n: number, one: string, many?: string): string => `${n} ${n === 1 ? one : (many || one + 's')}`;
 
-// The CLI's own resume command comes from its manifest (`resume_command`); a CLI without one gets `<name> --resume`.
-function botResumeCommand(runtime: string | null | undefined, sid: string, slug: string): string {
-  const r = String(runtime || '').toLowerCase();
-  return `cd ~/tico-work/emp-${botSlug(slug)} && ${harnessCaps(r).resume_command || `${r} --resume`} ${sid}`;
-}
 // The bot page's Runs card, when /status came back without recent_runs: same cached /runs list.
 async function fillBotRuns(slug: string) {
   if (!$('#bot-recent-runs[data-pending]')) return;

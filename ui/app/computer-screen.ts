@@ -51,83 +51,12 @@ interface ScreenGesture { type: string; clientX: number; clientY: number; magnit
 interface ScreenDrag { x: number; y: number; left: number; top: number; mx: number; my: number; }
 let SCREEN: ScreenPage | null = null;
 
-// ----------------------------------------------------------------- who sees it
-// The server's rule (the sessions route): the computer's operator or a bot admin.
-const screenMayOpen = (machine: ScreenMachine | null | undefined): boolean => !!machine && !machine.revoked_at && (settingsIsAdmin() || (!!S.me?.id && machine.owner_id === S.me.id));
-const screenOn = (machine: ScreenMachine | null | undefined) => !!machine && machine.screen && machine.screen !== 'off' && machine.screen_available !== false;
-// A computer's row from what is already loaded: the bot rows' own computer first (every refresh reloads them), then
-// Settings' operations listing, which is read only when Settings opens, for a computer with no bots and for revoked_at.
-function screenMachine(id: string | null | undefined): ScreenMachine | null {
-  if (!id) return null;
-  const row = (SETTINGS_DATA.machines || []).find(m => m.id === id);
-  const bot = (S.emps || []).find(e => e.machine?.runner_id === id)?.machine;
-  if (!row && !bot) return null;
-  return {id, label: bot?.label || row?.label, owner_id: bot?.owner_id ?? row?.owner_id, revoked_at: row?.revoked_at,
-          screen: bot?.screen ?? row?.screen, screen_available: bot?.screen_available ?? row?.screen_available};
-}
 // A mode just saved, written into both loaded copies so neither shows the old one until the next refresh.
 function screenSaved(id: string, saved: ScreenSaved) {
   for (const m of [(SETTINGS_DATA.machines || []).find(x => x.id === id), ...(S.emps || []).filter(x => x.machine?.runner_id === id).map(x => x.machine)])
     if (m) Object.assign(m, {screen: saved.screen}, 'screen_available' in saved ? {screen_available: saved.screen_available} : {});
 }
-// The bot's computer when its screen is on and this person may open it; '' otherwise.
-function botScreenComputer(slug: string): string | undefined {
-  const id = botRow(slug)?.machine?.runner_id;
-  const machine = screenMachine(id);
-  return screenOn(machine) && screenMayOpen(machine) ? id : '';
-}
-const screenHref = (id: string) => `#/computers/${encodeURIComponent(id)}/screen`;
-// The bot header's button: only when its Screen row in More says ready (so not while the computer is offline).
-const botScreenLinkHTML = (slug: string) => {
-  const s = botScreenState(slug), id = s.state === 'ready' ? s.id : '';
-  return id ? `<a class="bot-learn bot-screen" id="bot-screen" href="${screenHref(id)}" aria-label="Screen" title="Screen"><span class="nav-icon" aria-hidden="true">computer</span><span class="bl-label">Screen</span></a>` : '';
-};
-// A task's owner bot's screen, in the task's header: a monitor icon, as quiet as the header's other icon buttons.
-const taskScreenLinkHTML = (owner: string | null | undefined) => {
-  const id = botScreenComputer(actorSlug(owner));
-  return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
-};
 
-// ----------------------------------------------------------------- the Screen row in a bot's More
-// Always there, so the feature stays findable when it is not working: the status, and when it is not ready, why and
-// what to do. Read from the bot row (online, its computer's platform) and the computer's row; no extra request.
-function botScreenState(slug: string): ScreenRow {
-  const e = botRow(slug);
-  // Someone who may see the bot but not read it gets a row without its computer (backend/views.py): say so, name nobody.
-  if (e && !('machine' in e)) return {state: 'hidden'};
-  const id = e?.machine?.runner_id, machine = screenMachine(id);
-  if (!machine) return {state: e?.agent ? 'external' : 'none'};
-  const base = {id, machine, owner_id: machine.owner_id ? botPersonName(machine.owner_id) : '', may: screenMayOpen(machine)};
-  if (!e?.online) return {...base, state: 'offline'};
-  if (!machine.screen_available) return {...base, state: 'not_offered'};
-  if (!machine.screen || machine.screen === 'off') return {...base, state: 'off'};
-  return {...base, state: base.may ? 'ready' : 'not_allowed'};
-}
-const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
-// Docker: `screen on` inside the runner's container turns it on live and saves it in runner.json on the runner-home
-// volume, so it survives updates. Installation troubleshooting lives in the screen documentation.
-// A named or --server-network runner has runner.override.yaml beside the stock file, used on every compose call
-// (install.sh, the updater); without it the command reaches the default runner's project.
-const SCREEN_DOCKER_CMD = 'sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on';
-const SCREEN_CHECKOUT_CMD = 'scripts/tico-computer screen on';
-const screenCmdHTML = (cmd: string, label: string) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
-function botScreenRowHTML(slug: string) {
-  const s = botScreenState(slug);
-  const status = (text: string) => `<span class="bot-screen-status">${text}</span>`;
-  const body = {
-    ready: () => `<a class="bot-screen-open" href="${screenHref(s.id ?? '')}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine?.screen === 'control' ? 'Control' : 'View'}`)}`,
-    off: () => status('Off'),
-    not_offered: () => status('Off'),
-    offline: () => status("This computer is offline. Screen works when it's back."),
-    not_allowed: () => status(s.owner_id ? `Only ${esc(s.owner_id)} and admins can open this computer's screen.` : "Only admins can open this computer's screen."),
-    none: () => status('This bot has no computer yet.'),
-    external: () => status("This bot runs outside Tico's computers, so there is no screen to show."),
-    hidden: () => status("You can see this bot but not its activity, so its computer and screen aren't shown to you."),
-  }[s.state]();
-  return `<dt>Screen${betaPill('computer_screen')}</dt><dd class="bot-screen-row" id="bot-screen-row" data-screen-state="${s.state}" data-screen-key="${esc(botScreenKey(s))}">${body}</dd>`;
-}
-// What the row and the header button are drawn from; a refresh redraws them only when it changes.
-const botScreenKey = (s: ScreenRow): string => [s.state, s.id, s.machine?.screen, s.may, s.owner_id].map(v => v ?? '').join('|');
 function botScreenRefresh(slug: string) {
   const row = $('#bot-screen-row');
   if (row && row.dataset.screenKey !== botScreenKey(botScreenState(slug))) botScreenPaint(slug);
@@ -149,22 +78,6 @@ function botScreenPaint(slug: string) {
     placeBotHead();
   }
   botScreenWire(slug);
-}
-const SCREEN_SETUP_PENDING = new Set<string>(), SCREEN_SAVING = new Set<string>();
-function screenControlHTML(machine: ScreenMachine | null | undefined, online = true): string {
-  if (!machine) return '<span class="muted">No computer assigned.</span>';
-  if (!screenMayOpen(machine)) return '<span class="muted">Only the computer’s operator and admins can change its screen.</span>';
-  const id = machine.id || machine.runner_id || '';
-  const on = !!machine.screen_available && machine.screen !== 'off' && !!machine.screen;
-  const pending = SCREEN_SETUP_PENDING.has(id) && !on;
-  const key = [id, machine.screen, machine.screen_available, online, pending, SCREEN_SAVING.has(id)].join('|');
-  return `<div class="screen-control" data-screen-control="${esc(id)}" data-screen-control-key="${esc(key)}">
-    <label class="screen-toggle">${peopleSwitch(`data-screen-toggle="${esc(id)}"`, on || pending, SCREEN_SAVING.has(id), 'Enable screen')}<span>${pending ? 'Waiting for computer setup' : on ? 'On' : 'Off'}${!online ? ' · Computer offline' : ''}</span></label>
-    ${on ? `<select class="settings-inline-select" data-screen-mode="${esc(id)}" aria-label="Screen access" ${SCREEN_SAVING.has(id) ? 'disabled' : ''}><option value="view" ${machine.screen === 'view' ? 'selected' : ''}>View</option><option value="control" ${machine.screen === 'control' ? 'selected' : ''}>Control</option></select>${online ? `<a class="bot-screen-open" href="${screenHref(id)}">Open screen</a>` : ''}` : ''}
-    ${pending ? `<div class="bot-screen-steps"><p>Run this on ${esc(machine.label || 'the computer')}, in its runner folder (usually <code>/opt/tico-runner</code>):</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
-      <details><summary>Running from a checkout?</summary>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}</details>
-      <p>The screen becomes available when the computer reports it is ready. <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">Setup help</a></p></div>` : ''}
-  </div>`;
 }
 function botScreenSettingsPaint(slug: string) {
   const host = $('#bot-screen-settings'); if (!host || BOT?.slug !== slug) return;

@@ -9,9 +9,6 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const GR_ROUTE = '#/growth', GR_SOURCES = GR_ROUTE + '/sources', BRAND_ROUTE = '#/strategy/brand', GR_GOALS = '#/strategy/goals';
-// Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them on.
-const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 // The Growth board is Tasks on the pipeline the growth packs file ideas into, Growth Experiments (backend/
 // pipeline_presets_more.py); with several, the first live one; one channel's ideas are those tagged `channel:<slug>`.
 // Unknown (undefined) until the pipelines are read, null with none: then no board link shows (grBoardLinks).

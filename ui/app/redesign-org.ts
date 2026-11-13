@@ -28,7 +28,7 @@ interface RdoPose { x: number; y: number; s: number }
 type RdoCtx = {seen: Set<string>; group?: typeof rdoGroupBlock};
 
 const RDO_FOLDED_KEY = 'tico.org.chart.folded.v2';
-let RDO: RdoState | null = null;             // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids, manual: zoomed or panned by hand}
+             // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids, manual: zoomed or panned by hand}
 let RDO_SEQ = 0;
 // The General group starts folded. A chart saved under the key before it (v1) keeps the folds it had, plus this one.
 const rdoFoldedLoad = (): Set<string> => {
@@ -40,9 +40,6 @@ const rdoFoldedLoad = (): Set<string> => {
 };
 const rdoFoldedSave = () => { try { if (!RDO) return; localStorage.setItem(RDO_FOLDED_KEY, JSON.stringify([...RDO.folded])); } catch {} };
 
-// The groups with their leads: GET /v2/groups when it has answered (a list, or {groups} from an older hub), else the
-// roster's copy, which carries no leads.
-const rdoGroups = (): OrgGroup[] => RDO?.groups || S.orgGroups || [];
 // Ready once the groups' answer is in; if it failed, the sheet falls back to the roster's groups as before.
 const rdoReady = () => !!S.me && (RDO?.groups != null || !!RDO?.groupsTried);
 const rdoGroup = (id: string): OrgGroup | null => rdoGroups().find(g => g.id === id) || (S.orgGroups || []).find(g => g.id === id) || null;
@@ -54,13 +51,6 @@ function rdoRefName(ref: string): string {
   const [kind, id] = [String(ref).split(':')[0], String(ref).slice(String(ref).indexOf(':') + 1)];
   if (kind === 'person' || kind === 'human') return (S.people || []).find(p => p.id === id)?.name || id;
   return botDisplayName(id);
-}
-// A teammate's home group: the `team` its roster row carries (backend/groups.py), else the group whose members list (GET
-// /v2/groups `bots`) holds the bot, which is where a built-in bot is.
-function rdoHome(ref: string): string {
-  const id = ref.slice(ref.indexOf(':') + 1);
-  if (ref.startsWith('person:')) return (S.people || []).find(p => p.id === id)?.team || '';
-  return botRow(id)?.team || rdoGroups().find((g: {id: string; bots?: string[]}) => (g.bots || []).includes(id))?.id || '';
 }
 const rdoLeadOf = (ref: string): string[] => rdoGroups().filter(g => g.lead === ref).map(g => g.id);
 // The leads of a group and of every group above it.

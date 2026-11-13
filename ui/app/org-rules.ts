@@ -16,7 +16,6 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const RULES_ROUTE = '#/rules';
 // Every kind of rule, in the page's order (Stage rules spec, The Rules page): each tab's count comes from /rule-groups.
 const RU_TABS: [RuleTab, string][] = [['internal', 'Company'], ['external', 'Outside'], ['stages', 'Pipelines and stages'], ['due', 'Due'],
   ['wakes', 'Wakes'], ['automations', 'Automations on tasks'], ['builtin', 'Built in'], ['suggested', 'Suggested']];
@@ -227,10 +226,6 @@ function ruControls<T>(form: HTMLFormElement): T { return form.elements as unkno
 const ruPhone = () => matchMedia('(max-width:760px)').matches;
 const ruQuery = () => new URLSearchParams((S.route || '').split('?')[1] || '');
 const ruTabOf = (r: string): RuleTab => { const t = ((r || '').split('?')[0] ?? '').slice(RULES_ROUTE.length + 1); return RU_TABS.some(([k]) => k === t) ? t as RuleTab : 'internal'; };
-const ruHref = (tab: string | null, q: Record<string, string> = {}) => {
-  const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString();
-  return RULES_ROUTE + (tab && tab !== 'internal' ? '/' + tab : '') + (qs ? '?' + qs : '');
-};
 
 // ----------------------------------------------------------------- names
 const ruGroups = () => (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
@@ -278,30 +273,6 @@ const ruScopeIds = (scope: RuleScope | ScopeIds | null | undefined): Required<Sc
   people: (scope?.people || []).map(x => typeof x === 'string' ? x : x.id)});
 const ruSameScope = (a: RuleScope | ScopeIds | null | undefined, b: RuleScope | ScopeIds | null | undefined) => JSON.stringify(ruScopeIds(a)) === JSON.stringify(ruScopeIds(b));
 
-// ----------------------------------------------------------------- mentions
-// A rule names a teammate the way a thread's composer writes a mention: @slug for a bot, @handle for a person (their
-// id, the part of their email before the @, or a first name no one else shares). Each shows as a mention chip.
-function ruMentionOf(word: string) {
-  const w = word.toLowerCase();
-  const bot = (S.emps || []).find(e => e.status !== 'archived' && (String(e.id).toLowerCase() === w || String(e.name || '').toLowerCase() === w));
-  if (bot) return {href: '#/bot/' + encodeURIComponent(bot.id), name: botDisplayName(bot.id)};
-  const people = (S.people || []).filter((p: RuPerson) => !p.archived), first = (p: RuPerson) => String(p.name || '').split(' ')[0]?.toLowerCase();
-  const firsts = people.filter(p => first(p) === w);
-  const p = people.find(p => String(p.id).toLowerCase() === w || (p.email && personHandle(p.email) === w)) || (firsts.length === 1 ? firsts[0] : null);
-  return p ? {href: '#/person/' + encodeURIComponent(p.id), name: p.name || p.id} : null;
-}
-// A rule's text as HTML, its @mentions as chips. `as`: 'link' (an <a>), 'inline' (inside a row that is itself a link:
-// a span that opens the teammate on its own click) or 'plain' (inside a button: the chip's look only).
-function ruTextHTML(text: string, as: 'link' | 'inline' | 'plain' = 'link') {
-  return esc(text).replace(/(^|[^\w@])@(\w[\w.-]*)((?:&#39;s\b|[,;:!?)])*)/g, (all: string, pre: string, word: string, after: string) => {
-    const handle = word.replace(/[.-]+$/, ''), hit = handle && ruMentionOf(handle);
-    if (!hit) return all;
-    const label = '@' + esc(hit.name), tail = word.slice(handle.length) + after;
-    const chip = as === 'link' ? `<a class="ru-at" href="${esc(hit.href)}">${label}</a>`
-      : as === 'inline' ? `<span class="ru-at" data-href="${esc(hit.href)}">${label}</span>` : `<span class="ru-at">${label}</span>`;
-    return pre + (tail ? `<span class="ru-at-w">${chip}${tail}</span>` : chip);
-  });
-}
 // An inline chip opens its teammate, not the row around it.
 document.addEventListener('click', ev => {
   const at = eventElement(ev)?.closest<HTMLElement>('.ru-at[data-href]');

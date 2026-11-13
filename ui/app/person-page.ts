@@ -63,10 +63,6 @@ document.addEventListener('click', e => {
   void Promise.race([pushUnsubscribe({keepalive: true, timeout: PUSH_SIGN_OUT_MS}).catch(() => {}),
     new Promise(done => setTimeout(done, PUSH_SIGN_OUT_MS))]).then(() => { location.href = href; });
 }, true);
-// Each browser the person opens Tico in with Browser notifications on and allowed takes push too.
-function pushKeep(on: boolean | undefined) {
-  if (on && 'Notification' in window && Notification.permission === 'granted') void pushSubscribe().catch(() => {});
-}
 
 // ----------------------------------------------------------------- human page (team tree)
 const PERSON_TABS = ['profile', 'slack'];
@@ -74,10 +70,6 @@ const PERSON_TABS = ['profile', 'slack'];
 // Assistant page (ui/app/assistant-page.ts), the owner's too. The old #/person/<you>/assistant link lands there too.
 const personTabs = (p: RosterPerson) => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
 const PERSON_TAB_LABELS: Record<string, string> = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
-// Manage on them, as the server says it: yourself, the owner, an admin, or anyone they report up to.
-function personCanEdit(p: Pick<RosterPerson, 'id' | 'my_access'>) {
-  return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
-}
 function fieldEditor(label: string, value: string | null | undefined, {placeholder, rows, save}: {placeholder?: string; rows?: number; save: boolean}) {
   const current = String(value || '');
   return `<section class="card"><header><h2>${esc(label)}</h2>
@@ -342,9 +334,6 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   void personTasksLoad(p);
   if (tab === 'slack') personSlackLoad(p);
 }
-// The human's tasks: what they own, active first, finished behind a toggle. The rows are
-// the shared task row (S1), opening the shared task detail.
-/** The person whose tasks the page shows: ui/app/refresh.ts reads it on every live change. */ let PERSON_TASKS: string | null = null;
 // Shown only to whoever manages this person: the read is refused to everyone else.
 async function personAccessLoad(p: RosterPerson) {
   const data = await teammateAccessRead('human', p.id), card = $('#person-access');

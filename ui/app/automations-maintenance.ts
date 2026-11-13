@@ -110,7 +110,7 @@ interface MaintPatch {
 type MaintOpts = (pairs: ReadonlyArray<readonly [string | number, string]>, cur: unknown) => string;
 
 const AU_MAINT = 'maintenance';
-const AU_MAINT_OWNER = 'tico';   // the list's Owner: Tico itself runs it
+   // the list's Owner: Tico itself runs it
 const AU_MAINT_SCHEDULES: Array<[string, string]> = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], ['3h', 'Every 3 hours'], ['6h', 'Every 6 hours'],
   ['12h', 'Every 12 hours'], ['daily', 'Once a day']];
 const AU_MAINT_OFTEN: Array<[string, string]> = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
@@ -123,8 +123,6 @@ const AU_MAINT_BETA = new Set(['learn']);
 const AU_MAINT_PRIVACY = '#/settings/general/settings-privacy';
 const AU_MAINT_RUNS_PAGE = 25;
 
-const AU_SYSJOBS = 'system-jobs';
-const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
 const auMaintOk = (m: MaintView | null | undefined): m is MaintView => !!m && Array.isArray(m.steps) && !!m.settings;
 const auMaintStep = (key: string): MaintStep | undefined => {
   const steps: MaintStep[] = automationsState()?.maint?.steps || [];

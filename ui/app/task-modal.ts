@@ -454,10 +454,6 @@ function taskSessionsHTML(t: ModalTask) {
     <form class="inline task-link-add" data-modal-session hidden><input type="text" autocomplete="off" spellcheck="false" placeholder="URL or resume command" aria-label="Add a session"></form></section>`;
 }
 
-// Runs on (POST /v2/tasks/{id}/model, backend/task_run_models.py): the model this task's runs use, or the bot's task model
-// until one is set on it. The model list is GET /v2/models, read once here and by the automation step editor, which offers
-// the same models. Gateway tier picks (tico-*) are made in the bot's settings, so they stay out of both.
-let TASK_RUN_ROWS: TaskRunRow[] | null = null, TASK_RUN_LOADING: Promise<ModalModelRow[]> | null = null;
 function taskRunCatalog() {
   TASK_RUN_LOADING ||= get<{models?: ModalModelRow[]}>('/v2/models').then(d => {
     TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !m.meeting && !/^tico-/.test(m.id || ''));
@@ -686,9 +682,7 @@ interface TaskChatState {
   /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
   shown?: number; earlier?: boolean;
 }
-let TASK_CHAT: TaskChatState | null = null;
-let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
-const TASK_DRAFTS = new Map<string, string>();         // an unsent comment, per task, kept across redraws until it is sent or cleared
+let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;         // an unsent comment, per task, kept across redraws until it is sent or cleared
 function taskChatStop() {
   if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
   TASK_CHAT = null;
@@ -704,7 +698,6 @@ function taskChatLive(state: TaskChatState) {
     tfLoad(state.dialog, state.id).catch(() => {});
   }, 200);
 }
-function taskChatCurrent(state: TaskChatState) { return TASK_CHAT === state && state.dialog.open; }
 const commentAuthor = (a: string | null | undefined, via?: string | null, src: {kind: string; name?: string} | null = null) => {
   if (a === 'external:roadmap') return '<span class="who">Visitor</span>';
   // The Assistant passing on a person's words reads as "Ana's Assistant"; the server itself is named by what made the row.

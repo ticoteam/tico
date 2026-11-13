@@ -79,8 +79,6 @@ interface LensRunsResponse { runs?: LensRun[]; }
 interface LensGrid { rows: string[]; columns: string[]; cut: boolean; }
 interface LensEnd { i: number; name: string; y: number; x: number; }
 
-const LENSES_ROUTE = '#/strategy/lenses';
-const isLensesRoute = (r: string): boolean => r === LENSES_ROUTE || r.startsWith(LENSES_ROUTE + '?') || r.startsWith(LENSES_ROUTE + '/');
 let LENS: LensPage | null = null;           // the open page: {load, timer, bets, label, watch}
 let LENS_LOAD = 0;
 let LENS_FLOW: LensFlow | null = null;      // the open run panel: {lens, i, answers, on, published, notice}

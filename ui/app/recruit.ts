@@ -36,17 +36,12 @@ interface RecruitPostFields {
 }
 interface RecruitHireFields { name: HTMLInputElement; reports_to: HTMLSelectElement; runner_id: HTMLSelectElement }
 interface RecruitModelRow { id: string; label?: string; name?: string }
-let RECRUIT_HANDOFF: RecruitSeed | null = null;
-// Page-local state: which load is current, the arrival in progress, each seat's applicants once listed (the sidebar
-// shows their count), and the Computer and Model chosen while posting, which the Hire box starts from.
-const RECRUIT: RecruitState = {load: 0, arrive: '', run: null, found: {}, counts: {}, prefs: {}};
 const RECRUIT_DEPT: Record<string, string> = {marketing: '#a63d65', sales: '#1769a6', finance: '#2f6b3c', product: '#5946b2', support: '#9a4f19',
   legal: '#4b5563', engineering: '#3f566b', operations: '#0f6e56', hr: '#7a3e9d', leadership: '#3f566b'};
 const RECRUIT_MATCH: Record<string, string> = {strong: 'Strong', good: 'Good'};
 const RECRUIT_HOLD = 1600;                         // how long a dot that landed stays in 'done' before it rests
 const RECRUIT_ARM = 4000;                          // how long Close job? waits for the second click
 const RECRUIT_NEED: Record<string, string> = {connected: 'Connected', on_hire: 'Installs on hire', not_set: 'Not set'};
-const recruitAddress = (id: string, template = '') => '#/seat/' + encodeURIComponent(id) + (template ? '/' + encodeURIComponent(template) : '');
 
 function settingsRecruitHandoff() {
   if (!RECRUIT_HANDOFF || !S.me?.id || !settingsCanCreateBots()) return;
@@ -327,7 +322,6 @@ function recruitCount(id: string, n: number) {
   if (badge) countSet(badge, String(n));
   else renderTree();
 }
-const recruitSeatCount = (id: string): number | undefined => RECRUIT.counts[id];
 function recruitAvatar(c: RecruitCandidate, size = 34) {
   const color = RECRUIT_DEPT[String(c.department_id)] || `hsl(${avHue(c.template)} 38% 33%)`;
   const icon = TEMPLATE_ICON.test(c.icon || '') ? c.icon : '';

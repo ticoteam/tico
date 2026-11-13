@@ -122,12 +122,6 @@ interface DeviceMachine extends SettingsMachine {
   browser_exit?: import('../types/api').BrowserExit | null;
 }
 
-// An external agent (a Hermes profile) has no computer: the cell holds its credential instead.
-// The token is shown once, when it is minted; after that only rotate and revoke remain.
-const agentKind = (a: BotAgent) => `${settingsHarnessName(a.harness) || a.harness} agent`;
-// An imported snapshot's freshness says nothing about its external process.
-const agentPresenceLabel = (a: {synced?: boolean; last_seen_at?: string | null; credential?: unknown}, online: boolean | undefined) => a.synced ? (online ? 'History synced recently' : a.last_seen_at ? 'History not synced lately' : 'History not synced yet')
-  : !a.credential ? 'No credential yet' : online ? 'Reporting in' : 'Not reporting';
 function settingsAgentCell(e: DeviceBot) {
   const a = e.agent; if (!a) return '';
   const name = agentKind(a);

@@ -7,20 +7,10 @@
    #/automations?q=<words> opens the list searched (a bot's or a webhook's automations, linked from their pages). */
 'use strict';
 
-const AUTOMATIONS = '#/automations';
-// Listening (ui/app/listening.ts) is this page over the automations whose trigger is `listening`: its own sidebar row,
-// its own list, the same header, flow, editors and runs.
-const LISTENING = '#/listening';
-const auUnder = (r: string, base: string): boolean => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
-function isAutomationsRoute(r: string): boolean { return auUnder(r, AUTOMATIONS) || auUnder(r, LISTENING); }
-/** The page's own address: Listening's while its list is the one shown, else Automations'. */
-const auBase = (): string => AU?.lst ? LISTENING : AUTOMATIONS;
 const AU_BOT = 'botops';                             // builds automations for the Assistant; not offered as a step's bot
 const auPhone = () => matchMedia('(max-width:760px)').matches;
 const auClone = <T>(x: T): T => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = (id: string) => '/v2/automations/' + encodeURIComponent(id);
-// One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
-let AU: AutomationsState | null = null;
 // Where the old code read x.y with x null (AU once the page is left, the open automation, the shell's #au-root or one
 // of its parts) and so threw: the same stop, at the same read, as a plain Error naming what is missing. auNeed gives
 // the value back; auSure is the statement form and auIs the form inside a condition (never false: it throws), both
@@ -68,7 +58,6 @@ function auRouteParts(r: string): {id: string; view: AuView} {
   if (id === 'bot') return {id: '', view: 'flow'};
   return {id, view: view === 'runs' ? view : 'flow'};
 }
-const auHref = (id: string | undefined, view?: string) => auBase() + (id ? '/' + encodeURIComponent(id) : '') + (id && view && view !== 'flow' ? '/' + view : '');
 
 // The hub writes people as person:<id> (CONTRACT); older rows say human:<id>.
 const auPersonId = (a: unknown) => /^(person|human):/.test(String(a || '')) ? String(a).split(':').slice(1).join(':') : '';

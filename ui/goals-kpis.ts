@@ -110,7 +110,6 @@ interface GkAddControls extends GkTargetControls, Record<GkAddField, HTMLInputEl
 type GkAddForm = GkFormOf<GkAddControls>;
 type GkTargetField = 'baseline' | 'target' | 'min' | 'max';
 
-const KPI_LABEL: Record<string, string> = {green: 'On track', yellow: 'At risk', red: 'Off track', gray: 'No fresh data', none: 'No target'};
 const KPI_QUALITY: Record<string, string> = {estimate: 'estimate', partial: 'partial'};
 const GOAL_MANAGER_ACTOR = 'bot:strategy-owner';
 
@@ -121,23 +120,7 @@ function goalActorName(actor: string | undefined) {
   return actor === GOAL_MANAGER_ACTOR ? strategyBotName() : info.name;
 }
 
-// A status dot: green, yellow, red, gray (stale, missing or no data) or a ring (fresh, no target to judge by).
-function gdot(status: string | null | undefined, title = '') {
-  const s = ['green', 'yellow', 'red', 'none'].includes(status!) ? status! : 'gray';
-  return `<span class="gdot ${s}" role="img" aria-label="${esc(KPI_LABEL[s])}"${title ? ` title="${esc(title)}"` : ''}></span>`;
-}
 
-function kpiNum(value: number | string | null | undefined, unit: string | undefined = '') {
-  if (value == null || value === '') return '';
-  const text = Number(value).toLocaleString(undefined, {maximumFractionDigits: 1});
-  unit = String(unit || '').trim();
-  if (!unit) return text;
-  if (unit === '%' || unit === 'pp') return text + unit;
-  if (['$', '€', '£'].includes(unit)) return unit + text;
-  // "1 accounts" reads wrong: a word unit drops its plural s for exactly one.
-  if (Number(value) === 1 && /^[A-Za-z]+s$/.test(unit) && !/ss$/.test(unit)) unit = unit.slice(0, -1);
-  return `${text} ${unit}`;
-}
 // Periods are business days: shown in UTC so a week that ends on the 20th says the 20th everywhere.
 function kpiDay(iso: string | null | undefined) {
   if (!iso) return '';
@@ -147,16 +130,6 @@ function kpiDay(iso: string | null | undefined) {
 }
 const kpiFresh = (k: GkKpi) => k.latest && (k.freshness || 'fresh') === 'fresh';
 
-// A tiny line of the last readings, oldest first; the last point takes the status colour.
-function kpiSpark(values: number[] | undefined, status: string, w = 64, h = 18) {
-  const v = (values || []).map(Number).filter(Number.isFinite);
-  const s = ['green', 'yellow', 'red'].includes(status) ? status : 'gray';
-  if (v.length < 2) return `<svg class="kspark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${v.length ? `<circle class="kspark-end ${s}" cx="${w - 3}" cy="${h / 2}" r="2.2"/>` : ''}</svg>`;
-  const lo = Math.min(...v), span = Math.max(...v) - lo || 1, pad = 3;
-  const pts = v.map((y, i): [number, number] => [pad + i * (w - 2 * pad) / (v.length - 1), h - pad - (y - lo) / span * (h - 2 * pad)]);
-  const last = pts.at(-1)!;
-  return `<svg class="kspark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts.map(p => p.map(n => n.toFixed(1)).join(',')).join(' ')}"/><circle class="kspark-end ${s}" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.2"/></svg>`;
-}
 
 // One KPI on one line: dot, name, latest value and its period, the target on the goal, a sparkline.
 // On a goal an archived link no longer counts, so it shows only that; the owner's archive list keeps the last reading.

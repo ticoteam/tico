@@ -66,14 +66,6 @@ const ACCESS_PRESETS: SaPreset[] = [
 ];
 const accessTeamName = (id: string) => (S.orgGroups || []).find(g => g.id === id)?.name || teamLabel(id);
 const accessEmpty = (): SaAudience => ({everyone: false, people: [], teams: [], bots: []});
-const accessEveryone = (): SaAudience => ({everyone: true, people: [], teams: [], bots: []});
-function accessLevelText(level: SaAudience | undefined) {
-  if (!level || level.everyone) return 'Everyone';
-  const names = [...(level.teams || []).map(accessTeamName), ...(level.people || []).map(id => firstName(settingsPersonName(id)) || id),
-    ...(level.bots || []).map(settingsBotName)];
-  if (!names.length) return 'Managers only';
-  return names.length > 3 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
-}
 function accessSummary(policy: SaPolicy | null | undefined) {
   if (!policy) return 'Open';
   if (ACCESS_LEVELS.every(([key]) => policy[key]?.everyone)) return 'Open';
@@ -210,10 +202,6 @@ const teammateAccessPath = (kind: 'human' | 'group', id: string) => `/v2/${kind 
 // The access, or null when the viewer does not manage them: the server decides (docs/permissions.md).
 async function teammateAccessRead(kind: 'human' | 'group', id: string): Promise<SaData | null> {
   try { return await get<SaData>(teammateAccessPath(kind, id) + '/access', {fresh: true}); } catch { return null; }
-}
-function teammateEditAccess(kind: 'human' | 'group', id: string, name: string, after?: ((saved: SaSaved) => unknown) | undefined) {
-  return accessEditor({path: teammateAccessPath(kind, id), name, levels: TEAMMATE_ACCESS_LEVELS[kind],
-    presets: ACCESS_PRESETS.filter(([value]) => value !== 'requests'), skipPerson: kind === 'human' ? id : '', after});
 }
 async function accessEditor({path, name, levels, presets = [], skipBot = '', skipPerson = '', stage, panel, after, initialData, singleAudience, save}: SaOptions) {
   let data: SaData;

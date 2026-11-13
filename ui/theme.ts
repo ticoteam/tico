@@ -23,7 +23,8 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   const own = (url: string): boolean => { try { return new URL(url, location.href).origin === location.origin; } catch { return false; } };
   addEventListener('error', event => {
     const target = event.target;
-    if (target instanceof HTMLScriptElement && own(target.src)
+    // A page part fetched later (data-part, ui/app/parts.ts) that fails shows Retry in its page, not this card.
+    if (target instanceof HTMLScriptElement && own(target.src) && !target.dataset.part
         || target instanceof HTMLLinkElement && target.rel === 'stylesheet' && own(target.href)
         || !appLoaded && event instanceof ErrorEvent && /\/tico\/ui\//.test(event.filename)) {
       failed = true; check();

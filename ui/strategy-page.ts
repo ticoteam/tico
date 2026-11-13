@@ -172,7 +172,6 @@ function stratEl<T extends Element>(selector: string, root: ParentNode = documen
 let STRAT: StratState | null = null;          // the open page
 let STRAT_LOAD = 0;
 let STRAT_MKT: StratMkt = {};
-const isStrategyRoute = (r: string) => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS: Record<string, string> = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
 // The seven sections every strategy has, in this order (backend/strategy.py FIXED). The placeholder is the question;

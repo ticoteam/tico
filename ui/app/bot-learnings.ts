@@ -178,14 +178,6 @@ function learnBadge(button: HTMLElement, unseen: number | null | undefined) {
   button.setAttribute('aria-label', unseen ? `Learnings, ${unseen} new` : 'Learnings');
 }
 
-// A diff as lines: added and removed ones tinted with their marker dropped, each hunk header a small gap.
-function learnDiff(text: string) {
-  return text.split('\n').filter(l => !/^(diff --git|index |--- |\+\+\+ |\\ No newline)/.test(l)).map(l => {
-    if (l.startsWith('@@')) return '<span class="hunk">⋯</span>';
-    const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
-    return `<span class="${kind}">${esc(l.slice(1)) || ' '}</span>`;
-  }).join('').replace(/^<span class="hunk">⋯<\/span>/, '');
-}
 
 // A memory file as the panel shows it: its title and intro, then any working-rules section, then the other `## `
 // sections newest first by the date in their heading, and inside each the top-level `- ` entries newest first by

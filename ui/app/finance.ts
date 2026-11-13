@@ -31,7 +31,6 @@ type FinActResult = import('../types/api').FinanceAction & {approver?: string | 
 // What a committed action made or did (the ids its callers read).
 interface FinActDone { bill_id?: string; invoice_id?: string; contact_id?: string; account_id?: string; months?: string[]; new?: number }
 
-const FIN_ROUTE = '#/finance';
 const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['attribution', 'Attribution'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
   ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN: FinPage | null = null;           // the open page: {load, tab, arg, q, acc, caps}

@@ -30,14 +30,6 @@ async function gsState(change: {tour?: boolean; checklist?: boolean}): Promise<v
   } catch { /* a choice that did not save is asked again next time */ }
 }
 
-// Setup's last step (ui/app/welcome.ts) still has a row open: the computer (a hosted company's Tico Cloud computers
-// count, as the step shows them ticked) or the subscription line, not done or skipped. Finish setup stays in the
-// sidebar for the owner until both are, or until they hide it for good from that step (the checklist's own `dismissed`).
-function gsSetupOpen(): boolean {
-  if (!GS || GS.dismissed || S.me?.role !== 'owner') return false;
-  const computer = GS.items.find(item => item.id === 'computer'), sub = GS.items.find(item => item.id === 'subscription');
-  return (!!computer && !computer.done && !S.config?.hosted) || (!!sub && !sub.done && !sub.skipped);
-}
 
 // "Ask to add or edit your bots" (it opens Ask, ui/app/ask-panel.ts), for whoever may add bots, until there is one of your own.
 function gsOrgHint(): void {
@@ -174,7 +166,8 @@ window.gsBoot = function () {
   // owner of a team that came in from the company file gets the welcome (onbWelcome) in its place.
   void gsRefresh().then(async seen => {
     if (!seen || seen.tour_seen || S.config?.onboarding_needed || S.route === '#/welcome') return;
-    if (!(await onbWelcome())) gsTourStart();
+    // Only an owner can get the welcome: anyone else skips loading its code (ui/parts.json).
+    if (!(S.me?.role === 'owner' && await onbWelcome())) gsTourStart();
   });
   // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
   setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);

@@ -61,7 +61,6 @@ interface CpState {
   mq: MediaQueryList; onMq: (() => void) | null; signIn?: CpSignIn | null; boardDrawn?: string; tightened?: {audience: string; count: number}; tab?: boolean;
 }
 
-const CP_ROUTE = '#/company-page';
 let CP: CpState | null = null;    // the open page
 // The open page, for a function that only runs while it is open: the same TypeError a missing page threw, named.
 function cpOpen(): CpState {
@@ -101,8 +100,6 @@ const CP_CLASSES: CpPair[] = [['revenue', 'Revenue'], ['growth', 'Growth'], ['gr
   ['kpi', 'All KPIs'], ['product', 'Product and roadmap'], ['people', 'People'], ['legal', 'Legal'], ['security', 'Security incidents'], ['mission', 'Mission']];
 const CP_GROUPS: Record<string, string> = {kpi: 'KPIs', pnl_line: 'P&L lines'};
 
-// ----------------------------------------------------------------- who sees it
-const cpAllowed = () => S.me?.role === 'owner' || S.me?.bot_admin === true;
 
 // ----------------------------------------------------------------- small pieces
 const cpList = <T>(r: unknown, key: string): T[] => Array.isArray(r) ? r : isErrorRecord(r) && Array.isArray(r[key]) ? r[key] : [];

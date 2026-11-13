@@ -92,7 +92,6 @@ const strategyLevelName = (v: StrategyBotView, level: number): string => v.level
 // older entry, canceling, or the Undo itself redraws them in place instead of going back to the first page.
 let STRATEGY_LOG_UNDO: string | null = null;
 const STRATEGY_LOG_STATE: Record<string, string> = {done: '', proposed: 'Proposed to you', undone: 'Undone'};
-const strategyBotLogShown = (): boolean => S.me?.role === 'owner';
 async function renderStrategyBotLog(host: StrategyLogHost | null, more?: string | null): Promise<void> {
   if (!host) return;
   const page: StrategyBotLogPage | null = await v2Get('/v2/strategy-bot/log' + (more ? '?before=' + encodeURIComponent(more) : ''));

@@ -21,9 +21,6 @@ interface AssistantOut { text: string; typed?: string; files: File[]; scope?: st
 // One message of an earlier chat, and one page of them (GET /v2/conversations/{id}/messages).
 interface EarlierMessage { sender_id?: string; created_at?: string; body?: string; deleted_at?: string | null }
 interface EarlierPage { messages?: EarlierMessage[]; has_more?: boolean; next_before?: string | null }
-// A task of the assistant's, as the rail lists it (GET /v2/tasks).
-const ASSISTANT_HINTS = ["What's waiting on me?", 'Find the launch plan', 'How do I add a bot?'];
-let ASSISTANT_PILL: AssistantPill | null = null, ASSISTANT_LOAD = 0;
 function assistantPill(): AssistantPill {
   const slug = myChatBot();
   if (ASSISTANT_PILL && ASSISTANT_PILL.slug === slug) return ASSISTANT_PILL;
