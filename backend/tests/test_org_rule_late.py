@@ -189,3 +189,15 @@ def test_two_hundred_comments_with_retries_are_saved_once_each_in_order(ruled):
     ]
     assert said == [f"Step {n} is done." for n in range(200)]
     assert len(judge.calls) == 200
+
+
+def test_a_late_check_starts_on_its_own_once_the_write_commits(ruled):
+    """AC-2's "within 10 s" without the scheduler: the write's commit starts the drain thread, nobody drains by hand."""
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    mid = comment(api, task, BROKEN)["comment"]["id"]
+    deadline = time.monotonic() + 10
+    while not body_of(api, mid).startswith("Warning:") and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert body_of(api, mid).startswith("Warning:")

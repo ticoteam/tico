@@ -257,19 +257,11 @@ def register(
     def done_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         setup_finished(c, who, task_id)
         note, version = carry(c, who, task_id, gate, body.note or "", body.version)
-        late = bool(gate and gate.get("late"))
-        newest = (c.execute("SELECT max(rowid) FROM answers").fetchone()[0] or 0) if late else 0
-        H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None)
-        # A done note is kept on the answer it gave: a late check's warning line goes there.
-        answered = (
-            c.execute(
-                "SELECT id FROM answers WHERE rowid>? AND by_id=? ORDER BY rowid DESC LIMIT 1", (newest, str(who.actor))
-            ).fetchone()
-            if late
-            else None
-        )
+        done: dict[str, Any] = H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None) or {}
+        # A done note is kept on the answer it gave (answers.answer names it): a late check's warning line goes there.
+        answered: str | None = done.get("answer_id")
         if answered:
-            org_rule_check.late_on(c, gate, "answer", answer=answered[0])
+            org_rule_check.late_on(c, gate, "answer", answer=answered)
 
     says("task_done", M.TaskDone, lambda body: [("Done", body.note)], done_call, late=True)
 
