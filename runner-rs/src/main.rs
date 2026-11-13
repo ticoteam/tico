@@ -74,7 +74,6 @@ mod mail_key;
 mod manifest;
 mod mcp;
 mod memory_history;
-mod memory_tidy;
 mod memory_tidy_keep;
 mod model_subscriptions;
 mod op;
