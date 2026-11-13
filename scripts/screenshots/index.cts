@@ -107,6 +107,7 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
+  'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
@@ -209,7 +210,9 @@ const PAGES: PageSpec[] = [
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
-  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
+  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
+    // The stage rules panel opens from Rules › Pipelines and stages and from each stage header on the board.
+    'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css']},
   {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
   {name: 'listening', route: '#/listening', ready: 'Listening', ui: ['ui/app/listening.ts', 'ui/styles/listening.css', 'ui/app/page-chat.ts', 'ui/styles/page-chat.css']},
