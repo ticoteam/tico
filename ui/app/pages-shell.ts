@@ -339,6 +339,8 @@ const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 
 // app/org-rules.ts
 const RULES_ROUTE = '#/rules';
+// A rule save's refusal in words (the Rules page and a stage's rules panel, ui/app/stage-rules.ts).
+const ruError = (e: unknown) => errorStatus(e) === 403 ? "You can't change this." : errorMessage(e, 'Something went wrong.');
 const ruHref = (tab: string | null, q: Record<string, string> = {}) => {
   const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString();
   return RULES_ROUTE + (tab && tab !== 'internal' ? '/' + tab : '') + (qs ? '?' + qs : '');

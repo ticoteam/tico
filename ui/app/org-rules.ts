@@ -295,8 +295,6 @@ const ruDueCell = (rule: RuleRow) => {
   const [d, ...rest] = ruDueSorted(rule), more = rest.length + (rule.due_more || 0);
   return d ? `<span class="ru-due">${esc(ruDay(d.due_on))}${d.repeats && d.repeats !== 'once' ? ` <span class="muted">· ${esc(ruRepeatWord(d.repeats).toLowerCase())}</span>` : ''}${more ? ` <span class="ru-plus">+${more}</span>` : ''}</span>` : '<span class="ru-none">—</span>';
 };
-// A refusal in one line: a 403 is about permission, the rest say what the server said.
-const ruError = (e: unknown) => errorStatus(e) === 403 ? "You can't change this." : errorMessage(e, 'Something went wrong.');
 
 // ----------------------------------------------------------------- reads
 async function ruAll<T = RuleRow>(path: string): Promise<T[]> {
