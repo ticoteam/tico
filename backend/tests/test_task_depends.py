@@ -27,24 +27,23 @@ def c(company):
         yield conn
 
 
-def build(c, limit=None, minutes=None):
-    """Build, owned by the Builder bot, left when the owner says done."""
+def build(c, limit=None, minutes=None, release=None):
+    """Build, owned by the Builder bot, left when the owner says done; with `release`, a Release stage whose In a
+    release has those settings."""
     X.bot(c, "builder")
-    return X.pipeline(
-        c,
-        "eng",
-        "Engineering",
-        stages=(
-            {
-                "name": "Build",
-                "owner": B,
-                "task_limit": limit,
-                "expected_minutes": minutes,
-                "requirements": [{"kind": "owner_done"}],
-            },
-            {"name": "Review", "owner": B, "requirements": [{"kind": "owner_done"}]},
-        ),
-    )
+    stages = [
+        {
+            "name": "Build",
+            "owner": B,
+            "task_limit": limit,
+            "expected_minutes": minutes,
+            "requirements": [{"kind": "owner_done"}],
+        },
+        {"name": "Review", "owner": B, "requirements": [{"kind": "owner_done"}]},
+    ]
+    if release is not None:
+        stages.append({"name": "Release", "owner": B, "requirements": [X.github("in_release", settings=release)]})
+    return X.pipeline(c, "eng", "Engineering", stages=tuple(stages))
 
 
 def task(c, title):
@@ -395,6 +394,89 @@ def test_until_released_stays_blocked_after_done_and_wakes_once_when_production_
     assert D.on_release(c, "0.6.0-rc.11", APP) == [] and len(bodies(c, check)) == 1
 
 
+def test_a_task_held_after_done_until_released_counts_as_blocked_everywhere_a_snooze_does(c):
+    """BLOCKED is the filter beside every open-snooze filter (never-stuck, Health, stage picks, turns): a Validate task
+    held past its Engineering task's Done must match it, or it is reported as stuck while it waits for a release."""
+    build(c)
+    work, check, free = task(c, "Part 1"), task(c, "Validate part 1"), task(c, "Something else")
+    merged_pr(c, work, 7, "m7")
+    D.on_release(c, "1.1.0", APP)
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work)
+    matched = {str(r[0]) for r in c.execute(f"SELECT t.id FROM tasks t WHERE {D.BLOCKED % 't'}")}
+    assert check in matched and free not in matched
+
+
+def test_a_done_task_whose_release_was_never_read_is_read_again_and_its_dependent_woken(company):
+    """Review 1 of #3660, Probe A: the Engineering task reached Done (moved by hand, or Release pushed past) before any
+    release holding its merge was read. Nothing read its releases again once it was Done, so the Validate task stayed
+    blocked for good and nobody was told. The background re-read now reads them while a dependency waits; the moment it
+    finds the merge in the release production runs, the owner is woken once."""
+    from backend.item_sources import github as G
+    from backend.tests.helpers.fake_github import FakeGitHub
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        build(c)
+        work, check = task(c, "Part 1"), task(c, "Validate part 1")
+        merged_pr(c, work, 7, "m7")
+        D.on_release(c, "1.1.0", APP)
+        TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+        ended(c, work)
+        assert D.blocked(c, check)
+    gh.history[APP] = ["m7"]
+    gh.publish(APP, "v1.2.0")
+    G._refresh_releases(company, gh, H.now())
+    with company.transaction() as c:
+        assert G.release_of(c, APP, "m7", prereleases=True)["tag"] == "v1.2.0"
+        assert D.blocked(c, check) and bodies(c, check) == []  # read, but production still runs 1.1.0
+        assert D.on_release(c, "1.2.0", APP) == [check]
+        assert len(bodies(c, check)) == 1
+
+
+def test_a_release_read_after_start_up_that_production_already_runs_wakes_the_dependent_then(company):
+    """Production started on 1.2.0 before Tico read that 1.2.0 holds the merge: the read itself releases the task,
+    not the next start-up."""
+    from backend.item_sources import github as G
+    from backend.tests.helpers.fake_github import FakeGitHub
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        build(c)
+        work, check = task(c, "Part 1"), task(c, "Validate part 1")
+        merged_pr(c, work, 7, "m7")
+        D.on_release(c, "1.2.0", APP)
+        TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+        ended(c, work)
+        assert D.blocked(c, check)
+    gh.history[APP] = ["m7"]
+    gh.publish(APP, "v1.2.0")
+    G._refresh_releases(company, gh, H.now())
+    with company.transaction() as c:
+        assert not D.blocked(c, check)
+        (body,) = bodies(c, check)
+        assert f"{ref(c, work)} is in production: it runs 1.2.0" in body
+
+
+def test_until_released_reads_the_release_repo_the_engineering_release_stage_names(c):
+    """The Release stage's In a release may read another repository's releases (`release_repo`), and production's
+    release comes from there: the merge is looked for where Release found it, not in the PR's own repository."""
+    from backend.item_sources import github as G
+
+    shipped = "acme/app-releases"
+    build(c, release={"release_repo": shipped})
+    work, check = task(c, "Part 1"), task(c, "Validate part 1")
+    merged_pr(c, work, 7, "m7")
+    D.on_release(c, "1.1.0", shipped)
+    E.move(c, work, "Release", X.ANA, "Merged")
+    published(c, "v1.2.0", "m7", repo=shipped)
+    G.saw_releases(c, shipped, G.version_now())
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work)
+    assert D.blocked(c, check)
+    assert D.on_release(c, "1.2.0", shipped) == [check]
+
+
 def test_until_released_waits_for_every_merged_pr_of_the_task(c):
     build(c)
     work, check = task(c, "Part 1"), task(c, "Validate part 1")
@@ -450,6 +532,33 @@ def test_a_validate_task_may_depend_on_a_done_task_until_released_but_not_on_one
     assert D.on_release(c, "1.2.0", APP) == [check]
     with pytest.raises(H.Refused, match="in production already"):
         TR.relate(c, X.ANA, late, work, "depends_on", until="released")
+
+
+def test_until_released_on_another_products_task_is_refused_with_why(c):
+    """Review 1 of #3660, Probe B: a task whose PRs merged into another product's repository never reaches the release
+    this server runs. Until released cannot wait for it, and the refusal says so instead of "in production already"."""
+    build(c)
+    work, check = task(c, "Lights part 1"), task(c, "Validate lights part 1")
+    merged_pr(c, work, 7, "l7", repo="acme/lights")
+    D.on_release(c, "1.1.0", APP)
+    ended(c, work)
+    with pytest.raises(H.Refused, match=f"merged nothing into {APP}, whose release this server runs") as refused:
+        TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    assert "in production" not in str(refused.value)
+
+
+def test_a_held_dependency_on_a_done_task_cannot_be_written_plain_again(c):
+    """Writing it again without --until would leave a plain dependency on a Done task: a row that blocks nothing and is
+    never taken off. It is refused, as a new plain dependency on a Done task is."""
+    build(c)
+    work, check = task(c, "Part 1"), task(c, "Validate part 1")
+    merged_pr(c, work, 7, "m7")
+    D.on_release(c, "1.1.0", APP)
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work)
+    with pytest.raises(H.Refused, match="has ended"):
+        TR.relate(c, X.ANA, check, work, "depends_on")
+    assert TR.until_of(c, check, work, "depends_on") == "released" and D.blocked(c, check)
 
 
 def test_until_is_only_released_and_only_on_a_dependency(c):

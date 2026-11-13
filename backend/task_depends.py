@@ -25,11 +25,15 @@ dependency holds past the other task's Done, until production runs a release tha
 how a Validate task waits for its work to reach production, with no snooze. It reads "Blocked by #304 ..., done, until
 production runs its release". `in_production` asks it of the releases Tico has saved (the release that holds each merge
 commit, item_sources.github.release_of, as stage_inputs reads it) and the release this server runs (releases.version,
-in the repository of its release manifest), which `on_release` records at every start-up and checks then: the moment
+in the repository of its release manifest), which `on_release` records at every start-up and checks then. While such a
+dependency waits on a Done task, the background re-read of releases keeps reading that task's (`held_blockers`, in the
+repo its pipeline's In a release reads) and checks again when it finds one holding a merge (`released_now`): the moment
 the running release holds them all, the dependency comes off and the owner is woken once, "#304 is in production". No
-poll. When the other task is Done and production already runs its release (or nothing of it merged into the repository
+new poll. When the other task is Done and production already runs its release (or nothing of it merged into the repository
 production runs), it comes off at once, as a plain dependency does; closed without doing it, likewise. A dependency on
-a Done task is refused only when there is nothing left to wait for.
+a Done task is refused only when there is nothing left to wait for: production runs its release already, or none of
+its merges is in the repository production's release comes from (another product's work, whose production version
+Tico does not see: its owner snoozes to the date they will look again).
 
 Snooze stays for "look again on a date". A PR, main or a release is reached through the task that carries it.
 """
@@ -233,7 +237,17 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, unti
 
     H: Any = hubdb
     if until == UNTIL and blocker["status"] == "done":
-        if in_production(conn, str(blocker["id"])) is not None:
+        shipped = in_production(conn, str(blocker["id"]))
+        if shipped == "":
+            where = running(conn)[1] or "the repository"
+            H.refuse(
+                conn,
+                actor,
+                "task_ended",
+                f"{ref(blocker)} merged nothing into {where}, whose release this server runs: until released cannot "
+                "wait for it. Another product's release is not seen here: snooze to the date you will look again.",
+            )
+        if shipped is not None:
             H.refuse(
                 conn, actor, "task_ended", f"{ref(blocker)} is in production already: there is nothing to wait for"
             )
@@ -337,9 +351,11 @@ def running(conn: "sqlite3.Connection") -> tuple[str, str]:
 def in_production(conn: "sqlite3.Connection", task_id: str) -> str | None:
     """Whether production runs a release that holds every merged PR of the task: the version it runs when it does, ""
     when nothing of the task merged into the repository production runs (nothing to wait for), None while a merge is in
-    no release yet or in one newer than the running release. A release holds a merge when its saved history holds the
-    merge commit (item_sources.github.release_of, pre-releases counted, as stage_inputs reads it); it runs in
-    production when its tag is the running version or older (releases.parse: rc.10 after rc.9)."""
+    no release yet or in one newer than the running release. Each merge is looked for in the repo its pipeline's In a
+    release reads (item_sources.github.release_reads: the `release_repo` setting, else the PR's own). A release holds a
+    merge when its saved history holds the merge commit (item_sources.github.release_of, pre-releases counted, as
+    stage_inputs reads it); it runs in production when its tag is the running version or older (releases.parse: rc.10
+    after rc.9)."""
     from . import releases
     from .item_sources import github as G
 
@@ -348,13 +364,10 @@ def in_production(conn: "sqlite3.Connection", task_id: str) -> str | None:
     version, repo = running(conn)
     have = RL.parse(version)
     held: list[str] = []
-    for link in GS.prs_of(conn, task_id):
-        meta: Row = link.get("metadata") or {}
-        if meta.get("state") != "merged" or not meta.get("merged_sha"):
-            continue
-        if repo and str(link["repo"]).lower() != repo.lower():
+    for wait in GS.release_reads(conn, task_id):
+        if repo and str(wait["repo"]).lower() != repo.lower():
             continue  # another product's code: this server's release never holds it
-        release: Row | None = GS.release_of(conn, str(link["repo"]), str(meta["merged_sha"]), prereleases=True)
+        release: Row | None = GS.release_of(conn, str(wait["repo"]), str(wait["sha"]), prereleases=True)
         tag = RL.parse(release["tag"]) if release else None
         if not (have and tag and tag <= have):
             return None
@@ -366,18 +379,46 @@ def on_release(conn: "sqlite3.Connection", version: str, repo: str) -> list[str]
     """Start-up: record the release this server runs (`version`, of `repo`, from releases.version and the release
     manifest), then take off each dependency until released whose task is Done and whose merged PRs that release holds
     (`in_production`), and release each task that waited on it (`release_one`: it moves on, or its owner is woken once,
-    "#304 is in production: it runs 0.6.0-rc.10"). Every start-up checks, so a release read after one start is found at
-    the next; a dependency that came off is not there to wake anyone twice. Returns the tasks released."""
+    "#304 is in production: it runs 0.6.0-rc.10"). Every start-up checks, and so does the background re-read when it
+    finds a release holding a merge of the Done task (`released_now`); a dependency that came off is not there to wake
+    anyone twice. Returns the tasks released."""
     import json
 
     conn.execute(
         "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
         (RUNNING, json.dumps({"version": version, "repo": repo})),
     )
+    return _ship(conn, None, version)
+
+
+def held_blockers(conn: "sqlite3.Connection") -> list[str]:
+    """The Done tasks an open task still depends on until released: whose releases the background re-read keeps
+    reading after Done (item_sources.github._release_waits), so a task that reached Done before its release was read
+    does not keep its dependent blocked for good."""
+    return [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT DISTINCT d.to_task FROM task_relations d JOIN tasks b ON b.id = d.to_task "
+            "JOIN tasks w ON w.id = d.from_task WHERE d.kind = ? AND d.until = ? AND b.status = 'done' "
+            "AND w.status = 'open' ORDER BY d.to_task",
+            (RELATION, UNTIL),
+        )
+    ]
+
+
+def released_now(conn: "sqlite3.Connection", blocker_id: str) -> list[str]:
+    """The re-read just found a release holding a merge of `blocker_id` (Done, depended on until released): if the
+    release production runs (as the last start-up saw it) now holds all its merges, release what waits on it, as
+    `on_release` does. Returns the tasks released."""
+    return _ship(conn, blocker_id, running(conn)[0])
+
+
+def _ship(conn: "sqlite3.Connection", blocker: str | None, version: str) -> list[str]:
     found = conn.execute(
         "SELECT d.from_task, d.to_task, b.number FROM task_relations d JOIN tasks b ON b.id = d.to_task "
-        "WHERE d.kind = ? AND d.until = ? AND b.status = 'done' ORDER BY d.created_at, d.rowid",
-        (RELATION, UNTIL),
+        "WHERE d.kind = ? AND d.until = ? AND b.status = 'done' AND (? IS NULL OR d.to_task = ?) "
+        "ORDER BY d.created_at, d.rowid",
+        (RELATION, UNTIL, blocker, blocker),
     ).fetchall()
     shipped: dict[str, str | None] = {}
     out: list[str] = []

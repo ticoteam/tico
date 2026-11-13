@@ -868,7 +868,9 @@ def vanished(old: Row | None, metadata: Row) -> Row:
 
 
 def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
-    """Each merged PR an open task's In a release waits on: {task, repo (the release repo), sha, at, prereleases}."""
+    """Each merged PR an open task's In a release waits on: {task, repo (the release repo), sha, at, prereleases,
+    held}. Also each merged PR of a Done task that another task depends on until released (task_depends), read with
+    its pipeline's In a release settings and marked `held`, so its release is still read after Done."""
     out: list[Row] = []
     for task_id, settings in conn.execute(
         "SELECT t.id, r.settings FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
@@ -876,23 +878,50 @@ def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
         "AND r.kind='item' AND r.source='github' AND r.condition='in_release' "
         "WHERE t.status='open' AND t.pipeline_id IS NOT NULL"
     ).fetchall():
-        try:
-            setting: Row = json.loads(settings or "{}") or {}
-        except ValueError:
-            setting = {}
-        for link in prs_of(conn, str(task_id)):
-            metadata = link["metadata"]
-            if metadata and metadata["state"] == "merged" and metadata.get("merged_sha"):
-                out.append(
-                    {
-                        "task": str(task_id),
-                        "repo": release_repo(setting, str(link["repo"])),
-                        "sha": str(metadata["merged_sha"]),
-                        "at": metadata.get("merged_at"),
-                        "prereleases": setting.get("prereleases", True) is not False,
-                    }
-                )
+        out += _merged_waits(conn, str(task_id), _settings(settings))
+    from .. import task_depends
+
+    for task_id in task_depends.held_blockers(conn):
+        out += [{**w, "held": True} for w in release_reads(conn, task_id)]
     return out
+
+
+def _settings(settings: object) -> Row:
+    try:
+        return json.loads(str(settings or "{}")) or {}
+    except ValueError:
+        return {}
+
+
+def _merged_waits(conn: "sqlite3.Connection", task_id: str, setting: Row) -> list[Row]:
+    out: list[Row] = []
+    for link in prs_of(conn, task_id):
+        metadata = link["metadata"]
+        if metadata and metadata["state"] == "merged" and metadata.get("merged_sha"):
+            out.append(
+                {
+                    "task": task_id,
+                    "repo": release_repo(setting, str(link["repo"])),
+                    "sha": str(metadata["merged_sha"]),
+                    "at": metadata.get("merged_at"),
+                    "prereleases": setting.get("prereleases", True) is not False,
+                }
+            )
+    return out
+
+
+def release_reads(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
+    """Each merged PR of a task, with the repo whose releases hold it: {task, repo, sha, at, prereleases}. The repo is
+    the one its pipeline's In a release reads (`release_repo`), so a task that has left Release, or never had one, is
+    read as Release read it; with no such requirement, each PR's own repo."""
+    found = conn.execute(
+        "SELECT r.settings FROM tasks t JOIN stages s ON s.pipeline_id = t.pipeline_id "
+        "JOIN requirements r ON r.stage_id = s.id AND r.withdrawn_at IS NULL "
+        "AND r.kind='item' AND r.source='github' AND r.condition='in_release' "
+        "WHERE t.id=? ORDER BY s.position, r.rowid LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return _merged_waits(conn, task_id, _settings(found[0] if found else None))
 
 
 def release_repo(settings: Row, pr_repo: str) -> str:
@@ -967,7 +996,12 @@ def _refresh_releases(store: Any, github: GitHub, now: str, *, task: str | None 
             with store.transaction() as conn:
                 save_included(conn, release["id"], wait["sha"], inside)
                 changed += 1
-                if inside:
+                if inside and wait.get("held"):
+                    # Production may run this release already: what waits on the Done task goes on now.
+                    from .. import task_depends
+
+                    task_depends.released_now(conn, wait["task"])
+                elif inside:
                     _nudge(conn, [wait["task"]])
             if inside:
                 break
