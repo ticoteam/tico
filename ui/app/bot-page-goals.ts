@@ -55,6 +55,7 @@ async function botGoalAdd(slug: string) {
 // Add goal under them; no goal is the target and "Set goal", which opens the goal sheet.
 function botGoalRender(slug: string, goals: GkGoal[] | undefined) {
   const el = $('#bot-goal');
+  botGoalFitWatch();
   if (goals === undefined) {
     el.removeAttribute('data-status'); el.innerHTML = '';
     setTimeout(() => { if (BOT?.slug === slug && $('#bot-goal') && !$('#bot-goal').innerHTML) botGoalLoad(slug); }, 30000);
@@ -85,4 +86,68 @@ function botGoalRender(slug: string, goals: GkGoal[] | undefined) {
   for (const a of pop.querySelectorAll('[data-goal-open]'))
     a.onclick = (ev: MouseEvent) => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); pop.hidePopover(); openGoal(a.dataset.goalOpen); };
   pop.querySelector('[data-goal-add]').onclick = () => { pop.hidePopover(); void botGoalAdd(slug); };
+}
+
+// The goal in the header never draws narrower than BOT_GOAL_MIN (#302): its pill shrinks first, down to where
+// its title still reads, and with less room than that the header drops it (.bot-top.no-goal) and the Goals card
+// leads More instead. Room is the header's width less what the bot's name and the actions need; the alert line
+// beside the name yields first, so it is not counted. It comes back only with BOT_GOAL_BACK px to spare, so a
+// header resized around the switch point does not flicker. Below 1100px the goal has its own line and needs only
+// that line's width; on a phone it lives under More anyway (bot-page.css).
+const BOT_GOAL_MIN = 140, BOT_GOAL_BACK = 16;
+let BOT_GOAL_FIT: ResizeObserver | null = null;
+function botGoalFitWatch() {
+  BOT_GOAL_FIT?.disconnect();
+  BOT_GOAL_FIT = null;
+  const top = $('#bot-top'), name = top?.querySelector('.bot-nameline');
+  if (!top || !top.querySelector('#bot-goal')) return;
+  const watch = new ResizeObserver(() => {
+    // A redrawn or left page detaches the header: stop watching it.
+    if (!top.isConnected) { watch.disconnect(); if (BOT_GOAL_FIT === watch) BOT_GOAL_FIT = null; return; }
+    botGoalFit(top);
+  });
+  watch.observe(top);
+  if (name) watch.observe(name);
+  BOT_GOAL_FIT = watch;
+  botGoalFit(top);
+}
+function botGoalFit(top: HTMLElement) {
+  const phone = window.matchMedia('(max-width: 760px)').matches, wide = window.matchMedia('(min-width: 1100px)').matches;
+  const need = phone ? 0 : wide ? botGoalNeed(top) : BOT_GOAL_MIN, room = top.clientWidth;
+  const off = top.classList.contains('no-goal');
+  const hide = off ? need + BOT_GOAL_BACK > room : need > room;
+  if (hide === off) return;
+  top.classList.toggle('no-goal', hide);
+  botGoalsCardPlace(hide);
+}
+// What one line needs to hold the bot's whole name, every other shown item and the goal at its narrowest.
+function botGoalNeed(top: HTMLElement) {
+  const gap = parseFloat(getComputedStyle(top).columnGap) || 0;
+  let need = BOT_GOAL_MIN, items = 1;
+  for (const el of top.children as HTMLCollectionOf<HTMLElement>) {
+    if (el.id === 'bot-goal' || !el.getClientRects().length) continue;   // the goal itself, and what is not drawn
+    items++;
+    need += el.classList.contains('bot-ident') ? botIdentNeed(el) : el.getBoundingClientRect().width;
+  }
+  return need + gap * (items - 1);
+}
+// The avatar and the name line at full length (the name's scrollWidth, not its cut width), without the alert.
+function botIdentNeed(ident: HTMLElement) {
+  const id = ident.querySelector('.botid') as HTMLElement | null, line = ident.querySelector('.bot-nameline') as HTMLElement | null;
+  if (!id || !line) return ident.getBoundingClientRect().width;
+  let name = 0;
+  for (const el of line.children as HTMLCollectionOf<HTMLElement>) {
+    if (!el.getClientRects().length) continue;
+    const w = el.getBoundingClientRect().width;
+    name += el.tagName === 'H1' ? Math.max(w, el.scrollWidth) : w;
+  }
+  return ident.getBoundingClientRect().width - id.getBoundingClientRect().width + Math.ceil(name);
+}
+// With no goal in the header the Goals card is the first card under More, as on a phone; back home after the
+// alert's quarantine card when the goal returns.
+function botGoalsCardPlace(first: boolean) {
+  const card = $('#bot-goals-card'), lead = $('#bot-more-top'), home = $('#bot-quarantine-host');
+  if (!card || !lead) return;
+  if (first) lead.after(card);
+  else if (home) home.after(card);
 }

@@ -57,7 +57,13 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 .bot-quarantine-text{margin:0 0 8px;padding:6px 10px;border-left:3px solid var(--line);background:var(--surface2);font-family:var(--mono);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
 /* the goal is a bubble beside the name, not a full-width line; its whole text shows on hover (title) */
 #bot-tool-strip{display:none}               /* the repo and tool icons leave the top line; the Tools card under More lists them */
-.bot-goal{order:2;flex:0 1000000 auto;min-width:0;max-width:min(300px,100%);display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
+.bot-goal{order:2;flex:0 1000000 auto;min-width:0;max-width:min(300px,100%);display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-sm);color:var(--muted)}
+/* The goal shrinks first but never below 140px, where its title still reads (#302). With less room than that the
+   header drops it (.no-goal, botGoalFit in ui/app/bot-page-goals.ts) and the Goals card leads More: never a sliver. */
+.bot-goal[data-status="set"]{min-width:140px}
+.bot-goal[data-status="none"]{flex-shrink:0}   /* "Set goal" is short: whole, or not in the header */
+.bot-goal:empty,.bot-top.no-goal>.bot-goal{display:none}
+.bot-goal>.muted{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* One line on a computer: the bot (name, then its alert cut to fit) takes the left; the goal sits right, by the actions. */
 @media (min-width:1100px){
   .bot-top{align-items:center}
@@ -67,12 +73,13 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
   .bot-ident .meta{margin-top:0;flex:0 1000 auto;overflow:hidden}
   .bot-ident .bot-stop{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 }
-.bot-goal-main{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:inherit;font:inherit;cursor:pointer}
+.bot-goal-main{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:28px;padding:0 10px;overflow:hidden;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:inherit;font:inherit;cursor:pointer}
 .bot-goal-main:hover{background:var(--hover)}
 .bot-goal-main:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.bot-goal-i{flex:none;font-size:18px;color:var(--muted)}
-.bot-goal-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:600}
-.bot-goal-n{flex:none;color:var(--muted);font-size:var(--t-sm);font-weight:600}
+/* A quiet pill: a small muted target and the title in the regular weight, so the bot's name leads the line. */
+.bot-goal-i{flex:none;width:16px;height:16px;font-size:16px;color:var(--muted);opacity:.8}
+.bot-goal-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:500}
+.bot-goal-n{flex:none;color:var(--muted);font-size:var(--t-sm);font-weight:500}
 .bot-goal-set{border-color:transparent;background:none}.bot-goal-set .bot-goal-title{color:var(--link-quiet);font-weight:400}
 .bot-goal-set:hover .bot-goal-title{color:var(--ink)}
 .bot-goal-pop{width:300px}
@@ -211,8 +218,8 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-ident>[data-tip-bot]{display:inline-grid;place-items:center;min-width:44px;min-height:44px;margin:-8px}   /* status tip: a 44 px tap */
   .bot-ident h1{font-size:var(--t-lg)}
   .bot-top .bot-switch{display:flex;order:2;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
-  .bot-top>.bot-goal{order:3;flex:0 1000000 auto}
-  .bot-goal-main{height:28px;font-size:var(--t-sm)}
+  .bot-top>.bot-goal{order:3;flex:1 1 100%;max-width:none}   /* its own line under the bot, never squeezed beside it */
+  .bot-goal-main{max-width:min(300px,100%)}
   body.mobile-composer-focus #main.bot-chat-layout .bot-top{display:none}
 }
 @media (max-width:760px){
