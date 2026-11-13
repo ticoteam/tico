@@ -293,6 +293,16 @@ Besides its owner, a task can list people or bots under a **role**, a short name
 `"roles": {"reviewer": ["human:charlie"]}` (each role named replaces its people, `[]` clears one).
 `tico task list --member me [--role reviewer]` lists the tasks you are on. In SQL they are the `task_roles` table.
 
+## The task's Human
+
+A task may name one **Human**: the person accountable for it, whoever owns it, such as the developer on a ticket a bot
+owns. It is optional. The owner still has the work and is the one woken; the Human is the person the task falls to
+first. An OK, a page or a question that names nobody goes to them and is in their Needs you, as is the task once the
+ladder brings it to a person, and the owner bot's wake tells it to ask them. Naming one who cannot read a private task
+is refused (it adds no reader). A Human who left, cannot sign in or can no longer read the task is passed over for the
+rest of the ladder. Task create and update take `"human": "human:charlie"` (`""` takes them off); the task carries
+`human_id`. `tico task create|update --human <person>`. It stays when the task moves to another pipeline.
+
 ## Files
 
 Attach a file to the task so anyone who can read the task can open it. Uploading the same name on the same task adds a

@@ -44,8 +44,8 @@ def task_context(api, args):
     "task, use tico_task_ask.",
     {
         "owner": _s(
-            "Who does it: a bot slug, a person id, or `me`. Leave it out to file into a pipeline whose first stage "
-            "picks from several: the stage picks one; naming one always wins"
+            "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
+            "picks one"
         ),
         "title": _s("Task title: plain words, no reference numbers or all-caps"),
         "body": _s("The details", default=""),
@@ -111,17 +111,18 @@ def task_context(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
+        "human": _s("Its Human: a person or `me`"),
         "after": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
-            "each has merged. Build and review go ahead side by side",
+            "description": "Tasks it merges after (ids or 8+ leading characters): its PRs queue in Merge only once "
+            "each has merged; build and review go ahead",
         },
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            "description": "Who is on it by role, {role: [people or bots]}: a named role's people are replaced, [] clears "
-            "it, an unnamed role stays. Roles are short names the team picks (developer, reviewer, qa); one person may hold several",
+            "description": "Who is on it by role, {role: [people or bots]}, e.g. reviewer: each role named is "
+            "replaced ([] clears it), others stay",
         },
         "model": _s(
             "A bot-owned task's own model, from tico_bot_model's list: its runs use it, not the bot's task model"
@@ -140,6 +141,7 @@ def task_create(api, args):
         "body": args.get("body") or "",
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
+        **({"human": _target(api, args["human"])} if args.get("human") else {}),
     }
     for field in (
         "pipeline",
@@ -662,8 +664,8 @@ def task_give(api, args):
         "after": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
-            "each has merged. Build and review go ahead side by side",
+            "description": "Tasks it merges after (ids or 8+ leading characters): its PRs queue in Merge only once "
+            "each has merged; build and review go ahead",
         },
     },
     required=("parent", "title"),
@@ -789,6 +791,7 @@ def task_list(api, args):
             "description": "Tighten visibility; only the direct human requester can publish",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
+        "human": _s("Its Human: a person, `me`, or \"\" for none"),
         "note": _s("What changed, in a sentence"),
         "version": VERSION,
         "on_behalf_of": ASKED,
@@ -801,6 +804,8 @@ def task_update(api, args):
     for field in ("title", "body", "due", "labels", "private", "goal_id", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
+    if args.get("human") is not None:
+        body["human"] = _target(api, args["human"]) if args["human"] else ""
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
 

@@ -198,6 +198,8 @@ class TaskCreate(Contract):
     body: Text
     # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
     owner: ID | None = None
+    # The person accountable for it, whoever owns it (hubdb.task_human): asks that name nobody go to them first.
+    human: ID | None = None
     # The pipeline it goes in, by id; General when none is named. It starts in the pipeline's first stage.
     pipeline: ID | None = None
     # The task that files it: that task waits until this one ends. Set once, here.
@@ -296,6 +298,8 @@ class TaskUpdate(Contract):
     number: TaskNumber | None = None  # a mover's, for a task that has none
     # Replace the people in the roles named: {role: [actors]}; [] clears one.
     roles: dict[str, list[str]] | None = None
+    # The task's Human (hubdb.task_human), a person; "" takes them off.
+    human: str | None = Field(default=None, max_length=200)
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None

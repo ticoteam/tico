@@ -3558,6 +3558,7 @@ def create_app(settings=None):
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
             unassigned=unassigned,
             wake_refs=wake_refs,
+            human_id=body.human,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if body.for_actor:
@@ -3860,6 +3861,7 @@ def create_app(settings=None):
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
+        fields["human_id"] = fields.pop("human")  # the column's name: `human` is the API's, as `owner` is
         if "size" in body.model_fields_set and body.size is None:
             fields["clear_size"] = True
         after = H.task_update(

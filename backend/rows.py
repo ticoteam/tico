@@ -263,6 +263,7 @@ class TaskRow(TypedDict):
     pipeline_id: str | None
     stage_id: str | None
     assignee_id: str | None
+    human_id: str | None
 
 
 class PresenceRow(TypedDict):
