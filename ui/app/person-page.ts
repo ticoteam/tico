@@ -157,9 +157,9 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     ${fieldEditor('Goals', p.goals, {placeholder: 'What they are trying to get done.', save: edit})}
     ${fieldEditor('Notes', p.notes, {placeholder: 'Working notes about this human. Visible to humans who can open this profile.', rows: 8, save: edit})}
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>
-      <div>${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
+      <div class="chip-list">${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
-      <div>${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+      <div class="chip-list">${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span></a>`).join('')}</div></section>` : ''}
     <section class="card" id="person-access" hidden><header><h2>Access</h2>
         <button class="linkish person-edit-btn" type="button" id="person-access-edit">Edit</button></header>
       <div class="muted" id="person-access-text"></div></section>

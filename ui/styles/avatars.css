@@ -1,11 +1,6 @@
-/* ui/styles/avatars.css — Runtime mark, bot avatars and blobs, status dots.
+/* ui/styles/avatars.css — bot avatars and blobs, status dots.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* Which harness runs a bot: a small muted mark beside the name. The name truncates before the mark does. */
-.rt{flex:none;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;margin-left:3px;color:var(--muted);opacity:.8}
-.rt svg{width:100%;height:100%;display:block}
-.rt .tool-initials{font-size:8px;font-weight:600;line-height:var(--lh-none);letter-spacing:var(--track-normal)}
 .tree a.node .nm{flex:0 1 auto}
-.botid h1 .rt{width:16px;height:16px;margin-left:8px;vertical-align:middle}
 .tree .cnt{margin-left:auto;font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums;background:var(--surface2);padding:0 6px;border-radius:9px}
 /* A bot's DM unread (sidebar.js treeDmBadge): plain, beside any Needs you count. */
 .tree .cnt.tree-dm{color:var(--ink);font-weight:600}
@@ -47,6 +42,8 @@ img.av-photo{object-fit:cover;background:var(--surface2)}
 .node.cur{background:linear-gradient(90deg,var(--surface2),transparent)}
 .chip{display:inline-flex;align-items:center;gap:6px;color:var(--ink);white-space:nowrap}
 .chip:hover{text-decoration:none;color:var(--ink)}
+/* A person's reports and bots (person-page.ts): chips 16px apart in a row, 8px between rows. */
+.chip-list{display:flex;flex-wrap:wrap;gap:8px 16px}
 @media (prefers-reduced-motion:reduce){.av::after,.av,.av-shape{animation:none!important}}
 
 .proj{color:var(--muted);font-size:.85em;margin-right:5px}

@@ -186,7 +186,12 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
       // The top line keeps no tool icons; the Tools card under More lists them.
-      assert.equal(await page.locator('.bot-nameline .rt').count(), 1);
+      // The title is the name alone: no harness or provider mark beside it (#299).
+      assert.equal(await page.locator('.rt').count(), 0, 'no harness mark anywhere on the page');
+      assert.equal((await page.locator('.bot-nameline h1').innerText()).trim(), 'AI CMO');
+      // A bot with a harness still leaves the model out of the tool strip.
+      await page.locator('#bot-tool-strip .bts-icon').first().waitFor({state: 'attached'});
+      assert.equal(await page.locator('#bot-tool-strip [data-tool="model"]').count(), 0, 'the strip leaves the model out');
       assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no tool icons in the top line');
       await page.goto('https://tico-ui.test/#/bot/cmo/tools');
       const list = page.locator('#bot-tools');
