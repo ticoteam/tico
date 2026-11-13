@@ -370,3 +370,59 @@ def _headers() -> dict[str, str]:
     from backend.tests.helpers.api import headers
 
     return headers()
+
+
+def test_a_retired_channel_goes_to_zero_and_a_new_channel_with_its_name_still_syncs(api: Any):
+    """Review 2: a campaign moved off a channel that is then retired leaves that channel at 0, not its old spend, and
+    the run stays ok; a new channel named like the retired one then fills normally. Growth's month total equals
+    Finance's at each step."""
+    from backend import growth_sync as GS
+    from backend.tests.helpers.api import get, headers, post
+
+    store: Store = api.app.state.store
+    month = GS.this_month()
+    day = f"{month}-01"
+    _finance_with_spend(store, [(day, "brand", 421000), (day, "retarget", 188000), (day, "podcast", 31000)])
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
+    post(api, "growth/channels", {"slug": "social", "name": "Social"})
+    body = {"truth_for": "spend", "system": "Finance ad spend", "sync_kind": GF.KIND}
+    first = {"meta_ads:111:brand": "social", "meta_ads:111:retarget": "search-ads"}
+    src = post(api, "growth/sources", {**body, "sync_map": {"campaigns": first}})
+
+    def sync() -> dict[str, Any]:
+        result = post(api, f"growth/sources/{src['id']}/sync", {})
+        assert result["ok"], result
+        return result
+
+    def remap(campaigns: dict[str, str]) -> None:
+        r = api.patch(
+            f"/api/v2/growth/sources/{src['id']}", json={"sync_map": {"campaigns": campaigns}}, headers=headers()
+        )
+        assert r.status_code == 200, r.text
+
+    def spends() -> dict[str, float]:
+        with store.read() as c:
+            return {
+                str(r[0] or "unknown"): float(r[1] or 0)
+                for r in c.execute(
+                    "SELECT ch.slug, k.spend FROM growth_cohorts k LEFT JOIN growth_channels ch ON ch.id=k.channel_id "
+                    "WHERE k.month=?",
+                    (month,),
+                )
+            }
+
+    sync()
+    assert spends() == {"social": 4210.0, "search-ads": 1880.0, "unknown": 310.0}
+
+    remap({"meta_ads:111:brand": "search-ads", "meta_ads:111:retarget": "search-ads"})
+    post(api, "growth/channels/social/retire", {})
+    sync()
+    assert spends() == {"social": 0.0, "search-ads": 6090.0, "unknown": 310.0}
+    assert sum(spends().values()) == 6400.0
+
+    post(api, "growth/channels", {"slug": "social-paid", "name": "Social"})
+    remap({"meta_ads:111:brand": "social-paid", "meta_ads:111:retarget": "search-ads"})
+    sync()
+    assert spends() == {"social": 0.0, "social-paid": 4210.0, "search-ads": 1880.0, "unknown": 310.0}
+    assert sum(spends().values()) == 6400.0
+    assert get(api, "growth/sources")["sources"][0]["health"] == "fresh"

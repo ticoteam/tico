@@ -17,7 +17,7 @@ health; this module only answers what a run of kind `finance_ad_spend` writes.
   current month and the two before) and hands the rows, or the reason it failed, to growth_sync.run. "Sync now" runs
   it, and so does `refresh`, which the app hangs on Finance's import (ad_import.AFTER_RUN): a restated day reaches
   Growth within one refresh. A channel-month the source filled before that gets no spend now (a campaign remapped
-  away, Finance's import off) is set to 0, so Growth's month total keeps equal to Finance's.
+  away, Finance's import off, the channel retired) is set to 0, so Growth's month total keeps equal to Finance's.
 """
 
 import sqlite3
@@ -208,28 +208,57 @@ def sync(c: sqlite3.Connection, actor: str, source: dict[str, Any], at: datetime
         return GS.run(c, actor, source, error=str(failed), at=at)
     sent = [{"month": r.month, "channel": r.channel or "", "spend": r.spend} for r in found]
     sent += _emptied(c, str(source["id"]), found, oldest, at.strftime("%Y-%m"))
-    return GS.run(c, actor, source, rows=sent, at=at)
+    result = GS.run(c, actor, source, rows=sent, at=at)
+    if result.get("ok"):
+        result["written"] = int(result.get("written") or 0) + _empty_retired(
+            c, actor, str(source["id"]), str(result["run"]), oldest, at.strftime("%Y-%m")
+        )
+    return result
+
+
+def _filled(c: sqlite3.Connection, sid: str, oldest: str, newest: str, retired: bool) -> list[sqlite3.Row]:
+    """The channel-months in [oldest, newest] whose spend this source filled: Unknown and live channels, or retired
+    ones."""
+    return c.execute(
+        "SELECT k.id, k.month, coalesce(k.channel_id, '') AS channel_id, coalesce(ch.slug, '') AS slug, k.spend "
+        "FROM growth_origins o JOIN growth_cohorts k ON k.id=o.cohort_id "
+        "LEFT JOIN growth_channels ch ON ch.id=k.channel_id "
+        "WHERE o.field='spend' AND o.origin='synced' AND o.source_id=? AND k.month BETWEEN ? AND ? AND "
+        + ("ch.retired_at IS NOT NULL " if retired else "(k.channel_id IS NULL OR ch.retired_at IS NULL) ")
+        + "ORDER BY k.month, slug",
+        (sid, oldest, newest),
+    ).fetchall()
 
 
 def _emptied(c: sqlite3.Connection, sid: str, found: list[SpendRow], oldest: str, newest: str) -> list[dict[str, Any]]:
-    """A 0 for each channel-month in [oldest, newest] whose spend this source filled before and that gets none now (a
-    campaign remapped away, or Finance's import off), so Growth's month total keeps equal to Finance's."""
+    """A 0 for each live channel-month (or Unknown) in [oldest, newest] whose spend this source filled before and that
+    gets none now (a campaign remapped away, or Finance's import off), so Growth's month total keeps equal to Finance's.
+    Sent by the live channel's slug, which the engine resolves before any name, so it never names another channel."""
     from . import growth_sync as GS
 
     known = GS._channels(c)  # pyright: ignore[reportPrivateUsage]
     now = {(r.month, known.get(r.channel.lower(), r.channel) if r.channel else "") for r in found}
-    out: list[dict[str, Any]] = []
-    for r in c.execute(
-        "SELECT k.month, coalesce(k.channel_id, '') AS channel_id, coalesce(ch.slug, '') AS slug "
-        "FROM growth_origins o JOIN growth_cohorts k ON k.id=o.cohort_id "
-        "LEFT JOIN growth_channels ch ON ch.id=k.channel_id "
-        "WHERE o.field='spend' AND o.origin='synced' AND o.source_id=? AND k.month BETWEEN ? AND ? "
-        "ORDER BY k.month, slug",
-        (sid, oldest, newest),
-    ):
-        if (str(r["month"]), str(r["channel_id"])) not in now:
-            out.append({"month": str(r["month"]), "channel": str(r["slug"]), "spend": 0.0})
-    return out
+    return [
+        {"month": str(r["month"]), "channel": str(r["slug"]), "spend": 0.0}
+        for r in _filled(c, sid, oldest, newest, retired=False)
+        if (str(r["month"]), str(r["channel_id"])) not in now
+    ]
+
+
+def _empty_retired(c: sqlite3.Connection, actor: str, sid: str, run: str, oldest: str, newest: str) -> int:
+    """After a good run: a retired channel's spend this source filled in the window goes to 0. The engine writes only
+    live channels, and a retired channel's spend is now counted where its campaigns map (or listed as not written),
+    so keeping it would count the month's spend twice. Its origin stays this source, at this run."""
+    from . import hubdb as H
+
+    ids = [str(r["id"]) for r in _filled(c, sid, oldest, newest, retired=True) if r["spend"]]
+    for cid in ids:
+        c.execute("UPDATE growth_cohorts SET spend=0, updated_by=?, updated_at=? WHERE id=?", (actor, H.now(), cid))
+        c.execute(
+            "UPDATE growth_origins SET run_id=?, at=? WHERE cohort_id=? AND field='spend' AND source_id=?",
+            (run, H.now(), cid, sid),
+        )
+    return len(ids)
 
 
 def refresh(store: Any, at: str) -> None:
