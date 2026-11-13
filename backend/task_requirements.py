@@ -423,7 +423,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         # Given on an earlier page. A person's OK of an earlier version of this same page, at the commits the PRs are
         # at now, stays: publishing the page again changed no code (Nov 13, #3584: Chris was asked again for nothing).
-        if signoff and _same_code_ok(conn, task, requirement, answer, page):
+        # Only on the visit where it was given: an OK brought back from Merge is the Merge return's to judge.
+        if signoff and answer is not carried and _same_code_ok(conn, task, requirement, answer, page):
             name, was = _name(conn, answer["by_id"]), answer["page_version"]
             return Standing(requirement, MET, line=f"OK'd by {name} on version {was}; no new commits since")
         answer = None
