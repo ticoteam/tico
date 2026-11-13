@@ -1,5 +1,5 @@
 """Finance: Tico's own books for the previous full month and this month to date, four monthly budgets (one near its
-limit), six invoices, bills and finance rules. The Finance Owner's books view is granted six days before the build, and its
+limit), six invoices, bills and finance rules. The Finance Owner sees the books by default from the start, and its
 first rule proposal, made four days before it, waits for Ana's OK.
 
 The books are dated from the build's own moment (`b.now`): the previous full month, then this month up to the build, so
@@ -14,7 +14,6 @@ import contextlib
 from datetime import date, datetime, timedelta, timezone
 
 from .. import bookkeeper, hubdb
-from ..demo_seed import say_done
 from ..finance import actions as FA
 from ..finance import reads as RD
 
@@ -347,9 +346,6 @@ CONTENT = {
         ],
         "proposed": ("ago", 4),
     },
-    # The Finance Owner's books view: Ana grants it on Finance's Access page six days before the build, and marks the
-    # Finance Owner's ask done. The Finance Owner's entries follow it, since it can only post to accounts it can see.
-    "view": {"granted": ("ago", 6), "note": "The Finance Owner can see the books (Everything)."},
     "chase": {
         "title": "Chase ACME-1003 from Tidewater Coffee Co.",
         "body": (
@@ -459,8 +455,12 @@ def _setup(c, cal):
     opened = cal.opening()
     FA.ensure_setup(c, CONTENT["owner_email"], cal.at(opened, hour=8))
     bookkeeper.grant_defaults(c)
+    # The Finance Owner sees the books by default, before its first entry: a journal line on an account the poster
+    # cannot see is refused (handlers.may_write).
+    if bookkeeper.grant_view(c, OWNER, cal.at(opened, hour=8)) is None:
+        raise AssertionError("finance demo: the Finance Owner was not given its default view")
     _act(c, cal, OWNER, "right_grant", {"teammate": ACCOUNTS_PAYABLE, "right": "finance.ap"}, "right-ap", opened)
-    for who in (ACCOUNTS_PAYABLE,):  # the Finance Owner's own view comes later (_bookkeeper_view)
+    for who in (ACCOUNTS_PAYABLE,):
         _act(
             c,
             cal,
@@ -677,25 +677,6 @@ def _rule_payload(rule, codes):
     return _resolve({k: rule[k] for k in ("kind", "name", "words", "when", "outcome", "examples")}, codes)
 
 
-def _bookkeeper_view(c, cal):
-    """Ana gives the Finance Owner the books and marks its ask done. The grant comes before the Finance Owner's first entry:
-    a journal line on an account the poster cannot see is refused (handlers.may_write)."""
-    ask = bookkeeper.ask_for_view(c, OWNER)
-    if ask is None:
-        raise AssertionError("finance demo: the Finance Owner's view was asked for before the demo's own ask")
-    view = CONTENT["view"]
-    _act(
-        c,
-        cal,
-        OWNER,
-        "view_grant",
-        {"subject_kind": "teammate", "subject": FINANCE_OWNER, "what": "everything"},
-        "view-bookkeeper",
-        view["granted"],
-    )
-    say_done(c, OWNER, ask, view["note"])
-
-
 def _rules_and_tasks(c, cal):
     codes = _codes(c, cal)
     for i, rule in enumerate(CONTENT["rules"]):
@@ -723,8 +704,6 @@ def _propose_rule(c, cal, rule):
 def seed(b):
     cal = Calendar(b.now)
     b.write(lambda c: _setup(c, cal))
-    with _hub_clock(b, days=6):
-        b.write(lambda c: _bookkeeper_view(c, cal))
     b.write(lambda c: _books(c, cal))
     b.write(lambda c: _billing(c, cal))
     b.write(lambda c: _rules_and_tasks(c, cal))
