@@ -115,6 +115,19 @@ const at = (page: Page, width: number): Promise<Shot> => page.evaluate(async (wi
       assert((await at(page, 1200)).shown, scheme + ': the goal returns');
       const home = await page.evaluate(() => (document.querySelector('#bot-goals-card') as HTMLElement).previousElementSibling?.id);
       assert.equal(home, 'bot-quarantine-host', scheme + ': the Goals card back in its place');
+      // Narrower windows: below 1100px the goal has its own line under the bot, a whole pill, never cut to fit.
+      await page.evaluate(() => { (document.querySelector('#bot-top') as HTMLElement).style.width = ''; });
+      for (const width of [1099, 900, 761]) {
+        await page.setViewportSize({width, height: 900});
+        const s = await page.evaluate(async () => {
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const btn = document.querySelector('#bot-goal .bot-goal-main') as HTMLElement, name = document.querySelector('.bot-ident h1') as HTMLElement;
+          const b = btn.getBoundingClientRect(), i = (btn.querySelector('.bot-goal-i') as HTMLElement).getBoundingClientRect();
+          return {shown: btn.getClientRects().length > 0, pill: b.width, below: b.top >= name.getBoundingClientRect().bottom - 1,
+            iconIn: i.left >= b.left - 0.5 && i.right <= b.right + 0.5};
+        });
+        assert(s.shown && s.pill >= 140 && s.below && s.iconIn, `${scheme}: own line at a ${width}px window ${JSON.stringify(s)}`);
+      }
       assert.deepEqual(errors, [], scheme + ': page errors');
       await context.close();
     }

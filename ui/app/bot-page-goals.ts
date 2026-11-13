@@ -107,7 +107,8 @@ function botGoalFitWatch() {
     botGoalFit(top);
   });
   watch.observe(top);
-  if (name) watch.observe(name);
+  // The thread's actions and the tab switch fill in and change without resizing the header itself.
+  for (const el of [name, top.querySelector('#bot-top-acts'), top.querySelector('#btabs')]) if (el) watch.observe(el);
   BOT_GOAL_FIT = watch;
   botGoalFit(top);
 }
