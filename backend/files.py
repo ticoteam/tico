@@ -2047,6 +2047,12 @@ class Files:
             raise Problem("not_found", "File not found", 404)
         return row
 
+    def info(self, who, fid):
+        """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md)."""
+        with self.store.read() as c:
+            row = self.visible_file(c, who, fid)
+            return {"file": self.view(c, who, row, {"task": {}, "repo": {}})}
+
     def versions(self, who, fid):
         with self.store.read() as c:
             row = self.visible_file(c, who, fid)
@@ -2312,6 +2318,10 @@ def install_files(app, store, auth, blobs, mutate):
     @app.get("/api/v2/files/{fid}/activity")
     def activity(request: Request, fid: str):
         return files.activity_log(request.state.identity, fid)
+
+    @app.get("/api/v2/files/{fid}/info")
+    def info(request: Request, fid: str):
+        return files.info(request.state.identity, fid)
 
     @app.get("/api/v2/files/{fid}/versions")
     def versions(request: Request, fid: str):

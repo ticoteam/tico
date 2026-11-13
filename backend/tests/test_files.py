@@ -27,7 +27,7 @@ def test_a_private_chats_file_is_invisible_to_everyone_else(api):
     for other in ("ana-test", "cara-test"):  # the company owner included: a personal chat is not theirs
         page = listing(api, who=other)
         assert page["total"] == 0 and page["files"] == []
-        for path in ("", "/activity", "/versions", "/versions/1", "/meta"):
+        for path in ("", "/info", "/activity", "/versions", "/versions/1", "/meta"):
             assert api.get("/api/v2/files/" + fid + path, headers=headers(other)).status_code == 404, path
         assert "plan" not in api.get("/api/v2/bots/ops/files?limit=100", headers=headers(other)).text
     # Promote is the owner's or a bot administrator's, explicit and audited; then everyone who sees the bot sees it.
@@ -40,6 +40,17 @@ def test_a_private_chats_file_is_invisible_to_everyone_else(api):
     assert api.get("/api/v2/files/" + fid, headers=headers("cara-test")).content == b"# Plan"
     log = api.get("/api/v2/files/" + fid + "/activity", headers=headers("cara-test")).json()["activity"]
     assert [a["action"] for a in log] == ["promoted", "created"]
+
+
+def test_info_is_the_rail_row_of_a_file_the_viewer_sees(api):
+    _, attempt = turn(api)
+    fid = publish(api, attempt).json()["file"]["id"]
+    got = api.get(f"/api/v2/files/{fid}/info", headers=headers("ben-test"))
+    assert got.status_code == 200, got.text
+    row = got.json()["file"]
+    assert row == next(f for f in listing(api)["files"] if f["id"] == fid)
+    assert row["bot"] == "ops" and row["version"] == 1 and row["open"]["type"] == "tico"
+    assert api.get("/api/v2/files/file-missing-000000000000/info", headers=headers("ben-test")).status_code == 404
 
 
 def traced(api, request):

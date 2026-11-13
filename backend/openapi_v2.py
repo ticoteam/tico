@@ -1384,6 +1384,14 @@ STABLE = [
         "FileActivity",
     ),
     (
+        "/api/v2/files/{fid}/info",
+        "get",
+        "Files",
+        "getBotFile",
+        "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+        "BotFileResult",
+    ),
+    (
         "/api/v2/files/{fid}/versions",
         "get",
         "Files",

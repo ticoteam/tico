@@ -2,8 +2,34 @@
 
 A bot's page lists **Files** in its right rail: the useful things it created, revised or delivered, newest
 activity first, as a plain list of names. Three rows show by default; a small "+N" opens the rest in
-place. A bot with no files has no Files section. A stored file opens in the app's viewer (a CSV as a table, its first 1,000 rows, with Download);
-a linked document opens at its provider in a new tab.
+place. A bot with no files has no Files section. A stored file, or a Google Doc, Sheet, Slides or Drive file, opens in
+the [review view](#review); any other linked document opens at its provider in a new tab.
+
+## Review
+
+Clicking a file in a bot's Files, the Assistant's Files, Library › Files or a file pill in a thread opens it full
+screen at `#/file/<id>` (`?v=<n>` pins a version; `?task=<id>` or `?bot=<slug>` names the chat). The file is on the
+left, a chat on the right, and the top bar holds the name, Download and a clock. On a phone the file and the chat
+take turns, switched by two marks under the top bar. Esc or ✕ returns to the page underneath as it was; a cold link
+draws that page first (the task, the bot, else Library › Files), so closing lands there.
+
+- **The file:** the same kinds the viewer shows (pictures, video, audio, PDF, Markdown, text, CSV, HTML in its
+  sandbox), plus Word files (`.docx`), drawn in the browser by the vendored docx-preview (no LibreOffice). A Google
+  Doc, Sheet, Slides or Drive file shows Google's own `/preview` (signed in as the viewer, nothing passed but the
+  address), with Open in Google beside it. Anything else is a card with Download.
+- **The chat:** from a task, the task's thread; from a bot's page, its rail or Library, the DM with the file's bot.
+  Each message carries `refs.from_page` `{page: 'file', label: <title>, item: {kind: 'file', id, name: 'v<n>'}}`
+  for the version on screen (the same reference the [page chat](pages.md) uses). A file no bot owns has no chat.
+- **Versions:** the clock lists them (number, when, who), newest first. One picked shows, with a small `v<n>` mark
+  that returns to the latest. **Compare with previous** shows a line diff for Markdown, text, CSV and Word files
+  (their text).
+- **Live:** a new version shows without a reload: the chat's `messages` and `runs` events re-read `/versions`, and so
+  does a 60-second poll while the tab is visible. No new event topic.
+- **Word files are untrusted.** docx-preview parses the file in the app, but draws it detached from the page with
+  pictures as `data:` addresses from inside the file, and without embedded HTML (altChunk), comments or tracked
+  changes. The result is stripped of scripts, frames, forms and every `on*` handler; only `http(s)`, `mailto` and `#`
+  links stay, and only pictures from inside the file. It shows in the same sandboxed frame as HTML (no scripts, its
+  own origin) under `default-src 'none'; img-src data:`, so a picture or font on another site never loads.
 
 ## What gets listed
 
@@ -136,8 +162,8 @@ the bot publishes a changed version.
 
 Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=` (ordered by last
 activity, with the visible `total`), `POST /api/v2/files/uploads`, `/links`, `/imports`,
-`PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/activity` and
-`/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
+`PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
+lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
 It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
@@ -154,7 +180,7 @@ the bot's page, so a file you may not read adds no row, name or count.
   files on tasks its bots and people own, nested teams included), task, date, pinned and archived. They ride in the
   address (`#/library/files?kind=page&bot=…`). On a phone they scroll sideways.
 - **Rows:** title, kind, bot, last updated, and where a page is pinned. A page opens full size; another stored file
-  opens in the file viewer; a link opens at its provider.
+  opens in the review view, and so does a Google link; another link opens at its provider.
 - **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total. Cursors are
   encrypted and authenticated; a scan can return an empty page with a continuation past hidden rows.
 
