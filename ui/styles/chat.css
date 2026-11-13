@@ -391,6 +391,16 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 .learned-input{width:100%}
 .learned-priorities{margin:0;padding-left:1.4em}
 .learned-empty{margin-top:var(--s2)}
+/* Bots that can view this chat (ui/app/assistant-viewers.ts): one quiet line until opened. */
+.viewers{display:flex;flex-direction:column;gap:var(--s2);font-size:var(--t-sm)}
+.viewers-line{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.viewers-label{font-weight:600}
+.viewers-list,.viewers-matches{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s1)}
+.viewers-item{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.viewers-name{margin-right:auto;overflow-wrap:anywhere}
+.viewers-q{width:100%}
+.viewers-note{margin:0}
+.viewers-learned{display:flex;align-items:center;gap:var(--s2)}
 /* The chat column (bot chat, the Assistant, update threads, task comments): one centred column at most
    --read-width wide, in --read-size type on --read-leading lines. Your words sit in a --bubble; a bot's reply,
    its run summary and a Confirm card stay on the page without one. The thread pads itself to the column, so

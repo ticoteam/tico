@@ -46,7 +46,9 @@ async function pageLearned() {
       <h1>What it has learned</h1>
       <p class="muted">${esc(name)} reads this before every reply in your chat. Teach it there, for example “launches matter
         more than hiring news”; change or delete anything here.</p></div>
+    <section class="card learned-sec viewers" id="assistant-viewers" aria-label="Bots that can view this chat"></section>
     <div id="learned-body"><div class="empty">Loading…</div></div></div>`;
+  void viewersMount($('#assistant-viewers'), name);
   let d: LearnedPage;
   try { d = await get<LearnedPage>('/v2/assistant/learned'); }
   catch (e) { if (load === LEARNED_LOAD && $('#learned-body')) $('#learned-body').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }

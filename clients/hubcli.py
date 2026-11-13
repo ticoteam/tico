@@ -820,6 +820,13 @@ def parser():
     assistant.add_parser(
         "learned", help="what your chat bot has learned: your layer, and the company's for the owner"
     ).set_defaults(fn="assistant learned")
+    assistant.add_parser(
+        "shared", help="the people who chose you to view their Assistant chat, read only (a bot's own run)"
+    ).set_defaults(fn="assistant shared")
+    s = assistant.add_parser("shared-read", help="read one page of a person's Assistant chat they shared with you")
+    s.add_argument("person", help="the person's id, e.g. human:ana (tico assistant shared)")
+    s.add_argument("--before", default=None, help="next_before from the previous page, for older messages")
+    s.set_defaults(fn="assistant shared-read")
     s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
     s.add_argument("id", help="the card's proposal id (tico assistant proposals)")
     s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")

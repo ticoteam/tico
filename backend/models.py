@@ -773,6 +773,14 @@ class LearnedEdit(Contract):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class AssistantViewerAdd(Contract):
+    bot: str = Field(min_length=1, max_length=200)  # its slug or id
+
+
+class AssistantViewerLearned(Contract):
+    include_learned: bool
+
+
 class GoalReadBack(Contract):
     """The whole plan the owner's Assistant reads back in their chat (backend/goal_read_back.py): each change an object
     with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields. The
