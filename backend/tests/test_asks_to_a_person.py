@@ -176,7 +176,9 @@ def test_a_question_with_no_choices_needs_only_its_why(ruled):
 
 
 def needs_you_ask(api, rid, token="ana-test"):
-    return next(i["ask"] for i in get(api, "needs-you", token)["items"] if (i.get("ask") or {}).get("requirement_id") == rid)
+    return next(
+        i["ask"] for i in get(api, "needs-you", token)["items"] if (i.get("ask") or {}).get("requirement_id") == rid
+    )
 
 
 def test_an_asks_short_title_is_on_its_entry_and_in_needs_you(ruled):
