@@ -111,6 +111,10 @@ def task_context(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
+        "human": _s(
+            "The person accountable for it, whoever owns it (a human id or `me`); optional. Asks that name nobody "
+            "go to them"
+        ),
         "after": {
             "type": "array",
             "items": {"type": "string"},
@@ -140,6 +144,7 @@ def task_create(api, args):
         "body": args.get("body") or "",
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
+        **({"human": _target(api, args["human"])} if args.get("human") else {}),
     }
     for field in (
         "pipeline",
@@ -776,8 +781,8 @@ def task_list(api, args):
 
 @tool(
     "tico_task_update",
-    "Edit a task's fields: title, body, due, labels, privacy, goal, with a note. Where it is and who has it change "
-    "by tico_task_done, tico_task_move, tico_task_close and tico_task_reassign, never here.",
+    "Edit a task's fields: title, body, due, labels, privacy, goal, Human, with a note. Where it is and who has it "
+    "change by tico_task_done, tico_task_move, tico_task_close and tico_task_reassign, never here.",
     {
         "id": TASK_ID,
         "title": _s("A new title; it is checked as a new task's title would be"),
@@ -789,6 +794,7 @@ def task_list(api, args):
             "description": "Tighten visibility; only the direct human requester can publish",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
+        "human": _s("The person accountable for it (a human id or `me`); an empty string takes them off"),
         "note": _s("What changed, in a sentence"),
         "version": VERSION,
         "on_behalf_of": ASKED,
@@ -801,6 +807,8 @@ def task_update(api, args):
     for field in ("title", "body", "due", "labels", "private", "goal_id", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
+    if args.get("human") is not None:
+        body["human"] = _target(api, args["human"]) if args["human"] else ""
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
 

@@ -5492,6 +5492,20 @@ def review_finding_route(conn, actor, task_id, target):
             )
 
 
+def task_human(conn, actor, value):
+    """A task's Human as stored: `value` (`human:ana`, `ana`) as a person's actor. The Human is optional and never a
+    co-owner: the owner still has the work, and the Human is the person the task falls to first
+    (waiting_on.person_for). Refused for a bot, a group, nobody known, or a person who left or cannot sign in."""
+    from . import task_requirements
+
+    found = resolve_actor(conn, value)
+    if not found or not is_human(found):
+        refuse(conn, actor, "kind", f"A task's Human is a person, not {value}")
+    if not task_requirements.active_person(conn, found):
+        refuse(conn, actor, "kind", f"{actor_name(conn, found)} can't sign in, so can't be a task's Human")
+    return found
+
+
 def task_create(
     conn,
     actor,
@@ -5535,6 +5549,7 @@ def task_create(
     readers=(),
     readers_check=None,
     unassigned=False,
+    human_id=None,
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
 
@@ -5563,8 +5578,10 @@ def task_create(
     `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
+    `human_id` is the task's Human (`task_human`): the person accountable for it, whoever owns it.
     """
     _writer(conn, actor)
+    human_id = task_human(conn, actor, human_id) if human_id else None
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
     public_title = str(public_title or "").strip()
     public_summary = str(public_summary or "").strip()
@@ -5795,14 +5812,15 @@ def task_create(
             "occurrence": occurrence or None,
             "occurrence_step": occurrence_step or None,
             "rule_due_id": (rule_due_id or None) if occurrence else None,
+            "human_id": human_id,
         }
         conn.execute(
             "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, due_at, "
             "conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, lane, rank, "
-            "goal_id, number, private, occurrence, occurrence_step, rule_due_id) VALUES "
+            "goal_id, number, private, occurrence, occurrence_step, rule_due_id, human_id) VALUES "
             "(:id, :title, :body, :requester_id, :owner_id, :status, :due_at, "
             ":conversation_id, :created_at, :updated_at, :done_at, :closed_at, :closed_by_id, :note, "
-            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id)",
+            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id, :human_id)",
             row,
         )
         _building(conn, row["id"])  # its first stage is part of task.created, not a change
@@ -5848,6 +5866,8 @@ def task_create(
                 _task_event(conn, row['id'], actor, field, None, value, '')
         if goal_id:
             _task_event(conn, row["id"], actor, "goal_id", None, goal_id, "")
+        if human_id:
+            _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
         if plain:
             # warn mode: the problem is on the record, the task still exists (the refuse week follows)
             _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
@@ -6065,10 +6085,11 @@ def task_update(
     clear_size=False,
     public_allowance=0,
     seen_version=None,
+    human_id=None,
 ):
-    """Edit a task's fields: title, body, due date, note, labels, lane, rank, goal, number, privacy, roles, size and
-    its public text. One edit raises the task's version once. `seen_version` is the version the caller looked at: an
-    edit against an older one is refused.
+    """Edit a task's fields: title, body, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
+    Human and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
+    at: an edit against an older one is refused.
 
     This never writes the task's status, stage or owner: the engine does (backend/task_engine.py). For the callers
     that still say it this way, `status="done"` is `task_done`, `status="closed"` is `task_close`, `status="open"` on
@@ -6079,6 +6100,7 @@ def task_update(
     is). `rank` is the position in the owner's queue. `goal_id` names the goal the task serves; "" takes it off.
     `number` gives a task that has none its number; it never changes. `title` renames it, checked as a new task's
     title would be (`_retitle`). `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
+    `human_id` names the task's Human (`task_human`); "" takes them off.
     """
     if status is not None and status not in ("open", "done", "closed"):
         raise ValueError(f"a task is open, done or closed, not {status!r}: move it with task_move")
@@ -6123,6 +6145,7 @@ def task_update(
                 ("goal", goal_id),
                 ("private", private),
                 ("roles", roles),
+                ("human", human_id),
                 ("visibility", visibility),
                 ("public title", public_title),
                 ("public summary", public_summary),
@@ -6159,6 +6182,7 @@ def task_update(
                 title,
                 private,
                 roles,
+                human_id,
                 visibility,
                 public_title,
                 public_summary,
@@ -6269,6 +6293,12 @@ def task_update(
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
+    if human_id is not None:
+        human_id = task_human(conn, actor, human_id) if human_id else None
+        if human_id != row.get("human_id"):
+            sets.append("human_id=:human_id")
+            args["human_id"] = human_id
+            _task_event(conn, task_id, actor, "human_id", row.get("human_id"), human_id, note or "")
     edited = bool(
         sets or roles or clear_size or any(v is not None for v in (visibility, public_title, public_summary, size))
     )

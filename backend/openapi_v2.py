@@ -2646,6 +2646,11 @@ SCHEMAS = {
             "labels",
         ],
         owner_name={"type": "string", "description": "Display name of owner (`owner_id` stays the actor id)"},
+        human_id={
+            "type": ["string", "null"],
+            "description": "The task's Human: the person accountable for it whoever owns it, first on its ladder (asks "
+            "that name nobody go to them). Set with `human` on create and update",
+        },
         requester_name={"type": "string", "description": "Display name of requester"},
         filer={
             "type": "string",

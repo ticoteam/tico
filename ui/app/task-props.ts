@@ -1,4 +1,4 @@
-/* ui/app/task-props.ts — A task's properties, Linear style: one click-to-edit row each (Stage, Owner, Asked by, Due,
+/* ui/app/task-props.ts — A task's properties, Linear style: one click-to-edit row each (Stage, Owner, Human, Asked by, Due,
    Tags, Part of), their menus and pickers, and the task's "…" menu (docs/pipelines-v3.md S4, S5).
    Used by the task's window (#task-modal); each change saves at once with the task's version.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -108,6 +108,10 @@ function taskPropsHTML(t: PropTask): string {
   // Owner and who asked. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
+  // Human: the person accountable for it whoever owns it (backend hubdb.task_human); optional.
+  const human = t.human_id || '';
+  rows.push(row('human', 'Human', human ? actorFace(human, 16) + txt(actorLabel(human)) : txt('None'), {edit: r.edit, empty: !human, words: human ? actorLabel(human) : 'none',
+    extra: r.edit && human ? `<button type="button" class="prop-x" data-prop-clear="human" aria-label="Take the Human off" title="Clear">${TL_ICON.x}</button>` : ''}));
   const asker = taskAsker(t), askerLabel = taskAskerLabel(t);
   rows.push(row('asker', 'Asked by', asker ? (taskFiledByBuiltin(t) ? '' : actorFace(asker, 16)) + txt(askerLabel) : txt('Unknown'), {words: askerLabel || 'Unknown', empty: !asker}));
   if (t.roles && Object.keys(t.roles).length) rows.push(taskPeopleRowHTML(t, r));
@@ -150,7 +154,7 @@ function taskPropsHTML(t: PropTask): string {
   return `<div class="props">${stageRow}</div><details class="task-details" data-task-details="${esc(String(t.id))}"${open ? ' open' : ''}><summary><span class="task-details-k">Details</span><span class="task-details-line">${esc(line)}</span><span class="task-details-chev" aria-hidden="true">›</span></summary><div class="props">${rows.join('')}</div></details><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS: Record<string, string> = {visible: 'Visible to', readers: 'Visible to', followers: 'Followers', stage: 'Stage', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', people: 'People', publication: 'Public', size: 'Size', snooze: 'Snooze'};
+const PROP_WORDS: Record<string, string> = {visible: 'Visible to', readers: 'Visible to', followers: 'Followers', stage: 'Stage', owner: 'Owner', human: 'Human', due: 'Due', tags: 'Tags', parent: 'Part of', people: 'People', publication: 'Public', size: 'Size', snooze: 'Snooze'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -409,7 +413,8 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     }
     const clear = eventElement(ev)?.closest<HTMLElement>('[data-prop-clear]');
     if (clear) {
-      void save(clear.dataset.propClear ?? '', {due: ''});
+      const field = clear.dataset.propClear ?? '';
+      void save(field, field === 'human' ? {human: ''} : {due: ''});
       return;
     }
     const b = eventElement(ev)?.closest<HTMLElement>('[data-prop]'); if (!b) return;
@@ -470,6 +475,12 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       // Give to… (give-to.ts): searchable, with suggestions for this task; the owner shows ✓.
       if (!giveToJustClosed(b)) giveToOpen(b, {label: 'Owner', task, selected: task.owner_id || '',
         onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
+    } else if (key === 'human') {
+      // People only: the Human is a person, never a bot or a team.
+      const items = (S.people || []).filter(p => p.id && !p.hidden).map(p => ({value: 'human:' + p.id, text: p.name || p.id, checked: 'human:' + p.id === task.human_id,
+        html: `<span class="tl-opt-face">${actorAvatar('human:' + p.id, 16)}</span><span>${esc(p.name || p.id)}</span>`})).sort((a, b) => a.text.localeCompare(b.text));
+      propMenu(d, b, {label: 'Human', find: 'Find a person', items, none: 'Nobody to pick',
+        onPick: it => { if (it.value !== task.human_id) void save('human', {human: it.value}); }});
     } else if (key === 'due') {
       const input: HTMLInputElement | null = $('[data-prop-date]', d);
       d.focusProp = 'due';
