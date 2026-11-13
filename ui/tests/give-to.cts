@@ -19,19 +19,20 @@ const {open} = require('./task-code.cts') as {open: (browser: Browser, opts?: Re
 
 // The roster the picker reads (S.emps, S.people), shaped as the app holds it, with the roles of the real team. The
 // app reads the roster again on its own timer, so the fixture's endpoints serve the same one.
-// In production a bot's id is not its slug (BotOps is bot:<uuid>, slug botops); eng and api keep the task fixture's ids.
+// As production sends them: a built-in bot's id is its slug (botops, assistant); a newer bot's is a uuid (b-release here).
 const bot = (id: string, display_name: string, role: string, extra: Record<string, unknown> = {}) =>
   ({id, name: id, slug: id.replace(/^b-/, ''), display_name, role, status: 'active', state: 'active', host: 'keeper',
     resolved_model: 'claude-opus-5-5', resolved_model_label: 'Opus 5.5', resolved_provider: 'Anthropic', ...extra});
 const BOTS = [
   bot('eng', 'Engineer', 'Builds each change on a branch. Never merges.'),
   bot('api', 'API Engineer', 'Owns the payments API.'),
-  bot('b-botops', 'BotOps', 'Keeps every bot running: stuck runs, failed jobs, computers.'),
+  bot('botops', 'BotOps', 'Keeps every bot running: stuck runs, failed jobs, computers.'),
   bot('finance', 'Finance Owner', 'Keeps the books and pays the bills.'),
   bot('finance-po', 'Finance Product Owner', 'Writes the specs for Finance screens.'),
   bot('reviewer-1', 'Reviewer 1', 'Reads each pull request first.'),
   bot('reviewer-2', 'Reviewer 2', 'Reads each pull request after the fixes.'),
   bot('b-release', 'Release Owner', 'Reviews the merge queue and ships each release.'),
+  bot('assistant', 'Assistant', "Every human's private Assistant."),
   bot('jev', 'Jev', 'Checks each page a person will read.', {description: 'ignored: the role wins'}),
   bot('old', 'Old Helper', 'Retired.', {status: 'archived'})];
 const PEOPLE = [{id: 'ana', name: 'Ana', title: 'Founder'}, {id: 'sam', name: 'Sam', title: 'Designer'}, {id: 'gone', name: 'Gone', hidden: true}];
@@ -45,7 +46,7 @@ async function roster(page: Page): Promise<void> {
   // A roster read already on its way when the routes changed could still land with the fixture's bots: one read after
   // them is shown last (refresh.ts keeps the newest read), so wait for it.
   await page.evaluate(() => refresh(true));
-  await page.waitForFunction(() => S.emps.some(e => e['id'] === 'b-botops') && S.people.some(p => p['id'] === 'gone'));
+  await page.waitForFunction(() => S.emps.some(e => e['id'] === 'botops') && S.people.some(p => p['id'] === 'gone'));
 }
 
 async function desktop(browser: Browser): Promise<void> {
@@ -62,12 +63,12 @@ async function desktop(browser: Browser): Promise<void> {
   assert.deepEqual(await names('zzz'), []);
   const everyone = await page.evaluate(() => giveToEntries().map(e => e.name));
   assert.deepEqual(everyone, ['Ana', 'Sam', 'API Engineer', 'BotOps', 'Engineer', 'Finance Owner', 'Finance Product Owner', 'Jev', 'Release Owner', 'Reviewer 1', 'Reviewer 2'],
-    'people then bots, A–Z; archived and hidden stay out');
+    'people then bots, A–Z; archived bots and the Assistant stay out, BotOps (id = slug) is listed');
 
   // AC-3: requester, bots named (title, then body), the area tag's owner, then recent; no one twice; at most 8.
   const suggested = await page.evaluate(() => giveToSuggest(giveToEntries(), {requester_id: 'human:sam', title: 'Ask BotOps about the stuck run',
     body: 'Then finance-po writes it up; botops again.', tags: [{owner: 'bot:b-release'}, {owner: 'human:sam'}]},
-  ['bot:eng', 'bot:b-botops', 'bot:api', 'bot:jev', 'bot:reviewer-1', 'bot:reviewer-2']).map(s => `${s.entry.name}: ${s.why}`));
+  ['bot:eng', 'bot:botops', 'bot:api', 'bot:jev', 'bot:reviewer-1', 'bot:reviewer-2']).map(s => `${s.entry.name}: ${s.why}`));
   assert.deepEqual(suggested, ['Sam: Asked for it', 'BotOps: Named in the task', 'Finance Product Owner: Named in the task', 'Release Owner: Owns its area',
     'Engineer: Recent', 'API Engineer: Recent', 'Jev: Recent', 'Reviewer 1: Recent']);
 
@@ -95,7 +96,7 @@ async function desktop(browser: Browser): Promise<void> {
   assert.equal(await pop.locator('[aria-checked=true] .gt-name').first().textContent(), 'Engineer', 'the current owner shows ✓');
   assert.doesNotMatch(await pop.innerText(), /opus|anthropic/i, 'no model text');
   assert.equal(await pop.locator('[role=option]').first().getAttribute('title'), 'Founder', 'the role on hover');
-  assert.equal(await pop.locator('[role=option][data-give-pick="b-botops"]').getAttribute('title'), 'Keeps every bot running: stuck runs, failed jobs, computers.');
+  assert.equal(await pop.locator('[role=option][data-give-pick="botops"]').getAttribute('title'), 'Keeps every bot running: stuck runs, failed jobs, computers.');
 
   // Esc: closed, nothing saved, focus back on the button.
   await page.keyboard.press('Escape');
@@ -152,7 +153,7 @@ async function desktop(browser: Browser): Promise<void> {
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});
   await page.waitForFunction(() => /BotOps/.test(document.querySelector('#task-modal [data-prop="owner"]')?.textContent || ''));
-  assert.deepEqual(owners, ['bot:b-botops'], "the owner is saved as BotOps's actor");
+  assert.deepEqual(owners, ['bot:botops'], "the owner is saved as BotOps's actor");
 
   // AC-6: the pick is first in Recent in another place (New task, which has no task: Suggested is recent only).
   await page.keyboard.press('Escape');
@@ -171,7 +172,7 @@ async function desktop(browser: Browser): Promise<void> {
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'human:sam');
   assert.equal(await field.locator('.gt-name').textContent(), 'Sam');
   assert.ok(!(await field.evaluate(b => b.classList.contains('empty'))));
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.giveTo.recent:human:ana') || '[]').join(' ')), 'human:sam bot:b-botops');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.giveTo.recent:human:ana') || '[]').join(' ')), 'human:sam bot:botops');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('give-to: desktop ok');
@@ -192,7 +193,7 @@ async function phone(browser: Browser): Promise<void> {
   assert.ok(q.y < 80 && q.height >= 44, 'search at the top');
   const heights = await pop.locator('.gt-row').evaluateAll(rs => rs.map(r => r.getBoundingClientRect().height));
   assert.ok(heights.length > 5 && heights.every(h => h >= 44), `44px rows: ${heights}`);
-  assert.equal(await pop.locator('.gt-row[data-give-pick="b-botops"] .gt-role').isVisible(), true, 'the role shows after the name on a phone');
+  assert.equal(await pop.locator('.gt-row[data-give-pick="botops"] .gt-role').isVisible(), true, 'the role shows after the name on a phone');
   assert.ok(await pop.evaluate(p => p.scrollWidth <= p.clientWidth + 1), 'no sideways scroll');
   await pop.locator('.gt-x').click();
   await pop.waitFor({state: 'detached'});
@@ -214,7 +215,7 @@ async function needsYou(browser: Browser): Promise<void> {
   const item = {id: 't-ny', kind: 'task', line: 'Ask BotOps about the stuck run', since: now, task: brief, task_id: 't-ny'};
   await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [item]}}));
   const sent: unknown[] = [];
-  await page.route('**/api/v2/tasks/t-ny/owner', route => { sent.push(route.request().postDataJSON()); return route.fulfill({json: {task: {...brief, owner_id: 'bot:b-botops', version: 3}}}); });
+  await page.route('**/api/v2/tasks/t-ny/owner', route => { sent.push(route.request().postDataJSON()); return route.fulfill({json: {task: {...brief, owner_id: 'bot:botops', version: 3}}}); });
   // The app's own Needs you list must hold the item first: a refresh that lands after the screen opens otherwise
   // reads it as answered elsewhere and moves on.
   await page.evaluate(() => v2NeedsRead());
@@ -243,7 +244,7 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await give.isDisabled(), false);
   await give.click();
   for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(100);
-  assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['b-botops'], 'Give sends the value the old list sent');
+  assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['botops'], 'Give sends the value the old list sent');
 
   // 👎 on a bot's question, Wrong person: the same field, ✓ on the task's owner, and Give to… sends the pick.
   const ask = {kind: 'ask', id: 'r-ny', task_id: 't-ask', requirement_id: 'r-ny', line: 'Which day does the beta start?', since: now,

@@ -55,13 +55,15 @@ function giveToRoleLine(text: string | null | undefined): string {
   return (first ? first[0] : para).trim();
 }
 
-/** Everyone who may be picked, as the old list held them: people not hidden, then bots not archived and not hidden
-    (a hidden bot stays when it is the one chosen). People first, then bots, each A–Z. */
+/** Everyone who may be picked: people not hidden, then bots not archived. The Assistant stays out (everyone's own
+    private one; it stays when it is the one chosen), but its helpers are listed: work is given to BotOps, the
+    Librarian, the Rules Owner and the Strategy Owner by name, and a built-in bot's id is its slug, so the sidebar's
+    isHiddenBot would hide them here. People first, then bots, each A–Z. */
 function giveToEntries(selected = ''): GiveToEntry[] {
   const byName = (a: GiveToEntry, b: GiveToEntry) => a.name.localeCompare(b.name, undefined, {sensitivity: 'base'});
   const people: GiveToEntry[] = (S.people || []).filter(p => !p.hidden).map(p => ({value: 'human:' + p.id, actor: 'human:' + p.id,
     name: String(p.name || p.id), slug: '', role: giveToRoleLine(p.title), kind: 'human' as const})).sort(byName);
-  const bots: GiveToEntry[] = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
+  const bots: GiveToEntry[] = (S.emps || []).filter(e => e.status !== 'archived' && (e.id !== assistantBot() || [e.id, 'bot:' + e.id].includes(selected)))
     .map(e => {
       const about = e as typeof e & {role?: string | null; description?: string | null};
       return {value: e.id, actor: 'bot:' + e.id, name: String(e.display_name || e.slug || e.id), slug: String(e.slug || e.id),
