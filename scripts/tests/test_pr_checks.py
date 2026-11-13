@@ -2461,6 +2461,17 @@ def test_a_new_ui_file_runs_the_release_shot_table_test_even_in_a_light_plan(eve
         assert checks.RELEASE_SHOTS not in light_plan(changed, event, repo_map, added=added)["guards"], changed
 
 
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event, repo_map):
+    # Nov 13: #3598 added `tico growth source push src_1 --file signups.csv` in clients/commands/strategy.py; its light
+    # plan never ran test_cli_spec.py, which parses every example, and main went red (fixed by #3684).
+    changed = ["clients/commands/strategy.py", "backend/growth.py"]
+    light = light_plan(changed, event, repo_map, added=[])
+    assert checks.CLI_SPEC in light["python"] and light["narrow"]["tier"][checks.CLI_SPEC] == 0
+    assert checks.CLI_SPEC in light["guards"] and (ROOT / checks.CLI_SPEC).is_file()
+    assert checks.CLI_SPEC not in light_plan(["backend/growth.py"], event, repo_map, added=[])["guards"]
+
+
 def test_a_schema_line_in_a_backend_module_runs_the_rows_schema_test(tmp_path):
     # A column added to a CREATE TABLE string (hubdb.py, store.py) or to the column list an ALTER TABLE loop reads
     # changes the hub's schema without a migration: rows.py must follow, so test_rows_schema.py runs.

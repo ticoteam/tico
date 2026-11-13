@@ -20,7 +20,7 @@ interface RdoGroup {
   bots: string[];
   order: number;
 }
-declare const RDO: {zoom: number; groups: RdoGroup[]};
+declare const RDO: {zoom: number; groups: RdoGroup[]; manual?: boolean};
 declare const S: {orgGroups: {id: string; name: string; parent: string; org_parent: string; order: number}[]; emps: unknown[]};
 declare function rdoDraw(opts: {refit: boolean}): void;
 // The fit's last reading, kept on the page's window between frames.
@@ -296,6 +296,17 @@ async function chart(page: Page, tag: string) {
       });
       await page.locator('#rdo-pane').evaluate(el => { el.scrollLeft = 0; });
       assert.equal(await centred(), false, tag + ': panned to the left end');
+      // A mouse drags it (ui/app/drag-pan.ts): 120px left, starting on a card, opens no sheet; it counts as panned by hand.
+      const start = (await page.locator('#rdo-cv .rdo-card').first().boundingBox())!;
+      await page.mouse.move(start.x + 20, start.y + 10);
+      await page.mouse.down();
+      for (let i = 1; i <= 6; i++) await page.mouse.move(start.x + 20 - 20 * i, start.y + 10);
+      await page.mouse.up();
+      assert.ok(Math.abs(await page.locator('#rdo-pane').evaluate(el => el.scrollLeft) - 120) <= 1, tag + ': a mouse drag pans');
+      assert.equal(await page.evaluate(() => RDO.manual), true, tag + ': a drag is by hand');
+      assert.equal(await page.locator('.rdo-sheet, [role=dialog]:visible').count(), 0, tag + ': a drag opens nothing');
+      await page.evaluate(() => { RDO.manual = false; });
+      await page.locator('#rdo-pane').evaluate(el => { el.scrollLeft = 0; });
       await page.setViewportSize({width: 1440, height: 900});
       await page.waitForFunction(() => {
         const pane = document.querySelector<HTMLElement>('#rdo-pane')!, p = pane.getBoundingClientRect(), o = document.querySelector('.rdo-card.top')!.getBoundingClientRect();

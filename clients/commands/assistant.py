@@ -5,6 +5,7 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 import json
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
@@ -448,6 +449,32 @@ def assistant_learn(api, args):
 )
 def assistant_learned(api, args):
     return api.get("assistant/learned")
+
+
+@tool(
+    "tico_assistant_shared",
+    "The people who chose you to view their Assistant chat, read only: each person's id, name, since when, "
+    "your last read and whether what their Assistant learned about them is included. Nobody else's chat is readable.",
+    {},
+)
+def assistant_shared(api, args):
+    return api.get("assistant/shared")
+
+
+@tool(
+    "tico_assistant_shared_read",
+    "Read one page of a person's Assistant chat that they chose to share with you: their messages, the "
+    "Assistant's replies and its cards, newest page first (pass `before` = the reply's next_before for older). Read "
+    "only: you cannot post, react or act on a card there. Each read is in the audit log and on their list.",
+    {
+        "person": _s("The person's id, e.g. human:ana (tico_assistant_shared lists them)"),
+        "before": _s("next_before from the previous page, for older messages (optional)"),
+    },
+    required=("person",),
+)
+def assistant_shared_read(api, args):
+    query = {"before": args["before"]} if args.get("before") else {}
+    return api.get("assistant/shared/" + quote(str(args["person"]), safe=":"), **query)
 
 
 # ----------------------------------------------------------------------------- a person's batch

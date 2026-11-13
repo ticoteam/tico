@@ -467,7 +467,7 @@ function tasksRender(state: TasksPageState | null) {
 function tasksAskOff() {
   if (typeof pipelineAskLeave === 'function') pipelineAskLeave();
 }
-/** The rail's host is emptied and hidden away from a pipeline (and the rail's own reads stop, pipeline-rail.ts). */
+/** The rail's host is emptied and hidden away from a pipeline (and its chat goes, pipeline-rail.ts). */
 function tasksRailOff() {
   const rail = document.getElementById('task-rail');
   if (rail && !rail.hidden) { rail.hidden = true; rail.replaceChildren(); }
@@ -489,13 +489,22 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean), line = it.line.toLowerCase();
   return !taskFiltersOn(state.filters) && words.every(w => line.includes(w));
 }
-/** One row of You: the sentence asked; a question with two choices answers in place (S1.8). */
+/** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
+function needsTitle(it: NeedsEntry): string {
+  return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
+}
+/** Its second line: the question, under an Answer row's title (its buttons answer it); other asks keep it as the tooltip. */
+function needsAsk(it: NeedsEntry): string {
+  return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
+}
+/** One row of You: its task's title (needsTitle), an Answer row's question under it; a question with two choices answers in place (S1.8). */
 function needsRowHTML(it: NeedsEntry): string {
   const ask = it.ask, two = it.kind === 'ask' && ask?.kind === 'answer' && ask.choices?.length === 2 && ask.may.includes('answer');
   const after = two ? ask!.choices!.map((c, i) => `<button type="button" class="${i ? 'ghost' : 'primary'} sm" data-need-answer="${esc(c)}">${esc(c)}</button>`).join('') : '';
   const who = it.kind === 'mention' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
-  return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0">`
-    + `<span class="tk-title">${esc(it.line)}</span>${it.task ? lateTagHTML(it.task) : ''}`
+  const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
+  return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
+    + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }

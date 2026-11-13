@@ -1,5 +1,7 @@
 // "What it has learned" (ui/app/learned.ts): linked from the top of your chat; the owner sees the company layer and their
-// own, everyone else only their own; edit and delete send exactly that entry's change and redraw without it. Fixtures only.
+// own, everyone else only their own; edit and delete send exactly that entry's change and redraw without it. Bots that
+// can view this chat (ui/app/assistant-viewers.ts): none at first, a search offers only matching bots, and add, remove
+// and "include what it has learned" each send one write. Fixtures only.
 import type {Browser, LaunchOptions, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';
@@ -18,6 +20,7 @@ interface ChatState {room_id: string}
 async function open(browser: Browser, me: Record<string, unknown>, learned: unknown, chat: ChatState) {
   const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
   const errors: string[] = [], writes: unknown[][] = [];
+  let viewers: {bots: Record<string, unknown>[]; include_learned: boolean} = {bots: [], include_learned: false};
   page.on('pageerror', (error: Error) => errors.push(error.message));
   await page.route('**/*', (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -37,6 +40,17 @@ async function open(browser: Browser, me: Record<string, unknown>, learned: unkn
     if (p === '/api/v2/assistant') return json(chat);
     if (p === `/api/v2/conversations/${chat.room_id}/snapshot`) return json({messages: [], execution: null, has_more: false, next_before: null});
     if (p === '/api/v2/assistant/learned' && req.method() === 'GET') return json(learned);
+    if (p === '/api/v2/bots') return json([{slug: 'assistant', display_name: 'Assistant', state: 'active'}, {slug: 'assistant-owner', display_name: 'Assistant Owner', state: 'active'},
+      {slug: 'routines', display_name: 'Assistant Routines', state: 'active'}, {slug: 'finance', display_name: 'Finance', state: 'active'}, {slug: 'old', display_name: 'Assistant Old', state: 'archived'}]);
+    if (p === '/api/v2/assistant/viewers' && req.method() === 'GET') return json(viewers);
+    if (p.startsWith('/api/v2/assistant/viewers')) {
+      const body = req.postDataJSON?.() ?? null;
+      writes.push([req.method(), p.slice('/api/v2/assistant/viewers'.length), body]);
+      if (req.method() === 'POST') viewers = {...viewers, bots: [...viewers.bots, {bot: body.bot, slug: body.bot, name: 'Assistant Owner', added_at: now, last_read_at: null}]};
+      else if (req.method() === 'DELETE') viewers = {...viewers, bots: viewers.bots.filter(b => `/${b.slug}` !== p.slice('/api/v2/assistant/viewers'.length))};
+      else if (req.method() === 'PUT') viewers = {...viewers, include_learned: Boolean(body.include_learned)};
+      return json(viewers);
+    }
     const one = p.match(/^\/api\/v2\/assistant\/learned\/([^/]+)$/);
     if (one) {
       const body = req.postDataJSON?.() ?? null;
@@ -102,6 +116,34 @@ const chat = (over: Record<string, unknown>) => ({available: true, state: 'activ
       assert.equal(await page.locator('#learned-company').count(), 0, 'member: no company layer');
       assert.match(await page.locator('#learned-personal').innerText(), /Nothing yet\. Tell Assistant in your chat/, 'member: how to teach it');
       assert.deepEqual(errors, [], 'member: no page errors');
+      await page.close();
+    }
+    // Bots that can view this chat: nobody at first, one quiet line; search offers only live matches other than the
+    // Assistant, and add, include-learned and remove are one write each.
+    {
+      const member = {id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true};
+      const {page, errors, writes} = await open(browser, member, {personal: [], company: null}, chat({bot: 'assistant', name: 'Assistant'}));
+      await page.goto('https://tico-ui.test/#/assistant/learned');
+      const viewers = page.locator('#assistant-viewers');
+      await viewers.getByText('Bots that can view this chat').waitFor();
+      assert.match(await viewers.innerText(), /Bots that can view this chat\s*None\s*·\s*Add a bot/, 'viewers: none at first');
+      assert.equal(await viewers.locator('[data-viewer-learned]').count(), 0, 'viewers: no learned switch with nobody added');
+      await viewers.locator('[data-viewer-open]').click();
+      assert.equal(await viewers.locator('[data-viewer-pick]').count(), 0, 'viewers: the bot list is never shown in full');
+      await viewers.locator('.viewers-q').fill('assis');
+      await viewers.locator('[data-viewer-pick]').first().waitFor();
+      assert.deepEqual(await viewers.locator('[data-viewer-pick]').allInnerTexts(), ['Assistant Owner', 'Assistant Routines'], 'viewers: live matches, not the Assistant');
+      assert.match(await viewers.innerText(), /Can read this chat\. Can't write in it\./, 'viewers: read only, said');
+      await viewers.locator('[data-viewer-pick="assistant-owner"]').click();
+      await viewers.locator('[data-viewer="assistant-owner"]').waitFor();
+      assert.match(await viewers.locator('[data-viewer="assistant-owner"]').innerText(), /Assistant Owner\s*not read yet\s*Remove/, 'viewers: added, with its last read');
+      await viewers.locator('[data-viewer-learned]').check();
+      await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-viewer-learned]')?.checked === true);
+      await viewers.locator('[data-viewer="assistant-owner"] [data-viewer-remove]').click();
+      await viewers.locator('[data-viewer="assistant-owner"]').waitFor({state: 'detached'});
+      assert.deepEqual(writes, [['POST', '', {bot: 'assistant-owner'}], ['PUT', '/learned', {include_learned: true}], ['DELETE', '/assistant-owner', {}]],
+        'viewers: one write each');
+      assert.deepEqual(errors, [], 'viewers: no page errors');
       await page.close();
     }
   } finally { await browser.close(); }

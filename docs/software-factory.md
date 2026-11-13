@@ -81,10 +81,21 @@ leaves Release once the merge is in a published release (a repo that publishes n
 ## Visual specs
 
 A spec can be a visual page. The Product Owner publishes it on the task it describes with
-`tico page publish <file.html> --spec --task <task>`. The page's styles are inlined at publish, so its mockups read as
-Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
-A spec that is narrowed to some readers, or on a private task, gives the link only. Build instructions are in
-`templates/catalog/segment-product-owner/skills/build-the-spec-page/SKILL.md`.
+`tico page publish <file.html> --spec --task <task>`. Tico's styles are inlined into the page at publish, so it
+reads as Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
+A spec that is narrowed to some readers, or on a private task, gives the link only.
+
+Every page a person reads to decide is built the same way, with the `build-the-page` skill
+(`templates/catalog/segment-product-owner/skills/build-the-page/`; the Reviewer and Builder templates carry the same
+copy). Four templates: a spec for a screen change, a spec for a bug or a change with no screen (cause and fix first,
+then the behaviour before and after), the Checked in production page, and a page about a pull request (a Review page,
+or the Builder's QA page). Each opens with what it is and what to decide in two or three lines, then real
+screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
+never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo
+(`scripts/release_shots.py`). The skill's `page.py` embeds the pictures, checks the page against those rules, and draws
+the published copy at both widths, which the bot looks at before it attaches the page. In Validate, the Product Owner
+does the checking itself; a person never does. Existing bots take the skill and their playbooks at their next template
+refresh ([Bots follow their template](updates.md#bots-follow-their-template)).
 
 ## When Security holds a release
 

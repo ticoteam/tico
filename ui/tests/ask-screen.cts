@@ -76,7 +76,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await page.goto('http://tico-ui.test/#/tasks');
     const row = page.locator('[data-need="r1"]');
     await row.waitFor();
-    assert.equal((await row.locator('.tk-title').innerText()).trim(), 'Approve the spec for Checkout flow');
+    assert.equal((await row.locator('.tk-title').innerText()).trim(), 'Checkout flow', 'the row leads with its task');
+    assert.equal(await row.getAttribute('title'), 'Approve the spec for Checkout flow', 'the ask is its tooltip');
     assert.deepEqual(await page.locator('#task-body .tk-group').evaluateAll(els => els.map(e => e.firstChild?.textContent?.trim())), ['Answer', 'Review']);
 
     // Play opens the first in the list's order: the question (Answer) before the OK (Review).

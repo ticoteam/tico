@@ -127,7 +127,9 @@ function botPinFill(slug: string, el: HTMLElement) {
   el.querySelectorAll('.bot-w-name').forEach(n => { n.textContent = name; });
   if (!pin) { body.innerHTML = '<p class="muted dash-none">Loading…</p>'; return; }
   // A page carries its own title; a card gets its name above it, as the rail's other sections do.
-  if (pin.card) body.innerHTML = `<h2 class="rail-h">${esc(name)}</h2>${dashCardBody(pin.card)}`;
+  // A count card's count sits in the header as the rail's other sections show theirs (#355); none at 0.
+  const n = pin.card ? dashHeadCount(pin.card)?.[0] : 0;
+  if (pin.card) body.innerHTML = `<h2 class="rail-h">${esc(name)}${n ? ` <span class="cnt">${dashNum(n)}</span>` : ''}</h2>${dashCardBody(pin.card)}`;
   else { body.innerHTML = ''; body.append(dashPageEl(pin.page, 'small')); }
 }
 async function botPinsLoad(slug: string) {

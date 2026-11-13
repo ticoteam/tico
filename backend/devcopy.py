@@ -90,6 +90,7 @@ EMPTY = (
     "rule_events_seen",
     "rule_task_runs",
     "rule_task_state",
+    "stage_rule_marks",  # a stage rule timer's ledger: a pending row is a manager's wake the copy would send
     "trigger_relays",
     "hook_relay_state",
     "sleep_idle_state",
@@ -456,6 +457,8 @@ KEEP = (
             "learnings",
             "lens_runs",
             "learned_entries",
+            "assistant_shares",  # who a person lets view their Assistant chat: a choice, it sends nothing
+            "assistant_share_settings",
             "linked_docs",
             "live_meeting_chat",
             "live_meeting_chat_routes",
@@ -622,7 +625,10 @@ KEEP = (
             "gtm_sources",
             "growth_channels",
             "growth_cohorts",
+            "growth_origins",
             "growth_settings",
+            "growth_sync_runs",
+            "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",

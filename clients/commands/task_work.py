@@ -526,7 +526,9 @@ def task_follow(api, args):
     "can open it in Tico. Returns the link to put in your note; never link a path on your "
     "Mac or an s3:// URI. Send the text as-is, or content_base64 for a binary file. "
     "With req and page instead, attach a page to the stage's page requirement: Jev checks it, then the person it "
-    "names OKs that version. Attaching again replaces it.",
+    "names OKs that version. Attaching again replaces it. With a new version after a send back, say what changed "
+    "(changed: up to 5 one-line bullets) and what you did with each of their points (answered: "
+    "\"<point>: done|not done, <why>\"); never quote their note back to them.",
     {
         "id": _s("Task id"),
         "req": _s("The page requirement's name or id, e.g. Spec page"),
@@ -538,6 +540,18 @@ def task_follow(api, args):
         "text": _s("The file's text, for a text or Markdown file"),
         "content_base64": _s("The file's bytes, base64-encoded, for anything that is not text"),
         "note": {"type": "string", "maxLength": 500},
+        "changed": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 120},
+            "maxItems": 5,
+            "description": "With a page: what changed in this version, up to 5 one-line bullets",
+        },
+        "answered": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 300},
+            "maxItems": 12,
+            "description": 'With a page: each point of the last send back, as "<point>: done|not done, <why>"',
+        },
     },
     required=("id",),
     writes=True,
@@ -547,6 +561,9 @@ def task_attach(api, args):
         if not (args.get("req") and args.get("page")):
             raise ValueError("A page requirement takes both req and page, e.g. req: Spec page, page: page:file-…")
         body = {"requirement": args["req"], "page": args["page"], "version": _seen(args)}
+        for field in ("note", "changed", "answered"):
+            if args.get(field):
+                body[field] = args[field]
         return _asked(api, args).post(f"tasks/{args['id']}/pages", body, key=_key(args))
     if not args.get("name"):
         raise ValueError("Say the file's name (name), or attach a page with req and page")

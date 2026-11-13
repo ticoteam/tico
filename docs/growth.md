@@ -88,7 +88,38 @@ the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goal
 ## Sources
 
 **Sources** lists the systems that hold each number (spend, customers, retention) and which number each one is the truth
-for. The numbers are entered from them each week; the rows stay in those systems.
+for. A source that only names a system is typed by hand: someone reads its numbers and enters them.
+
+**Synced sources.** A source can fill its numbers itself. Today that is a **file**: a CSV with a `month` column
+(`YYYY-MM`), a `channel` column (a channel's slug or name; blank or `unknown` is Unknown) and one column per number. Map
+each number to its column once; the month and channel columns may have other names too:
+
+```
+tico growth source add --truth-for "new customers" --system "Signups sheet" --sync file \
+  --map new_customers=signups --map revenue_month=revenue --map channel=source
+tico growth source push <id> --file signups.csv
+```
+
+- **Months.** The first good run fills up to 12 months back. Later runs rewrite only the current month and the two
+  before it, for late data and restatements. A future month is never written.
+- **Rows it does not write.** A row naming a channel Growth does not have is not written; the run lists it, with
+  the rows outside the months it may write.
+- **Where each number came from.** Every number records whether it was synced (which source, when) or typed (by whom),
+  and whether it is actual or an estimate. `tico growth cohort list --json` and `tico growth numbers --json` show it
+  under `origins`.
+- **Who wins.** A number a synced source filled belongs to it: typing it is refused, naming the source, until the source
+  is retired. A sync never overwrites a number someone typed as actual. When the two differ, the typed number stays and
+  the source's value is held beside it, and the source's owner or an admin keeps one
+  (`tico growth cohort resolve ... --keep typed|source`). A value they chose not to use is not raised again. A typed
+  estimate is replaced by the synced actual.
+- **One source per number.** Two live synced sources never fill the same number.
+- **Health.** `tico growth source list` shows each synced source as fresh, waiting (never run), stale (no good run in
+  twice its refresh time, `--refresh-hours`; a file's is a week) or failing, with the reason. A failed run changes
+  nothing already written. The source's owner gets one notice when it starts failing and one when it recovers.
+- **Run again.** `tico growth source sync <id>` runs a file source's last file again, after a remap say.
+
+The owner and admins connect, remap and retire a synced source. The owner, an admin or the source's own owner sends it
+rows.
 
 ## Marketing tasks
 
@@ -113,10 +144,38 @@ Marketing Owners still file ideas that way.
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.
 
+## First run
+
+An empty Growth needs four things, in this order, before it shows a team's first numbers:
+
+1. **Settings**: revenue per customer per month and the margin (the unit has a default).
+2. **A channel**: at least one active channel. Unknown is not a channel.
+3. **Its source**: an active channel names a live source.
+4. **Its first month**: an active channel that names a live source has a month with spend and new customers.
+
+Every Growth read (`channel list` and `show`, `source list`, `cohort list`, `economics`, `numbers`, `kpis`, `settings`)
+carries `setup` while any step is not done: each step and whether it is done, and the next one with its CLI command, its
+MCP tool, whether the caller may do it and, if not, who may (the owner and admins by name). The CLI prints that next step
+under its normal output. Once all four have been done, `setup` is only `{"done": true}` and stays so, even if a channel is
+retired later. `tico growth setup` shows each step with the date it was first done.
+
+Growth records once per team when it was first opened (any Growth read, by a person or a bot), when each step was first
+done, and when its numbers were first seen (the Growth page, `economics`, `numbers` or a channel read after all four
+steps are done). The Growth activation rate is read from these dates. A team whose first read already finds all four
+steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
+support session reading Growth records nothing.
+
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
+
+Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
+any channel (`channels`), add or change sources (`sources`), record months (`months`). `channels` false does not stop a
+bot that owns a channel changing that channel's why, stage and budget. Each setup write (settings, a channel, a source,
+a month) answers with `setup` too, so the next step follows without another read.
+`may_edit` stays as it was: in `channel list`, `source list` and `settings` it is "may change channels, sources and
+settings"; in `numbers` it is "may record months".
 
 Everyone signed in reads the Growth page. The owner and admins arrange it, and so does a bot acting as itself, which
 pins only the cards it made there (a bot pins no pages to it). Its audience is everyone; it has no audience to change.
@@ -125,8 +184,12 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 
 ```
 tico growth numbers                       the page: each month's rows, Unknown and the totals
+tico growth setup                         the four first-run steps, each done or not, and the next one
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
 tico growth source list | add | update ID | retire ID
+tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
+tico growth source push ID --file FILE.csv | sync ID
+tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N]
                  [--d30 N] [--d90 N] [--d180 N] [--revenue N] [--margin N]

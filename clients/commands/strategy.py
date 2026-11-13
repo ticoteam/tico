@@ -12,7 +12,7 @@ from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s, _target
 from clients.commands._requester import _as_person
-from clients.commands._shared import json_file
+from clients.commands._shared import json_file, text_file
 
 
 # ----------------------------------------------------------------------------- strategy
@@ -346,9 +346,18 @@ def _channel_body(api, args, keys):
     return body
 
 
+# Every Growth read's answer carries these two (backend/growth_setup.py).
+SETUP_NOTE = (
+    " you_may: what you may do, per action (change settings, add or change any channel, add or change sources, record "
+    "months; a bot that owns a channel still changes its own why, stage and budget). setup: while Growth is not set up, "
+    "each step and the next one with its command, its tool and who may do it; then only done."
+)
+
+
 @tool(
     "tico_growth_channel_list",
-    "The growth channels by sort then name: stage, owner, monthly budget, why, guardrail.",
+    "The growth channels by sort then name: stage, owner, monthly budget, why, guardrail. may_edit: you may add "
+    "and change channels." + SETUP_NOTE,
     {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
 )
 def growth_channel_list(api, args):
@@ -357,7 +366,7 @@ def growth_channel_list(api, args):
 
 @tool(
     "tico_growth_channel_show",
-    "One channel by slug, with its open marketing tasks (labelled channel:<slug>).",
+    "One channel by slug, with its open marketing tasks (labelled channel:<slug>)." + SETUP_NOTE,
     {"slug": _s("Channel slug")},
     required=("slug",),
 )
@@ -413,20 +422,50 @@ SOURCE_PROPS = {
     "reach_ref": _s("The MCP server, credential name, URL or person"),
     "may": _s("What a bot may do there: read only, pause ads"),
     "owner": _s("Who answers for it: me, a bot slug or a person id"),
+    "sync_kind": {
+        "type": "string",
+        "enum": ["file", "none"],
+        "description": "Make it fill numbers itself: file (a CSV sent with tico growth source push); none stops it",
+    },
+    "map": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "With sync_kind: NUMBER=COLUMN for each number it fills (new_customers=signups), and "
+        "month=COLUMN or channel=COLUMN when those columns have other names",
+    },
+    "refresh_hours": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "A good run is due this often; twice it with none shows the source Stale",
+    },
 }
 
 
 def _source_body(api, args):
-    body = {k: args[k] for k in SOURCE_PROPS if k != "owner" and args.get(k) is not None}
+    body = {k: args[k] for k in SOURCE_PROPS if k not in ("owner", "map", "sync_kind") and args.get(k) is not None}
     if args.get("owner") is not None:
         body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    if args.get("sync_kind") is not None:
+        body["sync_kind"] = None if args["sync_kind"] == "none" else args["sync_kind"]
+    if args.get("map"):
+        mapping = {"fields": {}}
+        for pair in args["map"]:
+            name, sep, column = pair.partition("=")
+            if not sep or not name.strip() or not column.strip():
+                raise APIError("map", "--map is NUMBER=COLUMN, month=COLUMN or channel=COLUMN")
+            if name.strip() in ("month", "channel"):
+                mapping[name.strip()] = column.strip()
+            else:
+                mapping["fields"][name.strip()] = column.strip()
+        body["sync_map"] = mapping
     return body
 
 
 @tool(
     "tico_growth_source_list",
     "Which system holds the truth for each number (bookings, spend, sign-ups), how a bot "
-    "reaches it and what it may do there, and any number two sources both claim.",
+    "reaches it and what it may do there, and any number two sources both claim. may_edit: you may change sources."
+    + SETUP_NOTE,
     {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
 )
 def growth_source_list(api, args):
@@ -437,7 +476,7 @@ def growth_source_list(api, args):
     "tico_growth_source_add",
     "Owner or admin only: name the system that holds the truth for a number.",
     SOURCE_PROPS,
-    required=("truth_for", "system", "reach_kind"),
+    required=("truth_for", "system"),
     writes=True,
 )
 def growth_source_add(api, args):
@@ -466,6 +505,35 @@ def growth_source_retire(api, args):
     return _as_person(api).post(f"growth/sources/{args['id']}/retire", {}, key=_key(args))
 
 
+@tool(
+    "tico_growth_source_push",
+    "Send a synced source its rows: a CSV with a month column (YYYY-MM), a channel column (a channel's slug or name; "
+    "blank or unknown is Unknown) and one column per number it fills. Writes the months a run may write and answers "
+    "what it wrote, held beside a typed number, and did not write. The owner, an admin or the source's own owner.",
+    {
+        "id": _s("Source id"),
+        "csv": _s("The CSV text"),
+        "error": _s("Instead of rows: why the fetch failed (the source then shows Failing with it)"),
+    },
+    required=("id",),
+    writes=True,
+)
+def growth_source_push(api, args):
+    body = {k: args[k] for k in ("csv", "error") if args.get(k) is not None}
+    return api.post(f"growth/sources/{args['id']}/rows", body, key=_key(args))
+
+
+@tool(
+    "tico_growth_source_sync",
+    "Run a synced source now and answer the run's result. A file source runs its last file again.",
+    {"id": _s("Source id")},
+    required=("id",),
+    writes=True,
+)
+def growth_source_sync(api, args):
+    return api.post(f"growth/sources/{args['id']}/sync", {}, key=_key(args))
+
+
 COHORT_FIELDS = (
     "spend",
     "bot_cost",
@@ -481,7 +549,8 @@ COHORT_FIELDS = (
 
 @tool(
     "tico_growth_cohort_list",
-    "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 days, revenue and margin.",
+    "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 days, revenue and margin."
+    + SETUP_NOTE,
     {
         "channel": _s("A channel slug, or unknown"),
         "month": _s("YYYY-MM"),
@@ -537,9 +606,31 @@ def growth_cohort_set(api, args):
 
 
 @tool(
+    "tico_growth_cohort_resolve",
+    "A number typed as actual that a synced source disagrees with: keep the typed number or use the source's. "
+    "The source's owner or an admin; the choice is logged.",
+    {
+        "channel": _s("A channel slug, or unknown"),
+        "month": _s("YYYY-MM"),
+        "field": {
+            "type": "string",
+            "enum": list(COHORT_FIELDS[:-1]),
+            "description": "The number",
+        },
+        "keep": {"type": "string", "enum": ["typed", "source"], "description": "Which value stays"},
+    },
+    required=("channel", "month", "field", "keep"),
+    writes=True,
+)
+def growth_cohort_resolve(api, args):
+    body = {k: args[k] for k in ("channel", "month", "field", "keep")}
+    return api.post("growth/cohorts/conflicts", body, key=_key(args))
+
+
+@tool(
     "tico_growth_economics",
     "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
-    "expected months kept, LTV and LTV:CAC, with the total and the Unknown row.",
+    "expected months kept, LTV and LTV:CAC, with the total and the Unknown row." + SETUP_NOTE,
     {"month": _s("YYYY-MM; default the latest with numbers")},
 )
 def growth_economics(api, args):
@@ -549,7 +640,7 @@ def growth_economics(api, args):
 @tool(
     "tico_growth_numbers",
     "The growth numbers over the last months: each month's total, each channel's economics, "
-    "the KPI tree with its series, and the markers.",
+    "the KPI tree with its series, and the markers. may_edit: you may record months." + SETUP_NOTE,
     {
         "months": {
             "type": "integer",
@@ -564,7 +655,9 @@ def growth_numbers(api, args):
 
 
 @tool(
-    "tico_growth_kpis", "The KPI tree: the North Star, its inputs and guardrails, each KPI's funnel stage and loop.", {}
+    "tico_growth_kpis",
+    "The KPI tree: the North Star, its inputs and guardrails, each KPI's funnel stage and loop." + SETUP_NOTE,
+    {},
 )
 def growth_kpis(api, args):
     return api.get("growth/kpis")
@@ -573,7 +666,7 @@ def growth_kpis(api, args):
 @tool(
     "tico_growth_settings",
     "The growth settings (unit, revenue per customer per month, margin %). With values or set, "
-    "owner or admin only: change them.",
+    "owner or admin only: change them. may_edit: you may change them." + SETUP_NOTE,
     {
         "values": {"type": "object", "description": "{unit, revenue_month, margin_pct}"},
         "set": {"type": "array", "items": {"type": "string"}, "description": "KEY=VALUE, instead of values"},
@@ -597,6 +690,17 @@ def growth_settings(api, args):
     return _as_person(api).call("PUT", "growth/settings", values, _key(args))
 
 
+@tool(
+    "tico_growth_setup",
+    "Growth's first run: the four steps from an empty Growth to its first numbers (settings, a channel, its source, "
+    "its first month), each done or not with when it was first done, the next step with its CLI command and MCP tool, "
+    "whether you may do it and if not who may, and when the team first opened Growth and first saw its numbers.",
+    {},
+)
+def growth_setup(api, args):
+    return api.get("growth/setup")
+
+
 def _growth_text(args, result):
     from clients import remotecli  # tables and indented lines, shared with `tico brand`
 
@@ -610,7 +714,13 @@ _CHANNEL = (
     Arg("guardrail_kpi_id", "--guardrail-kpi", metavar="ID"),
     Arg("guardrail_max", "--guardrail-max", metavar="N"),
 )
-_SOURCE = (Arg("truth_for", "--truth-for"), Arg("system", "--system"), Arg("reach_kind", "--reach-kind"))
+_SOURCE = (
+    Arg("truth_for", "--truth-for"),
+    Arg("system", "--system"),
+    Arg("reach_kind", "--reach-kind"),
+    Arg("sync_kind", "--sync"),
+    Arg("map", "--map", metavar="NUMBER=COLUMN"),
+)
 
 # `tico growth ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
 CLI = (
@@ -674,6 +784,19 @@ CLI = (
         render=_growth_text,
         example="tico growth source retire src_1",
     ),
+    Command(
+        "growth source push",
+        "send a synced source its rows as a CSV (owner, admin or the source's owner)",
+        args=(Arg("csv", "--file", type=text_file, metavar="FILE"),),
+        render=_growth_text,
+        example="tico growth source push src_1 --file signups.csv",
+    ),
+    Command(
+        "growth source sync",
+        "run a synced source now; a file source runs its last file again",
+        render=_growth_text,
+        example="tico growth source sync src_1",
+    ),
     Group("growth cohort", "monthly numbers by channel"),
     Command(
         "growth cohort list",
@@ -701,6 +824,18 @@ CLI = (
         example="tico growth cohort set --channel google-search --month 2026-10 --spend 1800 --new 6",
     ),
     Command(
+        "growth cohort resolve",
+        "keep a typed number or use the synced source's value (the source's owner or an admin)",
+        args=(
+            Arg("channel", "--channel", metavar="SLUG"),
+            Arg("month", "--month", metavar="YYYY-MM"),
+            Arg("field", "--field"),
+            Arg("keep", "--keep"),
+        ),
+        render=_growth_text,
+        example="tico growth cohort resolve --channel search-ads --month 2026-10 --field new_customers --keep typed",
+    ),
+    Command(
         "growth economics",
         "CAC, months kept, LTV and LTV:CAC by channel",
         args=(Arg("month", metavar="YYYY-MM"),),
@@ -716,6 +851,12 @@ CLI = (
     ),
     Command(
         "growth kpis", "the KPI tree: North Star, inputs, guardrails", render=_growth_text, example="tico growth kpis"
+    ),
+    Command(
+        "growth setup",
+        "the four setup steps, each done or not, and the next one",
+        render=_growth_text,
+        example="tico growth setup",
     ),
     Command(
         "growth settings",

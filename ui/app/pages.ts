@@ -153,7 +153,7 @@ interface PageFullState {
   menu?: 'history' | null;
 }
 let PG: PageFullState | null = null;          // {id, page, versions, shown}
-async function pageFullView(id: string) {
+async function pageFullView(id: string, at = 0) {
   const main = $('#main');
   main.innerHTML = `<div class="pg-view" id="pg-view">${skelRows(3, {card: true})}</div>`;
   const state: PageFullState = PG = {id, page: null, versions: [], shown: 0, can: {}, diff: null};
@@ -167,7 +167,8 @@ async function pageFullView(id: string) {
   if (PG !== state) return;
   state.page = read.page; state.can = {manage: !!read.can_manage, del: !!read.can_delete};
   state.pinned = read.pinned || [];
-  state.shown = read.page.version;
+  // #/page/<id>?v=<n> (the decision view's review history) opens that version; past the newest, the newest.
+  state.shown = at >= 1 && at <= read.page.version ? at : read.page.version;
   pageFullDraw(state);
   get<{versions?: PageVersion[]}>(`/v2/files/${encodeURIComponent(id)}/versions`).then(v => {
     if (PG !== state) return;
@@ -325,6 +326,10 @@ const PAGE_TEXT_BLOCKS = new Set(['ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', '
 const PAGE_TEXT_SKIP = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'IFRAME', 'OBJECT', 'title']);
 function pageText(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  return doc.body ? pageTextLines(doc.body).join('\n') : '';
+}
+/** The lines pageText reads from one node and what is in it. */
+function pageTextLines(root: Node): string[] {
   const lines: string[] = [];
   let line = '';
   const flush = () => { const l = line.replace(/\s+/g, ' ').trim(); if (l) lines.push(l); line = ''; };
@@ -337,9 +342,29 @@ function pageText(html: string): string {
     for (const child of node.childNodes) walk(child);
     if (block) flush();
   };
-  if (doc.body) walk(doc.body);
+  walk(root);
   flush();
-  return lines.join('\n');
+  return lines;
+}
+// Each heading, paragraph, list item or table row of a page whose text is not in an earlier version's lines (pageText)
+// gets a 3 px amber bar in its left margin: the decision view's "Changes since vK" switch, off. The innermost block is
+// marked, so a changed list item marks that item, not its whole list. `marked`: how many blocks.
+const PAGE_MARK_BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,tr,dt,dd,blockquote,pre,figcaption,caption,summary';
+const PAGE_MARK_STYLE = '[data-tico-changed]{position:relative}[data-tico-changed]::before{content:"";position:absolute;'
+  + 'left:-6px;top:0;bottom:0;width:3px;border-radius:2px;background:#d97706}';
+function pageMarkChanged(html: string, before: string[]): {html: string; marked: number} {
+  const doc = new DOMParser().parseFromString(html, 'text/html'), had = new Set(before);
+  const blocks = [...doc.querySelectorAll<HTMLElement>(PAGE_MARK_BLOCKS)].reverse();   // innermost first
+  let marked = 0;
+  for (const el of blocks) {
+    if (el.querySelector('[data-tico-changed]') || !pageTextLines(el).some(l => !had.has(l))) continue;
+    el.setAttribute('data-tico-changed', ''); marked++;
+  }
+  if (!marked) return {html, marked};
+  const style = doc.createElement('style');
+  style.textContent = PAGE_MARK_STYLE;
+  doc.head.append(style);
+  return {html: (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML, marked};
 }
 // The versions What's changed? may compare against: those before the one on screen.
 const pageDiffBases = (state: PageFullState) => state.versions.filter(v => v.version < state.shown);
@@ -837,7 +862,11 @@ function lfDraw() {
 // Called by redesignRoute (ui/app/redesign.ts) before the router's own list.
 function pagesRoute(r: string) {
   if (rdUnder(r, RD_FILES)) { pageLibraryFiles(); return true; }
-  if (r.startsWith(PAGE_ROUTE)) { void pageFullView(decodeURIComponent(r.slice(PAGE_ROUTE.length).split('?')[0] ?? '')); return true; }
+  if (r.startsWith(PAGE_ROUTE)) {
+    const [id = '', query = ''] = r.slice(PAGE_ROUTE.length).split('?');
+    void pageFullView(decodeURIComponent(id), Number(new URLSearchParams(query).get('v')) || 0);
+    return true;
+  }
   return false;
 }
 function pagesStop(r: string) {

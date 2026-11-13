@@ -19,6 +19,8 @@ are on it:
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
+- Stage rules whose When is a timer (N h in the stage, N h quiet, N h waiting on a person) are judged after the
+  tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
 - A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
   (`_ready_snoozes`).
 
@@ -33,7 +35,7 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, task_wakes
+from . import batch_work, hubdb_core, merge_order, stage_rule_timers, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -186,6 +188,19 @@ def check(
     finally:
         if conn.in_transaction:
             conn.execute("RELEASE never_stuck_room")
+    _keeping_reads(conn, "SAVEPOINT never_stuck_stage_rules")
+    try:
+        # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
+        timers: Any = stage_rule_timers
+        timers.sweep(conn, at)
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute("ROLLBACK TO never_stuck_stage_rules")
+        failures.append(("stage_rules", error))
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE never_stuck_stage_rules")
     return done
 
 

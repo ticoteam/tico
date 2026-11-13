@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+declare function tasksLiveApply(events: {id: string; task?: unknown; gone?: boolean}[]): void;
 
 const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
 const config = {version: '0.1.0', app_name: 'Tico', local: true};
@@ -22,6 +23,92 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 const brief = (id: string, title: string, stageId: string, version = 1) => ({id, title, number: 1, pipeline_id: 'product', stage_id: stageId,
   status: 'open', owner_id: 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false, turn: null,
   version, created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z'});
+
+// Task #339: columns are at least 300px, so a board whose stages don't fit scrolls sideways. Each redraw replaced the
+// columns and put the board back at its first stage. At 1440×900 with the manager's panel open, scrolled to 300px, the
+// board stays there through a search typed and cleared, a live update, a drop on another stage, the refused-move bar
+// closed, a reload and Threads and back; another pipeline keeps its own position. Runs on the fake server of tasks-page.cts.
+async function scrollKept(browser: import('playwright').Browser): Promise<void> {
+  const {open, PIPELINES, fixtures, task, brief} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
+  const product = PIPELINES.find(p => p.id === 'product')!, ops = PIPELINES.find(p => p.id === 'ops')!;
+  (product as {manager_id: string | null}).manager_id = 'bot:pm';
+  const more = (id: string, name: string) => ({...product.stages[0]!, id, name});
+  product.stages.push(more('ship', 'Ship'), more('learn', 'Learn'));
+  ops.stages.push(more('check', 'Check'), more('tell', 'Tell'), more('file', 'File'));
+  const tasks = [...fixtures(), task('t-8', 'Stale version', 'build'), task('t-9', 'Sent back', 'review')];
+  const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=product&layout=columns'});
+  const cols = page.locator('#task-body .pv-cols');
+  await cols.waitFor();
+  await page.locator('#task-manager').click();
+  await page.locator('#task-rail .pm-head').waitFor();
+  const x = () => cols.evaluate(el => el.scrollLeft);
+  const settled = async (want: number, what: string) => {
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    assert.equal(await x(), want, `still at ${want} after ${what}`);
+  };
+  await cols.evaluate(el => { el.scrollLeft = 300; });
+  await settled(300, 'scrolling');
+
+  // Search typed and cleared: two redraws, one with fewer cards.
+  await page.locator('#task-q').fill('Rounding');
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-card').length === 1);
+  await settled(300, 'a search');
+  await page.locator('#task-q').fill('');
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-card').length > 1);
+  await settled(300, 'the search cleared');
+
+  // A live update of a task on the board.
+  const live = tasks.find(t => t.id === 't-4')!;
+  Object.assign(live, {title: 'Rounding in the API, renamed', version: live.version + 1});
+  await page.evaluate(b => tasksLiveApply([{id: b.id, task: b}]), brief(live));
+  await page.locator('#task-body .tk-card[data-task="t-4"]', {hasText: 'renamed'}).waitFor();
+  await settled(300, 'a live update');
+
+  // Drags a card to a column from the card's middle, clear of the edges where the board scrolls by itself.
+  const drag = async (id: string, col: string) => {
+    const from = await page.locator(`.tk-card[data-task="${id}"]`).boundingBox(), to = await page.locator(`[data-pv-col="${col}"]`).boundingBox();
+    await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from!.x + from!.width / 2 + 20, from!.y + from!.height / 2, {steps: 3});
+    await page.mouse.move(to!.x + to!.width / 2, to!.y + 40, {steps: 8});
+    await page.mouse.up();
+  };
+  const moved = page.waitForResponse(r => r.url().endsWith('/tasks/t-9/move'));
+  await drag('t-9', 'build');
+  await page.locator('[data-pv-col="build"] .tk-card[data-task="t-9"]').waitFor();
+  assert.equal((await moved).status(), 200, 'the engine moved it');
+  await settled(300, 'a drop on another stage');
+
+  // A move the server refuses (the task changed meanwhile) shows the bar; closing it draws again.
+  tasks.find(t => t.id === 't-8')!.version += 1;
+  await drag('t-8', 'review');
+  const bar = page.locator('.pv-bar[role="alert"]');
+  await bar.waitFor();
+  await bar.locator('[data-pv-bar-x]').click();
+  await bar.waitFor({state: 'detached'});
+  await settled(300, 'the refused-move bar closed');
+
+  // A reload in the same tab opens where it was; another pipeline keeps its own place.
+  await page.reload();
+  await cols.waitFor();
+  await page.waitForFunction(() => document.querySelector('#task-body .pv-cols')!.scrollLeft > 0);
+  await settled(300, 'a reload');
+  // Threads and back in the same tab: the page draws a new #task-body, and the board opens where it was.
+  await page.evaluate(() => { location.hash = '#/threads'; });
+  await cols.waitFor({state: 'detached'});
+  await page.evaluate(() => { location.hash = '#/tasks?pipeline=product&layout=columns'; });
+  await page.locator('#task-body [data-pv-col="spec"]').waitFor();
+  await settled(300, 'Threads and back');
+  await page.evaluate(() => { location.hash = '#/tasks?pipeline=ops&layout=columns'; });
+  await page.locator('#task-body [data-pv-col="todo"]').waitFor();
+  assert.ok(await cols.evaluate(el => el.scrollWidth > el.clientWidth), 'Operations scrolls sideways too');
+  await settled(0, 'opening another pipeline');
+  await page.evaluate(() => { location.hash = '#/tasks?pipeline=product&layout=columns'; });
+  await page.locator('#task-body [data-pv-col="spec"]').waitFor();
+  await settled(300, 'coming back to Product');
+  assert.deepEqual(errors, []);
+  await page.close();
+}
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
@@ -136,6 +223,9 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
     assert.equal(await page.locator('#pe-dialog').count(), 1, 'the editor stays open');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: a dragged task moves, a refused one says why, with a why to push past only where it may be.');
+    await page.close();
+
+    await scrollKept(browser);
+    console.log('PASS: a dragged task moves, a refused one says why, with a why to push past only where it may be; the columns stay scrolled where they were.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

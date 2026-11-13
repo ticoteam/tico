@@ -2052,6 +2052,21 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
     client.get.assert_called_with("assistant/proposals")
 
 
+def test_assistant_shared_read_reads_the_chat_a_person_shared(monkeypatch):
+    """`tico assistant shared-read human:ana --before m1` runs `tico_assistant_shared_read`: GET that person's page."""
+    from clients import remotecli
+    from unittest.mock import Mock
+
+    client = Mock()
+    client.get.return_value = {"messages": []}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "shared-read", "human:ana", "--before", "m1"]))
+    client.get.assert_called_with("assistant/shared/human:ana", before="m1")
+    remotecli.run(hubcli.parser().parse_args(["assistant", "shared"]))
+    client.get.assert_called_with("assistant/shared")
+
+
 def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
     """`tico tool index --limit 5 --cursor c2` runs `tico_tool_index`: GET tool-index with the page."""
     from clients import remotecli
@@ -2510,6 +2525,33 @@ def test_bots_and_the_assistant_may_book_and_every_caller_may_read_the_calendar(
         assert {"owner", "member", "bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
 
 
+def test_bot_commands_with_their_own_tool_reach_it_not_bot_create(monkeypatch):
+    """`tico bot app-view|app-shot|turns-at-once|browser-exit` run their own tool through the CLI's routing; an unlisted
+    `tico bot` command fell to `bot create` and failed with "'Namespace' object has no attribute 'template'"."""
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    ran = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    argvs = {
+        "tico_bot_app_view": ["bot", "app-view", "cpo"],
+        "tico_bot_app_shot": ["bot", "app-shot", "/#/tasks", "--out", "x.png"],
+        "tico_bot_turns_at_once": ["bot", "turns-at-once", "cpo"],
+        "tico_bot_browser_exit": ["bot", "browser-exit", "cpo"],
+    }
+    for name in argvs:
+        monkeypatch.setitem(BY_NAME[name], "fn", lambda api, args, name=name: ran.append(name) or {"ok": True})
+    for argv in argvs.values():
+        assert remotecli.run(hubcli.parser().parse_args(argv)) == {"ok": True}
+    assert ran == list(argvs)
+
+
 def test_app_view_cli_sends_on_off_as_booleans_and_app_shot_keeps_the_token_off_the_command_line(monkeypatch, tmp_path):
     import subprocess
 
@@ -2542,3 +2584,28 @@ def test_app_view_cli_sends_on_off_as_booleans_and_app_shot_keeps_the_token_off_
     assert command[2] == 'https://team.example/#/tasks' and command[4] == '390'
     assert 'tico_av_secret' not in ' '.join(command) and env['TICO_VIEW_TOKEN'] == 'tico_av_secret'
     assert out['view'] == 'v1' and out['read_only'] is True
+
+
+def test_a_growth_read_prints_the_next_setup_step_or_who_may_and_nothing_once_set_up():
+    from clients import remotecli
+
+    nxt = {
+        "step": "month",
+        "number": 4,
+        "says": "Add Search ads's first month: spend and new customers.",
+        "command": "tico growth cohort set --channel search-ads --month 2026-10 --spend <spend> --new <new customers>",
+        "you_may": True,
+    }
+    setup = {"done": False, "steps": [], "next": nxt}
+    out = remotecli.growth_text("growth cohort list", {"cohorts": [], "you_may": {}, "setup": setup})
+    assert out.splitlines() == [
+        "No months yet.",
+        "Next (step 4 of 4): Add Search ads's first month: spend and new customers.",
+        "  " + nxt["command"],
+    ]
+    who = [{"ref": "human:ana", "name": "Ana"}, {"ref": "human:ben", "name": "Ben"}]
+    setup["next"] = {**nxt, "you_may": False, "who_may": who, "bots_may": True}
+    out = remotecli.growth_text("growth economics", {"month": None, "rows": [], "setup": setup})
+    assert out.splitlines()[-1] == "  Only the owner, an admin or a bot can: Ana, Ben."
+    done = remotecli.growth_text("growth channel list", {"channels": [], "setup": {"done": True}, "you_may": {}})
+    assert done == "No channels yet."

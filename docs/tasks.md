@@ -299,6 +299,26 @@ tico task comment <id> "The export" --file <file-id>@1
 lists them with their versions. The task's **Files** strip shows each file at its newest version; a comment's pictures
 and pages show under it ([Visuals](visuals.md#in-a-chat-or-task-conversation)).
 
+### Attach a page to a page requirement
+
+```sh
+tico task attach <id> page:<file id>[@<version>] --req "Spec page" --version N \
+  --changed "Sources on every evidence row" --changed "Cut the repeated second section" \
+  --answered "Sources on the evidence table: done, each row links its query" \
+  --answered "Phone picture: not done, it needs a person's phone"
+```
+
+`POST /api/v2/tasks/{id}/pages` takes `requirement`, `page`, `version`, and, all optional, `note` (500 characters),
+`changed` (up to 5 one-line bullets of 120 characters: what changed in this version) and `answered` (up to 12 entries
+`"<point>: done|not done, <why>"`, one per point of the person's last send back; the bot splits their note into points).
+An entry not in that form is refused with the form. A note or line that repeats 12 or more words in a row from the
+person's last send back is refused: "Don't quote their note back; say what you did with each point (--answered)". The
+MCP tool `tico_task_attach` takes the same fields. The decision view shows them on the next OK of the page.
+
+`GET /api/v2/tasks/{id}/asks/{requirement id}/rounds` lists every version attached to that page requirement, oldest
+first: when and by whom, the note, `changed` and `answered` given with it, Jev's verdict and reason (no p-value), and
+each OK or send back given while it counted.
+
 ## Followers
 
 A task's **followers** are the people and bots who follow its thread, each at a level: `live` (everything),

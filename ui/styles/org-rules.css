@@ -210,32 +210,38 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 /* the map */
 .rr-map{position:relative;min-width:0;min-height:0}
 .rr-pane{position:absolute;inset:0;overflow:auto;isolation:isolate;overscroll-behavior:contain}
+.rr-pane.dragging{cursor:grabbing;user-select:none}
 .rr-sz{position:relative;margin:0 auto}
 .rr-cv{transition:none}
 /* More room between cards than the Org tab's chart, for the lines and their chips. */
 .rr-cv{--rdo-gap:22px;--rdo-col-px:26px;--rdo-drop:22px}
 .rr-cv .rdo-gb{gap:22px}
 .rr-cv .rdo-g{padding:22px 14px 14px}
+/* Drawn at its own size, so no map text is under 11px: team tabs 12px (the Org tab's are 10), names 13, roles 12. */
+.rr-cv .rdo-tab{font-size:var(--t-xs)}
 .rr-every{display:flex;padding:0 0 10px}
 .rr-all{height:30px;padding:0 12px;border:1px solid var(--raised);border-radius:var(--r-ctl);background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-base);font-weight:600;cursor:pointer}
-.rr-map :is(.rdo-card,.rr-all){position:relative;z-index:1;transition:opacity var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease)}
-.rr-map .rdo-tab{transition:opacity var(--dur-fast) var(--ease)}
+.rr-map :is(.rdo-card,.rr-all){position:relative;z-index:1;transition:color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease)}
+.rr-map .rdo-tab{transition:color var(--dur-fast) var(--ease)}
 .rr-map [data-rr-party].on{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink);color:var(--ink)}
 .rr-map [data-rr-tone="zero"]{border-color:var(--fail)}
 .rr-map [data-rr-tone="cap"]{border-color:var(--wait)}
 .rr-map [data-rr-tone="rule"]{border-color:var(--run)}
 .rr-map [data-rr-tone="open"]{border-color:var(--ok)}
 .rr-map .rdo-tab[data-rr-tone]{color:var(--ink)}
-.rr-map.has-sel [data-rr-party]:not(.on,.in-team,[data-rr-tone]){opacity:.42}
-.rr-map.searching [data-rr-party]{opacity:.3}
-.rr-map.searching [data-rr-party].hit{opacity:1;box-shadow:0 0 0 2px var(--accent)}
+/* Unrelated to the selection (a team, person or bot; never Everyone) or not a search match: muted, still readable on
+   its own background (4.5:1 and up), never faded. */
+.rr-map.has-sel:not(.searching) [data-rr-party]:not(.on,.in-team,[data-rr-tone]),.rr-map.searching [data-rr-party]:not(.hit){color:var(--muted);border-color:var(--line)}
+.rr-map.has-sel:not(.searching) [data-rr-party]:not(.on,.in-team,[data-rr-tone]) .av,.rr-map.searching [data-rr-party]:not(.hit) .av{opacity:.5}
+.rr-map.searching [data-rr-party].hit{box-shadow:0 0 0 2px var(--accent)}
 .rr-lines{position:absolute;left:0;top:0;z-index:0;overflow:visible;pointer-events:none}
 .rr-ln{stroke-width:2;fill:none}
 .rr-ln.zero{stroke:var(--fail)}.rr-ln.cap{stroke:var(--wait)}.rr-ln.rule{stroke:var(--run);stroke-dasharray:6 4}.rr-ln.open{stroke:var(--ok)}
 .rr-mk.zero{fill:var(--fail)}.rr-mk.cap{fill:var(--wait)}.rr-mk.rule{fill:var(--run)}.rr-mk.open{fill:var(--ok)}
 .rr-chips{position:absolute;left:0;top:0;z-index:2}
-.rr-chip{position:absolute;transform:translate(-50%,-50%);max-width:220px;height:22px;padding:0 9px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--ink);font:500 var(--t-sm)/20px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
-.rr-chip[aria-disabled="true"]{cursor:default}
+/* A chip: the line's count, led by the other party's name when its card is out of view. */
+.rr-chip{position:absolute;transform:translate(-50%,-50%);height:22px;padding:0 9px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--ink);font:500 var(--t-sm)/20px var(--sans);white-space:nowrap;cursor:pointer}
+.rr-cn{display:inline-block;max-width:120px;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
 .rr-chip.zero{border-color:var(--fail)}.rr-chip.cap{border-color:var(--wait)}.rr-chip.rule{border-color:var(--run)}.rr-chip.open{border-color:var(--ok)}
 
 /* the panel */
@@ -246,16 +252,19 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .rr-back{display:none}
 .rr-panel .err{margin:0}
 .rr-set{display:flex;flex-direction:column;gap:10px}
-.rr-set .ru-seg,.rr-dirs{display:grid;grid-template-columns:1fr 1fr;align-self:stretch}
-.rr-set .ru-seg button,.rr-dirs button{min-height:28px;overflow:hidden;text-overflow:ellipsis}
+.rr-row{display:flex;flex-direction:column;gap:6px}
+.rr-row-h{display:flex;align-items:baseline;gap:8px;min-width:0;color:var(--muted);font-size:var(--t-base)}
+.rr-row-h .rr-from,.rr-cap .rr-from{margin-left:auto}
+/* Each control on one row: its choices share the width and never wrap. */
+.rr-set .ru-seg{display:flex;align-self:stretch}
+.rr-set .ru-seg button{flex:1 1 auto;min-height:28px;padding:3px 8px;white-space:nowrap}
+.rr-dirs{display:grid;grid-template-columns:1fr 1fr;align-self:stretch}
+.rr-dirs button{min-height:28px;overflow:hidden;text-overflow:ellipsis}
 .rr-cap{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:var(--t-base)}
 .rr-cap input{width:76px;font-variant-numeric:tabular-nums}
 .rr-cap input::placeholder{color:var(--muted);opacity:.75}
 .rr-from{color:var(--muted);font-size:var(--t-xs);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ru-txt .rr-from::before{content:"· "}
-/* Who bots may book: its label, then its three choices on one row (the mode above has two columns). */
-.rr-book{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:var(--t-base)}
-.rr-book .ru-seg{display:grid;grid-template-columns:repeat(3,1fr);align-self:stretch}
 .rr-sec{display:flex;flex-direction:column;gap:6px}
 .rr-sec>header{display:flex;align-items:center;gap:8px;min-height:28px}
 .rr-sec>header h3{flex:1;margin:0}
@@ -272,6 +281,9 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .rr-line{display:flex;flex-direction:column;gap:3px;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 button.rr-line:hover{background:var(--surface2)}
 .rr-line.ro{cursor:default}
+/* A read-only line's chip, clicked on the map: its row shown and lit for a moment. */
+.rr-line{transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease)}
+.rr-line.lit{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .rr-lt{display:flex;align-items:baseline;gap:6px;min-width:0}
 .rr-dir{flex:none;color:var(--muted);font-size:var(--t-sm)}
 .rr-who{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:500}
@@ -323,6 +335,8 @@ button.rr-line:hover{background:var(--surface2)}
   .ru[data-tab="internal"] .ru-list{padding:0 0 16px;overflow:visible}
   .rr{display:block;height:auto}
   .rr-map{height:58dvh;border-bottom:1px solid var(--line)}
+  /* A team's tab shows its whole name, as on a computer (the Org tab's phone chart cuts it to the outline). */
+  .rr-cv .rdo-tab{max-width:none}
   .rr.searching .rr-map{display:none}
   .rr.searching .rr-pick{display:flex;flex-direction:column;padding:4px 8px}
   .rr-pick .rr-opt{min-height:44px;padding:6px 8px;border-bottom:1px solid var(--line);border-radius:0}

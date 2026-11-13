@@ -16,6 +16,8 @@
 
 The tasks, KPIs and channels are read as their own routes read them: a marker shows only a task the reader may see
 (auth.task_sql, as task lists do). `may_edit` is who may record cohorts: an admin or a bot (growth.py's cohort rule).
+`you_may` (what the caller may do per action) and `setup` (what is left to set up) as every Growth read
+(backend/growth_setup.py).
 """
 
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ from datetime import datetime, timezone
 from fastapi import Request
 
 from . import growth as G
+from . import growth_setup as GS
 from . import hubdb as H
 from . import kpis as K
 from . import marketing_tasks as MT
@@ -60,6 +63,7 @@ SERIES_KEYS = (
     "quality",
     "revenue_month",
     "margin_pct",
+    "origins",  # each number's origin (backend/growth_sync.py origins_view); {} for every channel together
 )
 
 
@@ -245,4 +249,5 @@ def install(app, store, auth):
         if not MONTHS_MIN <= months <= MONTHS_MAX:
             raise Problem("validation", "months is between 1 and 24", 422)
         with store.read() as c:
-            return numbers(c, auth, who, months, _hidden_owners(c, auth, who))
+            out = numbers(c, auth, who, months, _hidden_owners(c, auth, who))
+        return GS.attach(store, auth, who, out, seen=True)

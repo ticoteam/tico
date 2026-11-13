@@ -396,15 +396,31 @@ def needs_list(ctx):
     return ctx.memo("needs", lambda: views.needs_items(ctx.c, ctx.auth, ctx.who, ctx.task_view))
 
 
+def needs_act(it):
+    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: done, ok, answer, reply, fix."""
+    kind, task = it.get("kind"), it.get("task") or {}
+    if kind == "ask":
+        return "answer" if (it.get("ask") or {}).get("kind") == "answer" else "ok"
+    if kind == "paused":
+        return "fix"
+    if kind == "mention":
+        return "reply"
+    stuck = (task.get("turn") or {}).get("state") == "paused" or (task.get("late") or {}).get("level") == "person"
+    return "fix" if stuck else "done"
+
+
 def needs_brief(items, n):
-    """The first `n` Needs you items (views.needs_items) as a card's rows. A row says the item's own `line` (the ask,
-    the missing work, the Paused cause, the mention's first line); the task's title only when the item has none, and
-    only from its brief, which needs_items gives for a task the reader may read."""
+    """The first `n` Needs you items (views.needs_items) as a card's rows. A row is titled by its task's title, from the
+    brief needs_items gives for a task the reader may read; a Paused cause and an item without a task by its own `line`.
+    `line` (the ask, the missing work, the cause, the mention's first line) goes along as the row's tooltip, and `act`
+    (needs_act) as the word at its right."""
     return [
         {
             "id": it.get("id"),
             "kind": it.get("kind"),
-            "title": it.get("line") or (it.get("task") or {}).get("title") or "",
+            "title": (it.get("kind") != "paused" and (it.get("task") or {}).get("title")) or it.get("line") or "",
+            "line": it.get("line") or "",
+            "act": needs_act(it),
             "task_id": it.get("task_id") or (it.get("id") if it.get("kind") == "task" else None),
         }
         for it in items[:n]
@@ -1741,6 +1757,10 @@ def install(app, store, auth, mutate, settings, task_view):
         with store.read_transaction() as c:
             out = place_view(context(c, request, month_of(month)), place, timings)
         request.state.server_timing = place_timing(timings)
+        if place == "growth":  # opening the Growth page: its first open, and its numbers seen once set up
+            from .growth_setup import attach
+
+            return attach(store, auth, request.state.identity, out, seen=True)
         return out
 
     @app.put("/api/v2/places/{place}")

@@ -140,6 +140,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['Support', 'COO', 'Sales', 'Inbox']);
     assert.match(await page.locator('.use-total').innerText(), /^\$10\.20 API-equivalent · 24 runs/);
     assert.equal(await page.locator('.use-note').count(), 1, 'API-equivalent is said once');
+    assert.deepEqual(await page.locator('#use-total').evaluate(el => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight]), ['16px', '600'], 'the total is 16px/600');
+    assert.equal(await page.locator('.use-note').innerText(), 'API-equivalent · 24 runs', 'the rest of the line is small and muted');
+    assert.equal(await page.locator('.use-note').evaluate(el => getComputedStyle(el).fontSize), '12px');
     assert.equal(await page.locator('#use-total').getAttribute('title'), '$6.50 billed on API keys or Tico Gateway; the rest ran on subscriptions');
     const support = page.locator('.use-row[data-bot=support]');
     assert.match(await support.locator('.use-runs').innerText(), /12 runs/);

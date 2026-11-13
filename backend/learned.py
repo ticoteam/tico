@@ -3,7 +3,8 @@ in two layers.
 
 - The personal layer: how one person likes things ranked and summarised. One per person, kept by their Assistant, so it
   goes with them when ownership moves on. Private to
-  that person: only they read it, change it or delete it, and only a turn in their own chat is handed it. No one else,
+  that person: only they read it, change it or delete it, and only a turn in their own chat is handed it (or a bot they
+  let view their chat, when they include it: backend/assistant_share.py). No one else,
   the owner and admins included, reads it, and it is not in SQL (backend/sql.py denies a table it does not name).
 - The company layer: the vision, the company's priorities (its live company goals) and what the owner taught it about
   the company. Only the owner reads it and adds to it: on their own click, or in their own Assistant chat, whose turn

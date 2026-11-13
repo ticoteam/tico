@@ -7,18 +7,32 @@ the QA page is attached: Jev checks it, then a person approves it, and approving
 
 ## 1. Build the page
 
-Follow `skills/build-the-qa-page/SKILL.md`: what changed, before and after screenshots of the running app (or the
-output that proves a change with nothing to see), how it was checked with the checks at the head and what both reviewers
-found, risks, and the pull request with its head commit. A page for an OK is HTML: Tico refuses a Markdown or
-plain-text one.
+Follow `skills/build-the-page/SKILL.md` with its `templates/review.html`, titled "QA", in `reports/<task id>-qa.html`,
+at the head commit:
 
-## 2. Publish and attach
+- The opening, two or three lines: what changed for the person who asked (what they can now do or see, and what was
+  wrong before), then **Decide:** "Approve = ship to production, or send it back with what is wrong."
+- What it looks like: before and after screenshots of each changed screen at phone and desktop width, both from the
+  running app (Tico: `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out
+  shots/`; Reviewer 2's shots when they are at the head), with red numbered arrows on what changed. Never a drawn
+  screen. A change with no screen deletes this section and says "No screens changed" in the opening; the output that
+  proves it (the command and its output, numbers before and after) goes under how it was checked.
+- How it was checked: the tests added (named), the commands run and their real output, and what was not checked, with
+  why. A line that only says it passed is not proof.
+- In the details: the pull request link and the full head commit; the checks at that head (passing, with the link); what
+  Reviewer 1 and Reviewer 2 found and what you did about each, one line each; any risk or follow-up to decide, or "None".
 
-    tico page publish reports/<task id>-qa.html --task <id>
+## 2. Build, look, publish and attach
+
+    python3 skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
+    python3 skills/build-the-page/page.py check reports/<task id>-qa.html --kind review
+    tico page publish reports/<task id>-qa.html --task <id> --title "QA: <the change>"
+    python3 skills/build-the-page/page.py render <file id> --kind review
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 
-`tico page publish` prints the file id and embeds the screenshots saved beside the page. The requirement's name is the
-one `tico task show` lists for QA.
+`tico page publish` prints the file id. Look at both pictures `render` names before you attach: a page that does not
+draw, or has a broken picture, is fixed and published again, never attached. The requirement's name is the one
+`tico task show` lists for QA. Then end the turn: Jev checks it, then the stage asks a person to approve it.
 
 ## 3. When it comes back
 

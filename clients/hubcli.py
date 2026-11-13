@@ -820,6 +820,13 @@ def parser():
     assistant.add_parser(
         "learned", help="what your chat bot has learned: your layer, and the company's for the owner"
     ).set_defaults(fn="assistant learned")
+    assistant.add_parser(
+        "shared", help="the people who chose you to view their Assistant chat, read only (a bot's own run)"
+    ).set_defaults(fn="assistant shared")
+    s = assistant.add_parser("shared-read", help="read one page of a person's Assistant chat they shared with you")
+    s.add_argument("person", help="the person's id, e.g. human:ana (tico assistant shared)")
+    s.add_argument("--before", default=None, help="next_before from the previous page, for older messages")
+    s.set_defaults(fn="assistant shared-read")
     s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
     s.add_argument("id", help="the card's proposal id (tico assistant proposals)")
     s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
@@ -1219,6 +1226,19 @@ def parser():
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
+    s.add_argument(
+        "--changed",
+        action="append",
+        metavar="LINE",
+        help="with --req: one line on what changed in this version (up to 5, 120 characters each)",
+    )
+    s.add_argument(
+        "--answered",
+        action="append",
+        metavar="ENTRY",
+        help='with --req: "<point>: done|not done, <why>" for each point of the last send back (up to 12). '
+        "Never quote their note back to them",
+    )
     s.set_defaults(fn="task attach")
     s = task.add_parser("context", help="readable page and meeting references for a task")
     s.add_argument("id")

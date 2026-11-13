@@ -4884,13 +4884,14 @@ SCHEMAS.update(
                 "name": "s",
                 "group": "s",
                 "description": "s",
+                "label": "s",
                 "version": "i",
                 "example": "o",
                 "aliases": items({"type": "string"}),
                 "sourceless": "b",
                 "outbound": "b",
             },
-            required=["name", "group", "description", "version", "example"],
+            required=["name", "group", "description", "label", "version", "example"],
         ),
         "EventTypeList": obj({"items": items(ref("EventType"))}, required=["items"]),
     }
@@ -9759,10 +9760,31 @@ SCHEMAS.update(
                     "description": "The root ids `catch_up` counts, at most 99 (first page only; "
                     "[] after): a client keeps the set from the live stream",
                 },
+                "unread": items(ref("ThreadRailUnread")),
                 "dms": ref("ThreadDmCounts"),
                 "next_cursor": "n",
             }
         ),
+        "ThreadRailUnread": {
+            **obj(
+                {
+                    "id": "s",
+                    "title": "s",
+                    "name": "s",
+                    "audience": "s",
+                    "dm_with": items(obj({"actor": "s", "name": "s"})),
+                    "dm_with_count": "i",
+                    "home_actor": {"type": ["string", "null"], "description": "The bot or person whose Home it is"},
+                    "new_count": "i",
+                    "mention": "b",
+                    "task_id": {"type": ["string", "null"]},
+                    "last_message_at": {"type": ["string", "null"]},
+                },
+                required=["id", "audience", "new_count", "mention"],
+            ),
+            "description": "A Catch up item the rail does not hold (a 1:1 DM, a Home, a task's thread), in Catch up's "
+            "order: mentions first, then newest activity (first page only; [] after)",
+        },
         "ThreadBrowse": obj(
             {"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}), "next_cursor": "n"}
         ),
@@ -9974,7 +9996,8 @@ STABLE.extend(
             "Threads",
             "listThreadRail",
             "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through "
-            "`next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. "
+            "`next_cursor` until both are done; `catch_up`, `catch_up_ids`, `unread` (each chat Catch up counts that the rail "
+            "does not list) and `dms` on the first page. "
             "Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting",
             "ThreadRail",
         ),

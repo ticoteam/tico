@@ -14,7 +14,10 @@ What a beat did is stored small (migration 20261106094503_heartbeat): each beat 
 (also the server's liveness, `liveness`); a `heartbeat_beats` row only for a beat where a step did something or failed
 (repeated failures fold); a step's `heartbeat_steps` row only when it did something, failed, changed its result or is
 timed from its last run, else every 5 minutes, its counts kept in memory between (`_Memory`). The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
-quiet repeats folded. Its screen is ui/app/automations-heartbeat.ts (GET/PUT /api/v2/heartbeat)."""
+quiet repeats folded. Its screen is ui/app/automations-heartbeat.ts (GET/PUT /api/v2/heartbeat).
+
+The steps that call GitHub (`Step.outside`) run on a worker of their own beside the beat while the server runs one
+(`Outside`), so a slow GitHub never holds up a due time or a recovery; each beat wakes it at the beat's time."""
 
 import json
 import logging
@@ -63,6 +66,18 @@ KINDS = (("due", "Due times"), ("recovery", "Recovery"), ("poll", "Outside polls
 KIND_WORDS = dict(KINDS)
 
 
+def _capture(telemetry: "Observability | None", name: str, exc: BaseException) -> None:
+    """A failure to telemetry under `name`, when there is telemetry (Observability.capture is untyped)."""
+    if telemetry is not None:
+        sink: Any = telemetry
+        sink.capture(name, exc)
+
+
+def _failure_words(exc: BaseException) -> str:
+    routines: Any = SR  # system_routines.failure_words is untyped
+    return str(routines.failure_words(exc))
+
+
 class Failed(Exception):
     """A step's failure in its own words (a block that set `run.error` without raising): recorded, not captured."""
 
@@ -80,6 +95,7 @@ class Step:
     lasting: bool = False  # timed from its last recorded start, so a restart keeps its hour
     control: str | None = None  # its switch and preset (system_routines.CONTROLS)
     loop: bool = False  # one of the server loop's own (needs the app): never in a bare Scheduler.tick
+    outside: bool = False  # it calls GitHub: on the outside polls' own worker (`Outside`) while the server runs one
 
     @property
     def floor(self) -> timedelta | None:
@@ -287,7 +303,7 @@ MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
     timedelta(hours=1),
 )
 STEPS = [
-    Step("github_sync", "GitHub sync", "poll", None, github_sync, capture="github_wakes", loop=True),
+    Step("github_sync", "GitHub sync", "poll", None, github_sync, capture="github_wakes", loop=True, outside=True),
     Step("personal_alerts", "Personal alerts", "poll", None, personal_alerts, capture="scheduler", loop=True),
     Step("stall_marks", "Silent run check", "recovery", MINUTE, S.step_stall_marks, failure="stall_marks"),
     Step("turn_fixer", "Turn fixer", "recovery", None, S.step_turn_fixer, failure="turn_fixer"),
@@ -324,7 +340,14 @@ STEPS = [
     ),
     # CI build time: the repository's recent workflow runs recorded and priced into Finance (backend/ci_runs.py).
     Step(
-        "ci_sweep", "CI build time", "recovery", FIVE_MINUTES, S.step_ci_sweep, failure="ci_sweep", capture="scheduler"
+        "ci_sweep",
+        "CI build time",
+        "recovery",
+        FIVE_MINUTES,
+        S.step_ci_sweep,
+        failure="ci_sweep",
+        capture="scheduler",
+        outside=True,
     ),
     Step("updates", "Updates", "due", None, S.step_updates, failure="updates"),
     Step("company_page", "Company page editions", "due", None, S.step_company_page, failure="company_page"),
@@ -344,7 +367,14 @@ STEPS = [
         capture="scheduler",
     ),
     Step(
-        "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
+        "repository_waits",
+        "Repository and setup waits",
+        "poll",
+        None,
+        repository_waits,
+        capture="scheduler",
+        loop=True,
+        outside=True,
     ),
     Step(
         "entity_links",
@@ -365,8 +395,18 @@ STEPS = [
         item_metadata,
         failure="item_metadata",
         capture="scheduler",
+        outside=True,
     ),
-    Step("source_actions", "Merge queue", "due", None, source_actions, failure="source_actions", capture="scheduler"),
+    Step(
+        "source_actions",
+        "Merge queue",
+        "due",
+        None,
+        source_actions,
+        failure="source_actions",
+        capture="scheduler",
+        outside=True,
+    ),
     Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
     Step("idea_checks", "Jev's idea check", "due", None, idea_checks, failure="idea_checks", capture="scheduler"),
 ]
@@ -448,6 +488,44 @@ class Ran:
         return self.error is None and bool(self.words) and not self.quiet
 
 
+def _lane(ctx: Context, outside: bool) -> list[Step]:
+    """The steps one pass runs. The beat: every step, but the outside ones while the server's `Outside` worker runs
+    them (a worker whose thread died leaves them to the beat again, so they never stop unnoticed). The worker's pass
+    (`outside`): only those."""
+    if outside:
+        return [s for s in STEPS if s.outside]
+    worker: Outside | None = getattr(ctx.scheduler, "outside", None)
+    # A stopping worker still holds them: a beat in the last second of a shutdown must not make GitHub calls inline.
+    taken = worker is not None and (worker.alive() or worker.is_set())
+    return [s for s in STEPS if not (s.outside and taken)]
+
+
+def _run(ctx: Context, step: Step) -> Ran:
+    """One step, timed and on its own: a raise is its failure, recorded and captured as before, never the pass's."""
+    begun = time.monotonic()
+    words, quiet, error = None, True, None
+    try:
+        words, quiet = step.run(ctx) or (None, True)
+    except Failed as exc:
+        error = str(exc)
+    except Exception as exc:  # noqa: BLE001 - one failing step must not stop the others
+        error = _failure_words(exc)
+        if step.failure:
+            ctx.failures.append({step.failure: type(exc).__name__})
+        if step.capture:
+            _capture(ctx.telemetry, step.capture, exc)
+        LOG.error("Heartbeat step %s failed: %s", step.key, type(exc).__name__)
+    return Ran(step.key, round((time.monotonic() - begun) * 1000), words, bool(quiet), error)
+
+
+def _summary(ran: "Sequence[Ran]") -> dict[str, list[str]]:
+    return {
+        "ran": [r.key for r in ran],
+        "did": [r.key for r in ran if r.did],
+        "failed": [r.key for r in ran if r.error],
+    }
+
+
 def beat(ctx: Context) -> dict[str, list[str]]:
     """Run the steps due now in order, each timed and on its own (one raising never stops the next), then store what
     the beat did. Returns {"ran", "did", "failed"} (step keys)."""
@@ -463,25 +541,12 @@ def beat(ctx: Context) -> dict[str, list[str]]:
         except Exception as exc:  # noqa: BLE001 - the timing reads fail alone; untimed steps still run
             cfgs = lasts = None  # only those steps wait for the next beat
             ctx.failures.append({"system_routines": type(exc).__name__})
-        for step in STEPS:
+        for step in _lane(ctx, outside=False):
             if step.loop and ctx.app is None:
                 continue
             if not _due(ctx, step, at, cfgs, lasts):
                 continue
-            begun = time.monotonic()
-            words, quiet, error = None, True, None
-            try:
-                words, quiet = step.run(ctx) or (None, True)
-            except Failed as exc:
-                error = str(exc)
-            except Exception as exc:  # noqa: BLE001 - one failing step must not stop the others
-                error = SR.failure_words(exc)
-                if step.failure:
-                    ctx.failures.append({step.failure: type(exc).__name__})
-                if step.capture and ctx.telemetry is not None:
-                    ctx.telemetry.capture(step.capture, exc)
-                LOG.error("Heartbeat step %s failed: %s", step.key, type(exc).__name__)
-            ran.append(Ran(step.key, round((time.monotonic() - begun) * 1000), words, bool(quiet), error))
+            ran.append(_run(ctx, step))
         record(ctx.store, at, ran, round((time.monotonic() - ctx.started) * 1000))
         failed = [r for r in ran if r.error]
         worked = [r for r in ran if r.did]
@@ -492,11 +557,29 @@ def beat(ctx: Context) -> dict[str, list[str]]:
                 SR.count_words(len(worked), "step did something", "steps did something") if worked else "All quiet",
                 quiet=not worked,
             )
-    return {
-        "ran": [r.key for r in ran],
-        "did": [r.key for r in ran if r.did],
-        "failed": [r.key for r in ran if r.error],
-    }
+    return _summary(ran)
+
+
+def outside_pass(ctx: Context) -> dict[str, list[str]]:
+    """One pass of the outside polls on their own worker (`Outside`): the outside steps due at `ctx.at`, in order, each
+    on its own as in a beat. Each step's run is noted on its row as a beat notes it; a pass where one did something or
+    failed gets a row in the beat log, as a late outcome does (`record_late`). It is not a beat: the beat count, the
+    server's liveness and the Heartbeat job's runs stay the beat's own."""
+    ran: list[Ran] = []
+    for step in _lane(ctx, outside=True):
+        if step.loop and ctx.app is None:
+            continue
+        if not _due(ctx, step, ctx.at, None, None):
+            continue
+        ran.append(_run(ctx, step))
+    mem = _memory(ctx.store)
+    with mem.lock:
+        for r in ran:
+            _note(mem, r, ctx.at)
+    working = [r for r in ran if r.did or r.error]
+    if working:  # a quiet pass's numbers go with the next beat's write (`_commit` takes all that memory noted)
+        _commit(ctx.store, ctx.at, True, working, round((time.monotonic() - ctx.started) * 1000))
+    return _summary(ran)
 
 
 def _roll(row: dict[str, Any], at: datetime, fields: tuple[str, ...], window_field: str = "window_started_at") -> None:
@@ -854,6 +937,118 @@ class Rest:
         ctx.failures[:0] = self.carried
         self.carried = []
         return True
+
+
+class Outside:
+    """The outside polls' own worker: one thread beside the server's loop that runs the steps calling GitHub
+    (`Step.outside`: GitHub sync, repository and setup waits, the PR and release re-read, the CI sweep, the merge queue
+    calls) and `also` (the loop's release check and update feeds), so a slow GitHub never holds up a beat's due times
+    and recovery. Each beat wakes it with the beat's time (`wake`); a pass runs the outside steps due at that time,
+    timed by their floors as in the beat, so none runs more often than it did. One pass at a time: a wake while a pass
+    runs asks for one more pass after it, never a second one beside it. Failures wait for the scheduler's next pass
+    (`take_failures`) and go on its health row, as when the steps ran in the beat. Without it (tests, a script, a
+    bare Scheduler.tick) the beat runs them in its own order."""
+
+    def __init__(
+        self,
+        scheduler: S.Scheduler,
+        *,
+        app: "FastAPI | None" = None,
+        telemetry: "Observability | None" = None,
+        also: "Callable[[], Any] | None" = None,
+        stopping: "Callable[[], bool] | None" = None,
+        clock: "Callable[[], float]" = time.monotonic,
+    ) -> None:
+        self.scheduler, self.app, self.telemetry, self.also = scheduler, app, telemetry, also
+        self.stopping, self.clock = stopping, clock
+        self.stop = threading.Event()
+        self._wake = threading.Event()
+        self._lock = threading.Lock()
+        self._at: datetime | None = None  # the newest wake's beat time
+        self._failures: list[dict[str, str]] = []
+        self._also_at: float | None = None
+        self.thread: threading.Thread | None = None
+        # Read by tests only, written without the lock: never base a decision on them.
+        self.passes = 0
+        self.running = False
+
+    def wake(self, at: datetime | None = None) -> None:
+        """Ask for a pass at the beat's time `at` (now when None)."""
+        with self._lock:
+            self._at = at or datetime.now(timezone.utc)
+        self._wake.set()
+
+    def take_failures(self) -> list[dict[str, str]]:
+        with self._lock:
+            out, self._failures = self._failures, []
+        return out
+
+    def is_set(self) -> bool:
+        return self.stop.is_set() or bool(self.stopping and self.stopping())
+
+    def alive(self) -> bool:
+        """Whether it takes the outside steps from the beat: not started (a test drives `pass_once`), or its thread
+        still runs. A thread that died hands them back to the beat, which runs them inline as before."""
+        return self.thread is None or self.thread.is_alive()
+
+    def pass_once(self) -> dict[str, list[str]]:
+        """One pass, on the calling thread (the worker's own, or a test's)."""
+        self._wake.clear()  # before reading the time: a wake after this point is the next pass's
+        with self._lock:
+            at = self._at
+        ctx = Context(self.scheduler, at, app=self.app, telemetry=self.telemetry)
+        self.running = True
+        try:
+            done = outside_pass(ctx)
+            self._also_once()
+        finally:
+            self.running = False
+            self.passes += 1
+            with self._lock:
+                self._failures = (self._failures + ctx.failures)[-CARRY_MAX:]
+        return done
+
+    def _also_once(self) -> None:
+        """`also` (the release check and update feeds), at most every REST_FLOOR seconds; a failure is captured and
+        the next pass tries again, as on the loop."""
+        if self.also is None or (self._also_at is not None and self.clock() - self._also_at < REST_FLOOR):
+            return
+        self._also_at = self.clock()
+        try:
+            self.also()
+        except Exception as exc:  # noqa: BLE001 - as on the loop: captured, and the next pass tries again
+            _capture(self.telemetry, "scheduler", exc)
+            LOG.error("Outside polls' release check failed: %s", type(exc).__name__)
+
+    def rest_fallback(self) -> None:
+        """The loop's rest pass calls this: while the worker's thread is dead (and not stopping), `also` runs there,
+        as the beat takes back the GitHub steps (`_lane`), so the release check never stops unnoticed."""
+        if not self.alive() and not self.is_set():
+            self._also_once()
+
+    def run(self) -> None:
+        """The worker's thread until `stop`: a pass per wake."""
+        while not self.is_set():
+            if not self._wake.wait(timeout=1.0) or self.is_set():
+                continue
+            try:
+                self.pass_once()
+            except Exception as exc:  # noqa: BLE001 - the worker outlives a pass that could not be recorded
+                _capture(self.telemetry, "heartbeat", exc)
+                LOG.error("Outside polls' pass failed: %s", type(exc).__name__)
+
+    def start(self) -> "Outside":
+        self.thread = threading.Thread(target=self.run, name="tico-outside-polls", daemon=True)
+        self.thread.start()
+        return self
+
+    def halt(self, timeout: float | None = None) -> None:
+        """No new pass from here; one already running finishes within its calls' own timeouts (or, past `timeout`, is
+        left as a restart leaves it)."""
+        self.stop.set()
+        self._wake.set()
+        if self.thread is not None:
+            self.thread.join(timeout)
 
 
 def run_now(store: "Store", auth: "Auth", key: str) -> None:

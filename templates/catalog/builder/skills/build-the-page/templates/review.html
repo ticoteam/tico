@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{Review 1 | Review 2 | QA}}: {{change}}</title>
+<style>
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-lg);margin:0 0 8px}
+.pg h2{font-size:var(--t-md);margin:24px 0 8px}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
+#lead p{margin:2px 0}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
+figure.shot{margin:0;max-width:100%}
+figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
+figcaption{color:var(--muted);margin-top:6px;max-width:640px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-base) var(--mono)}
+@media (max-width:600px){.pair{flex-direction:column}}
+</style></head><body><main class="pg">
+<h1>{{Review 1 | Review 2 | QA}}: {{change}} · PR {{#n}} at {{commit, 7 characters}}</h1>
+<div id="lead">
+  <p>{{What the change does, in one sentence, and the result: "Nothing blocks." / "2 blocking issues." / "Built and checked; both reviews found nothing blocking."}}</p>
+  <p><b>Decide:</b> {{For the Builder: "fix the 2 blocking issues below." For the QA page: "Approve = ship to production, or send it back with what is wrong."}}</p>
+</div>
+
+<section id="pictures">
+  <h2>What it looks like</h2>
+  <div class="pair">
+    <figure data-shot="shots/{{page}}-390-before.png" data-arrows="1: {{x,y}} -> {{x,y}}">
+      <figcaption>Phone, before. 1: {{...}}</figcaption></figure>
+    <figure data-shot="shots/{{page}}-390-after.png" data-arrows="1: {{x,y}} -> {{x,y}}">
+      <figcaption>Phone, after. 1: {{...}}</figcaption></figure>
+  </div>
+</section>
+
+<section id="checked">
+  <h2>How it was checked</h2>
+  <pre>{{The commands run and their real output: test counts, the test that fails on the old code and passes now.}}</pre>
+</section>
+
+<section id="details">
+  <h2>Details</h2>
+  <section id="head"><h2>Head and checks</h2>
+    <p>PR <a href="{{pull request link}}">{{#n}}</a>, head {{full commit}}. Checks at that head: {{passing, running, or which failed}}.</p></section>
+  <section id="findings"><h2>Findings</h2>
+    <ul><li><b>issue (blocking):</b> {{file:line, the quoted code, what happens, what resolves it}}</li>
+        <li><b>suggestion:</b> {{...}}</li></ul>
+    <p>{{On a QA page: what Reviewer 1 and Reviewer 2 each found on the commit they read, and what was done about each; then any risk or follow-up to decide, or "None".}}</p></section>
+  <section id="not-checked"><h2>Not checked</h2><p>{{Tests not run, files skipped, pending checks. Or "Nothing."}}</p></section>
+</section>
+</main></body></html>

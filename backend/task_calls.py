@@ -480,12 +480,31 @@ def task_release(
 
 @_task_write()
 def task_page_attach(
-    conn: "sqlite3.Connection", actor: str, task_id: str, requirement: str, ref: str, seen_version: int | None = None
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    requirement: str,
+    ref: str,
+    seen_version: int | None = None,
+    *,
+    note: str | None = None,
+    changed: list[str] | None = None,
+    answered: list[str] | None = None,
 ) -> Row:
     """Attach a page (task_pages.attach), as a task write: a private task's refusal keeps none of its words."""
     from . import task_pages
 
-    return task_pages.attach(conn, task_id, requirement, ref, actor, seen_version=seen_version)
+    return task_pages.attach(
+        conn,
+        task_id,
+        requirement,
+        ref,
+        actor,
+        seen_version=seen_version,
+        note=note,
+        changed=changed,
+        answered=answered,
+    )
 
 
 @_task_write()

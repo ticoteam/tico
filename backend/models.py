@@ -409,10 +409,14 @@ class TaskAskAnswer(Contract):
 class TaskPageAttach(Contract):
     """Attach a page to a page requirement of the task's stage (task_pages.attach). `requirement` is its id or name;
     `page` is page:<file id> (its newest version) or page:<file id>@<version>. `version` is the task's, as on every
-    task write."""
+    task write. `note`, `changed` (up to 5 one-line bullets) and `answered` (up to 12 "<point>: done|not done, <why>")
+    are what the bot says with this version (backend/page_rounds.py); all optional."""
 
     requirement: Annotated[str, Field(min_length=1, max_length=500)]
     page: Annotated[str, Field(min_length=1, max_length=200)]
+    note: str | None = Field(default=None, max_length=2000)
+    changed: list[Annotated[str, Field(max_length=2000)]] | None = Field(default=None, max_length=50)
+    answered: list[Annotated[str, Field(max_length=2000)]] | None = Field(default=None, max_length=50)
     version: Version | None = None
     on_behalf_of: ID | None = None
 
@@ -771,6 +775,14 @@ class LearnedAdd(Contract):
 
 class LearnedEdit(Contract):
     text: str = Field(min_length=1, max_length=2000)
+
+
+class AssistantViewerAdd(Contract):
+    bot: str = Field(min_length=1, max_length=200)  # its slug or id
+
+
+class AssistantViewerLearned(Contract):
+    include_learned: bool
 
 
 class GoalReadBack(Contract):
@@ -3453,13 +3465,27 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
+# A synced source's kind (backend/growth_sync.py). Part 1 brings file import; database query, Finance ad spend and bot
+# cost follow in later parts.
+GrowthSyncKind = Literal["file"]
+
+
+class GrowthSyncMap(Contract):
+    month: str | None = Field(default=None, min_length=1, max_length=80)
+    channel: str | None = Field(default=None, min_length=1, max_length=80)
+    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+
+
 class GrowthSourceCreate(Contract):
     truth_for: Annotated[str, Field(min_length=1, max_length=80)]
     system: Annotated[str, Field(min_length=1, max_length=80)]
-    reach_kind: Literal["mcp", "credential", "url", "person"]
+    reach_kind: Literal["mcp", "credential", "url", "person"] | None = None  # a file source defaults to person
     reach_ref: str = Field(default="", max_length=300)
     may: str = Field(default="", max_length=300)
     owner_ref: str | None = Field(default=None, max_length=200)
+    sync_kind: GrowthSyncKind | None = None
+    sync_map: GrowthSyncMap | None = None
+    refresh_hours: int | None = Field(default=None, ge=1, le=24 * 92)
 
 
 class GrowthSourceUpdate(Contract):
@@ -3469,6 +3495,28 @@ class GrowthSourceUpdate(Contract):
     reach_ref: str | None = Field(default=None, max_length=300)
     may: str | None = Field(default=None, max_length=300)
     owner_ref: str | None = Field(default=None, max_length=200)
+    sync_kind: GrowthSyncKind | None = None  # null stops syncing: its numbers become typeable again
+    sync_map: GrowthSyncMap | None = None
+    refresh_hours: int | None = Field(default=None, ge=1, le=24 * 92)
+
+
+class GrowthSourceRows(Contract):
+    """One run's input: a CSV, or rows (each a column-to-value object), or the error the fetch ended with."""
+
+    csv: str | None = Field(default=None, max_length=1_000_000)
+    rows: list[dict[Annotated[str, Field(max_length=80)], str | float | int | None]] | None = Field(
+        default=None, max_length=5000
+    )
+    error: str | None = Field(default=None, max_length=2000)
+
+
+class GrowthConflictResolve(Contract):
+    channel: str | None = Field(default=None, max_length=40)  # a channel slug; "unknown" or null is Unknown
+    month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
+    field: Literal[
+        "spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month", "margin_pct"
+    ]
+    keep: Literal["typed", "source"]
 
 
 class GrowthCohortSet(Contract):

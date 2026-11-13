@@ -25,7 +25,7 @@ from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
-from .handlers import Plan, Result, may_write
+from .handlers import Plan, Result, may_write, private_hidden
 from .mercury import IP_HINT, Answer, dollars, error_text
 from .store import actions as SX
 from .store import ap as SAP
@@ -358,7 +358,8 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if obligation and SK.live_payment(ctx.c, obligation) is not None:
         raise FinanceError(CONFLICT, "a payment for that is already live")
     line = ctx.accounts.get(V.text(p, "account_id", 80))
-    if line is None or not line.active:
+    if line is None or not line.active or private_hidden(ctx, who, line.id):
+        # A private payroll line the payer lacks full detail of is not theirs to read, so not theirs to pay against.
         raise FinanceError(NOT_FOUND, "no such account")
     tags = posting.with_team(ctx, L.tags(p.get("tags")))
     if not may_write(ctx, who, line.id, tags):
@@ -941,7 +942,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     ended = "canceled"
     if right is not None and right.outcome == "deny":
         why = "whoever asked for it no longer has the right to pay"
-    elif line is None or not line.active or not may_write(ctx, who, line.id, tags):
+    elif line is None or not line.active or private_hidden(ctx, who, line.id) or not may_write(ctx, who, line.id, tags):
         why = "its line is no longer in the payer's view"
     elif rec is None or str(rec["status"]) != "active" or int(rec["version"]) != int(pay["recipient_version"]):
         # Changed details (§13) void the approval: asked again for the new version, never canceled quietly.
