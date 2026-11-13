@@ -55,6 +55,7 @@ interface ModalDetail {
   comments?: ModalComment[];
   messages?: ModalComment[];
   events?: ModalEvent[];
+  runs?: ModalRun[];
   can_comment?: boolean;
   execution?: ModalExecution | null;
   waiting_for?: string | null;
@@ -73,7 +74,18 @@ interface ModalReconnect { fix?: ModalReconnectFix; status?: string; person?: st
 type ModalRefs = NonNullable<TfMessage['refs']> & {via?: string; quiet?: boolean; turn_id?: string; reconnect?: ModalReconnect | null; credential_request?: string};
 interface ModalRunCount { steps?: number; tool_calls?: number; took_s?: number | null; }
 interface ModalComment extends TfMessage { kind: string; created_at: string; edited_at?: string | null; run?: ModalRunCount; refs: ModalRefs; }
-type ModalLine = {kind: 'comment'; ts: string; message: ModalComment} | ({kind: 'event'; ts: string; message?: undefined} & ModalEvent);
+type ModalLine = {kind: 'comment'; ts: string; message: ModalComment} | ({kind: 'event'; ts: string; message?: undefined} & ModalEvent)
+  | {kind: 'run'; ts: string; message?: undefined; run: ModalRun};
+// A bot's run on this task (`runs` in the task detail): its bot, when it started and finished.
+interface ModalRun { run: string; bot?: string | null; started_at?: string | null; finished_at?: string | null; outcome?: string | null; }
+// "worked 14 min": a finished run's length in words; under a minute is said so.
+function taskRunLineWords(r: ModalRun): string {
+  const s = Math.max(0, (Date.parse(r.finished_at || '') - Date.parse(r.started_at || '')) / 1000);
+  if (!isFinite(s)) return '';
+  if (s < 60) return 'worked under a minute';
+  const m = Math.round(s / 60);
+  return m < 60 ? `worked ${m} min` : `worked ${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+}
 // What a reply's run steps hold: the steps read per turn (a working run's apart), which are open, which are being read.
 interface ModalSteps { html: Map<string, string>; live: Map<string, string>; open: Set<string>; reading: Set<string>; }
 
@@ -739,6 +751,11 @@ function taskEventChipHTML(x: ModalLine) {
 const taskEventNote = (x: ModalLine) => x.kind === 'event' && x.field !== 'github' ? String(x.note || '').trim().split('\n')[0] || '' : '';
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
+  if (x.kind === 'run') {
+    const bot = String(x.run.bot || ''), words = taskRunLineWords(x.run);
+    return `<div class="tcomment sys tmark trun" data-run-line="${esc(x.run.run)}"><span class="tcomment-who">${esc(actorLabel(bot.includes(':') ? bot : 'bot:' + bot))}</span> <span class="muted">${esc(words)}</span>
+      <time class="muted tnum" title="${esc(fmt(x.run.finished_at))}">${esc(ago(x.run.finished_at))}</time></div>`;
+  }
   if (x.kind === 'event') {
     if ((x.field === 'status' || (x.field === 'move' && !x.note)) && x.old == null) return '';   // created: the header says so
     // The type and first step a task is filed with are part of its creation too, not moves.
@@ -988,6 +1005,8 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const lines: ModalLine[] = [
     ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map((m): ModalLine => ({kind: 'comment', ts: m.created_at, message: m})),
     ...(data.events || []).map((e): ModalLine => ({kind: 'event', ts: e.created_at, ...e})),
+    // Each finished bot run is one line: "Builder 2 worked 14 min".
+    ...(data.runs || []).filter(r => r.started_at && r.finished_at && r.bot).map((r): ModalLine => ({kind: 'run', ts: String(r.finished_at), run: r})),
   ].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   if (!$('form', host)) {
     // The box is the main chat's composer: a pill, one line that grows, the send arrow, Return sends.
@@ -1044,6 +1063,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
     });
   }
   state.data = data;
+  taskNeedBannerSync(state.dialog, data.task);
   taskComposerToPaint(state);
   // `can_comment`: false for someone who may read the task but not comment on it; they get no box
   const can = data.can_comment !== false, d = state.dialog;
@@ -1068,7 +1088,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   // The newest lines are drawn first; scrolling to the top (or its "earlier" line) draws older ones, back to the first.
   const older = Math.max(0, said.length - state.shown);
   const earlier = older ? `<button type="button" class="linkish task-earlier" data-task-earlier>↑ ${older} earlier message${older === 1 ? '' : 's'} and moves</button>` : '';
-  const groupKey = (run: ModalLine[]) => { const x = run[0]; return 'g:' + String(!x ? '' : x.kind === 'event' ? x.id : x.message.id); };
+  const groupKey = (run: ModalLine[]) => { const x = run[0]; return 'g:' + String(!x ? '' : x.kind === 'event' ? x.id : x.kind === 'run' ? x.run.run : x.message.id); };
   const html = (earlier + sourceRunsHTML(said.slice(older), {isUpdate, min: 3, noun: 'updates',
     open: (run: ModalLine[]) => openLines.has(groupKey(run)) || run.some(x => !!x.message && openLines.has(x.message.id)),
     line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id)}) || '<p class="muted">Nothing said yet.</p>') + wait;
@@ -1099,6 +1119,17 @@ function taskChatEarlier(state: TaskChatState) {
   taskCommentsRender(state, state.data);
   thread.scrollTop = thread.scrollHeight - fromBottom;
   requestAnimationFrame(() => { state.earlier = false; });
+}
+// The needs-you banner goes once the task no longer waits on this reader's own ask (answered here or elsewhere).
+function taskNeedBannerSync(d: ModalDialog, task: ModalTask | null | undefined): void {
+  const banner = $('.task-need', d);
+  if (!banner || !task || String(task.id) !== String(d.dataset.task)) return;
+  const turn = taskFinished(task) ? null : task.turn;
+  if (!(turn?.ask && turn.requirement_id && turn.who === myActor() && String(turn.requirement_id) === (banner.querySelector<HTMLElement>('[data-task-answer]')?.dataset.taskAnswer || ''))) banner.remove();
+}
+// An ask of this task was answered in the Needs you card: read the open task again so its banner goes.
+function taskAskSettled(taskId: string | number): void {
+  if (TASK_CHAT && taskChatCurrent(TASK_CHAT) && String(TASK_CHAT.id) === String(taskId)) void taskChatRead(TASK_CHAT);
 }
 async function taskChatRead(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.sending || state.reading) return;
@@ -1269,8 +1300,10 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
   const snooze = t.snooze || null;
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
-  const turnLine = turn?.line ? `<p class="task-wait"${yours ? ' data-task-yours' : ''}>${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}${yours
-    ? ` <button type="button" class="primary tmodal-act" data-task-answer="${esc(turn.requirement_id)}">Answer</button>` : ''}</p>` : '';
+  // A task waiting on this reader's own answer: a banner above the chat with its Answer button (it goes when answered).
+  const turnLine = yours && turn?.line ? `<div class="task-need" data-task-yours role="region" aria-label="Needs you">${taskMarkHTML(t, {space: false})}<span class="task-need-line">${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}
+    <button type="button" class="primary tmodal-act" data-task-answer="${esc(String(turn.requirement_id))}">Answer</button></div>`
+    : turn?.line ? `<p class="task-wait">${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}</p>` : '';
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="${esc(`Snoozed${snooze?.until ? ` until ${fmt(snooze.until)}` : ''}${snooze?.by ? ` by ${actorLabel(snooze.by)}` : ''}${snooze?.why ? ` · ${snooze.why}` : ''}`)}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>${snoozeDay(t) ? `Snoozed to ${esc(snoozeDay(t))}` : 'Snoozed'}${chipNoteHTML(snooze?.why)}</button>` : ''}

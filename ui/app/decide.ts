@@ -1010,6 +1010,7 @@ async function decideDo(st: DecState, it: NeedsEntry, label: string, run: () => 
     decideBar(label, undo ? undo(r) : null);
     decideAfter(st, it.id);
     void v2Refresh();
+    const tid = decideTaskId(it); if (tid) taskAskSettled(tid);
   } catch (e) {
     if (DEC !== st) return;
     st.busy = false; st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not saved.');

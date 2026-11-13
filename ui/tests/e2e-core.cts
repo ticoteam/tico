@@ -25,6 +25,8 @@ const tasks = (() => {
   async function detail(page: Page) {
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      // Details is one line until opened: its rows are read open.
+      m?.querySelectorAll<HTMLDetailsElement>('details.task-details').forEach(x => { x.open = true; });
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {

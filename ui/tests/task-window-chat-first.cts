@@ -110,6 +110,7 @@ const pages = async (page: Page) => {
 
       // 5. One Visible to row; no Private or Public box, no Size, no Who can see.
       const props = win.locator('[data-task-props]');
+      await props.locator('details.task-details > summary').click();
       assert.equal(await props.locator('[data-prop-row="visible"]').count(), 1);
       assert.match(await props.locator('[data-prop-row="visible"]').innerText(), /Visible to\s+(groups\s*)?Team/);
       for (const row of ['private', 'publication', 'size', 'readers'])
@@ -175,7 +176,7 @@ const pages = async (page: Page) => {
       await win.getByRole('tab', {name: /Pages/}).click();
       await win.locator('[data-task-pages] .tp-row').waitFor({state: 'visible'});
       assert.equal(await win.locator('.task-chat').isVisible(), false);
-      await win.getByRole('tab', {name: 'Info'}).click();
+      await win.getByRole('tab', {name: 'Info'}).click();   // the phone's Info tab shows Details open
       await win.locator('[data-prop-row="visible"]').waitFor({state: 'visible'});
       assert.equal(await win.locator('[data-task-pages]').isVisible(), false);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'nothing scrolls sideways');
