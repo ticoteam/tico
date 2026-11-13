@@ -52,6 +52,7 @@ function route(hash: string = location.hash): void {
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
   if (!isAutomationsRoute(S.route)) automationsStop();
+  pageChatRoute(S.route);   // a page's owner's chat closes with its page (ui/app/page-chat.ts)
   taskChatStop(); taskModalRouteClose();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and

@@ -266,6 +266,9 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-measure{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.2fr)}
 .goal-measure input{min-width:0}
 #main.rd-goals #goal-new{white-space:nowrap}
+/* The owner's Chat (page-chat.ts) at the end of the head, after "+ Goal". */
+#main.rd-goals .goal-chat{display:inline-flex}
+#main.rd-goals .goal-chat:empty{display:none}
 @media (max-width:760px){
   .goal-measure{grid-template-columns:1fr 1fr}.goal-measure .goal-metric{grid-column:1 / -1}
   .gsheet .goal-fs:not(.goal-measure){grid-template-columns:1fr}
@@ -273,6 +276,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .gsheet .goal-actions button{min-height:44px}
   #main.rd-goals .rd-strat-head h1{flex:1 1 0}
   #main.rd-goals .rd-strat-head .strat-actions{order:1;flex:none}
+  #main.rd-goals .rd-strat-head .goal-chat{order:1;flex:none}
 }
 
 /* KPI views: Tree · Loops · Journey */
