@@ -16,6 +16,8 @@ interface UseFigures {
 interface UseRow extends UseFigures { bot: string; name?: string; limit?: UseLimit | null; share?: number }
 interface UseDay extends UseFigures { day: string }
 interface UseRoutine extends UseFigures { title: string }
+/** A task (by title) or a model in a bot's detail, with its part of the bot's spend. */
+interface UseItem extends UseFigures { value: string | null; name: string; share?: number }
 /** GET /api/v2/usage (backend/usage.py): the figures for one group-by, with the rows, days or routines it was asked for. */
 interface UseData {
   bot?: string;
@@ -31,6 +33,9 @@ interface UseData {
   totals: UseFigures;
   daily?: UseDay[];
   routines?: UseRoutine[];
+  tasks?: UseItem[];
+  tasks_more?: UseFigures & { count: number };
+  models?: UseItem[];
 }
 /** Who holds a limit (`blocked_by`): the bot itself, or the team or a group, over a period. */
 interface UseHeld { scope?: string; name?: string; period?: string }
@@ -139,6 +144,17 @@ const useBilled = (r: UseFigures): string => (r.est_cost_usd ?? 0) > 0 ? `${useM
 function useCost(r: UseFigures): string {
   return `<span class="use-est" title="${esc(useBilled(r))}">${useMoney(useEquiv(r))}</span>${useLow(r)}`;
 }
+// Cache rate: the share of input tokens read from cache (cache writes are input too); null with no input tokens.
+const useCacheRate = (r: UseFigures): number | null => {
+  const input = (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.cache_write_tokens || 0);
+  return input ? (r.cached_tokens || 0) / input : null;
+};
+const useCacheWhy = 'Share of input tokens read from cache. On most models a cache read costs about a tenth of new input.';
+const usePct = (n: number | null): string => n == null ? '—' : n > 0 && n < 0.005 ? '<1%' : Math.round(100 * n) + '%';
+// The token parts in their fixed order: what each run sent and got back.
+const USE_PARTS: [string, string, keyof UseFigures][] = [['read', 'Cache reads', 'cached_tokens'], ['write', 'Cache writes', 'cache_write_tokens'],
+                                                         ['new', 'New input', 'input_tokens'], ['output', 'Output', 'output_tokens']];
+const useShortDay = (day: string): string => new Date(day + 'T00:00:00Z').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'});
 // A number a limit or a pool holds under a field name; anything else reads as no amount.
 const useNum = (v: unknown): number | null => typeof v === 'number' ? v : null;
 function useSaved(): { range?: string; department?: string } {
@@ -373,19 +389,47 @@ async function useDetail(slug: string): Promise<void> {
   catch (e) { if (USE === state) host.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (USE !== state || state.open !== slug) return;
   state.detail = data;
+  host.innerHTML = useDetailHtml(data);
+}
+
+// The opened bot's detail: what it cost and how, where its tokens went, the tasks and models that used them, its days
+// (only when the range has more than one), its automations and a CSV.
+function useDetailHtml(data: UseData): string {
+  const t = data.totals, all = useTokens(t), rate = useCacheRate(t);
+  const sum = `<div class="use-sum">${useCost(t)} <span class="use-note">API-equivalent</span> · ${useRuns(t.runs)} · ${useCount(all)} tokens ·
+    <span class="use-cache" title="${esc(useCacheWhy)}">${rate == null ? 'cache rate —' : usePct(rate) + ' from cache'}</span></div>`;
+  const tokens = all ? `<div class="use-mix" role="img" aria-label="${esc(USE_PARTS.map(([, label, key]) => `${label} ${usePct(Number(t[key] || 0) / all)}`).join(', '))}">${
+      USE_PARTS.map(([part, , key]) => `<i data-part="${part}" style="width:${(100 * Number(t[key] || 0) / all).toFixed(2)}%"></i>`).join('')}</div>
+    <ul class="use-legend">${USE_PARTS.map(([part, label, key]) =>
+      `<li><i data-part="${part}"></i>${label} <b class="tnum">${useCount(Number(t[key] || 0))}</b> · ${usePct(Number(t[key] || 0) / all)}</li>`).join('')}</ul>`
+    : `<p class="muted">${t.runs ? `No token counts reported for ${useRuns(t.runs)}` : 'No runs in this range.'}</p>`;
+  const table = (kind: string, head: string, items: UseItem[], more = '') => `<table class="use-items use-${kind}"><thead><tr><th>${head}</th>
+      <th class="use-c-runs">Runs</th><th class="use-c-tok">Tokens</th><th title="${esc(useCacheWhy)}">Cache</th><th class="use-c-cost">Cost</th><th class="use-c-share"><span class="sr-only">Share of cost</span></th></tr></thead>
+    <tbody>${items.map(r => `<tr><td class="use-c-name">${esc(r.name)}</td><td class="use-c-runs tnum">${r.runs.toLocaleString()}</td>
+      <td class="use-c-tok tnum">${useCount(useTokens(r))}</td><td class="tnum">${usePct(useCacheRate(r))}</td>
+      <td class="use-c-cost tnum"><span class="use-cost">${useCost(r)}</span></td>
+      <td class="use-c-share"><span class="use-share" role="img" aria-label="${Math.round((r.share || 0) * 100)}% of the bot's cost"><i style="width:${Math.round((r.share || 0) * 100)}%"></i></span></td></tr>`).join('')
+      || '<tr><td colspan="6" class="muted">None.</td></tr>'}${more}</tbody></table>`;
+  const rest = data.tasks_more;
+  const more = rest?.count ? `<tr class="use-more"><td colspan="6">${rest.count} more task${rest.count === 1 ? '' : 's'} · ${useMoney(useEquiv(rest))}</td></tr>` : '';
   const days = data.daily || [], peak = Math.max(...days.map(useSpend), 0);
-  const bars = days.map(d => {
-    const v = useSpend(d), tip = `${d.day} · ${useMoney(useEquiv(d))} · ${useRuns(d.runs)}`;
-    return `<span class="use-col" title="${esc(tip)}" data-day="${esc(d.day)}">${v ? `<i class="use-api" style="height:${(100 * v / peak).toFixed(1)}%"></i>` : ''}</span>`;
-  }).join('');
+  const chart = days.length < 2 ? '' : `<section class="use-sec"><h3>Cost per day</h3>
+    <div class="use-plot"><span class="use-top tnum">${useMoney(peak)}</span>
+      <div class="use-chart" role="img" aria-label="API-equivalent cost per day, ${esc(useShortDay(days[0]!.day))} to ${esc(useShortDay(days[days.length - 1]!.day))}, at most ${esc(useMoney(peak))}">${days.map(d => {
+        const v = useSpend(d), r = useCacheRate(d);
+        const tip = `${useShortDay(d.day)} · ${useMoney(useEquiv(d) ?? 0)} · ${useRuns(d.runs)}${r == null ? '' : ` · ${usePct(r)} from cache`}`;
+        return `<span class="use-col" title="${esc(tip)}" data-day="${esc(d.day)}">${v && peak ? `<i class="use-api" style="height:${(100 * v / peak).toFixed(1)}%"></i>` : ''}</span>`;
+      }).join('')}</div></div>
+    <div class="use-axis"><span>${esc(useShortDay(days[0]!.day))}</span><span>${esc(useShortDay(days[days.length - 1]!.day))}</span></div></section>`;
   const routines = (data.routines || []).filter(r => r.runs);
-  // A range of one day has no daily chart: its one bar would only fill the width and repeat the row's own figure.
-  const chart = days.length < 2 ? '' : `<div class="use-chart" role="img" aria-label="Daily API-equivalent cost, ${esc(days[0]?.day || '')} to ${esc(days[days.length - 1]?.day || '')}">${bars}</div>
-    <div class="use-axis"><span>${esc(days[0]?.day || '')}</span><span>${peak ? useMoney(peak) + ' a day at most' : ''}</span><span>${esc(days[days.length - 1]?.day || '')}</span></div>`;
-  host.innerHTML = `${chart}
-    <table class="use-routines"><thead><tr><th>Automation</th><th>Runs</th><th>Cost</th></tr></thead><tbody>${routines.map(r =>
+  return `${sum}
+    <section class="use-sec"><h3>Tokens</h3>${tokens}</section>
+    <section class="use-sec"><h3>Tasks</h3>${table('tasks', 'Task', data.tasks || [], more)}</section>
+    <section class="use-sec"><h3>Models</h3>${table('models', 'Model', data.models || [])}</section>
+    ${chart}
+    <section class="use-sec"><h3>Automations</h3><table class="use-routines"><thead><tr><th>Automation</th><th>Runs</th><th>Cost</th></tr></thead><tbody>${routines.map(r =>
       `<tr><td>${esc(r.title)}</td><td class="tnum">${r.runs}</td><td class="tnum"><span class="use-cost">${useCost(r)}</span></td></tr>`).join('')
-      || '<tr><td colspan="3" class="muted">None.</td></tr>'}</tbody></table>
+      || '<tr><td colspan="3" class="muted">None.</td></tr>'}</tbody></table></section>
     <button type="button" class="ghost" data-use-csv>Export CSV</button>`;
 }
 
@@ -394,7 +438,8 @@ function useCsv(): void {
   const data = USE?.detail; if (!data) return;
   const head: (keyof UseDay)[] = ['day', 'runs', 'input_tokens', 'cached_tokens', 'cache_write_tokens', 'output_tokens', 'est_cost_usd', 'subscription_equiv_usd'];
   const cell = (v: unknown): string => v == null ? '' : String(v);
-  const text = [head.join(','), ...(data.daily || []).map(d => head.map(k => cell(d[k])).join(','))].join('\n') + '\n';
+  const rate = (d: UseDay): string => { const r = useCacheRate(d); return r == null ? '' : String(Math.round(r * 1e4) / 1e4); };
+  const text = [[...head, 'cache_rate'].join(','), ...(data.daily || []).map(d => [...head.map(k => cell(d[k])), rate(d)].join(','))].join('\n') + '\n';
   const link = document.createElement('a');
   link.href = URL.createObjectURL(new Blob([text], {type: 'text/csv'}));
   link.download = `usage-${data.bot}-${data.from}-${data.to}.csv`;
