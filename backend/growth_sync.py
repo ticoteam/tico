@@ -465,7 +465,7 @@ def _load_customers(
             headers, table = list[GC.Cell](names), [[row.get(h) for h in names] for row in rows]
         loaded = GC.load(c, actor, headers, table, source=GC.source_key(str(source["id"])))
     except Problem as refused:
-        raise RunFailed(refused.detail) from None
+        raise RunFailed(str(refused)) from None
     return int(loaded["customers"])
 
 
