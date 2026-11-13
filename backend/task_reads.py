@@ -291,8 +291,7 @@ def _dependencies(c, ids, visible_sql):
     still shows it is blocked; a task it blocks that the reader may not open is left out."""
     from . import task_depends as D
 
-    D.prime(c, ids)
-    on = {tid: [other for other, _since in D.blockers(c, tid)] for tid in ids}
+    on = {tid: [other for other, _since in found] for tid, found in D.blockers_of(c, ids).items()}
     of = D.blocking(c, ids)
     others = sorted({other for found in on.values() for other in found} | {d for f in of.values() for d, _n, _s in f})
     if not others:

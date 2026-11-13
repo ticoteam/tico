@@ -87,6 +87,12 @@ def blockers(conn: "sqlite3.Connection", task_id: str) -> list[tuple[str, str]]:
     return read_cache.value(conn, (KIND, task_id), lambda: _open_of(conn, [task_id])[task_id], shared=True)
 
 
+def blockers_of(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[tuple[str, str]]]:
+    """`blockers` of many tasks in one statement, with or without the snapshot's cache (a list read outside a
+    transaction keeps nothing between reads)."""
+    return _open_of(conn, sorted({str(t) for t in task_ids if t}))
+
+
 def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> None:
     """Read the open dependencies of many tasks in one statement, for the `blockers` reads that follow."""
     values = read_cache.cache(conn)
