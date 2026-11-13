@@ -17,6 +17,8 @@ Steps:
    product's own feature names exactly as the product shows them.
 6. Read it as a user who has never seen the code. If they would ask "so what?" or "where?", add the one missing clause.
 7. Keep it short: one or two sentences for a fix, a short paragraph for a feature with a setting to find.
+8. For a changelog entry with a picture, start with a headline of at most eight words from the user's side ("Your
+   job link works after you tip"), then the one or two sentences. The picture is the screen after the change.
 
 Checks before you finish:
 - Each note starts with what the user sees or can do.

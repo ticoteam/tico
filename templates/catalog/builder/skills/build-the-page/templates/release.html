@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Release {{name}}</title>
+<style>
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-lg);margin:0 0 8px}
+.pg h2{font-size:var(--t-md);margin:24px 0 8px}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
+#lead p{margin:2px 0}
+#changelog>h2{font-size:var(--t-lg);margin:8px 0 4px}
+.intro{font-size:var(--t-md);color:var(--muted);margin:0 0 8px;max-width:60ch}
+.entry{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,320px);gap:24px;align-items:center;padding:20px 0;border-top:1px solid var(--line)}
+.entry h3{font-size:var(--t-md);margin:0 0 4px}
+.entry p{margin:0;max-width:48ch}
+.kind{display:block;font-size:var(--t-sm,12px);font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:4px}
+.plus{border-top:1px solid var(--line);padding-top:12px;color:var(--muted)}
+figure.shot{margin:0;max-width:100%}
+figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
+figcaption{color:var(--muted);margin-top:6px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;vertical-align:top;padding:6px;border-bottom:1px solid var(--line);overflow-wrap:break-word}
+th{color:var(--muted);font-weight:600}
+code{font-family:var(--mono);overflow-wrap:anywhere}
+#details{margin-top:32px;border-top:2px dashed var(--line)}
+@media (max-width:600px){.entry{grid-template-columns:1fr}}
+</style></head><body><main class="pg">
+<h1>Release {{name}} · {{YYYY-MM-DD}}</h1>
+<div id="lead">
+  <p>{{The batch and its state: "4 changes, each with an approved QA page at its merged commit. Suggested version 2.15.0 (minor: a new setting)."}}</p>
+  <p><b>Decide:</b> {{"OK = run the plan below and ship it, or send back what to pull."}}</p>
+</div>
+
+<section id="changelog">
+  <h2>What's new</h2>
+  <p class="intro">{{The one or two changes people will notice most, in one sentence.}}</p>
+  <article class="entry">
+    <div><span class="kind">{{New | Improved | Fixed}}</span>
+      <h3>{{A short plain headline: "Your job link works after you tip"}}</h3>
+      <p>{{One or two sentences on what people can now do, or what no longer goes wrong, in their words.}}</p></div>
+    <figure data-shot="shots/{{screen}}-after-390.png"><figcaption>{{Where to find it}}</figcaption></figure>
+  </article>
+  <p class="plus">{{Plus 3 fixes behind the scenes.}}</p>
+</section>
+
+<section id="confidence">
+  <h2>Why we're confident</h2>
+  <ul><li>{{Each change's QA page, approved at its merged commit; what was checked live; anything unusual.}}</li></ul>
+</section>
+
+<section id="plan">
+  <h2>Plan</h2>
+  <ol><li>{{Each step in order, runnable as written: the merges, the release, data changes, settings, deploys, store
+  submissions, the checks after it. The release follows this list and nothing else.}}</li></ol>
+</section>
+
+<section id="risks">
+  <h2>Biggest risks</h2>
+  <ol><li><b>{{What could go wrong}}.</b> {{How we would notice: the alert, log or number.}} {{How we would undo it.}}</li></ol>
+</section>
+
+<section id="details">
+  <h2>Evidence</h2>
+  <section id="tasks"><h2>Tasks in this release</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Task</th><th>Repository</th><th>PR</th><th>QA page</th></tr></thead>
+      <tbody><tr><td>{{title}}</td><td>{{owner/name}}</td><td><a href="{{pull request link}}">{{#n}}</a></td><td>{{version, approved}}</td></tr></tbody>
+    </table></div></section>
+  <section id="across"><h2>Checked across tasks</h2>
+    <p>{{Shared files or screens, one change undoing another, an order one needs, a data change that locks a large table. "None found" only after checking.}}</p></section>
+  <section id="after"><h2>After the release</h2><p>{{What is watched, where, and for how long.}}</p></section>
+  <section id="pulled"><h2>Pulled</h2><p>{{Each task taken out of the batch and why. Or "None."}}</p></section>
+</section>
+</main></body></html>

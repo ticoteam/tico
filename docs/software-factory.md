@@ -86,10 +86,13 @@ reads as Tico does. Every task filed under that task, and their own sub-tasks, g
 A spec that is narrowed to some readers, or on a private task, gives the link only.
 
 Every page a person reads to decide is built the same way, with the `build-the-page` skill
-(`templates/catalog/segment-product-owner/skills/build-the-page/`; the Reviewer and Builder templates carry the same
-copy). Four templates: a spec for a screen change, a spec for a bug or a change with no screen (cause and fix first,
-then the behaviour before and after), the Checked in production page, and a page about a pull request (a Review page,
-or the Builder's QA page). Each opens with what it is and what to decide in two or three lines, then real
+(`templates/catalog/segment-product-owner/skills/build-the-page/`; the Reviewer, Builder and Release Owner templates
+carry the same copy). Seven templates: a bug spec (the report, the root cause, the goal, then the fix before and
+after), a feature spec for a screen and one for a change with no screen (the goal, then the change before and after),
+a Review page, the Builder's QA page (the result and what was not checked, then each acceptance criterion with its
+result and proof), the release report for a batch (a changelog for customers with a screenshot per change, then why
+we are confident, the plan and at most three risks), and the Checked in production page. Each opens with what it is
+and what to decide in two or three lines, then real
 screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
 never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo
 (`scripts/release_shots.py`). The skill's `page.py` embeds the pictures, checks the page against those rules, and draws

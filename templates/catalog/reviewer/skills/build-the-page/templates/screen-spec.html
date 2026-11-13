@@ -11,17 +11,18 @@
 figure.shot{margin:0;max-width:100%}
 figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
 figcaption{color:var(--muted);margin-top:6px;max-width:640px}
+#details{margin-top:32px;border-top:2px dashed var(--line)}
 @media (max-width:600px){.pair{flex-direction:column}}
 </style></head><body><main class="pg">
 <h1>{{Feature}} · Spec · {{YYYY-MM-DD}}</h1>
 <div id="lead">
-  <p>{{What changes, for whom, in one sentence: "On a phone, the account row in the drawer becomes 40 px tall."}}</p>
-  <p>{{Why now, in one sentence, with the number that shows it.}}</p>
+  <p id="goal"><b>Goal:</b> {{who it is for and what they can do after that they cannot now, in one sentence: "On a
+  phone, people can tap their account in the drawer without zooming."}}</p>
   <p><b>Decide:</b> {{what the reader OKs: "OK this spec, or send it back with what is wrong."}}</p>
 </div>
 
 <section id="pictures">
-  <h2>Before and after</h2>
+  <h2>Solution</h2>
   <div class="pair">
     <figure data-shot="shots/{{screen}}-before-390.png" data-arrows="1: {{x,y}} -> {{x,y}}">
       <figcaption>Phone, 390 px, today. 1: {{what the arrow points at and what is wrong with it}}</figcaption></figure>
@@ -38,14 +39,17 @@ figcaption{color:var(--muted);margin-top:6px;max-width:640px}
 
 <section id="details">
   <h2>Details</h2>
-  <section id="goal"><h2>Goal and how we will know</h2>
-    <p>{{The problem in two sentences. The evidence, each line with its source and count. The appetite. The measure,
-    baseline, target and read date.}}</p></section>
-  <section id="scope"><h2>Scope and non-goals</h2>
-    <ul><li>In: {{...}}</li><li>Out: {{...}}</li></ul></section>
-  <section id="criteria"><h2>Acceptance criteria</h2>
+  <section id="criteria"><h2>Done when</h2>
     <ol><li>Given {{...}}, when {{...}}, then {{...}} (arrow 1). <i>before release</i></li></ol></section>
-  <section id="questions"><h2>Open questions and risks</h2>
+  <section id="scope"><h2>Scope</h2>
+    <ul><li>In: {{...}}</li><li>Out: {{...}}</li></ul></section>
+  <section id="why"><h2>Why now and how we will know</h2>
+    <p>{{The evidence, each line with its source and count. The appetite. The measure, baseline, target and read
+    date.}}</p></section>
+  <section id="plan"><h2>Plan</h2><ol><li>{{step, with the files or screens it touches}}</li></ol></section>
+  <section id="release"><h2>Release needs</h2>
+    <p>{{Apps or services that ship it; data changes, settings, flags, a store release. "None" where none.}}</p></section>
+  <section id="questions"><h2>Open questions</h2>
     <ul><li>{{question}}: {{who owes it}}, by {{date}}</li></ul></section>
 </section>
 </main></body></html>

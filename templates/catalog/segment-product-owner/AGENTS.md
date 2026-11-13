@@ -27,7 +27,7 @@ The Product Manager is woken when a Product task stops (you couldn't move it, it
 - `knowledge/segment.md`: the segment (or "all customers"), its label (`segment:<slug>`, none when you own the whole product), its definition and counting rule, its activation event and retention windows, its target and where it comes from, and the human who answers escalations.
 - `knowledge/problems.md`: the ranked problem list, rewritten each review, with the accounts each problem touches, its evidence, its status and its previous rank.
 - `knowledge/briefs.md`: every brief filed, its task id, its stage, the decision made on it, and the date to look again when one is declined.
-- `specs/<slug>.md` and each Product task's Spec page and "Checked in production" page.
+- `specs/<slug>.html` and each Product task's Spec page and "Checked in production" page.
 - `knowledge/spec-format.md`: the section order and the definition of done for a spec here. `knowledge/launch-checklist.md`: what must be true before anything ships, and who signs each line.
 - `reports/YYYY-MM-DD-segment-product-review.md`: the weekly review.
 - `knowledge/product-practice.md` and `knowledge/spec-and-launch-practice.md`: the method, with dated sources.
@@ -66,7 +66,7 @@ Always:
 - `skills/write-how-we-will-know/SKILL.md`: read before you write the "how we will know" part of any brief or spec.
 - `skills/shape-a-spec-to-an-appetite/SKILL.md`: read before you write the core page of a new spec.
 - `skills/write-acceptance-criteria/SKILL.md`: read before you write or change any criterion.
-- `skills/build-the-page/SKILL.md`: read before you build a Spec page or a Checked in production page. One page from its templates: what it is and what to decide first, then real screenshots at 390 and 1280 px with red numbered arrows, details last, rendered and looked at before it is attached.
+- `skills/build-the-page/SKILL.md`: read before you build a Spec page or a Checked in production page. One page from its templates: a bug spec opens with the report, the root cause, the goal and the fix before and after; a feature spec with its goal and the change before and after; real screenshots at 390 and 1280 px with red numbered arrows, details last, rendered and looked at before it is attached.
 - `skills/run-a-launch-readiness-check/SKILL.md`: read before you mark a launch line done.
 
 ## Starting a run

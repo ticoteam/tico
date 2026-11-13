@@ -1,23 +1,23 @@
 ---
 name: build-the-page
-description: Build any page a person reads to decide - a spec, a Checked in production page, a Review page or a QA page - as one HTML page from a ready template. It opens with what it is and what to decide in two or three lines, then real screenshots of the app at phone and desktop width with red numbered arrows, then the details. page.py embeds the screenshots, checks the page and renders the published copy before it is attached. Read before you write any of those pages.
+description: Build any page a person reads to decide - a spec, a Review page, a QA page, a release report or a Checked in production page - as one HTML page from a ready template. It opens with what it is and what to decide in two or three lines, then real screenshots of the app at phone and desktop width with red numbered arrows, then the details. page.py embeds the screenshots, checks the page and renders the published copy before it is attached. Read before you write any of those pages.
 ---
 
 # Build the page
 
-A person reads a page to decide: OK a spec, accept a check, merge a change. They read it in a minute, on a phone or a
-desktop, without opening the app or the code. So every page is built the same way, from one of four templates, and is
-never sent until it was seen rendered.
+A person reads a page to decide: OK a spec, ship a change, start a release. They read it in a minute, on a phone or a
+desktop, without opening the app or the code, and finish it with no doubt about what they are agreeing to. So every
+page is built the same way, from one of seven templates, and is never sent until it was seen rendered.
 
-## The five rules
+## The six rules
 
 1. **The opening says what it is and what to decide.** Two or three short lines in `<div id="lead">`: what the page is
-   about and its result, then a line that starts **Decide:**. A bug or no-screen spec opens with **Cause:** and
-   **Fix:**, one line each. At most 70 words.
+   about and its result, then a line that starts **Decide:**. A bug spec opens with **Report:**, any other spec with
+   **Goal:**. At most 70 words.
 2. **Then the pictures. Details last.** Before and after, at phone (390 px) and desktop (1280 px; 1440 px when both
    sides come from the demo) width, with a red numbered arrow on each thing that changes or is measured. Under each
    picture, one line per number. Then
-   `<section id="details">`: goal, scope, criteria, version, findings, whatever the template names.
+   `<section id="details">`: criteria, scope, plan, the head commit, whatever the template names.
 3. **Pictures are real screenshots of the app, never drawings.** No mock-up drawn in HTML, CSS or SVG: drawn screens
    look nothing like the app and are sent back. Before is the app today; after is the app running with the change
    applied (below). A change with no screen shows its real call and real output instead, and no picture.
@@ -25,23 +25,39 @@ never sent until it was seen rendered.
    no script, nothing loaded from outside (the pictures go in as `data:` URIs: `page.py build` does it).
 5. **Seen before it is sent.** After publishing, render the published page and look at it at both widths. A page that
    does not draw, has a broken picture or a misplaced arrow is fixed and published again. It is never attached broken.
+6. **Every sentence names something specific**: a number, a screen, a file, a person, a command. Cut any sentence
+   that would fit another page, and any section that only restates the top. No "overview", "summary", "benefits",
+   "considerations" or "next steps". A section with nothing in it says "Nothing." or "None."
 
 The page brings the proof. It never asks its reader to test, look at the app, or send a screenshot.
 
 ## Which template
 
-| Page | Template | Who |
-|---|---|---|
-| A spec for a change on a screen | `templates/screen-spec.html` | Product Owner, Spec |
-| A spec for a bug fix or a change with no screen (API, command, job) | `templates/change-spec.html` | Product Owner, Spec |
-| Checked in production | `templates/validation.html` | Product Owner, Validate |
-| A Review page, or the QA page | `templates/review.html` | Reviewers, Review 1 and 2; Builder, QA |
+| Page | Template | Kind | Who |
+|---|---|---|---|
+| A spec for a bug | `templates/bug-spec.html` | `bug-spec` | Product Owner, Spec |
+| A spec for a new feature or change on a screen | `templates/screen-spec.html` | `screen-spec` | Product Owner, Spec |
+| A spec for a change with no screen (API, command, job) | `templates/change-spec.html` | `change-spec` | Product Owner, Spec |
+| A Review page | `templates/review.html` | `review` | Reviewers, Review 1 and 2 |
+| The QA page | `templates/qa.html` | `qa` | Builder, QA |
+| The release report, one for a batch | `templates/release.html` | `release` | Release Owner |
+| Checked in production | `templates/validation.html` | `validation` | Product Owner, Validate |
 
-Each template has the sections its stage's checker reads (a spec: goal, scope, acceptance criteria; Checked in
-production: the version and what was run there; a review: the head commit, what was read and run, the findings; QA:
-how it was checked with output, the checks at the head, what each reviewer found). Keep every section; write
-"Nothing." in one that has nothing, and delete the pictures section only where no screen changed (say so in the
-opening).
+What goes at the top, before `#details`:
+- **Bug spec:** the report (quoted, cut to two lines, who and where), the root cause with `path:line`, the goal, then
+  the solution before and after with arrows.
+- **Feature spec:** the goal (who, and what they can do after that they cannot now), then the solution before and
+  after, one pair per screen in the order a person meets them.
+- **QA page:** the result and what was not checked, then the plan (the spec's acceptance criteria, one row each) with
+  each result, then the proof and the findings.
+- **Release report:** the changelog first, written for customers, then why we are confident, the plan and the biggest
+  risks (three at most).
+
+Below the line, only what the builder, QA or release needs. Each template has the sections its stage's checker reads
+(a spec: goal, scope, acceptance criteria; a review: the head commit, what was read and run, the findings; QA: the
+proof, the checks at the head, what each reviewer found; Checked in production: the version and what was run there).
+Keep every section; write "Nothing." in one that has nothing, and delete the pictures only where no screen changed
+(show the call and its output in two `<pre>` blocks instead, and say so in the opening).
 
 ## Real screenshots
 
@@ -73,6 +89,8 @@ validation, `shots/<screen>-<390|1280>.png`), and say the same width in the pict
   too big to apply in an hour, show the before with arrows and say in its caption what will change; still draw nothing.
 - **Another repository**: run its demo or dev server the way `knowledge/standards.md` says, and take the pictures
   with the same widths.
+- **A release report** takes no new pictures: each changelog entry reuses the after picture from that task's QA page
+  (or its spec, where QA showed output only), without arrows.
 
 Crop each picture to what matters, keeping enough around it to place it. A screen only another person sees is shot on
 your own view, the demo or a test account; never one person's real data.
@@ -90,16 +108,18 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
 
 ## Steps
 
-1. Copy the template to `specs/<slug>.html`, `reports/YYYY-MM-DD-checked-<slug>.html` or `reports/<task>-<page>.html`.
+1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/YYYY-MM-DD.N.html` or
+   `reports/YYYY-MM-DD-checked-<slug>.html`.
    Replace every `{{...}}`. Keep its styles: they use only Tico's colour tokens, so the page follows light and dark.
 2. Take the screenshots and set the arrows.
 3. Build and check it (`page.py` is in this skill's folder):
 
        python3 skills/build-the-page/page.py build <draft>.html --out <page>.html
-       python3 skills/build-the-page/page.py check <page>.html --kind <screen-spec|change-spec|validation|review>
+       python3 skills/build-the-page/page.py check <page>.html --kind <kind from the table>
 
    `check` names each rule the page breaks: the opening, the sections, a picture that is not a screenshot, a picture
-   in the details, a placeholder left, a request to test, filler, length. Fix each and build again.
+   in the details, a placeholder left, a request to test, filler, length, more than three risks, a pull request
+   number in a changelog. Fix each and build again.
 4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--spec` for a spec. It
    prints the file id and anything it removed. Anything of yours removed is a fault to fix; with `--spec`, Tico's own
    fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are not a fault.
@@ -119,4 +139,4 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
 ## Done
 
 The requirement holds a page that opens with what it is and what to decide, shows real screenshots with numbered
-arrows, keeps its details last, and that you saw rendered at both widths.
+arrows, keeps its details last, names something specific in every sentence, and that you saw rendered at both widths.
