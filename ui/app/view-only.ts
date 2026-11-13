@@ -12,7 +12,9 @@ const VIEW_HIDDEN = [
   '#task-new', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add',
   '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
 ];
-/** The controls that only read. Anything else that takes a click or input is greyed out and inert in a view. */
+/** The controls that only read. Anything else that takes a click or input is greyed out and inert in a view.
+    ui/tests/app-view-read-only.cts keeps its own list on purpose: the test checks this one rather than reading it, so
+    a write added here by mistake fails the test. Do not make one list from the other. */
 const VIEW_READS = [
   '#side a', '#side button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
   '#task-archive', '#task-layout button', '#task-archives button', '.tl-mi', '.tl-chip button', '.tk-row', '[data-task]',
@@ -21,7 +23,8 @@ const VIEW_READS = [
 ];
 const VIEW_CONTROLS = 'button, input, textarea, select, [contenteditable="true"], [role="button"], [role="checkbox"], '
   + '[role="switch"], [role="menuitem"], [role="menuitemradio"]';
-const VIEW_COMPOSERS = 'form.task-pill, form.p-compose, .thv-compose, .composer';
+/** The message boxes: the task window's (task-modal.ts) and a thread's (thread-view.ts). */
+const VIEW_COMPOSERS = 'form.task-pill, .thv-composer';
 
 const viewIsRead = (el: Element): boolean => VIEW_READS.some(sel => el.matches(sel));
 

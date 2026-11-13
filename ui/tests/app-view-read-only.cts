@@ -25,6 +25,7 @@ async function call<T = Record<string, unknown>>(hub: RealHubSupport.Hub, token:
   return json as T;
 }
 
+// Kept apart from view-only.ts's VIEW_READS on purpose: the test checks that list rather than reading it.
 // The reads a view may offer, by what the control is: moving between places, opening, searching, filtering, closing
 // and showing more. Anything else visible and enabled is a write a screenshot must not offer.
 const READS = [
@@ -109,7 +110,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
 
     // A thread: the bot's own DM page.
     await go(page, `#/bot/${BOT}`);
-    await page.waitForTimeout(t(1500));
+    await page.locator('#main .view-only-line').waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'a thread offers nothing that writes');
     assert.deepEqual(writes, [], 'the view sent no write');
     await context.close();
