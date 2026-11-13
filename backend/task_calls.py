@@ -415,9 +415,11 @@ def task_ask(
     mover: bool | None = None,
     for_action: bool = False,
     brief: Row | None = None,
+    title: str | None = None,
 ) -> Row:
     """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
-    "ok"). `brief` is a question's why, its choices' lines and the one recommended (backend/ask_shape.py). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
+    "ok"). `brief` is a question's why, its choices' lines and the one recommended (backend/ask_shape.py); `title` a
+    short heading for it (at most 60 characters). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
     carries `requirement_id`."""
     from . import task_engine as E
 
@@ -449,6 +451,7 @@ def task_ask(
         seen_version=seen_version,
         for_action=for_action,
         brief=brief,
+        title=title,
     )
 
 
@@ -943,6 +946,7 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
                 "asked_by": None if private else requirement.get("added_by_id"),
                 "choices": None if private else requirement.get("choices"),
                 **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
+                **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
                 "shows": [] if private else requirement.get("shows") or [],
                 **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
                 "answer": _answer_view(conn, task_id, answer, private),
@@ -961,6 +965,13 @@ def _brief_of(requirement: Row) -> Row | None:
         return None
     found = cast("Row", brief)
     return {"why": found.get("why"), "details": found.get("details"), "recommend": found.get("recommend")}
+
+
+def _title_of(requirement: Row) -> str | None:
+    """An ask's short title, as it was asked with one (models.TaskAsk.title), or None."""
+    settings: Row = requirement.get("settings") or {}
+    title: Any = settings.get("title")
+    return title if isinstance(title, str) and title else None
 
 
 def _leave_entry(
@@ -999,6 +1010,7 @@ def _leave_entry(
         "choices": None if private else requirement.get("choices"),
         **({"typed": typed} if typed else {}),
         **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
+        **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
         "shows": shows,
         # What it shows is where its words come from: a reader who may not open one of those pages reads
         # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).

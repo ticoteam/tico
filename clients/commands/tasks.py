@@ -527,6 +527,7 @@ def _own_ask(api, task_id, requirement=None):
             "description": "Instead of choices",
         },
         "recommend": _s("The choice you recommend", maxLength=60),
+        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
@@ -562,7 +563,7 @@ def task_ask(api, args):
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show", "why", "recommend"):
+    for field in ("kind", "choices", "show", "why", "recommend", "title"):
         if args.get(field):
             body[field] = args[field]
     if args.get("choice"):

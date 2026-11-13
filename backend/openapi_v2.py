@@ -2816,6 +2816,8 @@ SCHEMAS = {
                 },
                 required=["why", "details", "recommend"],
             ),
+            # The ask's short title (at most 60 characters), the decision view's heading. Absent on an ask without one.
+            "title": "s",
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),

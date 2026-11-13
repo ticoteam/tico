@@ -172,6 +172,46 @@ def test_a_question_with_no_choices_needs_only_its_why(ruled):
     assert r.status_code == 200, r.text
 
 
+# ---- an ask's short title (decision view part 2, task #390) --------------------------------------------------------
+
+
+def needs_you_ask(api, rid, token="ana-test"):
+    return next(i["ask"] for i in get(api, "needs-you", token)["items"] if (i.get("ask") or {}).get("requirement_id") == rid)
+
+
+def test_an_asks_short_title_is_on_its_entry_and_in_needs_you(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = ask(api, task, {**GOOD, "title": "  Launch note tone  "})
+    assert r.status_code == 200, r.text
+    rid = r.json()["requirement_id"]
+    view = get(api, f"tasks/{task['id']}")
+    view = view.get("task", view)
+    [entry] = [e for e in view["to_leave"] if e["requirement_id"] == rid]
+    assert entry["title"] == "Launch note tone"
+    assert entry["line"] == GOOD["line"], "the full question stays the line"
+    assert needs_you_ask(api, rid)["title"] == "Launch note tone"
+
+
+def test_an_asks_title_over_60_characters_is_refused_and_nothing_is_asked(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = ask(api, task, {**GOOD, "title": "x" * 61})
+    assert r.status_code == 422, r.text
+    assert sql(api, "SELECT count(*) AS n FROM requirements WHERE line=?", (GOOD["line"],))[0]["n"] == 0
+    assert ask(api, task, {**GOOD, "title": "x" * 60}).status_code == 200
+
+
+@pytest.mark.parametrize("title", [None, "   "])
+def test_an_ask_without_a_title_is_asked_as_before_and_carries_none(ruled, title):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = ask(api, task, {**GOOD, **({} if title is None else {"title": title})})
+    assert r.status_code == 200, r.text
+    rid = r.json()["requirement_id"]
+    assert "title" not in needs_you_ask(api, rid)
+
+
 def test_the_shape_is_a_bots_question_to_a_person_only(ruled):
     """A bot asking a bot, and a person asking anyone, keep asking as before."""
     api, _ = ruled
