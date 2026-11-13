@@ -3,7 +3,7 @@
 From the repository root on macOS:
 
 ```sh
-python3 e2e/website-tools/run.py --repeat 5
+python3 e2e/website-tools/live_checks.py --repeat 5
 ```
 
 Requires Google Chrome in `/Applications/Google Chrome.app`, Rust/Cargo, Swift (Vision OCR), and the repository's
