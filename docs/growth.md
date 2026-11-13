@@ -244,6 +244,14 @@ steps are done). The Growth activation rate is read from these dates. A team who
 steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
 support session reading Growth records nothing.
 
+On the web, the Growth page shows a **Get started** panel over its cards while any step is not done: the four steps in
+order, each done step with what was set, and the next one with a button that opens its form (Settings, a new channel,
+the channel's source picker or Sources when there is no source yet, and the Months form on the channel and the last full
+month). Someone who may not do the next step sees who may, by name, instead of the button. A team that finishes the
+steps after first opening Growth is told once that it is set up, with a link to the channel's numbers
+(`POST /api/v2/growth/setup/shown`); after that the panel does not come back. Each empty card names the step that fills
+it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
+
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else

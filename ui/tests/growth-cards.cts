@@ -79,20 +79,38 @@ const DEFAULTS: [string, string, CardSettings][] = [['growth_funnel', 'large', {
   ['growth_number', 'small', {metric: 'kept_d30'}], ['growth_channels', 'large', {count: 10}], ['growth_retention', 'medium', {months: 6}],
   ['growth_board', 'medium', {count: 3}]];
 
-function server(me: Person, pipelines: unknown[] = PIPELINES) {
+// GET /api/v2/growth/setup (backend/growth_setup.py show) with the first `done` steps done, as the panel reads it.
+const STEPS = ['settings', 'channel', 'source', 'month'];
+const SEARCH = {slug: 'search', name: 'Search'};
+interface Setup {done: boolean; celebrate: boolean; steps: {step: string; done: boolean}[]; next: Record<string, unknown> | null; channel: typeof SEARCH | null;
+  set: Record<string, unknown>; you_may: Record<string, boolean>}
+function setupAt(done: number, {may = true, sources = 1, celebrate = false}: {may?: boolean; sources?: number; celebrate?: boolean} = {}): Setup {
+  const step = STEPS[done];
+  const next = step ? {step, number: done + 1, says: '', you_may: may, ...(may ? {} : {who_may: [{ref: 'human:ana', name: 'Ana Silva'}, {ref: 'human:ben', name: 'Ben Ode'}]}),
+    ...(step === 'source' ? {sources} : {}), ...(step === 'month' ? {month: '2026-10'} : {})} : null;
+  return {done: done >= 4, celebrate, steps: STEPS.map((s, i) => ({step: s, done: i < done})), next, channel: done >= 1 ? SEARCH : null,
+    set: {settings: done >= 1 ? {unit: 'customers', revenue_month: 80, margin_pct: 70} : null, channel: done >= 2 ? SEARCH : null,
+      source: done >= 3 ? {system: 'Google Ads', truth_for: 'ad spend'} : null, month: done >= 4 ? {month: '2026-10', spend: 1800, new_customers: 6} : null},
+    you_may: {settings: may, channels: may, sources: may, months: may}};
+}
+
+function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = setupAt(4), emptyCards: string[] = []) {
   let n = 0, saved = false;
+  const empty = !setup.steps[3]!.done;   // a Growth with no month yet: every card shows nothing (backend/cards.py card_view)
+  const none = (template: string) => empty || emptyCards.includes(template);
   let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
   const reads: unknown[] = [], writes: Write[] = [];
-  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: false,
-    data: DATA[c.template]!(c.settings, month)});
-  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
+  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: none(c.template),
+    data: none(c.template) ? null : DATA[c.template]!(c.settings, month)});
+  const block = () => setup.done ? {done: true} : {done: false, steps: setup.steps, next: setup.next};
+  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS, setup: block(),
     pins: pins.map(p => ({...p, card: draw(p.card, month)}))});
   const save = () => {
     if (saved) return;
     saved = true;
     pins = pins.map(p => { const cid = 'c' + (++n); return {...p, id: 'p' + n, item: 'card:' + cid, card: {...p.card, id: cid}}; });
   };
-  return {reads, writes, handle(method: string, p: string, body: PostedCard, query: URLSearchParams): [number, unknown] | null {
+  return {reads, writes, setup, handle(method: string, p: string, body: PostedCard, query: URLSearchParams): [number, unknown] | null {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|growth)\b/.test(p)) writes.push([method, p, body]);
     if (p === '/api/v2/places/dashboard' && method === 'GET') return [200, {
       place: 'dashboard', kind: 'dashboard', saved: true, can_edit: me.company_role !== 'member',
@@ -116,6 +134,10 @@ function server(me: Person, pipelines: unknown[] = PIPELINES) {
         card: {id: cid, template: body.template, settings: body.settings, title: body.title}});
       return [200, {card: draw(pins.at(-1)!.card, MONTHS.at(-1)!), pin: 'p' + n}];
     }
+    if (p === '/api/v2/growth/setup') return [200, setup];
+    if (p === '/api/v2/growth/setup/shown') { if (setup.done) setup.celebrate = false; return [200, setup]; }
+    // A channel added finishes step 2: the panel reads its steps again after the save.
+    if (p === '/api/v2/growth/channels' && method === 'POST') { Object.assign(setup, setupAt(2)); return [200, {slug: 'search', name: 'Search'}]; }
     if (p === '/api/v2/growth/settings') return [200, {unit: 'customers', revenue_month: 49, margin_pct: 80}];
     if (p === '/api/v2/growth/channels') return [200, {channels: CHANNELS.map(c => ({...c, stage: 'testing', owner_ref: 'human:ana', track: 'performance'})), may_edit: true}];
     if (p === '/api/v2/growth/cohorts') return [200, {cohorts: MONTHS.map((month, i) => ({channel: query.get('channel'), month, new_customers: SERIES.new_customers![i],
@@ -124,9 +146,9 @@ function server(me: Person, pipelines: unknown[] = PIPELINES) {
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[]} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4), emptyCards = [] as string[]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors: string[] = [], fake = server(me, pipelines);
+  const errors: string[] = [], fake = server(me, pipelines, setup, emptyCards);
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
   const config = {company_name: 'Acme'};
@@ -192,6 +214,8 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(await page.locator('[data-gr-month] option').allInnerTexts(), ['Oct 2026', 'Sep 2026', 'Aug 2026', 'Jul 2026'], 'newest first');
       assert.deepEqual((await boardLinks(page))[0], [BOARD, true], 'the Growth board opens Growth Experiments');
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
+      assert.equal(await page.locator('#gr-start').isVisible(), false, 'a set-up Growth has no Get started panel');
+      assert.equal(await page.locator('#dash-grid .grs-fill').count(), 0);
       assert.equal(await page.locator('.dash-actions').isVisible(), true);
       assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
       // Arranging is in edit mode: Edit shows the grips, menus and + Card / + Page; Done hides them.
@@ -404,6 +428,170 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Growth cards: head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes');
+
+    // ---- Growth's first run (ui/app/growth-start.ts): the Get started panel and the empty cards.
+    const panel = (page: Page) => page.locator('#gr-start');
+    const stepKinds = (page: Page) => page.locator('#gr-start .grs-step .grs-k').evaluateAll(els => els.map(el => (el.firstChild?.textContent || '').trim()));
+    const panelButtons = (page: Page) => page.locator('#gr-start button.grs-go');
+    {
+      // AC-1: an admin, nothing set: four steps in order, none done, step 1 next with one button that opens Settings.
+      // AC-7: every empty card names the step that fills it; the Funnel names Goals; none says only "No ... yet".
+      const {page, errors} = await open(browser, {setup: setupAt(0)});
+      await panel(page).locator('.grs-step').first().waitFor();
+      assert.equal(await panel(page).getAttribute('aria-label'), 'Get started');
+      assert.match(await panel(page).locator('.grs-h').innerText(), /Get started/);
+      assert.deepEqual(await page.locator('#gr-start .grs-step').evaluateAll(els => els.map(el => el.getAttribute('data-grs-step'))), STEPS);
+      assert.deepEqual(await stepKinds(page), ['Next', 'Step 2', 'Step 3', 'Step 4']);
+      assert.equal(await page.locator('#gr-start .grs-done').count(), 0);
+      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'settings');
+      assert.match(await page.locator('#gr-start .grs-prog').innerText(), /0 of 4 done/);
+      assert.equal(await panelButtons(page).count(), 1, 'one button');
+      // The panel sits between the head and the cards.
+      const [headBottom, panelTop, panelBottom, gridTop] = await page.evaluate(() => [document.querySelector('.dash-head')!.getBoundingClientRect().bottom,
+        ...(() => { const r = document.querySelector('#gr-start')!.getBoundingClientRect(); return [r.top, r.bottom]; })(), document.querySelector('#dash-grid')!.getBoundingClientRect().top]);
+      assert.ok(headBottom! <= panelTop! && panelBottom! <= gridTop!, 'under the head, over the cards');
+      const fills = page.locator('#dash-grid .grs-fill');
+      assert.equal(await fills.count(), 7, 'every card says what fills it');
+      assert.deepEqual(await fills.evaluateAll(els => els.map(el => el.getAttribute('data-grs-fill'))), ['goals', 'month', 'month', 'month', 'channel', 'month', 'board']);
+      assert.match(await fills.nth(1).innerText(), /step 4/);
+      assert.match(await fills.nth(3).innerText(), /kept 30 days/, 'a kept share waits for 30 days');
+      assert.match(await fills.nth(4).innerText(), /step 2/);
+      assert.equal(await fills.nth(0).locator('a').getAttribute('href'), '#/strategy/goals', 'the Funnel opens Goals');
+      assert.equal(await page.locator('#dash-grid .dash-none').evaluateAll(els => els.filter(el => /^No .* yet$/.test((el.textContent || '').trim())).length), 0);
+      // A card's step that is not next yet points at the panel's next step instead of a form.
+      await fills.nth(1).locator('[data-gr-step]').click();
+      await page.waitForFunction(() => document.querySelector('#gr-start .grs-next')?.classList.contains('grs-flash'));
+      assert.equal(await page.locator('dialog.gr-dlg[open]').count(), 0);
+      await shot(page, 'desktop-growth-start');
+      await panelButtons(page).click();
+      await page.locator('dialog.gr-dlg[open][aria-label="Settings"] [name="revenue_month"]').waitFor();
+      await page.keyboard.press('Escape');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-2: step 1 done shows what was set; step 2 next opens the new channel form. Adding it marks step 2 done at once.
+      const {page, errors} = await open(browser, {setup: setupAt(1)});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.deepEqual(await stepKinds(page), ['Done', 'Next', 'Step 3', 'Step 4']);
+      assert.equal(await page.locator('#gr-start [data-grs-step="settings"] .grs-l').innerText(), '$80 per customer a month · 70% margin');
+      assert.match(await page.locator('#gr-start .grs-prog').innerText(), /1 of 4 done/);
+      assert.equal(await panelButtons(page).getAttribute('data-gr-step'), 'channel');
+      await page.locator('#dash-grid .grs-fill[data-grs-fill="channel"] [data-gr-step]').click();
+      const dlg = page.locator('dialog.gr-dlg[open][aria-label="New channel"]');
+      await dlg.locator('[name="name"]').waitFor();
+      await page.keyboard.press('Escape');
+      await panelButtons(page).click();
+      await dlg.locator('[name="name"]').fill('Search');
+      await dlg.locator('[type="submit"]').click();
+      await page.waitForFunction(() => document.querySelector('#gr-start [data-grs-step="channel"]')?.classList.contains('grs-done'));
+      assert.match(await page.locator('#gr-start [data-grs-step="channel"]').getAttribute('class') || '', /grs-just/, 'the step just done pops');
+      assert.equal(await page.locator('#gr-start [data-grs-step="channel"] .grs-l').innerText(), 'Search');
+      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'source');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-3: step 3 next opens Search's form at its source picker; with no source yet, it opens Sources.
+      const {page, errors} = await open(browser, {setup: setupAt(2)});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.equal(await panelButtons(page).innerText(), 'Choose the source');
+      await panelButtons(page).click();
+      const dlg = page.locator('dialog.gr-dlg[open][aria-label="Search"]');
+      await dlg.locator('[name="source_id"]').waitFor();
+      await page.waitForFunction(() => document.activeElement?.getAttribute('name') === 'source_id');
+      await page.keyboard.press('Escape');
+      await page.close();
+      const none = await open(browser, {setup: setupAt(2, {sources: 0})});
+      await panel(none.page).locator('.grs-next').waitFor();
+      assert.equal(await panelButtons(none.page).innerText(), 'Add a source');
+      await panelButtons(none.page).click();
+      await none.page.waitForFunction(() => location.hash === '#/growth/sources');
+      assert.deepEqual([...errors, ...none.errors], []);
+      await none.page.close();
+    }
+    {
+      // AC-4: step 4 next opens the Months form on Search and the last full month.
+      const {page, errors} = await open(browser, {setup: setupAt(3)});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.equal(await page.locator('#gr-start [data-grs-step="source"] .grs-l').innerText(), 'Google Ads · ad spend');
+      assert.equal(await panelButtons(page).innerText(), 'Add Oct 2026');
+      await panelButtons(page).click();
+      const dlg = page.locator('dialog.gr-dlg[open][aria-label="Search · New month"]');
+      assert.equal(await dlg.locator('[name="month"]').inputValue(), '2026-10');
+      assert.equal(await dlg.locator('[name="spend"]').count(), 1);
+      assert.equal(await dlg.locator('[name="new_customers"]').count(), 1);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-5: all four done says so once and points at Search's numbers; the next open has no panel.
+      const setup = setupAt(4, {celebrate: true});
+      const {page, errors, fake} = await open(browser, {setup});
+      await panel(page).locator('.grs-yay').waitFor();
+      assert.match(await panel(page).innerText(), /You’re set up/);
+      assert.match(await panel(page).innerText(), /Search’s first numbers are in/);
+      await page.locator('#dash-grid .grc-ch tbody tr').first().waitFor();
+      await shot(page, 'desktop-growth-start-done');
+      assert.ok(fake.writes.some(([m, p]) => m === 'POST' && p === '/api/v2/growth/setup/shown'), 'said once: recorded');
+      await panel(page).locator('[data-grs-see]').click();
+      await page.waitForFunction(() => document.querySelector('#dash-grid tr[data-channel="search"]')?.classList.contains('grs-flash'));
+      assert.equal(await panel(page).isVisible(), false);
+      await page.evaluate(() => { location.hash = '#/overview'; });
+      await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
+      await page.evaluate(() => { location.hash = '#/growth'; });
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      await page.waitForTimeout(200);
+      assert.equal(await panel(page).isVisible(), false, 'it does not come back');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const me of [OWNER, MEMBER]) {
+      // AC-13: a set-up Growth with a card still empty (Retention waits 30 days for kept customers) reads as before the
+      // panel: plain words, no step link, nothing that says an admin may not.
+      const {page, errors} = await open(browser, {me, emptyCards: ['growth_retention', 'growth_board']});
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      const lines = page.locator('#dash-grid .dash-none');
+      await lines.first().waitFor();
+      assert.equal(await panel(page).isVisible(), false);
+      assert.equal(await page.locator('#dash-grid [data-gr-step]').count(), 0, `${me.id}: no step links once set up`);
+      const words = await lines.allInnerTexts();
+      assert.ok(words.every(w => !/step \d/i.test(w)), `${me.id}: no step named once set up: ${words}`);
+      assert.ok(words.some(w => /kept 30 days/.test(w)), `${me.id}: Retention says what fills it`);
+      assert.equal(await page.locator('.toast').count(), 0);
+      if (me === OWNER) await shot(page, 'desktop-growth-set-up-empty-card');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-6: a member with step 2 next sees the owner and admins by name, and no button.
+      const {page, errors} = await open(browser, {me: MEMBER, setup: setupAt(1, {may: false})});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'channel');
+      assert.equal(await page.locator('#gr-start [data-grs-who]').innerText(), 'Only Ana Silva and Ben Ode can do this.');
+      assert.equal(await panelButtons(page).count(), 0, 'no button');
+      // An empty card's link points at the panel rather than a form they may not use.
+      await page.locator('#dash-grid .grs-fill[data-grs-fill="channel"] [data-gr-step]').click();
+      await page.waitForFunction(() => document.querySelector('#gr-start .grs-next')?.classList.contains('grs-flash'));
+      assert.equal(await page.locator('dialog.gr-dlg[open]').count(), 0);
+      await shot(page, 'desktop-growth-start-member');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const theme of ['dark', 'light']) {
+      // A phone: the steps stack in one column, nothing past the edge, the button in reach.
+      const {page, errors} = await open(browser, {viewport: PHONE, theme, setup: setupAt(1)});
+      await panel(page).locator('.grs-next').waitFor();
+      const lefts = await page.locator('#gr-start .grs-step').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().left)));
+      assert.equal(new Set(lefts).size, 1, 'one column');
+      assert.equal(await sideways(page), false, 'no sideways scroll');
+      const box = (await panelButtons(page).boundingBox())!;
+      assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width, 'the button fits');
+      assert.ok(await contrast(page.locator('#gr-start .grs-next .grs-n')) >= 3, `the next step's number reads (${theme})`);
+      await shot(page, `phone-growth-start-${theme}`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('Growth cards: head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; Get started panel (AC-1 to AC-7) on desktop and phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
