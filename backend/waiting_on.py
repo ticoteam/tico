@@ -16,7 +16,7 @@ The ten states, in headline order:
     bot       a requirement is not met and a bot has it
     jev       Jev is checking a page
     github    checks are running, the PR is queued, or it merged and waits for a release
-    tasks     tasks it filed are still open
+    tasks     tasks it filed are still open, a task it depends on ("Blocked by #304"), or one it merges after
     room      everything is met and the next stage is full
     pick      its stage picks from several bots and every one is at its limit (backend/stage_pick.py)
     by_hand   it sits in a stage that tasks leave by hand
@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from . import hubdb_core, idea_checks, merge_order, pipeline_rights, pr_conflicts, read_cache, task_wakes
+from . import hubdb_core, idea_checks, merge_order, pipeline_rights, pr_conflicts, read_cache, task_depends, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 
@@ -102,6 +102,8 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
     if isinstance(said, Wait):
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)
+        if said.state == TASKS and task_depends.is_wait(said.requirement_id):
+            return replace(said, who=None, line=task_depends.UNNAMED, about=None)
         if said.state == TASKS:
             return replace(said, who=None, line=SUB_TASK, about=None)
         return replace(said, line=SUB_TASK_CLOSED, about=None)
@@ -519,6 +521,21 @@ def of(
             line = f"{line}: {_share_line(conn, shut, 'add')}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since))
+    blockers = task_depends.blockers(conn, str(row["id"]))
+    if blockers:
+        # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
+        # An OK or an answer asked of a person, and a cause a person fixes first, stay theirs, as under a bot's snooze.
+        out = [wait for wait in out if wait.state == SNOOZED or (wait.state == PERSON and wait.ask) or wait.fix] + [
+            Wait(
+                TASKS,
+                blocker,
+                task_depends.line(conn, blocker),
+                task_depends.wait_id(str(row["id"]), blocker),
+                since,
+                about=blocker,
+            )
+            for blocker, since in blockers
+        ]
     # Two requirements missing for the same reason ("No PR linked" for PR open and Checks pass) are one line.
     once: dict[tuple[str, str | None, str], Wait] = {}
     for wait in out:
@@ -608,7 +625,8 @@ def on_person_many(conn: "sqlite3.Connection", waits: Mapping[str, Sequence[Wait
 
 @dataclass(frozen=True)
 class Slots:
-    """A limited stage's tasks as its limit counts them: `held`, the open tasks that are not snoozed and hold a slot,
+    """A limited stage's tasks as its limit counts them: `held`, the open tasks that are not snoozed or blocked
+    (task_depends) and hold a slot,
     and `on_person`, (task id, since) for each that waits only on a person's OK or answer (`on_person`), `since` being
     when the newest of its asks began."""
 
@@ -618,7 +636,8 @@ class Slots:
 
 _IN_STAGE = (
     "SELECT t.id FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL)"
+    "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) "
+    f"AND NOT {task_depends.BLOCKED % 't'}"
 )
 
 
@@ -694,6 +713,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
+    task_depends.prime(conn, ids)  # the tasks each depends on that are still open
     # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
     bots: list[str] = []
     for row in rows:

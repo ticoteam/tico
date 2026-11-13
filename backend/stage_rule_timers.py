@@ -31,6 +31,7 @@ import logging
 from typing import Any
 
 from . import hubdb as _hubdb
+from . import task_depends
 
 log = logging.getLogger(__name__)
 Row = dict[str, Any]
@@ -69,7 +70,7 @@ BATCH_HOURS = 1  # a manager's Stage rules wake: one an hour at most
 LISTED = 30  # tasks named in one wake; the rest are counted
 SYSTEM = "system"
 
-# Open work tasks the pass works on: not snoozed, not in a by-hand stage. `active_at` is the last activity; the end of a
+# Open work tasks the pass works on: not snoozed or blocked, not in a by-hand stage. `active_at` is the last activity; the end of a
 # snooze counts, so a task set aside is not quiet the moment its snooze ends and its owner is woken.
 _TASKS = (
     "SELECT t.id, t.title, t.number, t.owner_id, t.pipeline_id, t.stage_id, t.conversation_id, "
@@ -81,7 +82,9 @@ _TASKS = (
     "AS active_at "
     "FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status = 'open' AND s.kind = 'work' AND s.by_hand = 0 "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL)"
+    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    # Blocked by a task it depends on: nobody's turn, so no timer; its end sets last_change_at (task_depends.release).
+    f"AND NOT {task_depends.BLOCKED % 't'}"
 )
 
 

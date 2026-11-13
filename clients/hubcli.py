@@ -1191,17 +1191,23 @@ def parser():
         s.set_defaults(
             fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
         )  # one tool: tico_task_follow
-    s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
-    s.add_argument("id")
-    s.add_argument("task")
-    s.add_argument(
-        "--kind",
-        default="related",
-        help="related (default); duplicate_of; follow_up: it was split off or followed up from task. A relation is a "
-        "note: a task waits only on its requirements and the tasks it filed",
-    )
-    s.add_argument("--remove", action="store_true", help="take it off instead")
-    s.set_defaults(fn="task relate")
+    for change, words in (
+        ("relate", "relate another task to this one: <id> [<kind>] <task>, e.g. <id> depends_on <task>"),
+        ("unrelate", "take a relation off: <id> [<kind>] <task>"),
+    ):
+        s = task.add_parser(change, help=words)
+        s.add_argument("id")
+        s.add_argument("task", help="the other task, or the kind when a third word names the task")
+        s.add_argument("other", nargs="?", help="the other task, when the second word is the kind")
+        s.add_argument(
+            "--kind",
+            default="related",
+            help="related (default); duplicate_of; follow_up: it was split off or followed up from task; depends_on: "
+            "this task cannot go on until task ends (Blocked by it, no date; never snooze for that)",
+        )
+        if change == "relate":
+            s.add_argument("--remove", action="store_true", help="take it off instead")
+        s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
     s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
     s.add_argument("id", help="the task that merges later")
     s.add_argument("task", help="the task it merges after")

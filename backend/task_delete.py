@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from .store import H
 from . import task_relations as TR
+from . import task_depends
 from .migrations import renames
 
 
@@ -285,13 +286,6 @@ def _refusals(c, ids, conversations, messages):
     ]
     if outside:
         refusals["subtasks outside the list"] = len(outside)
-    blocked = [
-        r
-        for r in _column(c, "SELECT to_task FROM task_relations WHERE kind='blocks' AND from_task IN ({})", ids)
-        if r not in chosen
-    ]
-    if blocked:
-        refusals["tasks blocked by one outside the list"] = len(blocked)
     pointing = (
         [
             r
@@ -403,6 +397,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         for table in TASK_ROWS:
             column, where = _task_key(table)
             _delete(c, table, column, [tid], where)
+        # A task that depended on this one is no longer blocked by it: its owner hears, once (task_depends.deleted).
+        task_depends.deleted(c, tid, task.get("number"), actor)
         c.execute("DELETE FROM task_relations WHERE from_task=? OR to_task=?", (tid, tid))
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
@@ -585,6 +581,8 @@ def restore_tasks(c, ids, actor=None):
     for e, snap in snapshots:
         tid = e["task_id"]
         for row in snap["rows"].get("task_relations", []):
+            if row["kind"] == "depends_on" and not task_depends.restores(c, row, tid):
+                continue  # its dependents were released when it was deleted (task_depends.restores)
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])
     for e, snap in snapshots:
