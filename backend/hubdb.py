@@ -7768,6 +7768,12 @@ def task(conn, task_id):
     return row
 
 
+def task_untagged(conn, task_id):
+    """The task row without its tags: for a check that reads none of them (who may read it), so a page of checks
+    primed by prime_tasks(with_tags=False) reads no tags one task at a time."""
+    return _one(conn, TASK_SQL, (task_id,))
+
+
 def task_labels(row):
     return [tag["key"] for tag in (row or {}).get("tags", [])]
 

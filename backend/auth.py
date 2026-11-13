@@ -1349,9 +1349,10 @@ class Auth:
                     raise Problem("forbidden", f"This task involves {slug}, whose activity you cannot read", 403)
         return row
 
-    def task(self, c, who, task_id):
+    def task(self, c, who, task_id, *, tags=True):
+        """The task row when `who` reads it, else a refusal. `tags=False`: an access check that reads no tags."""
         self.task_snapshot(c)
-        return self.task_row(c, who, H.task(c, task_id))
+        return self.task_row(c, who, H.task(c, task_id) if tags else H.task_untagged(c, task_id))
 
     def resolve_task(self, c, who, ident, visible=None):
         """The full task id for what a caller typed: the id itself, a unique prefix of at least
