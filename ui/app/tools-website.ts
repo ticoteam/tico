@@ -6,14 +6,19 @@
    Recent activity, Browser (the browser host, read only; Sites; Central only) and Who can see it (as an API tool's,
    saved through PATCH /api/v2/website-tools/<id> {audience}). Activity: GET …/activity, 50 a page.
    Writes: PATCH/DELETE /api/v2/website-tools/<id>; POST …/accounts; PATCH/DELETE …/accounts/<aid>;
-   PUT …/accounts/<aid>/access/<subject> {on}; GET …/accounts/<aid>/code (Show code); POST /api/v2/credentials/<aid>/reveal
+   PUT …/accounts/<aid>/access/<subject> {on} (a person, bot or group; answers the account's access, which the rows
+   repaint from); GET /api/v2/website-tools/groups (groups' member counts, for the who picker, ui/app/who-picker.ts); GET …/accounts/<aid>/code (Show code); POST /api/v2/credentials/<aid>/reveal
    (Reveal password, people only, logged). Add tool › Website (toolsWebsiteCreate) is POST /api/v2/website-tools, then
    the account, then its grants. Open browser is the live view (ui/app/browser-view.ts).
    Passwords and 2FA keys are write-only: a form never shows a stored one, and a blank field on Replace login keeps it.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-interface TwWho {subject: string; kind: string; id: string; name?: string | null; initials?: string}
+// Who can use an account: a person, a bot or a group. A group carries its member count; a person or bot granted directly
+// who is also in a granted group carries those groups' names (`via`).
+interface TwWho {subject: string; kind: string; id: string; name?: string | null; initials?: string; members?: number; via?: string[]}
+// A group as GET /api/v2/website-tools/groups lists it: its member count and, when sent, its members as actors.
+interface TwGroup {id: string; name?: string; members?: number; actors?: string[]}
 interface TwSession {state?: string; where?: string | null; computer?: string | null; by?: TwWho | null}
 interface TwAccount {
   id: string; kind: string; username?: string | null; has_password?: boolean; has_totp?: boolean; holder?: TwWho | null; access?: TwWho[];
@@ -41,7 +46,7 @@ const TW_VERBS: Record<string, string> = {open: 'opened', fill: 'filled', copy: 
 const TW_SESSION: Record<string, string> = {needs_you: 'Needs you', in_use: 'In use'};
 const twVerb = (v: string) => TW_VERBS[v] || v;
 const twWhere = (r: TwRow) => [r.account === 'own' ? 'own' : r.account ? 'shared' : '', r.where === 'own' ? 'own browser' : r.where ? 'central' : ''].filter(Boolean).join(' · ');
-const twFace = (w: TwWho | null | undefined, size = 22) => w ? toolsFace({kind: w.kind === 'bot' ? 'bot' : 'person', id: w.id, name: w.name || w.id}, size) : '';
+const twFace = (w: TwWho | null | undefined, size = 22) => w ? toolsFace({kind: w.kind === 'bot' || w.kind === 'group' ? w.kind : 'person', id: w.id, name: w.name || w.id}, size) : '';
 const twName = (w: TwWho | null | undefined) => w ? w.name || w.id : '';
 // An account's line: a shared login's username (the tool's name when it has none); an own one's holder.
 const twAcctName = (a: TwAccount) => a.kind === 'own' ? twName(a.holder) || a.username || '' : a.username || TW?.data?.tool.name || '';
@@ -109,7 +114,7 @@ function twAccountsCard(d: TwData): string {
     const st = a.session?.state || '', said = TW_SESSION[st];
     const by = st === 'in_use' && a.session?.by ? ` · ${twName(a.session.by)}` : '';
     const right = a.kind === 'own' ? `<span class="muted tw-acct-user">${esc(a.username || '')}</span>`
-      : `<span class="tt-faces">${(a.access || []).slice(0, 4).map(w => `<span class="tt-face" title="${esc(twName(w))}">${twFace(w)}</span>`).join('')}</span>${
+      : `<span class="tt-faces">${(a.access || []).slice(0, 4).map(w => `<span class="tt-face" title="${esc(toolsFaceTitle({kind: w.kind, id: w.id, name: twName(w), members: w.members}))}">${twFace(w)}</span>`).join('')}</span>${
         (a.access || []).length > 4 ? `<span class="muted tt-more">+${(a.access || []).length - 4}</span>` : ''}`;
     return `<div class="tw-acct" data-tw-account="${esc(a.id)}" data-kind="${esc(a.kind)}">
       <span class="pill tw-kind${a.kind === 'own' ? '' : ' in-progress'}">${a.kind === 'own' ? 'Own' : 'Shared'}</span>
@@ -397,23 +402,63 @@ function twHolders(): [string, string][] {
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (admin || (me && (e.owner_id === me.id || e.reports_to === 'human:' + me.id))));
   return [...(me ? [['human:' + me.id, 'Me'] as [string, string]] : []), ...bots.map(e => ['bot:' + e.id, botDisplayName(e.id)] as [string, string])];
 }
-// Everyone a shared account can be granted to, minus `taken`, as <optgroup>s.
-function twWhoOptions(taken: Set<string>): string {
-  const people = (S.people || []).filter(p => !p.hidden && !taken.has('human:' + p.id));
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !taken.has('bot:' + e.id));
-  return `${people.length ? `<optgroup label="People">${people.map(p => `<option value="human:${esc(p.id)}">${esc(p.name || p.email || p.id)}</option>`).join('')}</optgroup>` : ''}${
-    bots.length ? `<optgroup label="Bots">${bots.map(b => `<option value="bot:${esc(b.id)}">${esc(botDisplayName(b.id))}</option>`).join('')}</optgroup>` : ''}`;
+// ----------------------------------------------------------------- who can use it: rows and the picker
+const TW_KIND_RANK: Record<string, number> = {group: 0, person: 1, bot: 2};
+const twSortWho = (list: TwWho[]) => [...list].sort((a, b) => (TW_KIND_RANK[a.kind] ?? 3) - (TW_KIND_RANK[b.kind] ?? 3) || twName(a).localeCompare(twName(b)));
+// A row's muted text: "Bot", a group's member count, "Also in Design" (or "Also in 2 groups") for a direct grant a granted
+// group covers too.
+function twWhoSub(w: TwWho): string {
+  const via = w.via || [], also = via.length === 1 ? `Also in ${via[0]}` : via.length > 1 ? `Also in ${via.length} groups` : '';
+  if (w.kind === 'group') return toolsMembers(w.members);
+  return [w.kind === 'bot' ? 'Bot' : '', also].filter(Boolean).join(' · ');
 }
-const twWhoLabel = (subject: string): string => {
-  const [kind, id = ''] = subject.split(/:(.*)/s);
-  if (kind === 'bot') return botDisplayName(id);
-  const p = (S.people || []).find(x => x.id === id);
-  return p?.name || p?.email || id;
-};
-const twWhoFace = (subject: string): string => {
-  const [kind, id = ''] = subject.split(/:(.*)/s);
-  return toolsFace({kind: kind === 'bot' ? 'bot' : 'person', id, name: twWhoLabel(subject)});
-};
+// One row: a 24px face, the name, its muted text, and a quiet × that shows on hover or focus (always on a touch screen).
+const twWhoRow = (w: TwWho, remove: string) => `<div class="tw-access-row" data-tw-access-row="${esc(w.subject)}">${twFace(w, 24)}<span class="tw-who-n">${esc(twName(w))}</span>
+  <span class="tw-who-sub">${esc(twWhoSub(w))}</span><button type="button" class="ghost tw-x" ${remove}="${esc(w.subject)}" aria-label="Remove ${esc(twName(w))}" title="Remove"><span class="nav-icon" aria-hidden="true">close</span></button></div>`;
+const twWhoRows = (list: TwWho[], remove: string) => list.length ? twSortWho(list).map(w => twWhoRow(w, remove)).join('') : '<p class="muted tw-nobody">Nobody yet.</p>';
+// Groups' member counts (and members, when sent), read once per dialog; until it answers a group shows no count.
+async function twGroups(): Promise<Map<string, TwGroup>> {
+  try {
+    const rows: TwGroup[] = await get('/v2/website-tools/groups', {fresh: true});
+    return new Map((Array.isArray(rows) ? rows : []).map(g => [g.id, g]));
+  } catch { return new Map(); }
+}
+const twPersonName = (id: string) => { const p = (S.people || []).find(x => x.id === id); return p?.name || p?.email || id; };
+// Who a pick makes: a TwWho for a subject, named from the roster.
+function twWhoOf(subject: string, groups: Map<string, TwGroup>): TwWho {
+  const [kind = '', id = ''] = subject.split(/:(.*)/s);
+  if (kind === 'group') {
+    const g = groups.get(id), name = g?.name || (S.orgGroups || []).find(x => x.id === id)?.name || id;
+    return {subject, kind: 'group', id, name, ...(g?.members === undefined ? {} : {members: g.members})};
+  }
+  return {subject, kind: kind === 'bot' ? 'bot' : 'person', id, name: kind === 'bot' ? botDisplayName(id) : twPersonName(id)};
+}
+// Everyone not yet granted, for the picker: groups (with their member counts), people, bots. One already covered by a
+// granted group stays, with "In Design", since a direct grant outlives the group's.
+function twCandidates(granted: TwWho[], groups: Map<string, TwGroup>): WhoCandidate[] {
+  const taken = new Set(granted.map(w => w.subject));
+  const covering = (subject: string) => granted.filter(w => w.kind === 'group' && (groups.get(w.id)?.actors || []).includes(subject)).map(w => twName(w));
+  const inGroups = (subject: string) => { const g = covering(subject); return g.length === 1 ? `In ${g[0]}` : g.length > 1 ? `In ${g.length} groups` : ''; };
+  const out: WhoCandidate[] = [];
+  for (const g of S.orgGroups || []) {
+    const subject = 'group:' + g.id;
+    if (taken.has(subject)) continue;
+    const w = twWhoOf(subject, groups);
+    out.push({subject, kind: 'group', name: twName(w), face: twFace(w, 24), sub: toolsMembers(w.members)});
+  }
+  for (const p of S.people || []) {
+    const subject = 'human:' + p.id;
+    if (p.hidden || taken.has(subject)) continue;
+    const name = p.name || p.email || p.id;
+    out.push({subject, kind: 'person', name, email: p.email || undefined, face: toolsFace({kind: 'person', id: p.id, name}, 24), sub: inGroups(subject)});
+  }
+  for (const e of S.emps || []) {
+    const subject = 'bot:' + e.id;
+    if (e.status === 'archived' || taken.has(subject)) continue;
+    out.push({subject, kind: 'bot', name: botDisplayName(e.id), face: avatar(e.id, 24), sub: ['Bot', inGroups(subject)].filter(Boolean).join(' · ')});
+  }
+  return out;
+}
 // The login fields: Shared or Own, whose, username, password, 2FA key and, for shared, who can use it.
 function twLoginFields(canShare: boolean): string {
   const holders = twHolders();
@@ -424,15 +469,14 @@ function twLoginFields(canShare: boolean): string {
     <label>Username<input name="username" maxlength="250" autocomplete="off" spellcheck="false" autocapitalize="off"></label>
     <label>Password<input name="password" type="password" autocomplete="new-password" spellcheck="false"></label>
     <label>2FA key (optional)<input name="totp" type="password" autocomplete="off" spellcheck="false" placeholder="Setup key or otpauth:// link"></label>
-    ${canShare ? `<div class="tw-who-field" data-tw-shared><label>Who can use it<select data-tw-who-pick aria-label="Who can use it"><option value="">Add…</option>${twWhoOptions(new Set())}</select></label>
-      <div class="tw-chips" data-tw-chips></div></div>` : ''}`;
+    ${canShare ? `<div class="tw-who-field" data-tw-shared><span class="tw-who-k">Who can use it</span>${whoPickerHTML({label: 'Who can use it'})}
+      <div class="tw-access" data-tw-picked></div></div>` : ''}`;
 }
 // Binds the Shared/Own switch and the who-can-use-it picker; returns the picked subjects.
 function twLoginBind(dialog: HTMLDialogElement): Set<string> {
   const picked = new Set<string>();
   const kind = dialog.querySelector<HTMLInputElement>('[name=kind]'), own = dialog.querySelector<HTMLElement>('[data-tw-own]');
-  const shared = dialog.querySelector<HTMLElement>('[data-tw-shared]'), chips = dialog.querySelector<HTMLElement>('[data-tw-chips]');
-  const pick = dialog.querySelector<HTMLSelectElement>('[data-tw-who-pick]');
+  const shared = dialog.querySelector<HTMLElement>('[data-tw-shared]'), rows = dialog.querySelector<HTMLElement>('[data-tw-picked]');
   dialog.querySelectorAll<HTMLButtonElement>('[data-tw-kind]').forEach(b => {
     b.onclick = () => {
       const k = b.dataset.twKind || 'shared';
@@ -442,16 +486,16 @@ function twLoginBind(dialog: HTMLDialogElement): Set<string> {
       if (shared) shared.hidden = k === 'own';
     };
   });
-  const paint = () => {
-    if (chips) chips.innerHTML = [...picked].map(s => `<span class="tw-chip" data-tw-chip="${esc(s)}">${twWhoFace(s)}<span>${esc(twWhoLabel(s))}</span>
-      <button type="button" class="ghost tt-x" data-tw-unpick="${esc(s)}" aria-label="Remove ${esc(twWhoLabel(s))}" title="Remove">×</button></span>`).join('');
-    if (pick) pick.innerHTML = `<option value="">Add…</option>${twWhoOptions(picked)}`;
-  };
-  if (pick) pick.onchange = () => { if (pick.value) { picked.add(pick.value); paint(); } };
-  if (chips) chips.onclick = ev => {
+  if (!shared || !rows) return picked;
+  let groups = new Map<string, TwGroup>();
+  const chosen = () => [...picked].map(s => twWhoOf(s, groups));
+  const paint = () => { rows.innerHTML = picked.size ? twWhoRows(chosen(), 'data-tw-unpick') : ''; };
+  const picker = whoPickerWire(shared, {candidates: () => twCandidates(chosen(), groups), onPick: c => { picked.add(c.subject); paint(); }});
+  rows.onclick = ev => {
     const s = eventElement(ev)?.closest<HTMLElement>('[data-tw-unpick]')?.dataset.twUnpick;
-    if (s) { picked.delete(s); paint(); }
+    if (s) { picked.delete(s); paint(); picker?.input.focus(); }
   };
+  void twGroups().then(g => { groups = g; paint(); picker?.refresh(); });
   return picked;
 }
 // The account's write: the login, then each grant. A grant that fails leaves the account; the toast says so.
@@ -518,36 +562,32 @@ function twReplaceDialog(state: TwState, a: TwAccount): void {
     await twRedraw(state);
   });
 }
-// Who can use it (a shared account): each change is saved at once.
+// Who can use it (a shared account): each change is saved at once, and the rows repaint from the account's access the
+// answer carries. The picker at the top; the only button is Done.
 function twAccessDialog(state: TwState, a: TwAccount): void {
-  const dialog = whDialog('Who can use it', `<div class="tw-access" data-tw-access></div>
-    <label>Add<select data-tw-access-pick aria-label="Add"></select></label>`);
+  const dialog = whDialog('Who can use it', `${whoPickerHTML({label: 'Add a person, bot or group'})}<div class="tw-access" data-tw-access></div>`, '', {close: 'Done'});
   dialog.classList.add('tw-access-dialog');
-  let access = [...(a.access || [])];
-  const list = dialog.querySelector<HTMLElement>('[data-tw-access]'), pick = dialog.querySelector<HTMLSelectElement>('[data-tw-access-pick]');
+  let access = [...(a.access || [])], groups = new Map<string, TwGroup>();
+  const list = dialog.querySelector<HTMLElement>('[data-tw-access]');
   const err = dialog.querySelector<HTMLElement>('[data-wh-error]');
-  const paint = () => {
-    if (list) list.innerHTML = access.length ? access.map(w => `<div class="tw-access-row" data-tw-access-row="${esc(w.subject)}">${twFace(w)}<span>${esc(twName(w))}</span>
-      <button type="button" class="ghost tt-x" data-tw-revoke="${esc(w.subject)}" aria-label="Remove ${esc(twName(w))}" title="Remove">×</button></div>`).join('')
-      : '<p class="muted">Nobody yet.</p>';
-    if (pick) pick.innerHTML = `<option value="">Add…</option>${twWhoOptions(new Set(access.map(w => w.subject)))}`;
-  };
+  const paint = () => { if (list) list.innerHTML = twWhoRows(access, 'data-tw-revoke'); };
   const save = async (subject: string, on: boolean) => {
     if (err) err.textContent = '';
     try {
-      await put(twAcctPath(state.id, a.id, '/access/' + encodeURIComponent(subject)), {on});
-      const [kind, id = ''] = subject.split(/:(.*)/s);
-      access = on ? [...access, {subject, kind: kind === 'bot' ? 'bot' : 'person', id, name: twWhoLabel(subject)}] : access.filter(w => w.subject !== subject);
+      const said: {access?: TwWho[]} | null = await put(twAcctPath(state.id, a.id, '/access/' + encodeURIComponent(subject)), {on});
+      access = Array.isArray(said?.access) ? said.access : on ? [...access, twWhoOf(subject, groups)] : access.filter(w => w.subject !== subject);
       paint();
+      picker?.refresh();
     } catch (e) { if (err) err.textContent = errorMessage(e, 'Try again'); }
   };
-  if (pick) pick.onchange = () => { if (pick.value) void save(pick.value, true); };
+  const picker = whoPickerWire(dialog, {candidates: () => twCandidates(access, groups), onPick: c => save(c.subject, true)});
   if (list) list.onclick = ev => {
     const s = eventElement(ev)?.closest<HTMLElement>('[data-tw-revoke]')?.dataset.twRevoke;
     if (s) void save(s, false);
   };
   dialog.addEventListener('close', () => void twRedraw(state));
   paint();
+  void twGroups().then(g => { groups = g; picker?.refresh(); });
 }
 
 function toolWebsiteStop(): void {

@@ -8012,7 +8012,12 @@ SCHEMAS['ToolIndexRow'] = obj(
         'detail': 's',
         'way': 's',
         'status': TOOL_STATUS,
-        'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's', 'initials': 's'})),
+        'who': items(
+            obj(
+                {'kind': {'enum': ['bot', 'person', 'group']}, 'id': 's', 'name': 's', 'initials': 's', 'members': 'i'},
+                required=['kind', 'id', 'name', 'initials'],
+            )
+        ),
         'who_total': 'i',
         'needs_you': 'b',
         'href': 's',
@@ -8195,8 +8200,19 @@ STABLE.extend(
             'put',
             'Tools',
             'setWebsiteAccountAccess',
-            'Give a shared account to a person or a bot, or take it away (on: false)',
+            'Give a shared account to a person, a bot or a group (group:<id>, credential administrators; every person '
+            'and bot in it and in the groups under it uses it), or take it away (on: false). Answers the account\'s '
+            'whole access list',
             'WebsiteAccountAccessSet',
+        ),
+        (
+            '/api/v2/website-tools/groups',
+            'get',
+            'Tools',
+            'listWebsiteToolGroups',
+            'Each group with its member count and its people and bots (actors), nested groups included, for Who can use '
+            'it (credential administrators)',
+            'WebsiteToolGroups',
         ),
         (
             '/api/v2/website-tools/{tool_id}/accounts/{account_id}/code',
@@ -8213,7 +8229,22 @@ WEBSITE_WHO = obj({'subject': 's', 'kind': {'enum': ['person', 'bot']}, 'id': 's
 SCHEMAS['WebsiteToolCreated'] = obj({'id': 's'})
 SCHEMAS['WebsiteDeleted'] = obj({'deleted': 'b', 'id': 's'})
 SCHEMAS['WebsiteAccountSaved'] = obj({'id': 's'})
-SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b'})
+# One row of an account's Who can use it: a person, a bot or (to an administrator) a granted group with its member count.
+# `via` names the granted groups a person or bot granted directly is also in.
+WEBSITE_ACCESS = obj(
+    {
+        'subject': 's',
+        'kind': {'enum': ['person', 'bot', 'group']},
+        'id': 's',
+        'name': 's',
+        'initials': 's',
+        'members': 'i',
+        'via': items(_t('s')),
+    },
+    required=['subject', 'kind', 'id', 'name', 'initials'],
+)
+SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b', 'access': items(WEBSITE_ACCESS)})
+SCHEMAS['WebsiteToolGroups'] = items(obj({'id': 's', 'name': 's', 'members': 'i', 'actors': items(_t('s'))}))
 SCHEMAS['WebsiteCode'] = obj({'code': 's', 'expires_in': 'i'})
 SCHEMAS['WebsiteToolSettings'] = obj(
     {'id': 's', 'name': 's', 'kind': {'enum': ['website']}, 'sites': items(_t('s')), 'central_only': 'b'}
@@ -8244,7 +8275,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'has_password': 'b',
                     'has_totp': 'b',
                     'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
-                    'access': items(WEBSITE_WHO),
+                    'access': items(WEBSITE_ACCESS),
                     'session': obj(
                         {
                             'state': {'enum': ['needs_you', 'in_use', 'unknown']},
