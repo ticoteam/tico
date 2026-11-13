@@ -2396,6 +2396,12 @@ class AccessLimits(Contract):
     on_behalf_of: ID | None = None
 
 
+class PageOwnerSet(Contract):
+    """A page's owner (backend/page_owners.py): a bot's id or slug, or null for no owner (the page has no Chat)."""
+
+    bot: str | None = None
+
+
 class AccessRules(Contract):
     """Team rules the owner tightens (backend/team_rules.py); only what is sent changes."""
 

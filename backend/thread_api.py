@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import delivery, org_rule_check, reach, teammate_access, thread_rail, thread_search, threads
+from . import delivery, org_rule_check, page_owners, reach, teammate_access, thread_rail, thread_search, threads
 from .store import H, Problem
 
 # How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
@@ -113,6 +113,7 @@ def _delivery_words(body):
     if body.delivery and getattr(body, "kind", "say") != "say":
         raise Problem("delivery", "delivery goes with a plain message (kind say)", 422)
     refs = getattr(body, "refs", None) or {}
+    page_owners.check_from(refs)  # a message written on a page names it and what was open there
     # The way's marks are the route's own (threads.WAY_KEYS): a client never writes them. A refs.delivery a client
     # sends with no `delivery` goes as it always did; beside a named way it would contradict it.
     if any(k in refs for k in threads.WAY_KEYS):
