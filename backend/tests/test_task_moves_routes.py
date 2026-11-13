@@ -315,7 +315,13 @@ def test_an_unrelated_reader_cannot_finish_or_hand_over_through_the_owners_done(
 
 
 def ask(api, tid, to="ben", line="OK to book the barn?", kind="ok", token="ana-test"):
-    body = {"to": to, "line": line, "kind": kind, "version": show(api, tid)["version"], "why": "It sets what goes out on launch day."}
+    body = {
+        "to": to,
+        "line": line,
+        "kind": kind,
+        "version": show(api, tid)["version"],
+        "why": "It sets what goes out on launch day.",
+    }
     r = api.post(f"/api/v2/tasks/{tid}/asks", json=body, headers=headers(token))
     assert r.status_code == 200, r.text
     return r.json()["requirement_id"]

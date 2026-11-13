@@ -186,6 +186,18 @@ def warn_on(gate: Row | None, text: str) -> str:
     return org_rule_check.warned_text(gate, text) if gate and gate.get("warn") else text
 
 
+class Place:
+    """A task write's place, read inside the check (`place_for`). `asks_person` says, before it is read, that the write
+    is a bot's question to a person (org_rule_check.asking): no other write pays for a `kind:ask` rule."""
+
+    def __init__(self, row: Row | None, ask: bool) -> None:
+        self.row, self.asks_person = row, ask
+
+    def __call__(self, c: Any, author: Any, recipients: Any) -> Any:
+        found: Row = org_rule_check.place_for(c, author, recipients, (self.row or {}).get("conversation_id") or "")
+        return {**found, "ask": True} if self.asks_person else found
+
+
 class TaskRules:
     """The check of a task write, built once per app (backend/app.py) from its rule check and audience."""
 
@@ -210,16 +222,10 @@ class TaskRules:
         return self.rule_task_audience(c, row, who.actor, "", *extra, *(also(c) if also else ()))
 
     @staticmethod
-    def place(row: Row | None, ask: bool = False) -> Callable[[Any, Any, Any], Any]:
+    def place(row: Row | None, ask: bool = False) -> "Place":
         """A task write's place, as `where:` reads it: its task's conversation, the thread its comments are in. `ask`:
         it is a bot's question to a person, which a `kind:ask` rule meets (the built-in "Asks to a person")."""
-
-        def place(c: Any, author: Any, recipients: Any) -> Any:
-            found: Row = org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
-            return {**found, "ask": True} if ask else found
-
-        setattr(place, "asks_person", ask)  # org_rule_check.asking reads it before the place is read
-        return place
+        return Place(row, ask)
 
     def check(
         self,
