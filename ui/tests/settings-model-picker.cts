@@ -114,7 +114,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await closedText(cell(page, 'researcher')), 'Haiku 5.5 MED 150K');
     assert.equal(await closedText(cell(page, 'analyst')), 'Opus 5.5 MED 600K');
     // AC-7: no window for a harness that does not compact.
-    assert.equal(await closedText(cell(page, 'reviewer')), 'Gpt 6 sol MED');
+    assert.equal(await closedText(cell(page, 'reviewer')), 'GPT 6 Sol MED');
     assert.match((await cell(page, 'assistant').locator('[data-choice-open]').getAttribute('aria-label'))!, /^Model for Assistant: Claude Code, opus 5.5, medium effort, compacts at 400k$/);
     assert.deepEqual(await page.locator('[data-bot-choice][data-kind=model] .sb-pick-text').evaluateAll(texts => texts.filter(t => t.scrollWidth > t.clientWidth).map(t => t.textContent)), [],
       'the whole model, effort and window show in the table');

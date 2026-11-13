@@ -59,7 +59,13 @@ function settingsCompactDefault(id: string | null | undefined) {
 const settingsSizeWords = (size: number | null | undefined) => modelContextWords(size);
 const settingsEffortShort = (effort: string | null | undefined) => effort === 'as-configured' ? ''
   : ({low: 'LOW', medium: 'MED', high: 'HIGH', xhigh: 'XHIGH', max: 'MAX'} as Record<string, string>)[String(effort)] || String(effort || '').toUpperCase();
-const settingsModelShort = (id: string) => { const name = settingsModelName(id); return name.charAt(0).toUpperCase() + name.slice(1); };
+// A model as the closed button reads it: "Opus 5.5", "GPT 6 Luna" (format.ts modelWords, without the Claude family name the
+// model already says); a Gateway tier or an id modelWords returns as it is keeps the catalog's name, first letter raised.
+const settingsModelShort = (id: string) => {
+  const read = settingsTierParse(id) ? '' : modelWords(id), words = read && read !== id ? read.replace(/^Claude /, '') : '';
+  const name = words || settingsModelName(id);
+  return name.charAt(0).toUpperCase() + name.slice(1);
+};
 const settingsHarnessShort = (id: string) => (settingsHarnessName(id) || id).replace(/\s*\(.*\)$/, '');
 
 // What a box's pick reads as: `short` on the closed button ("Opus 5.5 MED 400K", "Same as bot 150K") and `long` for
