@@ -726,7 +726,7 @@ def prime_page_references(c, values):
 
 
 def _primed_names_none(c, value):
-    """Whether every string in `value` was primed in this snapshot and names no page, so it names none."""
+    """Whether every string in `value` was primed in this snapshot and none of them names a page."""
     primed = _memo(c, "primed_page_strings")
     if not primed:
         return False
