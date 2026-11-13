@@ -187,6 +187,9 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
           }
           assert.equal(seen.filter(n => n.name === 'Conversion Rate Optimization Owner').length, 2, `${theme} ${width}px: both deep seats listed`);
           if (width === 236) {
+            // A short name with room stays on one line: the words are not stacked (a global .nm is a flex column).
+            for (const short of ['Firmware Engineer', 'Growth Manager'])
+              assert.equal(seen.find(n => n.name === short)!.lines, 1, `${theme} 236px: "${short}" is one line`);
             const pdm = seen.find(n => n.name.startsWith('Partnerships Development Manager'))!;
             assert.ok(pdm.lines >= 2, 'a long name wraps rather than being cut');
           }

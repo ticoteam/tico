@@ -212,10 +212,11 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 .tree .node.seat .seat-word .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.tree .nm{min-width:0;white-space:normal;overflow-wrap:break-word;line-height:1.25}
+.tree .nm{display:block;min-width:0;white-space:normal;overflow-wrap:break-word;line-height:1.25}
 /* A name wraps between words and is never cut, at any depth and at the 200px minimum: no line clamp, so a long title
    deep in the tree takes a fourth line rather than ending in "…" (rc.31 clamped two seats three levels down). Its marks
-   ride its last word (ui/app/sidebar.ts treeName), so a mark never sits alone on a line. */
+   ride its last word (ui/app/sidebar.ts treeName), so a mark never sits alone on a line. display:block because
+   thread-rail.css's global .nm is a flex column, which would stack the name's words one per line. */
 .tree .nm-end{white-space:nowrap}
 /* overflow:hidden puts an inline-block's baseline at its bottom edge, so the icon font's tall line box never makes the
    name's line taller than the clamp allows (the onboarding gear did: 35px in a 33px name). */
