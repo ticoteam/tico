@@ -62,6 +62,8 @@ def test_runs_that_only_lapse_go_to_botops_and_pause_the_task(api):
     [review] = botops_tasks(api)
     assert review["title"] == "Find why ops's runs can't start" and review["status"] == "open"
     assert start_holds.LAPSED_WHY in review["body"] and "Review the negate PR" in review["body"]
+    # Worded for silence, not as SAME hand-backs that each gave a reason.
+    assert f"took {execution.PRE_START_TRIES} runs" in review["body"] and "handed back" not in review["body"]
     # Nobody is asked to fix the computer: BotOps has it, and the bot is not shown as crashed.
     line = get(api, "status?bot=ops")["status"]
     assert line["state"] == "idle"
@@ -123,3 +125,24 @@ def test_a_bot_page_reads_its_own_runs_past_the_companys_newest(api):
     assert attempt["id"] not in [x["id"] for x in api.get("/api/runs", headers=headers).json()]
     mine = api.get("/api/runs", params={"bot": "ops"}, headers=headers).json()
     assert attempt["id"] in [x["id"] for x in mine] and {x["bot"] for x in mine} == {"ops"}
+
+
+def test_a_run_cut_by_tico_itself_is_not_called_the_computers_silence(api):
+    machine, _, attempt = start(api, botops=False)
+    with api.app.state.store.transaction() as c:
+        assert execution.flag_cut(c, "update") == 1
+    lapse(api, machine, attempt, wait_over=False)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] is None
+        [detail] = [
+            json.loads(r[0])
+            for r in c.execute(
+                "SELECT detail FROM events WHERE action='attempt.expired' AND target=?", (attempt["id"],)
+            )
+        ]
+    assert "cause" not in detail
+    # Nor does it count toward the wait: the next lapse is the first the computer caused, and goes out again at once.
+    again = claim(api, machine)
+    assert again and again["job_id"] == attempt["job_id"]
+    lapse(api, machine, again, wait_over=False)
+    assert claim(api, machine)["job_id"] == attempt["job_id"]

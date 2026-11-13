@@ -3136,13 +3136,25 @@ def failed_starts(c, job_id):
     A drain's pause event can arrive before its completion, so it excuses a lapsed lease on its own."""
     return c.execute(
         "SELECT count(*) FROM attempts a WHERE a.job_id=? AND a.started_at IS NULL "
-        "AND a.state='expired' AND a.finished_at>=? "
-        "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) "
-        "AND NOT coalesce(json_extract(a.result,'$.yielded'),0) "
-        "AND NOT EXISTS(SELECT 1 FROM attempt_events e WHERE e.attempt_id=a.id AND e.kind='status' "
-        "AND json_type(e.payload,'$.yielded')='text' AND trim(json_extract(e.payload,'$.yielded'))!='')",
+        "AND a.state='expired' AND a.finished_at>=? AND " + NOT_EXCUSED_SQL,
         (job_id, H.shift(H.now(), hours=-PRE_START_WINDOW_HOURS), UPDATE_CUT),
     ).fetchone()[0]
+
+
+# A missed start of attempt `a` that its computer caused: not a hub cut (UPDATE_CUT, bound as the one parameter) and
+# not a planned yield. Shared by failed_starts and the expiry's silent-lapse label, so a Tico update is never logged
+# as the computer's fault.
+NOT_EXCUSED_SQL = (
+    "NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) "
+    "AND NOT coalesce(json_extract(a.result,'$.yielded'),0) "
+    "AND NOT EXISTS(SELECT 1 FROM attempt_events e WHERE e.attempt_id=a.id AND e.kind='status' "
+    "AND json_type(e.payload,'$.yielded')='text' AND trim(json_extract(e.payload,'$.yielded'))!='')"
+)
+
+
+def computer_missed(c, aid):
+    """Whether run `aid` missed its start through its computer, by the same rule failed_starts counts."""
+    return bool(c.execute("SELECT 1 FROM attempts a WHERE a.id=? AND " + NOT_EXCUSED_SQL, (aid, UPDATE_CUT)).fetchone())
 
 
 def handed_back_until(c, job):
@@ -4202,8 +4214,10 @@ class Execution:
                 gateway_connection.forget(c, row["id"])
                 botops = False
                 lapsed = row["state"] == "leased" and state == "queued" and not benched
-                if lapsed:
-                    # Never started and never handed back: say so on the run (Runs, run_diagnostics.reason) and in the log.
+                silent = lapsed and computer_missed(c, row["id"])
+                if silent:
+                    # Never started and never handed back, and not cut by Tico itself: say so on the run (Runs,
+                    # run_diagnostics.reason) and in the log.
                     c.execute("UPDATE attempts SET final_text=? WHERE id=?", (LAPSED + ".", row["id"]))
                     logging.getLogger("tico.execution").warning(
                         "run %s of %s never started on runner %s (%s)",
@@ -4212,6 +4226,7 @@ class Execution:
                         row["runner_id"],
                         UNSTARTED_CATEGORIES[LAPSED],
                     )
+                if lapsed:
                     tries = failed_starts(c, row["job_id"])
                     if tries >= PRE_START_TRIES:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
@@ -4329,7 +4344,7 @@ class Execution:
                     H.KEEPER,
                     "attempt.expired",
                     row["id"],
-                    {"job_state": state, **({"cause": UNSTARTED_CATEGORIES[LAPSED]} if lapsed else {})},
+                    {"job_state": state, **({"cause": UNSTARTED_CATEGORIES[LAPSED]} if silent else {})},
                 )
 
     def tell_held(self, c, row, facts):

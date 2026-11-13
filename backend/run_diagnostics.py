@@ -22,7 +22,8 @@ HANDED_BACK = 'Its computer handed the run back before starting it'
 # (Tico Team, Nov 12: the shared machine did this to Performance Owner ~344 times in a day). Its expiry saves this as
 # the run's final_text (execution.expire), as hand_back saves HANDED_BACK.
 LAPSED = 'Its computer took the run and never started it, renewed its lease or handed it back'
-# Why a run never started, as one word for logs, events and Runs: told apart by the text above (start_holds.cause).
+# Why a run never started, as one word for logs and events: told apart by the text above (run_diagnostics.reason,
+# execution.handed_back_until).
 UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
 
 
