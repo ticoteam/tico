@@ -461,6 +461,9 @@ class DocEdit(M.Contract):
     locked: bool | None = None
     archived: bool | None = None
     note: str = Field(default="", max_length=300)
+    # A bot's write without the version it read (`tico doc write` without --base-version): it may replace only its
+    # own latest version, never one someone else saved (docs/docs.md).
+    own_version_only: bool = False
 
 
 class DocRestore(M.Contract):
@@ -485,6 +488,18 @@ class LinkEdit(M.Contract):
     description: str | None = Field(default=None, max_length=300)
     url: str | None = Field(default=None, min_length=1, max_length=2000)
     archived: bool | None = None
+
+
+# A bot's write refused so that it never replaces a version it did not read; each is recorded (docs.write_refused).
+REFUSED_WRITES = ("version_conflict", "base_version_required", "path_taken")
+
+
+def bot_write(who, body, refused):
+    """What a bot's text write records for the Docs measures: whether it sent the version it read, how it wrote and
+    whether it was refused. Empty for a person's write or a change that sends no text."""
+    if not H.is_bot(who.actor) or getattr(body, "body", None) is None:
+        return {}
+    return {"base_version": not getattr(body, "own_version_only", True), "mode": "whole", "refused": refused}
 
 
 def link_row(c, link_id):
@@ -677,11 +692,14 @@ class Docs:
                 raise Problem("forbidden", "Only an owner or bot administrator can lock or unlock a doc", 403)
             if row["locked"] and not self.admin(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
-            if body.version != row["version"]:
+            mine_only = body.own_version_only and row["updated_by_id"] != who.actor
+            if body.version != row["version"] or mine_only:
                 names = label_names(c, [row["updated_by_id"]])
                 raise Problem(
-                    "version_conflict",
-                    "Someone changed this doc after you opened it. Reload to see their "
+                    "base_version_required" if body.version == row["version"] else "version_conflict",
+                    "Someone else saved the latest version of this doc. Read it and send the version you read."
+                    if body.version == row["version"]
+                    else "Someone changed this doc after you opened it. Reload to see their "
                     "version, then apply your change to it.",
                     409,
                     extra={
@@ -727,7 +745,7 @@ class Docs:
                     who.actor,
                     "docs.archived" if archived and not row["archived"] else "docs.updated",
                     row["id"],
-                    {"path": path, "version": fresh["version"]},
+                    {"path": path, "version": fresh["version"], **bot_write(who, body, refused=False)},
                 )
                 if archived and not row["archived"]:
                     self.remove_index_source(c, row, who.actor)
@@ -1077,9 +1095,24 @@ def install_docs(app, store, auth, mutate):
     ):
         return docs.listing(request.state.identity, path_prefix.strip().lstrip("/"), limit, cursor, archived)
 
+    def refusals_recorded(request, body, target, write):
+        """`write`, with a bot's refusal recorded after its transaction rolled back (bot_write)."""
+        try:
+            return write()
+        except Problem as exc:
+            who = request.state.identity
+            detail = bot_write(who, body, refused=True)
+            if detail and exc.code in REFUSED_WRITES:
+                path = getattr(body, "path", None) or ""
+                with store.transaction() as c:
+                    H.event(c, who.actor, "docs.write_refused", target, {"code": exc.code, "path": path, **detail})
+            raise
+
     @app.post("/api/v2/docs")
     def create_doc(request: Request, body: DocCreate):
-        return mutate(request, body, docs.create(request, body))
+        return refusals_recorded(
+            request, body, (body.path or "").strip(), lambda: mutate(request, body, docs.create(request, body))
+        )
 
     @app.get("/api/v2/docs/search")
     def search_docs(
@@ -1183,7 +1216,7 @@ def install_docs(app, store, auth, mutate):
     @app.patch("/api/v2/docs/{doc_id}")
     def edit_doc(request: Request, doc_id: str, body: DocEdit):
         read_only(doc_id)
-        return mutate(request, body, docs.edit(request, doc_id, body))
+        return refusals_recorded(request, body, doc_id, lambda: mutate(request, body, docs.edit(request, doc_id, body)))
 
     @app.get("/api/v2/docs/{doc_id}/versions")
     def doc_versions(request: Request, doc_id: str):

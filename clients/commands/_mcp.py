@@ -17,6 +17,8 @@ BY_NAME = {t["name"]: t for t in TOOLS}
 # What a task engine refusal carries beside its rule and detail (docs/dev/pipelines-v3-cutover.md, HTTP): what is
 # missing and the commands allowed next, or the version the task has now. A bot reads them to act instead of retrying.
 REFUSAL_FIELDS = ("missing", "next", "version")
+# Who saved the version a refused doc write did not read (clients/commands/content.py docs_write).
+CONFLICT_FIELDS = ("updated_by_name", "updated_at")
 
 
 def error_payload(exc):
@@ -27,7 +29,7 @@ def error_payload(exc):
         "detail": getattr(exc, "detail", str(exc)),
         "retryable": bool(getattr(exc, "retryable", False)),
         "operation_id": getattr(exc, "operation_id", None),
-        **{k: extra[k] for k in REFUSAL_FIELDS if extra.get(k) not in (None, [])},
+        **{k: extra[k] for k in REFUSAL_FIELDS + CONFLICT_FIELDS if extra.get(k) not in (None, [])},
     }
 
 
