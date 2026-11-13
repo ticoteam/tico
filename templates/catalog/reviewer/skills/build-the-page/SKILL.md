@@ -46,7 +46,7 @@ opening).
 
 Name each file `shots/<screen>-<before|after>-<390|1280>.png` (for validation, `shots/<screen>-<390|1280>.png`).
 
-- **Production, as it is today** (a spec's before, every validation picture): the read-only view, signed in as
+- **Production, as it is today** (every validation picture; a spec's before only where no demo runs): the read-only view, signed in as
   yourself.
 
       tico bot app-shot /#/<screen> --width 390 --out shots/<screen>-before-390.png
@@ -61,6 +61,10 @@ Name each file `shots/<screen>-<before|after>-<390|1280>.png` (for validation, `
 
   It writes `<page>-<width>-before.png` and `<page>-<width>-after.png` at desktop 1440 px and phone 390 px for the
   pages the branch's `ui/` files draw; use those names in `data-shot`.
+
+  The demo's desktop pictures are 1440 px wide; production's are 1280. A before and after pair comes from one source,
+  so both sides match: for a spec, take both from the demo (before on `origin/main`, after on your branch), and name
+  them `-1440` instead of `-1280`. Never pair a 1280 production before with a 1440 demo after.
 
   For a spec, nothing is built yet: make a local branch, apply the smallest change that shows the result (the copy,
   the layout, the new row), run the demo and take the after picture. That branch is never pushed. Where the change is
@@ -95,7 +99,8 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
    `check` names each rule the page breaks: the opening, the sections, a picture that is not a screenshot, a picture
    in the details, a placeholder left, a request to test, filler, length. Fix each and build again.
 4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--spec` for a spec. It
-   prints the file id and anything it removed; anything removed is a fault to fix.
+   prints the file id and anything it removed. Anything of yours removed is a fault to fix; with `--spec`, Tico's own
+   fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are not a fault.
 5. Render the published page and look at it:
 
        python3 skills/build-the-page/page.py render <file id> --kind <kind>

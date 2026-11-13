@@ -224,7 +224,7 @@ def render(file_id, kind, out):
     if read.returncode:
         sys.exit("render: tico file read failed: " + read.stderr.strip())
     text = json.loads(read.stdout)["text"]
-    out = Path(out or tempfile.mkdtemp(prefix="page-render-"))
+    out = Path(out or tempfile.mkdtemp(prefix="page-render-")).resolve()  # as_uri() needs an absolute path
     out.mkdir(parents=True, exist_ok=True)
     page = out / "published.html"
     page.write_text(text)
