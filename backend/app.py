@@ -344,21 +344,38 @@ def create_app(settings=None):
                 stopping=stop.is_set,
             ).start()
             scheduler.drains = workers
-            try:
-                await run_passes(scheduler, recorded, release_check)
-            finally:
-                # No new claims; a call already started finishes within its own timeout.
-                await asyncio.to_thread(workers.stop, 75)
+            # The steps that call GitHub, and the release check and update feeds, on a worker of their own beside
+            # this loop (backend/heartbeat.py `Outside`): a slow GitHub never holds up a due time or a recovery.
+            from . import heartbeat
 
-        async def run_passes(scheduler, recorded, release_check):
+            outside = heartbeat.Outside(
+                scheduler,
+                app=app,
+                telemetry=telemetry,
+                also=lambda: recorded("release_check", release_check),
+                stopping=stop.is_set,
+            ).start()
+            scheduler.outside = outside
+            try:
+                await run_passes(scheduler)
+            finally:
+                # No new claims or passes; a call already started finishes within its own timeout.
+                outside.stop.set()
+                await asyncio.to_thread(workers.stop, 75)
+                await asyncio.to_thread(outside.halt, 15)
+
+        async def run_passes(scheduler):
             from . import heartbeat
 
             rest = heartbeat.Rest()
             while not stop.is_set():
-                # The Heartbeat (backend/heartbeat.py): GitHub sync, personal alerts, the tick's due-time and recovery
-                # steps, repository waits and call sweeps, in that order, each on its own (one failing never stops
-                # the next; each goes to telemetry as before).
+                # The Heartbeat (backend/heartbeat.py): personal alerts, the tick's due-time and recovery steps and the
+                # call sweeps, in that order, each on its own (one failing never stops the next; each goes to
+                # telemetry as before). The outside polls' worker is asked for its pass at the beat's time first, so
+                # it runs beside the beat and never more than one pass at a time.
                 ctx = heartbeat.Context(scheduler, app=app, telemetry=telemetry)
+                if scheduler.outside is not None:
+                    scheduler.outside.wake(ctx.at)
                 try:
                     await asyncio.to_thread(heartbeat.beat, ctx)
                 except Exception as exc:
@@ -368,7 +385,9 @@ def create_app(settings=None):
                 if rest.due(ctx):
                     try:
                         await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
-                        await asyncio.to_thread(recorded, "release_check", release_check)
+                        if scheduler.outside is not None:
+                            # The release check, here only while the worker's thread is dead.
+                            await asyncio.to_thread(scheduler.outside.rest_fallback)
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging

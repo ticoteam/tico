@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS credentials(
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
  tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT,
- has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT);
+ has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT, has_password INTEGER NOT NULL DEFAULT 1);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,

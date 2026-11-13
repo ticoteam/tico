@@ -2542,3 +2542,28 @@ def test_app_view_cli_sends_on_off_as_booleans_and_app_shot_keeps_the_token_off_
     assert command[2] == 'https://team.example/#/tasks' and command[4] == '390'
     assert 'tico_av_secret' not in ' '.join(command) and env['TICO_VIEW_TOKEN'] == 'tico_av_secret'
     assert out['view'] == 'v1' and out['read_only'] is True
+
+
+def test_a_growth_read_prints_the_next_setup_step_or_who_may_and_nothing_once_set_up():
+    from clients import remotecli
+
+    nxt = {
+        "step": "month",
+        "number": 4,
+        "says": "Add Search ads's first month: spend and new customers.",
+        "command": "tico growth cohort set --channel search-ads --month 2026-10 --spend <spend> --new <new customers>",
+        "you_may": True,
+    }
+    setup = {"done": False, "steps": [], "next": nxt}
+    out = remotecli.growth_text("growth cohort list", {"cohorts": [], "you_may": {}, "setup": setup})
+    assert out.splitlines() == [
+        "No months yet.",
+        "Next (step 4 of 4): Add Search ads's first month: spend and new customers.",
+        "  " + nxt["command"],
+    ]
+    who = [{"ref": "human:ana", "name": "Ana"}, {"ref": "human:ben", "name": "Ben"}]
+    setup["next"] = {**nxt, "you_may": False, "who_may": who, "bots_may": True}
+    out = remotecli.growth_text("growth economics", {"month": None, "rows": [], "setup": setup})
+    assert out.splitlines()[-1] == "  Only the owner, an admin or a bot can: Ana, Ben."
+    done = remotecli.growth_text("growth channel list", {"channels": [], "setup": {"done": True}, "you_may": {}})
+    assert done == "No channels yet."

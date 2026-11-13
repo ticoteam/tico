@@ -455,6 +455,7 @@ def _setup(c, cal):
     opened = cal.opening()
     FA.ensure_setup(c, CONTENT["owner_email"], cal.at(opened, hour=8))
     bookkeeper.grant_defaults(c)
+    bookkeeper.seed_bot_payment_rule(c, cal.at(opened, hour=8))  # as an install: a bot's payment asks a finance admin
     # The Finance Owner sees the books by default, before its first entry: a journal line on an account the poster
     # cannot see is refused (handlers.may_write).
     if bookkeeper.grant_view(c, OWNER, cal.at(opened, hour=8)) is None:

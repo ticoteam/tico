@@ -3,6 +3,9 @@
 .tk-row{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;border-radius:6px;cursor:pointer;color:var(--ink)}
 .tk-row:hover,.tk-row:focus-visible{background:var(--hover)}
 .tk-row .tk-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-two{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px}
+.tk-two .tk-title{flex:none}
+.tk-ask{color:var(--muted);font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tk-row-dim{color:var(--muted)}
 .tk-after{display:flex;gap:6px;flex:none}
 .tk-who{flex:none;display:inline-flex;width:18px;justify-content:center}

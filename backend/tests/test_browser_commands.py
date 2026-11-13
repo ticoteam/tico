@@ -13,6 +13,7 @@ import types
 import pytest
 
 from backend import browser_commands as bc
+from backend import website_tools as real_tools
 from backend.store import Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
 
@@ -28,6 +29,7 @@ class Tools(types.ModuleType):
     def __init__(self):
         super().__init__("backend.website_tools")
         self.central_only = False
+        self.has_password = True
         self.logs = []
 
     def _picked(self):
@@ -38,9 +40,12 @@ class Tools(types.ModuleType):
             "sites": ["acme.example"],
             "central_only": self.central_only,
             "username": "robot",
+            "has_password": self.has_password,
             "has_totp": True,
             "holder": None,
         }
+
+    require_value = staticmethod(real_tools.require_value)
 
     def pick(self, conn, who, site):
         if site not in ("acme.example", "Acme"):
@@ -283,6 +288,23 @@ def test_fill_sends_the_value_to_the_computer_only(setup, tools):
     r = done(thread, box)
     assert r.status_code == 422 and r.json()["error"]["code"] == "not_on_site" and PASSWORD not in r.text
     assert tools.logs[-1][1:] == ("fill", "acme.example/home", "central", "refused")
+
+
+def test_an_account_with_no_password_is_refused_before_the_browser_is_held(setup, tools):
+    s = setup
+    tools.has_password = False
+    for verb in ("fill", "copy"):
+        r = now(s, s.ops, verb, {"field": "password"})
+        error = r.json()["error"]
+        assert (r.status_code, error["code"]) == (409, "no_password"), r.text
+        assert 'tico browser needs-you acme.example "Sign in to acme.example"' in error["detail"]
+    assert queued() == [] and "acct1" not in bc.MAILBOX.holds
+    # The username still fills, and another bot finds the account free.
+    thread, box = call(s, s.finance, "fill", {"field": "username"})
+    [cmd] = collect(s, s.host)
+    assert cmd["value"] == "robot"
+    report(s, s.host, cmd)
+    assert done(thread, box).status_code == 200
 
 
 def test_copy_runs_on_the_callers_computer_and_not_for_central_only(setup, tools):

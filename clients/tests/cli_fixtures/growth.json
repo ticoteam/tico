@@ -745,7 +745,7 @@
     null
    ]
   ],
-  "stdout": "kpis:\n  - id: k1\n    name: Bookings\n    role: north_star\n",
+  "stdout": "Nothing yet.\nNext (step 2 of 4): Add your first channel: where customers come from (search ads, SEO, partners).\n  Only the owner or an admin can: Ana.\n",
   "stderr": "",
   "exit": 0
  },
@@ -867,6 +867,55 @@
    ]
   ],
   "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "setup"
+  ],
+  "tools": [
+   [
+    "tico_growth_setup",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/setup",
+    null
+   ]
+  ],
+  "stdout": "Set up: 1 of 4 steps done.\n  done  1. Settings  2026-11-13\n  next  2. First channel\n        3. Its source\n        4. First month\nFirst opened: 2026-11-13\nNext (step 2 of 4): Add your first channel: where customers come from (search ads, SEO, partners).\n  Only the owner or an admin can: Ana.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "setup",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_setup",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/setup",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"done\": false,\n  \"steps\": [\n    {\n      \"step\": \"settings\",\n      \"done\": true,\n      \"at\": \"2026-11-13T09:00:00Z\"\n    },\n    {\n      \"step\": \"channel\",\n      \"done\": false,\n      \"at\": null\n    },\n    {\n      \"step\": \"source\",\n      \"done\": false,\n      \"at\": null\n    },\n    {\n      \"step\": \"month\",\n      \"done\": false,\n      \"at\": null\n    }\n  ],\n  \"next\": {\n    \"step\": \"channel\",\n    \"number\": 2,\n    \"says\": \"Add your first channel: where customers come from (search ads, SEO, partners).\",\n    \"command\": \"tico growth channel add <slug> --name \\\"<name>\\\"\",\n    \"tool\": \"tico_growth_channel_add\",\n    \"you_may\": false,\n    \"who_may\": [\n      {\n        \"ref\": \"human:ana\",\n        \"name\": \"Ana\"\n      }\n    ],\n    \"bots_may\": false\n  },\n  \"channel\": null,\n  \"you_may\": {\n    \"settings\": false,\n    \"channels\": false,\n    \"sources\": false,\n    \"months\": true\n  },\n  \"first_opened_at\": \"2026-11-13T08:55:00Z\",\n  \"numbers_seen_at\": null\n}\n",
   "stderr": "",
   "exit": 0
  }

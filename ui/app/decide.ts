@@ -95,6 +95,7 @@ function decideOrdered(items: NeedsEntry[]): NeedsEntry[] {
   const rank = {answer: 0, review: 1, do: 2};
   return items.map((it, i) => ({it, i})).sort((a, b) => rank[needsGroup(a.it)] - rank[needsGroup(b.it)] || a.i - b.i).map(x => x.it);
 }
+// The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
 function decideKind(it: NeedsEntry): AskKind {
   if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
   if (it.kind === 'paused') return 'fix';
@@ -480,10 +481,11 @@ function decidePaintSide(st: DecState) {
   const kind = decideKind(it), asker = decideAsker(it);
   const stage = decideStageName(it.task?.stage_id);
   const typed = kind === 'question' ? it.ask?.typed : undefined;
-  // A page's OK is about the task's page: its title heads it, with the version under it. The stage's own line ("OK Chris
-  // (version 3)") names the person asked, so only what it says before that (Jev's reason, a send back) is kept.
+  // A page's OK is about the task's page: its title heads it, with the version under it. Needs you's line opens with
+  // what it is and the decision ("Spec for <title>, ready for your OK", views.page_ask_line), so only what the stage
+  // said after that (Jev's reason, a send back) is kept.
   const page = it.ask?.page, title = page ? it.task?.title || '' : '';
-  const said = title ? it.line.replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
+  const said = title ? it.line.replace(/^.*?, ready for your OK\.?\s*/, '').replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
   const sub = [asker ? esc(actorLabel(asker)) : '', esc(stage), page ? `Version ${esc(String(page.version))}` : ''].filter(Boolean).join(' · ');
   // Open task ↗: the task's own page, which stays open (taskModalOpen with `direct`); its Answer comes back here.
   const taskId = decideTaskId(it), num = it.task?.number;

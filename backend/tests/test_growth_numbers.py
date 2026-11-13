@@ -68,7 +68,10 @@ def marked(api, token="ana-test"):
 
 
 def test_an_empty_company_reads_empty_numbers(api):
-    assert get(api, "growth/numbers") == {
+    empty = get(api, "growth/numbers")
+    # What is left to set up and what the caller may do (backend/tests/test_growth_setup.py).
+    assert empty.pop("setup")["next"]["step"] == "settings" and empty.pop("you_may")["months"] is True
+    assert empty == {
         "months": [],
         "series": [],
         "channels": [],

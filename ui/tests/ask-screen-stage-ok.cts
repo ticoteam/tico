@@ -21,7 +21,7 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
   owner_id: 'bot:pm', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-const need = (task: string, title: string, file: string, version: number, hour: number, line = `OK Ana (version ${version})`) => ({
+const need = (task: string, title: string, file: string, version: number, hour: number, line = `Spec for ${title}, ready for your OK`) => ({
   kind: 'ask', id: `v-${task}:${RID}`, task_id: task, requirement_id: RID, line, since: `2026-11-09T${String(hour).padStart(2, '0')}:00:00Z`,
   task: brief(task, title),
   ask: {requirement_id: RID, kind: 'page', line, who: 'human:ana', asked_by: 'bot:pm', choices: null, may: ['ok', 'no'], met: false,
@@ -43,7 +43,7 @@ const pages: Record<string, string> = {
   const shots = process.env.TICO_UI_SHOTS;
   const needs = [
     need('t-a', 'Talk to the right bot from a pipeline board', 'pa', 1, 10),
-    need('t-b', 'Images in bot chat: paste fails', 'pb', 3, 11, 'Jev is unsure: no mobile layout. OK Ana (version 3)'),
+    need('t-b', 'Images in bot chat: paste fails', 'pb', 3, 11, 'Spec for Images in bot chat: paste fails, ready for your OK. Jev is unsure: no mobile layout.'),
     need('t-c', 'Paste retries', 'pc', 2, 12),
   ];
   const writes: {p: string; body: Record<string, unknown>}[] = [];
@@ -86,7 +86,7 @@ const pages: Record<string, string> = {
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
       assert.match(await dialog.locator('.dc-sub').innerText(), /Spec · Version 1/);
-      assert.equal(await dialog.locator('.dc-said').count(), 0, 'the stage line names only the person asked: nothing to add');
+      assert.equal(await dialog.locator('.dc-said').count(), 0, 'the line names only the task and the decision: nothing to add');
       const pane = (await dialog.locator('.dc-thing').boundingBox())!, box = (await frame.boundingBox())!;
       assert.ok(box.height >= pane.height - 60, `${label}: the page fills the pane (${box.height} of ${pane.height})`);
       assert.ok(box.height > (label === 'phone' ? 300 : 500), `${label}: the page is tall (${box.height})`);

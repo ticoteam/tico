@@ -13,10 +13,20 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-person{display:inline-flex;align-items:center;gap:3px;align-self:center;padding:1px 7px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:500;white-space:nowrap}
 .pv-stage-person svg{flex:none}
 
-/* Columns: one per work stage, side by side, sharing the width (200px to 480px each), scrolling sideways past that. */
+/* Columns: one per work stage, side by side, sharing the width (300px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
-.pv-col{flex:1 1 0;min-width:200px;max-width:480px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;background:var(--surface2)}
+.pv-col{flex:1 0 300px;min-width:300px;max-width:480px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;background:var(--surface2)}
 .pv-col-head{padding:2px 4px}
+/* On a computer the columns are the page's one scroller, so their sideways scrollbar sits at the window's bottom, not
+   under the tallest column: the pane stops scrolling and the board fills the room under the header. The wheel scrolls the
+   columns up and down as it did the page. The list and the phone have no .pv-cols and are untouched. */
+@media (min-width:761px){
+  .tasks-pane:has(> #task-body > .pv > .pv-cols){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
+  .tasks-pane:has(> #task-body > .pv > .pv-cols) > :not(#task-body){flex:none}
+  .tasks-pane:has(> #task-body > .pv > .pv-cols) > #task-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  #task-body > .pv:has(> .pv-cols){flex:1 1 auto}
+  .pv > .pv-cols{flex:1 1 auto;overflow:auto}
+}
 .pv-col-body{display:flex;flex-direction:column;gap:8px;min-height:24px}
 /* A phone's stage: the same cards as a column, one under the other. */
 .pv-phone{display:flex;flex-direction:column;gap:8px}

@@ -32,6 +32,28 @@ REPO = str(Path(__file__).resolve().parents[2])  # printed as <repo>: a path in 
 RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
 ROOT_HELP = hubcli.parser().description
 
+# Growth's setup block (backend/growth_setup.py) for a bot: settings done, a channel next, which only people may add.
+_GROWTH_MAY = {"settings": False, "channels": False, "sources": False, "months": True}
+_GROWTH_SETUP = {
+    "done": False,
+    "steps": [
+        {"step": "settings", "done": True},
+        {"step": "channel", "done": False},
+        {"step": "source", "done": False},
+        {"step": "month", "done": False},
+    ],
+    "next": {
+        "step": "channel",
+        "number": 2,
+        "says": "Add your first channel: where customers come from (search ads, SEO, partners).",
+        "command": 'tico growth channel add <slug> --name "<name>"',
+        "tool": "tico_growth_channel_add",
+        "you_may": False,
+        "who_may": [{"ref": "human:ana", "name": "Ana"}],
+        "bots_may": False,
+    },
+}
+
 # What the fake API answers, by "METHOD path" with the query left off; anything else answers {"ok": true}.
 _TRIGGER = {"id": "stripe", "name": "Stripe events", "event": "webhook.stripe", "preset": "stripe", "hourly": 60}
 _RELAY = {"trigger": "stripe", "address": "https://gateway.example/r/stripe"}
@@ -116,7 +138,15 @@ ANSWERS = {
         "rows": [{"name": "Google search", "spend": 900, "new_customers": 3, "cac": 300, "ltv": 1200, "ltv_cac": 4}],
         "total": {"name": "total", "spend": 900, "new_customers": 3, "cac": 300},
     },
-    "GET growth/kpis": {"kpis": [{"id": "k1", "name": "Bookings", "role": "north_star"}]},
+    "GET growth/kpis": {"kpis": [], "you_may": _GROWTH_MAY, "setup": _GROWTH_SETUP},
+    "GET growth/setup": {
+        **_GROWTH_SETUP,
+        "steps": [{**s, "at": "2026-11-13T09:00:00Z" if s["done"] else None} for s in _GROWTH_SETUP["steps"]],
+        "channel": None,
+        "you_may": _GROWTH_MAY,
+        "first_opened_at": "2026-11-13T08:55:00Z",
+        "numbers_seen_at": None,
+    },
     "GET goals": {"goals": [_GOAL]},
     "POST goals": {"goal": _GOAL},
     **{f"{verb} goals/{id}{tail}": {"goal": _GOAL} for id in ("id-1", "1") for verb, tail in _GOAL_CALLS},
