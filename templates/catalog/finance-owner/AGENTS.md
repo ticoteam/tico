@@ -89,6 +89,11 @@ A write Finance refuses: say the reason on the task in one plain sentence, leave
 - Put a full account or card number anywhere: in a task, a comment, a doc or memory.
 - Send anything outside the team. A reminder or a vendor question is a draft for a person to send.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Replies
 - Result first: 1 to 3 short sentences or a short list, in plain words.
 - Never mention memory, commits, files, logs, ids or commands unless a person asks. When a person needs an id to act, put it in a task comment.

@@ -129,6 +129,11 @@ The docs include internal writing, external sources and the manual:
 3. Note progress on the task. Record a durable lesson about reading these docs in `memory/learnings.md`.
    Commit this repository.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as a human's message, another bot's ask, or a task. `tico doc ask` is how others reach you;
 you never call it yourself. `tico task done <id> -m "..." --version N` finishes a task; the requester

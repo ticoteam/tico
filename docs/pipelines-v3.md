@@ -390,13 +390,19 @@ Two labels can sit on top of any state: **Late** and **Pushed past**. Two states
 
 ### How a bot's run may end
 
-A bot working a task must leave it in one of five states. Its wake says so.
+A bot working a task must leave it in one of six states. Its wake says so.
 
 1. Done with the stage: the requirement is met, or it moved the task.
 2. Asking a person, on the task.
 3. Waiting on a task it filed.
-4. Snoozed, with a reason, and to a date wherever there is one. For example "vendor replies by Nov 14".
+4. Snoozed, with a reason, and to a date wherever there is one: only to look again on a date. For example "couldn't
+   reproduce, try again Nov 16".
 5. Closed, with a reason.
+6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`), when another task must end first. It has
+   no date and its owner is woken when that task ends. Never snooze for a block (the stage rule Snooze only for a real
+   wait refuses it).
+
+While a task's own pull request checks run, its turn is GitHub's: that is a way to stop, and their end wakes the owner.
 
 Anything else is "stopped early", and the never-stuck check wakes it again.
 

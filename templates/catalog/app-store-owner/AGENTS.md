@@ -78,6 +78,11 @@ Always:
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
    could not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Growth
 Before you plan a listing change or write store copy, read How we sell in `tico strategy show`. A Marketing task, or a
 subtask of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. Before

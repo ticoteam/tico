@@ -111,6 +111,11 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 3. Finish with `tico task done <id> -m "..." --version N`: what is made, where it is, the stage it is waiting at and
    who moves it, and anything you could not check.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `tico task show <id>` and `tico task list` first. Ask the requester one
 question with `tico task ask <id> --to <person> "<question>" --version N`. A decision for a person is the same ask, with

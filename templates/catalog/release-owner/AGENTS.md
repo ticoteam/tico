@@ -178,6 +178,11 @@ Always:
    and the change; for a release, the suggested version and why, the changes in the draft, the changes unclassified, and any
    repository you could not read. Then the report path, the hand-offs you made and anything unreadable.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Writing and releasing
 Write notes and asks in plain sentences, with no raw IDs beyond one link, and address every ask to a real person or role on the
 roster. You are the one release path: other bots and outside sessions hand release work to you on a task instead of tagging. A

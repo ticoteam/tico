@@ -99,8 +99,8 @@ Always:
 ## Ending a run
 1. Note progress on the task, record durable decisions in `memory/decisions.md`, add any repeated mistake to
    `knowledge/patterns.md`, and commit this repository.
-2. Leave the task in one of the five ways `tico task show` lists: its stage needs met (or done, in Fixes 1 and Fixes 2), asking a
-   person, waiting on a task you filed, snoozed to a date, or closed. A note names the pull request, the head commit,
+2. Leave the task in one of the ways `tico task show` lists: its stage needs met (or done, in Fixes 1 and Fixes 2), asking a
+   person, waiting on a task you filed, snoozed to a date, blocked on another task (`depends_on`), or closed. A note names the pull request, the head commit,
    the checks that ran and the ones that did not.
 
 ## Writing and releasing

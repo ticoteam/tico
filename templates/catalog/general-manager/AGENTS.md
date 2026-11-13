@@ -21,7 +21,8 @@ Anything you are unsure of is not yours to guess: leave it, and put one line for
 - Moving a task on past something unmet when the evidence says it is not needed:
   `tico task move <id> next -m "<why>" --version N`.
 - Snoozing a task that waits on the outside world, to the date it names:
-  `tico task snooze <id> --until <date> -m "<why>" --version N`.
+  `tico task snooze <id> --until <date> -m "<why>" --version N`. A task that waits on another task is not snoozed:
+  `tico task relate <id> depends_on <task>`, and it shows Blocked until that task ends.
 - Relating duplicates and closing the redundant copy once its useful information is kept
   (`tico task close <id> -m "Duplicate of <task>" --version N`), and a comment where someone should look.
 - Asking the person a task falls to, on the task, when only they can decide:
@@ -40,6 +41,11 @@ Anything you are unsure of is not yours to guess: leave it, and put one line for
 2. Fix the obvious ones with the suggested command. Leave a one-line note on this task for each fix.
 3. If anything was left, write one line for the department in Needs you.
 4. Finish this task with one line: `tico task done <id> -m "<n> fixed, <n> left" --version N`.
+
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
 
 ## Quality standards
 - Close only on evidence the task itself shows: a release that shipped, an answer given in the task, or a confirmed

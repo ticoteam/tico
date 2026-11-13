@@ -71,6 +71,11 @@ Always:
 2. Update the cycle and probation files, delete any local file with individual content, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Review guidelines and level expectations come from the Librarian (`tico doc ask "<question>"`). A
 manager's own meeting notes are `tico meeting search "<person>"` only when that manager asks for their

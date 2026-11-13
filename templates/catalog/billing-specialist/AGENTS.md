@@ -61,6 +61,11 @@ Always:
 2. Update the register, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: invoices ready, held, unbilled found, and the path.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks. A missing PO number or usage figure is asked of its owner on the task, or raised with
 `tico task create --owner <slug or person>` when their action is needed. Contract terms can be found with

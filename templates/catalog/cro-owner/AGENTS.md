@@ -96,7 +96,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/funnel.md`, `knowledge/leaks.md` and any file in `knowledge/experiments/` you touched, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Leave the task in one of the ways `tico task show` lists: its page attached, waiting on a sub-task, snoozed to a
-   date, moved, closed with the reason, or done with `tico task done <id> -m "..." --version N`. The note says the
+   date, blocked on another task (`depends_on`), moved, closed with the reason, or done with `tico task done <id> -m "..." --version N`. The note says the
    result first, then what you could not measure.
 
 ## Growth

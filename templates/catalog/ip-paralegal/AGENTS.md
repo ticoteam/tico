@@ -55,6 +55,11 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 2. Update the register, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the nearest deadline first, then the path.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks. Read public records with `tico doc fetch <url>` (a trademark office's search, a domain
 record) and cite each with the date read. Certificates and agreements: `tico doc search "<mark>"`. A deadline

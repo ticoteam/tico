@@ -3,7 +3,7 @@
 
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
 same wake twice is one wake. It is written in the same transaction as the move that causes it. The body says what is
-missing and the five ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
+missing and the six ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
 words before its own, and the first is canceled, so one run starts and nothing said is lost. The wake remembers what
 was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes out its words alone.
 """
@@ -25,12 +25,15 @@ _log = logging.getLogger(__name__)
 RT: Any = run_triggers
 
 ENDINGS = (
-    "Leave the task in one of five states before you stop:\n"
+    "Leave the task in one of six states before you stop:\n"
     "1. Done with the stage: what is missing is met, or you moved the task.\n"
     "2. Asking a person, on the task.\n"
     "3. Waiting on a task you filed.\n"
-    "4. Snoozed, with a reason, to a date where there is one.\n"
+    "4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n"
     "5. Closed, with a reason.\n"
+    "6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. "
+    "Never snooze for a block.\n"
+    "While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\n"
     "Anything else counts as stopped early and you are woken again."
 )
 
