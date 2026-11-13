@@ -62,6 +62,7 @@ _installed_store = None
 
 OWNER_ON_TEAM = "sr_owner_on_team"
 REAL_WAIT = "sr_real_wait"
+QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
 BLOCKED = "You're blocked, not waiting. Ask a person on the task, or file a sub-task to whoever can unblock it."
 DEFAULTS: list[dict[str, Any]] = [
     {
@@ -95,6 +96,22 @@ DEFAULTS: list[dict[str, Any]] = [
         "then_params": {},
         "reason": BLOCKED,
         "builtin": REAL_WAIT,
+    },
+    {
+        # A timer (backend/stage_rule_timers.py): every stage, 6 h quiet, bot-owned and the bot's turn. Snoozed tasks
+        # have no timer. All of a manager's matches in the same hour go in one wake.
+        "id": QUIET_BOT_TASKS,
+        "name": "Quiet bot tasks",
+        "pipeline_id": "",
+        "stages": [],
+        "event": "timer",
+        "timer": {"kind": "quiet", "hours": 6},
+        "cond": {"owner_kind": "bot", "turn": "bot"},
+        "jev": "",
+        "then": "tell_manager",
+        "then_params": {},
+        "reason": "6 h quiet on the bot's turn",
+        "builtin": QUIET_BOT_TASKS,
     },
 ]
 # What the engine still does in code, read-only on the Rules page ("in code"). Candidates for later default rules.

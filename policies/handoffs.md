@@ -71,7 +71,9 @@ nothing is missing; you do not say done for a need Tico can see.
 - A page (a Spec, a Review, a QA page, Checked in production): write it, publish it with
   `tico file publish <path> --task <task-id>` (it prints the file id), then attach it to the need:
   `tico task attach <task-id> page:<file id> --req "<requirement>" --version N`. Jev checks it; a person OKs it
-  where the stage asks for one. Sent back: change it, publish again and attach the new version.
+  where the stage asks for one. Sent back: change it, publish again and attach the new version with
+  `--changed "<what changed>"` (up to 5 lines) and `--answered "<point>: done|not done, <why>"` for each point
+  of their note. Never quote their note back to them: Tico refuses it.
 - A review page names the pull request's newest commit. New commits make it stale: write it again.
 - A pull request: open it and link it with `tico task link <task-id> <pr url>`. Checks, merges and
   releases are read from GitHub. Never merge a pull request on a stage: the merge queue merges.

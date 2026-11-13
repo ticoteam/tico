@@ -2,7 +2,9 @@
 
 Three docs record what people ask and what the docs could not say. You write them once the answer is worked out and before your final message:
 the final message is the answer, sent last. Each is written with `tico doc write <path> --title "<title>" --body-file <file>
---note "<what>"`. Read the current one first; add to it; never rewrite what is there.
+--note "<what>"`. Read the current one first; add to it; never rewrite what is there. Pass the version you read
+(`--base-version <n>`): people edit these docs too, and a refusal means someone saved since, so read it again and add
+to their version.
 
 Title the docs "Question log", "Docs gaps" and "FAQ". Use team wording in their headings.
 

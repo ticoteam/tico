@@ -127,6 +127,8 @@ def held_locally(verdict: Row | None) -> Row | None:
     cause kept (`local`), so `org_rule_check.apply` holds it or warns that it went unchecked."""
     if not verdict or "refused" in verdict or "applied" in verdict:
         return verdict
+    if verdict.get("late"):
+        return {**verdict, "day_cap_line": True}  # its check, run after the write, finds the cap there (`run_late`)
     if verdict.get("check") == "structured":
         judged: Row | None = verdict.get("judged")
         return {**verdict, "judged": held_locally(judged)} if judged else verdict
@@ -237,15 +239,21 @@ class TaskRules:
         to: str | None = None,
         also: Callable[[Any], Any] | None = None,
         hands_over: bool = False,
+        late: bool = False,
+        ask: bool = False,
     ) -> Any:
-        """The verdict for one task write by `who`, outside the write, or None (nothing to check). `said` is the
+        """The verdict for one task write by `who`, outside the write, or None (nothing to check). `late`: when every
+        rule it meets only warns, the check runs right after the write (org_rule_check `check_as`); never for a bot's
+        ask (`ask`), which a rule that only warns still refuses (`covering`). `said` is the
         write's (label, text) pairs; `to` who it reaches besides the task's people, `also(c)` anyone else; `hands_over`
         that it gives the task to `to`. The write's place is its task's thread (`place`). A task the caller may not
         read is `org_rule_check.refused`. Any other error is a refusal too: the write never goes unchecked because
         this failed."""
         try:
-            if not org_rule_check.author_of(who, self.auth.settings.assistant_bot):
+            author = org_rule_check.author_of(who, self.auth.settings.assistant_bot)
+            if not author:
                 return None
+            late = late and not (ask and H.is_bot(author))
             if not any(value for _, value in said) and not hands_over:
                 return None
             with self.store.read() as c:
@@ -279,6 +287,7 @@ class TaskRules:
                     context={"task": row["title"]},
                     place=self.place(row, ask),
                     track_route=True,  # the audience is kept even when no rule matches: apply compares it
+                    **({"late": True} if late else {}),
                 )
             )
         except Exception:  # fail closed: the write is refused, never sent unchecked

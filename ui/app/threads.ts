@@ -51,13 +51,30 @@ interface ThreadRow {
   live_call?: { id: string; live_count?: number | undefined } | null | undefined;
   [key: string]: unknown;
 }
-// The rail's reply: Pinned and the rest, the next page's cursor, the Catch up count and the unread of each DM.
+// A chat Catch up counts that the rail does not list (a 1:1 DM, a Home, a task's thread): the rail's Unread row for it,
+// in Catch up's order (mentions first, then newest). Contract §10.1, `unread`.
+interface ThreadUnread {
+  id: string;
+  title?: string | null | undefined;
+  name?: string | null | undefined;
+  audience: string;
+  dm_with?: ThreadMember[] | null | undefined;
+  dm_with_count?: number | null | undefined;
+  home_actor?: string | null | undefined;
+  new_count: number;
+  mention: boolean;
+  task_id?: string | null | undefined;
+  last_message_at?: string | null | undefined;
+}
+// The rail's reply: Pinned and the rest, the next page's cursor, the Catch up count, its chats off the rail and the unread
+// of each DM.
 interface ThreadRailReply {
   threads?: ThreadRow[];
   pinned?: ThreadRow[];
   next_cursor?: string | null;
   catch_up?: number | string;
   catch_up_ids?: string[];
+  unread?: ThreadUnread[];
   dms?: Record<string, number>;
 }
 // The plain list's reply, from a server without the rail.
@@ -75,6 +92,7 @@ interface ThreadsLoaded {
   next: string | null;
   catchUp: number;
   cu: Set<string> | null;
+  unread: ThreadUnread[];
   dms: Record<string, number>;
 }
 // A root that is not on the rail, learned once for live counts: its 1:1 DM's teammate, and whether it is muted.
@@ -84,6 +102,8 @@ interface ThreadRoot {
   following: boolean;
   // Whether it belongs to a task: its task's state (a close, a post after it) decides whether it is listed.
   task?: boolean | undefined;
+  // Another's Home: only a reply to the viewer or a mention there counts, which the server decides (the rail's read).
+  home?: boolean | undefined;
 }
 // The threads topic's events (GET /api/v2/events) and the needs ones read here: one kind, with the fields that kind sends.
 interface ThreadsEvent {
@@ -113,6 +133,7 @@ interface NeedsEvent {
 // `rail`: whether the server has GET /v2/threads/rail (pins, Catch up); false keeps the plain list (GET /v2/threads).
 // `pinned`, `threads`: the rail's two lists, each by title. `catchUp`: the Catch up count from a server without
 // `catch_up_ids`; `cu`: else the roots Catch up counts (a Set), patched live, and its size is the badge.
+// `unread`: Catch up's chats the rail does not list (none from a server without them), each shown while `cu` holds it.
 // `dms`: {actor: unread} for the viewer's 1:1 DMs, bots and people, which the Team list shows on that teammate.
 // `roots`: {root id: {dm: the other actor or null, muted}} for roots not on the rail, learned once, for live counts.
 // `counted`: the message ids an `activity` already counted (an edit sends one more).
@@ -124,6 +145,7 @@ interface ThreadsState {
   next: string | null;
   catchUp: number;
   cu: Set<string> | null;
+  unread: ThreadUnread[];
   dms: Record<string, number>;
   roots: Record<string, ThreadRoot>;
   counted: Set<string>;
@@ -137,7 +159,7 @@ interface ThreadsState {
 
 // New message (ui/app/new-message.ts) is a page of its own beside the rail.
 const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', THREADS_NEW = '#/threads/new';
-const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, dms: {}, roots: {}, counted: new Set(),
+const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, unread: [], dms: {}, roots: {}, counted: new Set(),
                  loading: null, again: false, wired: false, needsSeen: null, readAt: 0, gen: 0};
 // A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).
 const THREADS_CONNECT_FRESH_MS = 300e3;
@@ -219,7 +241,8 @@ async function threadsRead(): Promise<ThreadsLoaded | null> {
       const r = await get<ThreadRailReply>('/v2/threads/rail?limit=' + limit, {fresh: true});
       if (Array.isArray(r?.threads)) {
         return {rail: true, pinned: r.pinned || [], threads: r.threads, next: r.next_cursor || null,
-                catchUp: Number(r.catch_up) || 0, cu: Array.isArray(r.catch_up_ids) ? new Set(r.catch_up_ids) : null, dms: r.dms || {}};
+                catchUp: Number(r.catch_up) || 0, cu: Array.isArray(r.catch_up_ids) ? new Set(r.catch_up_ids) : null,
+                unread: Array.isArray(r.unread) ? r.unread : [], dms: r.dms || {}};
       }
     } catch (e) { if (errorStatus(e) !== 404) throw e; }
   }
@@ -232,7 +255,7 @@ async function threadsRead(): Promise<ThreadsLoaded | null> {
     if (!t.parent_id && Number(t.dm_with_count) === 1 && typeof other === 'string' && other.startsWith('human:') && !(other in dms)) dms[other] = threadUnread(t);
   }
   const threads = [...r.threads, ...(r.dms || [])].filter(threadOnRail).sort(threadsByTitle);
-  return {rail: false, pinned: [], threads, next: null, catchUp: 0, cu: null, dms};
+  return {rail: false, pinned: [], threads, next: null, catchUp: 0, cu: null, unread: [], dms};
 }
 async function threadsLoad(): Promise<void> {
   // A change while a read is out reads once more after it: that read may have left before the change.
@@ -413,7 +436,7 @@ function threadsRootLearn(view: ThreadRow | null | undefined): ThreadRoot | null
   const dm = threadIsDm(view) && !threadIsGroupDm(view) && others.length === 1 ? others[0] : null;
   // Another's Home is in Catch up only through a mention, an ask or a hold, which `needs` brings.
   const theirHome = view.audience === 'home' && view.home?.actor !== myActor();
-  return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted' || theirHome, following: !!(view.me?.following || view.me?.member), task: !!view.task_id});
+  return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted' || theirHome, following: !!(view.me?.following || view.me?.member), task: !!view.task_id, home: theirHome});
 }
 async function threadsRoot(id: string): Promise<ThreadRoot> {
   const known = THREADS.roots[id];
@@ -453,8 +476,14 @@ async function threadsActivity(d: ThreadsEvent) {
     });
     if (fresh && row.me?.notify !== 'muted') THREADS.cu?.add(root);
   } else if (fresh && info) {
-    // Not on the rail: a DM, a task's thread or a Home. Catch up counts it; a 1:1 DM counts on its teammate too.
-    if (!info.muted) THREADS.cu?.add(root);
+    // Not on the rail: a DM, a task's thread or a Home. Catch up counts it; a 1:1 DM counts on its teammate too. Its
+    // Unread row counts the new ones in place; a chat with no row yet is read with the rail, which names it.
+    if (!info.muted) {
+      THREADS.cu?.add(root);
+      const listed = THREADS.unread.find(u => u.id === root);
+      if (listed) THREADS.unread = THREADS.unread.map(u => u === listed ? {...u, new_count: (Number(u.new_count) || 0) + more} : u);
+      else if (THREADS.cu && THREADS.rail) liveSoon('threads-rail', threadsLoad, 400);
+    } else if (info.home && THREADS.cu && THREADS.rail) liveSoon('threads-rail', threadsLoad, 400);
     if (info.dm && info.dm in THREADS.dms) {
       THREADS.dms = {...THREADS.dms, [info.dm]: threadsDmUnread(info.dm) + more};
       if (typeof renderTree === 'function') renderTree();

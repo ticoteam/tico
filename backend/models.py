@@ -162,9 +162,10 @@ Lane = Literal["company", "product"]
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
-# A relation is a note between two tasks. A task waits on no relation but `after`, and that only in Merge: it merges
-# after the other task (backend/merge_order.py). Otherwise it waits on the tasks it filed (`parent`).
-RelationKind = Literal["related", "duplicate_of", "follow_up", "after"]
+# A relation is a note between two tasks. A task waits on two relations: `after`, only in Merge, where it merges after
+# the other task (backend/merge_order.py), and `depends_on`, in any stage, where it is blocked until the other task ends
+# (backend/task_depends.py). Otherwise it waits on the tasks it filed (`parent`).
+RelationKind = Literal["related", "duplicate_of", "follow_up", "after", "depends_on"]
 
 
 class TaskRelationRef(Contract):
@@ -414,10 +415,14 @@ class TaskAskAnswer(Contract):
 class TaskPageAttach(Contract):
     """Attach a page to a page requirement of the task's stage (task_pages.attach). `requirement` is its id or name;
     `page` is page:<file id> (its newest version) or page:<file id>@<version>. `version` is the task's, as on every
-    task write."""
+    task write. `note`, `changed` (up to 5 one-line bullets) and `answered` (up to 12 "<point>: done|not done, <why>")
+    are what the bot says with this version (backend/page_rounds.py); all optional."""
 
     requirement: Annotated[str, Field(min_length=1, max_length=500)]
     page: Annotated[str, Field(min_length=1, max_length=200)]
+    note: str | None = Field(default=None, max_length=2000)
+    changed: list[Annotated[str, Field(max_length=2000)]] | None = Field(default=None, max_length=50)
+    answered: list[Annotated[str, Field(max_length=2000)]] | None = Field(default=None, max_length=50)
     version: Version | None = None
     on_behalf_of: ID | None = None
 
@@ -583,7 +588,8 @@ class TaskLink(Contract):
 
 class TaskRelation(Contract):
     """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
-    merges after task: in Merge its PRs are not queued until task has merged). The others are notes."""
+    merges after task: in Merge its PRs are not queued until task has merged), depends_on (it is blocked until task
+    ends). The others are notes."""
 
     task: ID
     kind: RelationKind = "related"
@@ -776,6 +782,14 @@ class LearnedAdd(Contract):
 
 class LearnedEdit(Contract):
     text: str = Field(min_length=1, max_length=2000)
+
+
+class AssistantViewerAdd(Contract):
+    bot: str = Field(min_length=1, max_length=200)  # its slug or id
+
+
+class AssistantViewerLearned(Contract):
+    include_learned: bool
 
 
 class GoalReadBack(Contract):
@@ -1538,6 +1552,8 @@ class Heartbeat(Contract):
             "model_switch_to_key_v1",
             "computer_logins_v1",
             "capacity_continue_v1",
+            "fork_session_v1",
+            "fresh_session_v1",
             "source_continue_v1",
             "turns_at_once_v1",
             "private_lanes_v1",
@@ -2167,13 +2183,6 @@ class BotTaskModel(Contract):
 
 class BotCompactAt(Contract):
     compact_at: CompactAt
-    expected_revision: int = Field(ge=1)
-
-
-class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"] = Field(
-        description="Token saver or Performance; legacy current is accepted as an alias for Performance."
-    )
     expected_revision: int = Field(ge=1)
 
 
@@ -3458,13 +3467,32 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
+# A synced source's kind (backend/growth_sync.py): file import and database query; Finance ad spend and bot cost follow
+# in later parts.
+GrowthSyncKind = Literal["file", "db_query"]
+
+
+class GrowthSyncMap(Contract):
+    month: str | None = Field(default=None, min_length=1, max_length=80)
+    channel: str | None = Field(default=None, min_length=1, max_length=80)
+    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
+    # that database, which runs it daily.
+    database: str | None = Field(default=None, min_length=1, max_length=80)
+    query: str | None = Field(default=None, min_length=1, max_length=120)
+    bot: str | None = Field(default=None, min_length=1, max_length=200)
+
+
 class GrowthSourceCreate(Contract):
     truth_for: Annotated[str, Field(min_length=1, max_length=80)]
     system: Annotated[str, Field(min_length=1, max_length=80)]
-    reach_kind: Literal["mcp", "credential", "url", "person"]
+    reach_kind: Literal["mcp", "credential", "url", "person"] | None = None  # a file source defaults to person
     reach_ref: str = Field(default="", max_length=300)
     may: str = Field(default="", max_length=300)
     owner_ref: str | None = Field(default=None, max_length=200)
+    sync_kind: GrowthSyncKind | None = None
+    sync_map: GrowthSyncMap | None = None
+    refresh_hours: int | None = Field(default=None, ge=1, le=24 * 92)
 
 
 class GrowthSourceUpdate(Contract):
@@ -3474,6 +3502,28 @@ class GrowthSourceUpdate(Contract):
     reach_ref: str | None = Field(default=None, max_length=300)
     may: str | None = Field(default=None, max_length=300)
     owner_ref: str | None = Field(default=None, max_length=200)
+    sync_kind: GrowthSyncKind | None = None  # null stops syncing: its numbers become typeable again
+    sync_map: GrowthSyncMap | None = None
+    refresh_hours: int | None = Field(default=None, ge=1, le=24 * 92)
+
+
+class GrowthSourceRows(Contract):
+    """One run's input: a CSV, or rows (each a column-to-value object), or the error the fetch ended with."""
+
+    csv: str | None = Field(default=None, max_length=1_000_000)
+    rows: list[dict[Annotated[str, Field(max_length=80)], str | float | int | None]] | None = Field(
+        default=None, max_length=5000
+    )
+    error: str | None = Field(default=None, max_length=2000)
+
+
+class GrowthConflictResolve(Contract):
+    channel: str | None = Field(default=None, max_length=40)  # a channel slug; "unknown" or null is Unknown
+    month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
+    field: Literal[
+        "spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month", "margin_pct"
+    ]
+    keep: Literal["typed", "source"]
 
 
 class GrowthCohortSet(Contract):
@@ -3495,6 +3545,23 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+    min_cohort: int | None = Field(default=None, ge=5, le=100000)  # the fewest customers a cohort needs for a rate
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)  # IANA; customer dates are read in it
+    key_readers: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=50)
+
+
+# Customer facts (backend/growth_customers.py): CSV text, or rows as objects. The cells are checked by the load itself,
+# whose refusals never echo a value; nothing here constrains a cell, so the contract's 422 has none to echo either.
+class GrowthCustomersLoad(Contract):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, defer_build=True)
+    csv: str | None = Field(default=None, max_length=20_000_000)
+    rows: list[dict[str, str | float | int | None]] | None = Field(default=None, max_length=200_000)
+
+    @model_validator(mode="after")
+    def one_shape(self):
+        if (self.csv is None) == (self.rows is None):
+            raise ValueError("send csv or rows, not both")
+        return self
 
 
 # Tools (backend/mailboxes.py): connect a mailbox, and who can use it.

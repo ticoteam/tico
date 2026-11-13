@@ -838,7 +838,7 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **QA.** Owner: Builder. To leave: Checks pass, and the QA page: what changed, before and after screenshots of the
   running app (or the output that proves a change with nothing to see), how it was checked with the checks at the
   newest commit, what both reviewers found on the commit they reviewed, risks, and the PR with its head commit. The
-  Builder builds it with its `build-the-qa-page` skill; approving it ships the change. Jev checks it against the linked PRs'
+  Builder builds it with its `build-the-page` skill (the review template, titled QA); approving it ships the change. Jev checks it against the linked PRs'
   newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
   then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after Review 2's page are reviewed
   before the person is asked: Reviewer 2 (the bot that wrote the newest review) reads only those commits against what
@@ -1173,7 +1173,10 @@ late. Nothing depends on the exact 10 seconds.
   reads it in QA (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
   page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,
   and the person is asked after the next read. The task shows "Changed after OK" and the manager bot is told once
-  (C22).
+  (C22). Sent back while a PR is still at the commit it was last queued at, the OK that came back does not count:
+  the page waits on the Builder ("Merge queue ran 463f2e7 and it failed (…): push a fix."), with the mover's note,
+  until there are new commits, and then the rules above decide. A page attached on that visit is judged as any other.
+  *Added Nov 13: four tasks went straight back to Merge and were queued again at the commit that had just failed.*
 - **A PR linked in Merge.** While a task is in a stage that queues PRs, only a person links another PR to it: a bot is
   told "Send the task back before linking another pull request.", and a bot's worktree branch PR is not linked there.
 - **`tico/merge-ok`.** Before queuing a PR, the server posts a check run `tico/merge-ok` = success on exactly the commit
@@ -1514,22 +1517,18 @@ Today: a pipeline with the manager rail at the side.
 
 **New:**
 
-- **Top:** the manager's avatar and "Eng Manager".
-- **Tabs:** "Log" (selected), "Tasks 2", "Learned".
-- **Group "Late", count 2:** "Calibration export retries" · "30h"; "Refund flow" · "3d". Rows here have no mark and no
-  avatar.
-- **Log lines,** dimmed, time then text: "07:50 Builder moved Docs for saved carts past Review 2"; "07:12 Scout snoozed
-  Carrier contract with no end".
-- **Chat:** a message from "Eng Manager", "1d": "Calibration first-try is 84 percent. The target is 95 and the fix is in
-  ring 3."
-- A "Message Eng Manager" box.
+- **Top:** the manager's avatar, "Eng Manager" and the close button.
+- **Chat:** the direct chat with the manager, filling the rest of the column: a message from "Eng Manager", "1d":
+  "Calibration first-try is 84 percent. The target is 95 and the fix is in ring 3."
+- A "Message Eng Manager" box, always at the bottom of the window; the messages scroll above it, newest in view.
 
 Rules:
 
-- Kept as it is: Log, Tasks, Learned, and the chat.
-- Two fixes: tasks show by title, not by id. "Ran 07:50" goes.
-- A pipeline manager doesn't own tasks (C25). Its Tasks tab lists the ones it was woken about.
-- The Log shows each push past and each snooze a bot made with no end date.
+- The rail is the chat alone. The Log, Tasks and Learned tabs and the Late list are gone (Nov 13).
+- The rail is as tall as the window, never as tall as the board; scrolling the board does not move it.
+- Late tasks show on the board's cards and stage headers. The Log (each push past, each snooze with no end date, as C1
+  and F30 describe) stays in the API, GET /api/v2/pipelines/{id}/log, for bots and the CLI; no screen reads it.
+- A phone has no rail: the board's Ask bar opens the same chat as a sheet.
 
 ### S11. Pipeline editor and stage settings
 

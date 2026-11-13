@@ -75,6 +75,16 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
         active = c.execute("SELECT count(*) FROM bots WHERE state='active'").fetchone()[0]
     assert first and queued == active, "every active bot is queued, and the first one asked"
     with store.transaction() as c:
+        # The request waits for a warm session (a shipped routine's release policy): while it waits it is not out,
+        # and once the release check lets it go, it holds the queue.
+        job = c.execute(
+            "SELECT id,held,release FROM jobs WHERE bot_id=? ORDER BY rowid DESC LIMIT 1", (first,)
+        ).fetchone()
+        assert job["held"] == 1 and json.loads(job["release"])["wait"] == updates.SHIPPED_WAIT["daily"]
+        c.execute(
+            "UPDATE jobs SET held=0,released=? WHERE id=?",
+            (json.dumps({"warm": True, "waited": 0, "at": H.now()}), job["id"]),
+        )
         assert updates.dispatch(c, MORNING) is None, "one at a time: nothing more while it is out"
         request = c.execute(
             "SELECT m.body, m.refs FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.state='sent'"
@@ -759,3 +769,23 @@ def test_a_persons_draft_with_nothing_real_to_say_posts_nothing(api):
             updates.NOTHING_NEW,
         )
         assert not c.execute("SELECT 1 FROM updates WHERE bot='human:ana'").fetchone(), "no draft was posted"
+
+
+def test_an_update_waiting_for_a_warm_session_does_not_hold_the_queue_or_count_as_missed(api):
+    """A shipped update routine's request waits for a warm session (backend/wake_presets.py): meanwhile the queue asks
+    the next bot, and the request is not given up on at the pickup limit. Once let go, its limits run from then."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        first = updates.dispatch(c, MORNING)
+        c.execute("UPDATE update_queue SET sent_at=? WHERE bot=?", (H.shift(H.now(), minutes=-30), first))
+        second = updates.dispatch(c, MORNING)
+        assert second and second != first
+        assert c.execute("SELECT state FROM update_queue WHERE bot=?", (first,)).fetchone()[0] == "sent"
+        job = c.execute("SELECT id FROM jobs WHERE bot_id=? ORDER BY rowid DESC LIMIT 1", (first,)).fetchone()[0]
+        c.execute(
+            "UPDATE jobs SET held=0,released=? WHERE id=?",
+            (json.dumps({"warm": True, "waited": 1800, "at": H.now()}), job),
+        )
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id=? AND held=1", (second,))  # the second is not out
+        assert updates.dispatch(c, MORNING) is None  # let go just now: it is out, and inside its pickup limit
+        assert c.execute("SELECT state FROM update_queue WHERE bot=?", (first,)).fetchone()[0] == "sent"

@@ -1055,8 +1055,9 @@ STABLE = [
         "post",
         "Tasks",
         "relateTask",
-        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after), or take the relation "
-        "off with remove. A task waits on no relation but after, in Merge: its PRs are not queued until task merged",
+        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take "
+        "the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and "
+        "on depends_on, in any stage (Blocked by task until it ends)",
         "TaskResult",
     ),
     (
@@ -1382,6 +1383,14 @@ STABLE = [
         "listFileActivity",
         "A file's append-only activity, newest first",
         "FileActivity",
+    ),
+    (
+        "/api/v2/files/{fid}/info",
+        "get",
+        "Files",
+        "getBotFile",
+        "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+        "BotFileResult",
     ),
     (
         "/api/v2/files/{fid}/versions",
@@ -2705,9 +2714,10 @@ SCHEMAS = {
         relations={
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up, "
-            "after): each {id, title, status, owner, direction}; an `after` entry also has the other task's number and "
-            "stage (out: this task merges after it; in: it merges after this one). A task waits on no relation but "
-            "after, in Merge. Sub-tasks are in the task's children.",
+            "after, depends_on): each {id, title, status, owner, direction}; an `after` or `depends_on` entry also has "
+            "the other task's number and stage (after out: this task merges after it; in: it merges after this one; "
+            "depends_on out: this task is blocked by it; in: it blocks this one). A task waits on after, in Merge, and "
+            "on depends_on. Sub-tasks are in the task's children.",
             "additionalProperties": items(
                 obj(
                     {"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"},
@@ -4894,13 +4904,14 @@ SCHEMAS.update(
                 "name": "s",
                 "group": "s",
                 "description": "s",
+                "label": "s",
                 "version": "i",
                 "example": "o",
                 "aliases": items({"type": "string"}),
                 "sourceless": "b",
                 "outbound": "b",
             },
-            required=["name", "group", "description", "version", "example"],
+            required=["name", "group", "description", "label", "version", "example"],
         ),
         "EventTypeList": obj({"items": items(ref("EventType"))}, required=["items"]),
     }
@@ -7307,9 +7318,6 @@ SCHEMAS.update(
                 "name": "s",
                 "label": "s",
                 "description": "s",
-                "batch_seconds": "i",
-                "batch_scope": "s",
-                "sweep_seconds": "i",
                 "digest_hour": {"type": ["integer", "null"]},
                 "pulls": "s",
                 "sweeps": "b",
@@ -8084,7 +8092,8 @@ STABLE.extend(
             'Tools',
             'addWebsiteAccount',
             'Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per '
-            'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again',
+            'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. '
+            'username and password may be left out for a site a person signs in to by hand',
             'WebsiteAccountSaved',
         ),
         (
@@ -8154,6 +8163,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'id': 's',
                     'kind': {'enum': ['shared', 'own']},
                     'username': 's',
+                    'has_password': 'b',
                     'has_totp': 'b',
                     'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
                     'access': items(WEBSITE_WHO),
@@ -8170,7 +8180,17 @@ SCHEMAS['WebsiteTool'] = obj(
                     'can_manage': 'b',
                 },
                 # `username` is left out for a bot, a run or a computer.
-                required=['id', 'kind', 'has_totp', 'holder', 'access', 'session', 'can_use', 'can_manage'],
+                required=[
+                    'id',
+                    'kind',
+                    'has_password',
+                    'has_totp',
+                    'holder',
+                    'access',
+                    'session',
+                    'can_use',
+                    'can_manage',
+                ],
             )
         ),
         'host': {
@@ -9757,10 +9777,31 @@ SCHEMAS.update(
                     "description": "The root ids `catch_up` counts, at most 99 (first page only; "
                     "[] after): a client keeps the set from the live stream",
                 },
+                "unread": items(ref("ThreadRailUnread")),
                 "dms": ref("ThreadDmCounts"),
                 "next_cursor": "n",
             }
         ),
+        "ThreadRailUnread": {
+            **obj(
+                {
+                    "id": "s",
+                    "title": "s",
+                    "name": "s",
+                    "audience": "s",
+                    "dm_with": items(obj({"actor": "s", "name": "s"})),
+                    "dm_with_count": "i",
+                    "home_actor": {"type": ["string", "null"], "description": "The bot or person whose Home it is"},
+                    "new_count": "i",
+                    "mention": "b",
+                    "task_id": {"type": ["string", "null"]},
+                    "last_message_at": {"type": ["string", "null"]},
+                },
+                required=["id", "audience", "new_count", "mention"],
+            ),
+            "description": "A Catch up item the rail does not hold (a 1:1 DM, a Home, a task's thread), in Catch up's "
+            "order: mentions first, then newest activity (first page only; [] after)",
+        },
         "ThreadBrowse": obj(
             {"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}), "next_cursor": "n"}
         ),
@@ -9972,7 +10013,8 @@ STABLE.extend(
             "Threads",
             "listThreadRail",
             "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through "
-            "`next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. "
+            "`next_cursor` until both are done; `catch_up`, `catch_up_ids`, `unread` (each chat Catch up counts that the rail "
+            "does not list) and `dms` on the first page. "
             "Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting",
             "ThreadRail",
         ),

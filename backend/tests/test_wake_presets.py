@@ -18,12 +18,6 @@ from backend import bot_settings as BS
 PR = "https://github.com/ticoteam/tico/pull/412"
 
 
-def preset(api, bot, name):
-    return post(
-        api, f"bots/{bot}/wake-preset", {"wake_preset": name, "expected_revision": get(api, "bots/" + bot)["revision"]}
-    )
-
-
 def notice(api, task, body, to="ops", **refs):
     with api.app.state.store.transaction() as c:
         return H._wake(c, H.task(c, task["id"]), "bot:" + to, body, refs or None)
@@ -78,59 +72,7 @@ def employee(api, bot):
     return {e["name"]: e for e in api.get("/api/employees", headers=headers()).json()}[bot]
 
 
-def test_existing_bots_use_performance_and_new_bots_start_as_doers(api):
-    view = get(api, "bots/ops")["wake"]
-    assert view["preset"] == "performance" and view["batch_seconds"] == 60
-    task = new_task(api, "existing")
-    notice(api, task, "Finished: a request", wake_batch="completion")
-    assert [(j["state"], j["held"]) for j in jobs(api)] == [("queued", 0), ("queued", 1)]
-    made = post(
-        api,
-        "bots",
-        {
-            "slug": "scout",
-            "display_name": "Scout",
-            "description": "A test bot.",
-            "status": "active",
-            "repo": "emp-scout",
-            "thread_mode": "personal",
-            "model": "hermes-profile",
-            "effort": "as-configured",
-            "harness": "hermes",
-            "operator": "ana",
-            "owners": ["ana"],
-            "runner_id": None,
-        },
-    )
-    assert made["wake"]["preset"] == "performance" and made["profile"]["name"] == "doer"
-    listed = {b["slug"]: b for b in get(api, "bots")}
-    assert listed["scout"]["wake"]["batch_seconds"] == 900 and listed["ops"]["wake"]["preset"] == "performance"
-    assert (
-        employee(api, "scout")["wake"]["batch_seconds"] == 900 and employee(api, "ops")["wake"]["batch_seconds"] == 60
-    )
-    preset(api, "ops", "performance")
-    assert employee(api, "ops")["wake"]["summary"].startswith("Performance")
-    preset(api, "ops", "current")  # older clients select Performance through the legacy alias
-    assert employee(api, "ops")["wake"]["preset"] == "performance"
-
-
-def test_legacy_wake_migration_is_idempotent_and_preserves_other_settings(api):
-    with api.app.state.store.transaction() as c:
-        BS.update(c, 'ops', {'wake_preset': 'current', 'compact_at': 400000})
-        before = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
-        W.ensure(c)
-        row = c.execute(
-            f"SELECT {BS.CONFIG} AS config,revision FROM bot_config bc {BS.JOIN} WHERE bot='ops'"
-        ).fetchone()
-        assert json.loads(row[0])["wake_preset"] == "performance"
-        assert json.loads(row[0])["compact_at"] == 400000 and row[1] == before + 1
-        W.ensure(c)
-        assert c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0] == before + 1
-
-
-@pytest.mark.parametrize("name", ["token_saver", "performance"])
-def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
-    preset(api, "ops", name)
+def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api):
     task = new_task(api, "assigned")  # an assignment
     post(api, "chat/ops", {"text": "Can you look at this?"})  # a person's question
     post(api, "chat/ops", {"text": "Can you look at this?"})  # the same, sent twice
@@ -170,9 +112,8 @@ def test_a_repeated_send_while_its_turn_runs_shows_that_turn_not_a_dismissal(api
     assert get(api, snapshot)["execution"]["label"] == "Delivery dismissed"
 
 
-@pytest.mark.parametrize("name,window", [("token_saver", 1800), ("performance", 60)])
-def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(api, name, window):
-    preset(api, "ops", name)
+def test_an_unchanged_webhook_queues_nothing_and_the_notice_wait_is_its_only_timer(api):
+    window = W.NOTICE_SECONDS
     task = post(api, "tasks", {"owner": "ops", "title": "Repair checks", "body": "x", "links": [PR]})
     failing = {
         "action": "created",
@@ -200,9 +141,7 @@ def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(ap
     assert [j["state"] for j in jobs(api) if j["id"] == ci["id"]] == ["canceled"]
 
 
-@pytest.mark.parametrize("name", ["token_saver", "performance"])
-def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unheld(api, name):
-    preset(api, "assistant", name)
+def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unheld(api):
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "bot:assistant", "Plan the launch", "Plan it.", "bot:assistant")
         task = H.task_create(
@@ -226,105 +165,23 @@ def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unhel
         assert woken and all(row["held"] == 0 for row in woken)
 
 
-def test_token_saver_gives_three_notices_in_its_window_one_wake(api):
-    preset(api, "ops", "token_saver")
-    tasks = [new_task(api, f"report {n}") for n in range(3)]
-    since = H.now()
-    t0 = H.shift(H.now(), hours=-1)
-    for n, task in enumerate(tasks):
-        notice(api, task, f"Finished: part {n}", wake_batch="completion")
-        at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, minutes=10 * n))
-    tick(api, H.shift(t0, minutes=29))
-    assert all(j["held"] and j["hold_until"] == H.shift(t0, minutes=30) for j in jobs(api, since=since))
-    tick(api, H.shift(t0, minutes=31))
-    rows = jobs(api, since=since)
-    assert [j["state"] for j in rows] == ["canceled"] * 3 + ["queued"]
-    assert rows[-1]["wake_class"] == "digest" and all(f"report {n}" in rows[-1]["body"] for n in range(3))
-    # The next batch waits a whole window after this one went out.
-    notice(api, tasks[0], "Finished: part 4", wake_batch="completion")
-    at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, minutes=40))
-    tick(api, H.shift(t0, minutes=41))
-    assert jobs(api, since=since)[-1]["hold_until"] == H.shift(t0, minutes=70)
-
-
-def test_performance_coalesces_one_tasks_notices_within_a_minute(api):
-    preset(api, "ops", "performance")
+def test_one_tasks_notices_inside_the_five_minute_wait_give_one_wake(api):
     task = new_task(api, "fix")
     since, t0 = H.now(), H.shift(H.now(), hours=-1)
     for n, body in enumerate(("1 review comments on tico#412", "2 review comments on tico#412")):
         notice(api, task, body, wake_batch="review")
         at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, seconds=20 * n))
-    tick(api, H.shift(t0, seconds=59))
+    tick(api, H.shift(t0, seconds=W.NOTICE_SECONDS - 1))
     assert all(j["held"] for j in jobs(api, since=since))
-    tick(api, H.shift(t0, seconds=61))
+    tick(api, H.shift(t0, seconds=W.NOTICE_SECONDS + 1))
     assert [(j["state"], j["held"]) for j in jobs(api, since=since)] == [("completed", 0), ("queued", 0)]
 
 
-@pytest.mark.parametrize("name,gap", [("token_saver", 2 * 3600), ("performance", 15 * 60)])
-def test_an_enabled_sweep_runs_at_most_once_per_cap_from_its_actual_start(api, name, gap):
-    machine = task_bot(api, lanes=True)
-    preset(api, "ops", name)
-    task = new_task(api, "hourly digest")
-    settled(api)
-    since, t0 = H.now(), H.shift(H.now(), hours=-5)
-
-    def occurrence(n, when):
-        notice(api, task, f"Scheduled occurrence {n} absorbed into this open task.", wake="occurrence", sweep="s1")
-        at(api, jobs(api, since=since)[-1]["id"], when)
-        tick(api, H.shift(when, seconds=1))
-        return jobs(api, since=since)[-1]
-
-    first = occurrence(0, t0)
-    assert (first["state"], first["held"]) == ("queued", 0)  # the first run starts at once
-    assert occurrence(1, H.shift(t0, seconds=60))["state"] == "canceled"  # it has not run yet: nothing to add
-    # Its computer takes it just before the cap and finishes; the next run is spaced from that start.
-    attempt = claim(api, machine)
-    started = H.shift(t0, seconds=gap - 60)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (started, attempt["id"]))
-    finish(api, machine, attempt)
-    late = occurrence(2, H.shift(t0, seconds=gap + 60))
-    assert late["held"] and late["hold_until"] == H.shift(started, seconds=gap)
-
-
-def test_switching_presets_changes_only_the_preset(api):
-    with api.app.state.store.transaction() as c:
-        BS.update(c, 'ops', {'compact_at': 400000})
-        tables = [
-            t
-            for t in ("schedules", "triggers", "credential_grants", "subscriptions")
-            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()
-        ]
-
-        def state():
-            row = c.execute(
-                f"SELECT {BS.CONFIG} AS config,access FROM bot_config bc {BS.JOIN} WHERE bot='ops'"
-            ).fetchone()
-            config = json.loads(row[0])
-            config.pop("wake_preset", None)
-            return config, row[1], [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables]
-
-        before = state()
-    for name in ("performance", "token_saver", "current"):
-        assert preset(api, "ops", name)["wake"]["preset"] == ("performance" if name == "current" else name)
-        with api.app.state.store.read() as c:
-            assert state() == before
-    assert get(api, "bots/ops")["compact_at"] == 400000
-    with api.app.state.store.read() as c:
-        assert [
-            r[0]
-            for r in c.execute(
-                "SELECT after FROM settings_changes WHERE bot='ops' AND field='wake_preset' ORDER BY created_at"
-            )
-        ] == ['"token_saver"', '"performance"']
-
-
-def test_a_usage_limit_with_a_known_reset_waits_for_it_under_a_preset(api, monkeypatch):
+def test_a_usage_limit_with_a_known_reset_waits_for_it(api, monkeypatch):
     from backend.execution import cooling_off
     from backend.scheduler import Scheduler
 
     machine, _, attempt = setup_attempt(api)
-    preset(api, "ops", "token_saver")
     reset = H.shift(H.now(), minutes=40)[:19] + "+00:00"
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "reset"}, machine["token"])
     post(
@@ -347,25 +204,8 @@ def test_a_usage_limit_with_a_known_reset_waits_for_it_under_a_preset(api, monke
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "queued"
 
 
-def test_a_turn_records_its_wake_and_the_measures_count_it_by_preset(api):
-    machine = task_bot(api, lanes=True)
-    preset(api, "ops", "token_saver")
-    since = H.shift(H.now(), minutes=-1)
-    task = new_task(api, "measured")
-    assert claim(api, machine)
-    [run] = get(api, f"tasks/{task['id']}/run-view")["runs"]
-    assert run["wake"]["class"] == "assignment" and run["wake"]["preset_label"] == "Token saver"
-    assert run["wake"]["profile"] == "doer" and run["wake"]["profile_label"] == "Doer"  # what the run page shows
-    measures = {p["preset"]: p for p in get(api, "wake-presets/measures?since=" + since)["presets"]}
-    assert (
-        measures["token_saver"]["turns"] == 1 and measures["token_saver"]["pickup_seconds"]["immediate_p50"] is not None
-    )
-    assert measures["token_saver"]["missed_actions"] == 0 and measures["performance"]["jobs"] == 0
-
-
 def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
     machine = task_bot(api, lanes=True)
-    preset(api, "ops", "token_saver")
     task = new_task(api, "awaited")
     settled(api)
     body = "Unblocked: awaited\nThe migration is finished."
@@ -399,18 +239,20 @@ def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
     assert [j["state"] for j in jobs(api) if j["body"] == "Yes"] == ["queued", "queued"]
 
 
-@pytest.mark.parametrize("name,rooms", [("performance", 1), ("token_saver", 3)])
-def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_its_turn_is_over(api, name, rooms):
+@pytest.mark.parametrize("rooms", [1, 3])
+def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_its_turn_is_over(api, rooms):
     machine = task_bot(api, lanes=True)
-    preset(api, "ops", name)
     tasks = [new_task(api, "fix")] * 3 if rooms == 1 else [new_task(api, f"report {n}") for n in range(3)]
+    if rooms > 1:
+        lead(api)  # several rooms go out as one digest only for a Lead; any other bot gets one wake per room
     settled(api)
     since, t0 = H.now(), H.shift(H.now(), hours=-1)
     sent = [(task, f"Finished: part {n}") for n, task in enumerate(tasks)]
     for n, (task, body) in enumerate(sent):
         notice(api, task, body, wake_batch="completion")
         at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, seconds=20 * n))
-    tick(api, H.shift(t0, minutes=31))  # one room: the newest carries; else a digest
+    tick(api, H.now())
+    tick(api, H.shift(t0, days=2))  # one room: the newest carries; else a digest
     released = len(jobs(api, since=since))
     redeliver = lambda: [notice(api, task, body, wake_batch="completion") for task, body in sent]
     redeliver()  # while the carrier is queued
@@ -434,7 +276,6 @@ def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_i
 def test_a_batch_bigger_than_the_room_page_goes_out_as_a_digest_that_names_it(api):
     from backend.execution import HISTORY_PAGE
 
-    preset(api, "ops", "performance")
     task = new_task(api, "noisy")
     since, t0 = H.now(), H.shift(H.now(), hours=-1)
     count = HISTORY_PAGE // 2 + 5
@@ -456,24 +297,32 @@ def test_a_batch_bigger_than_the_room_page_goes_out_as_a_digest_that_names_it(ap
         )
 
 
+def lead(api, bot="ops"):
+    """A Lead: its notices wait for its daily digest hour, one digest for the bot (backend/profiles.py)."""
+    with api.app.state.store.transaction() as c:
+        BS.update(c, bot, {"profile": "lead"})
+
+
 def test_a_digest_over_many_rooms_names_the_newest_and_counts_the_rest(api):
     from backend import wake_presets as WP
 
-    preset(api, "ops", "token_saver")
+    lead(api)
     tasks = [new_task(api, f"room {n}") for n in range(WP.DIGEST_ROOMS + 5)]
     since, t0 = H.now(), H.shift(H.now(), hours=-1)
     for n, task in enumerate(tasks):
         notice(api, task, f"Finished: part {n}", wake_batch="completion")
         at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, seconds=n))
-    tick(api, H.shift(t0, minutes=31))
+    tick(api, H.now())
+    tick(api, H.shift(t0, days=2))
     digest = jobs(api, since=since)[-1]["body"]
     assert "and updates in 5 more rooms" in digest
     assert tasks[-1]["conversation_id"] in digest and tasks[0]["conversation_id"] not in digest  # newest first
 
 
 def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(api):
+    """`measures` reads the preset a past job recorded: history only, since new jobs record none."""
     machine = task_bot(api, lanes=True)
-    preset(api, "ops", "token_saver")
+    lead(api)
     tasks = [new_task(api, f"report {n}") for n in range(3)]
     settled(api)
     since, t0 = H.now(), H.shift(H.now(), hours=-1)
@@ -486,7 +335,11 @@ def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(ap
                 "UPDATE messages SET created_at=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)",
                 (H.shift(t0, minutes=10 * n), job["id"]),
             )
-    tick(api, H.shift(t0, minutes=31))
+            c.execute("UPDATE jobs SET wake_preset='token_saver' WHERE id=?", (job["id"],))  # as a past job did
+    tick(api, H.now())
+    tick(api, H.shift(t0, days=2))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET wake_preset='token_saver' WHERE wake_class='digest' AND bot_id='ops'")
     attempt = claim(api, machine)
     finish(api, machine, attempt, usage={"input_tokens": 900, "cached_tokens": 0, "output_tokens": 0, "model": "fake"})
     with api.app.state.store.transaction() as c:
@@ -514,14 +367,13 @@ def stale_comments(api, task, n):
 
 
 def finished_requests(api, task, n):
-    """Nonblocking news a preset batches: requests the bot asked for, finished (refs.wake_batch)."""
+    """Nonblocking news the notice wait batches: requests the bot asked for, finished (refs.wake_batch)."""
     with api.app.state.store.transaction() as c:
         for i in range(n):
             H._wake(c, H.task(c, task["id"]), "bot:ops", f"Finished: request {i}", {"wake_batch": "completion"})
 
 
 def test_comments_start_no_turn_and_two_finished_requests_inside_the_window_give_one(api):
-    preset(api, "ops", "performance")
     task = new_task(api, "tidy")
     settled(api)
     since, t0 = H.now(), H.shift(H.now(), hours=-1)
@@ -530,14 +382,13 @@ def test_comments_start_no_turn_and_two_finished_requests_inside_the_window_give
     finished_requests(api, task, 2)
     for n, job in enumerate(jobs(api, since=since)):
         at(api, job["id"], H.shift(t0, seconds=20 * n))
-    tick(api, H.shift(t0, seconds=59))
+    tick(api, H.shift(t0, seconds=W.NOTICE_SECONDS - 1))
     assert [(j["held"], j["wake_class"]) for j in jobs(api, since=since)] == [(1, "completion")] * 2
-    tick(api, H.shift(t0, seconds=61))
+    tick(api, H.shift(t0, seconds=W.NOTICE_SECONDS + 1))
     assert [(j["state"], j["held"]) for j in jobs(api, since=since)] == [("completed", 0), ("queued", 0)]
 
 
 def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
-    preset(api, "ops", "token_saver")
     task = new_task(api, "tidy")
     settled(api)
     since = H.now()
@@ -554,7 +405,6 @@ def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
 def test_a_persons_done_through_botops_wakes_no_bot_about_the_done_task(api, botops):
     """BotOps marking done, for the person, a task a bot asked them for: the person's act, as the same act from the app
     is. Pipelines v3 wakes no bot about a Done task (docs/pipelines-v3.md, check rule 7), so nothing is queued or held."""
-    preset(api, "ops", "token_saver")
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Approve the vendor list", "Please check it.", "human:ana")
     attempt = turn(api, botops, person="ana-test", text="Mark the vendor list done")
@@ -577,7 +427,6 @@ def held_notice(api, task):
 
 
 def test_run_now_wakes_the_bot_while_a_notice_on_the_task_is_held(api):
-    preset(api, "ops", "token_saver")
     task = new_task(api, "tidy")
     settled(api)
     held_notice(api, task)

@@ -717,21 +717,34 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .wh-type,.wh-outcome{min-width:0;overflow-wrap:anywhere}
 .wh-call-ctl{justify-content:flex-end}
 .wh-sends .wh-call{grid-template-columns:5.5em minmax(0,1fr) minmax(0,1.4fr) 4em 4em auto}
-.wh-events{display:grid;gap:8px;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;min-width:0}
-.wh-events legend{padding:0 4px;color:var(--muted);font-size:var(--t-sm)}
-.wh-ev-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 14px}
-.wh-ev-group{display:grid;gap:2px;align-content:start;min-width:0;font-size:var(--t-sm)}
-.wh-ev-group label{gap:6px!important;flex-wrap:nowrap!important;overflow-wrap:anywhere}
-.wh-ev-group label:not(:first-child){padding-left:4px}
 .wh-pre{margin:0;padding:8px 10px;max-height:40vh;overflow:auto;border-radius:6px;background:var(--surface2);font-size:var(--t-xs);white-space:pre-wrap;overflow-wrap:anywhere}
 .wh-payload-meta{margin:0}
 .wh-dialog .wr-sub{margin:0}
-.wh-filter-head{color:var(--muted)}
-.wh-filter-items{display:grid;gap:2px;max-height:180px;overflow:auto}.wh-ev-group .wh-filter-items label{padding-left:0}
+/* Every whDialog: the title alone in the header; one footer, the form's last child, pinned to the scrolling dialog's
+   bottom: a .danger button far left, the refusal, then Cancel and the submit on the right. */
+.wh-dialog .task-rule-form{padding:20px 20px 0}
+.wh-foot{position:sticky;bottom:0;z-index:1;margin:0 -20px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 20px;
+  background:var(--surface);border-top:1px solid var(--line)}
+.wh-foot .spacer{flex:1}.wh-foot .danger{order:-1}.wh-foot .err{margin:0}.wh-foot .err:empty{display:none}
+/* The endpoint form's Events, Sends for and Headers: a label like Name's, then one input-high row (what it is now, one
+   ghost button); a list opens in place below. One type size: nothing here sets a font-size. */
+.wh-sums{display:flex;flex-direction:column;gap:16px}
+.wh-sum{display:grid;gap:4px;min-width:0}
+.wh-sum-k{color:var(--ink)}
+.wh-sum-row{display:flex;align-items:center;gap:12px;min-height:32px}.wh-sum-row>span{flex:1;min-width:0}
+.wh-pick{display:grid;gap:12px;padding:4px 0}
+.wh-dialog .wh-pick label{line-height:20px;gap:8px;flex-wrap:nowrap}
+.wh-area{display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:start}
+.wh-area-k{font-weight:500}
+.wh-area-items{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 16px}
+.wh-filters{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.wh-filter{display:grid;gap:6px;align-content:start;min-width:0}.wh-filter-k{font-weight:500}
+.wh-filter-items{display:grid;gap:6px}
+@media (max-width:560px){.wh-area,.wh-area-items,.wh-filters{grid-template-columns:minmax(0,1fr)}}
 .wh-hdrs{display:grid;gap:6px}.wh-hdrs:empty{display:none}
 .wh-hdr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto auto;gap:6px 8px;align-items:center}
 .wh-hdr input:not([type=checkbox]){width:100%}
-.wh-hdr .wh-hdr-secret{gap:6px;font-size:var(--t-sm);white-space:nowrap}
+.wh-hdr .wh-hdr-secret{gap:6px;white-space:nowrap}
 .wh-wake{font-size:var(--t-sm);white-space:nowrap}
 .wh-wake-url{margin-bottom:12px}.wh-wake-url input{width:100%;min-width:0}
 .wh-wake-url .err{margin:0;font-size:var(--t-sm)}
@@ -934,6 +947,7 @@ section.card>header .settings-head-act{margin-left:auto}
   .subs-table td{padding:0;border:0;white-space:normal;min-width:0}
   .subs-table .subs-name{grid-column:1;grid-row:1;overflow-wrap:anywhere}
   .subs-table .subs-count{grid-column:2;grid-row:1}
+  .subs-table .subs-offline{width:40px;height:40px;margin:-16px -14px -16px -10px}
   .subs-table .subs-more-cell{grid-column:3;grid-row:1;width:auto}
   .subs-table .subs-use{grid-column:1/-1;grid-row:2;padding-top:2px}
   .subs-table .subs-use:empty{display:none}
@@ -953,13 +967,14 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-noone{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted)}
 .subs-you{font-size:var(--t-sm);font-weight:400}
 .subs-in-use td{background:color-mix(in srgb,var(--ok) 8%,transparent)}
-.subs-pick-line{display:block;margin-top:2px;font-size:var(--t-sm)}
-.subs-pick-mark{color:var(--muted)}.subs-pick-mark.in-use{color:var(--ok)}
+.subs-mark{margin-left:6px;font-size:var(--t-sm);font-weight:400;vertical-align:1px}.subs-mark.in-use{color:var(--ok)}
+.subs-offline{display:inline-grid;place-items:center;width:24px;height:24px;margin:-8px -8px -8px -2px;padding:0;border:0;background:none;cursor:pointer;vertical-align:middle}
+.subs-offline::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--wait)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
 .subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
 .subs-reset{white-space:nowrap}.subs-reset::before{content:'·';margin-right:6px;opacity:.6}
-.subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}
+.subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}.subs-bar.bad{box-shadow:inset 0 0 0 1px var(--fail)}
 .subs-more-cell{width:1%;text-align:right}
 .subs-more{min-height:var(--ctl-sm);padding:0 8px;line-height:1}
 .subs-reconnect{cursor:pointer;border:0;font:inherit;font-size:var(--t-sm)}

@@ -183,6 +183,33 @@ const hash = (page: Page) => new URL(page.url()).hash;
 const go = (page: Page, to: string) => page.evaluate(to => { location.hash = to; }, to);
 // The Gateway's Webhooks fold, drawn again (what reopening it does).
 const redraw = (page: Page) => page.evaluate(() => whMount('gateway'));
+// The open whDialog as a person sees it: its fields' labels and the space between them, what is ticked or in view, and
+// any text not at the body's one size or any line but the footer's (inputs and buttons keep their own borders).
+const dialogLook = (page: Page) => page.locator('.wh-dialog').evaluate(d => {
+  const form = d.querySelector('form')!, foot = form.querySelector<HTMLElement>('.wh-foot')!, shown = (e: Element) => (e as HTMLElement).offsetParent !== null;
+  const fields = [...form.querySelectorAll<HTMLElement>(':scope > label, .wh-sum')].filter(shown);
+  const label = (f: HTMLElement) => f.matches('.wh-sum') ? f.querySelector<HTMLElement>('.wh-sum-k')! : f;
+  const rect = (e: Element) => e.getBoundingClientRect(), box = rect(d), submit = foot.querySelector('[type=submit]');
+  const body = [...form.querySelectorAll<HTMLElement>('*')].filter(e => shown(e) && !e.closest('header'));
+  const texts = body.filter(e => [...e.childNodes].some(n => n.nodeType === 3 && n.textContent!.trim()));
+  const lined = body.filter(e => !e.matches('input, select, textarea, button') && ['Top', 'Right', 'Bottom', 'Left'].some(side => parseFloat(getComputedStyle(e).getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0));
+  return {
+    fields: fields.map(f => label(f).firstChild!.textContent!.trim()),
+    labelStyle: [...new Set(fields.map(f => { const cs = getComputedStyle(label(f)); return `${cs.color} ${cs.fontSize} ${cs.fontWeight}`; }))],
+    gaps: fields.slice(1).map((f, i) => Math.round(rect(f).top - rect(fields[i]!).bottom)),
+    rows: [...form.querySelectorAll<HTMLElement>('.wh-sum-row')].map(r => [...r.children].filter(shown).map(c => (c as HTMLElement).innerText.trim())),
+    ticks: [...form.querySelectorAll('input[type=checkbox]')].filter(shown).length,
+    scrolls: d.scrollHeight > d.clientHeight + 1,
+    submitInView: !!submit && rect(submit).bottom <= Math.min(box.bottom, innerHeight) + 0.5 && rect(submit).top >= box.top,
+    footPinned: Math.abs(rect(foot).bottom - box.bottom) <= 1.5 && rect(foot).bottom <= innerHeight + 0.5,
+    footLast: form.lastElementChild === foot,
+    head: [...form.querySelector('header')!.children].map(c => c.tagName.toLowerCase()),
+    footButtons: [...foot.querySelectorAll<HTMLElement>('button')].filter(shown).sort((a, b) => rect(a).left - rect(b).left).map(b => b.innerText.trim()),
+    sizes: [...new Set(texts.map(e => getComputedStyle(e).fontSize))],
+    lines: lined.map(e => e.className || e.tagName),
+    boxes: form.querySelectorAll('fieldset, legend').length,
+  };
+});
 const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gateway', GATEWAY_LINK = '#/settings/models/wh-gateway';
 
 (async () => {
@@ -273,29 +300,74 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await pane.locator('[data-wh-open="shop"]').waitFor();
       assert.equal(hash(page), '#/automations/webhooks');
 
-      // Outgoing, on Tools: the picker sends a whole group as group.* and single events by name; the secret shows once.
+      // Outgoing, on Tools. The list says each endpoint's events in words.
       await go(page, '#/tools/webhooks');
       pane = page.locator(OUTGOING);
       await pane.locator('[data-wh-hook="wh1"]').waitFor();
       assert.match(await pane.locator('[data-wh-hook="wh1"]').innerText(), /Paused[\s\S]*40 sent · 3 failed/);
+      assert.match(await pane.locator('[data-wh-hook="wh1"]').innerText(), /hooks\.zapier\.com · All tasks, Bot run failed/);
       await shot(page, 'outgoing-list-desktop', OUTGOING);
+      // New endpoint at 1440×900: five fields in one rhythm, each section one line at its default, no box, no tick, no
+      // scroll, one size of text, Create in view and the footer's line the only one.
       await pane.locator('[data-wh-hook-new]').click();
       const make = page.locator('.wh-dialog');
-      await make.locator('[name=name]').fill('Make.com');
-      await make.locator('[name=url]').fill('https://hook.make.com/abc');
-      for (const e of CATALOG.filter(x => x.outbound === false)) assert.equal(await make.locator(`[data-ev-name="${e.name}"]`).count(), 0, e.name + ' is for automations only');
-      assert.equal(await make.locator('[data-ev-name="strategy.published"]').count(), 1);
-      await make.locator('[data-ev-all]').uncheck();
-      assert.equal(await make.locator('.wh-ev-groups input:checked').count(), 0, 'unchecking All clears the boxes');
-      await make.locator('[data-ev-group="task"] [data-ev-head]').check();
-      await make.locator('[data-ev-name="bot.run_failed"]').check();
-      assert.equal(await make.locator('[data-ev-group="task"] [data-ev-name]:checked').count(), CATALOG.filter(e => e.group === 'task').length);
+      await make.locator('[data-wh-events]').waitFor();
+      let look = await dialogLook(page);
+      assert.deepEqual(look.fields, ['Name', 'URL', 'Events', 'Sends for', 'Headers']);
+      assert.equal(look.labelStyle.length, 1, 'every field is labelled alike: ' + look.labelStyle.join(' | '));
+      assert.deepEqual(look.gaps, [16, 16, 16, 16]);
+      assert.deepEqual(look.rows, [['All events', 'Choose'], ['Every department, bot and pipeline', 'Narrow'], ['None', 'Add header']]);
+      assert.equal(look.ticks, 0, 'no checkbox until something is chosen');
+      assert.equal(look.scrolls, false, 'nothing to scroll');
+      assert.equal(look.submitInView, true, 'Create is in view');
+      assert.deepEqual(look.sizes, ['13px'], 'one type size in the body');
+      assert.deepEqual(look.lines, ['wh-foot'], 'the footer has the only line');
+      assert.equal(look.boxes, 0, 'no fieldset or legend');
+      assert.deepEqual(look.head, ['h2'], 'the header holds the title only');
+      assert.equal(look.footLast, true);
+      assert.deepEqual(look.footButtons, ['Cancel', 'Create']);
+      const name = make.locator('[name=name]');
+      for (const [k, v] of [['autocomplete', 'off'], ['data-1p-ignore', ''], ['data-lpignore', 'true'], ['data-bwignore', ''], ['data-form-type', 'other']])
+        assert.equal(await name.getAttribute(k!), v, `Name ${k} keeps password managers off`);
       if (shots) { await settled(page); await make.screenshot({path: path.join(shots, 'outgoing-new-desktop.png')}); }
+      await name.fill('Make.com');
+      await make.locator('[name=url]').fill('https://hook.make.com/abc');
+      // Choose: areas, plain words, nothing ticked, focus on the first box; the code and description are its tooltip.
+      for (const e of CATALOG.filter(x => x.outbound === false)) assert.equal(await make.locator(`[data-ev-name="${e.name}"]`).count(), 0, e.name + ' is for automations only');
+      await make.locator('[data-ev-choose]').click();
+      const evPick = make.locator('[data-ev-pick]');
+      assert.equal(await evPick.getAttribute('role'), 'group');
+      assert.equal(await evPick.getAttribute('aria-label'), 'Events');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.evName), 'task.created', 'focus is on the first box');
+      assert.equal(await evPick.locator('input:checked').count(), 0, 'nothing ticked');
+      assert.deepEqual(await evPick.locator('.wh-area-k').allInnerTexts(), ['Tasks', 'Messages', 'Bots', 'Rules', 'Other']);
+      const created1 = evPick.locator('label', {has: page.locator('[data-ev-name="task.created"]')});
+      assert.equal((await created1.innerText()).trim(), 'Task created');
+      assert.equal(await created1.getAttribute('title'), 'task.created · A task was filed.');
+      assert.equal((await evPick.locator('label', {has: page.locator('[data-ev-name="strategy.published"]')}).innerText()).trim(), 'Strategy published');
+      assert.deepEqual(await evPick.locator('.wh-area-items label').evaluateAll(ls => ls.filter(l => l.getBoundingClientRect().height > 21).map(l => (l as HTMLElement).innerText)), [], 'no label wraps');
+      assert.deepEqual(await make.locator('.wh-sum-row').first().locator('button:visible').allInnerTexts(), ['All events']);
+      assert.equal((await make.locator('[data-ev-words]').innerText()).trim(), 'None chosen');
+      // Nothing ticked: Create says so in the footer, in view.
+      await make.locator('button[type=submit]').click();
+      const refusal = make.locator('.wh-foot [data-wh-error]');
+      await page.waitForFunction(() => document.querySelector('.wh-foot [data-wh-error]')?.textContent === 'Pick at least one event');
+      assert.ok(await refusal.evaluate(e => { const r = e.getBoundingClientRect(); return r.height > 0 && r.bottom <= innerHeight && r.top >= 0; }), 'the refusal is in view');
+      // The Tasks area, Bot held and Health finding: a whole group goes as group.*, the rest by name.
+      await evPick.locator('[data-ev-area="tasks"] [data-ev-head]').check();
+      await evPick.locator('[data-ev-name="bot.held"]').check();
+      await evPick.locator('[data-ev-name="health.finding"]').check();
+      assert.equal(await evPick.locator('[data-ev-area="tasks"] [data-ev-name]:checked').count(), CATALOG.filter(e => e.group === 'task').length);
+      assert.equal(await evPick.locator('[data-ev-area="bots"] [data-ev-head]').evaluate(h => (h as HTMLInputElement).indeterminate), true, 'a part-ticked area shows the dash');
+      assert.equal((await make.locator('[data-ev-words]').innerText()).trim(), 'All tasks, Bot held, Health finding');
+      if (shots) { await settled(page); await make.screenshot({path: path.join(shots, 'outgoing-choose-desktop.png')}); }
       await make.locator('button[type=submit]').click();
       await make.waitFor({state: 'detached'});
       await pane.locator('[data-wh-secret="secret"]').waitFor();
       const created = state.posts.find(x => x.path === '/api/v2/webhooks')!;
-      assert.deepEqual(created.body.events, ['task.*', 'bot.run_failed']);
+      assert.deepEqual(created.body.events, ['task.*', 'bot.held', 'health.finding']);
+      assert.equal((await pane.locator('[data-wh-event-facts]').innerText()).trim(), 'All tasks, Bot held, Health finding');
+      assert.equal(await pane.locator('[data-wh-event-facts]').getAttribute('title'), 'task.*, bot.held, health.finding', 'the codes are the tooltip');
       assert.equal(await pane.locator('[data-wh-secret="secret"] code').innerText(), 'whsec_b3V0Z29pbmc=');
       await pane.locator('[data-wh-back]').click();
       await pane.locator('[data-wh-hook="wh1"]').click();
@@ -304,6 +376,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.equal(await pane.locator('[data-wh-send="s2"] [data-wh-retry]').count(), 1);
       assert.equal(await pane.locator('[data-wh-send="s1"] [data-wh-retry]').count(), 0, 'no retry on a delivered send');
       assert.match(await pane.locator('[data-wh-filter-facts]').innerText(), /Engineering · Engineer/);
+      assert.match(await pane.locator('.wh-facts').innerText(), /Sends for\s+Engineering · Engineer/);
       assert.match(await pane.locator('[data-wh-header-facts]').innerText(), /x-api-key secret, x-team/);
       await shot(page, 'outgoing-detail-desktop', OUTGOING);
       // Edit: filters and custom headers. The secret header shows "set", empty, and empty keeps it.
@@ -316,8 +389,12 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.equal(await secretRow.locator('[data-hdr-value]').getAttribute('type'), 'password');
       assert.equal(await edit.locator('[data-hdr]').nth(1).locator('[data-hdr-value]').inputValue(), 'acme');
       assert.equal(await edit.locator('[data-hdr]').nth(1).locator('[data-hdr-value]').getAttribute('type'), 'text');
-      assert.equal(await edit.locator('[data-filter="departments"] [data-filter-all]').isVisible(), false);
-      assert.equal(await edit.locator('[data-filter="pipelines"] [data-filter-all]').isVisible(), true, 'an empty list says All');
+      // A section that holds a choice opens; the lists say no "All".
+      assert.equal(await edit.locator('[data-ev-pick]').isVisible(), true, 'events not All: open');
+      assert.equal(await edit.locator('[data-filter-pick]').isVisible(), true, 'a filter: open');
+      assert.equal((await edit.locator('[data-filter-words]').innerText()).trim(), '1 department, 1 bot');
+      assert.doesNotMatch(await edit.locator('[data-filter-pick]').innerText(), /\bAll\b/);
+      assert.equal((await edit.locator('[data-hdr-none]').innerText()).trim(), '', 'None goes once a header is there');
       await edit.locator('[data-filter="departments"] input[value="engineering"]').uncheck();
       await edit.locator('[data-filter="bots"] input[value="ops"]').check();
       await edit.locator('[data-hdr-add]').click();
@@ -340,6 +417,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.deepEqual(saved.headers, [{name: 'x-api-key', secret: true}, {name: 'x-team', value: 'acme', secret: false},
         {name: 'Authorization', value: 'Bearer abc', secret: true}], 'blank rows are dropped and the kept secret is sent without a value');
       assert.equal(saved.expected_revision, 2);
+      assert.deepEqual(saved.events, ['task.*', 'bot.run_failed'], 'the events it had');
       await pane.locator('[data-wh-sends]').waitFor();
       const retried = page.waitForResponse(r => r.url().endsWith('/sends/s2/retry'));
       await pane.locator('[data-wh-send="s2"] [data-wh-retry]').click();
@@ -526,6 +604,125 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
         assert.deepEqual(errors, []);
         await page.close();
       }
+    }
+    {
+      // The endpoint form's other paths: the Messages area, All events, editing a narrowed endpoint, Narrow, and the
+      // footer every whDialog shares.
+      const state = server();
+      state.hooks.push({...state.hooks[0]!, id: 'wh3', name: 'Ops pager', enabled: true, paused_reason: '', events: ['bot.held', 'custom.deploy'],
+        filter: {departments: [], bots: [], pipelines: ['engineering']}, headers: [{name: 'x-team', secret: false, value: 'acme'}]});
+      const {page, errors} = await open(browser, '#/tools/webhooks', undefined, state);
+      const pane = page.locator(OUTGOING), dlg = page.locator('.wh-dialog');
+      await pane.locator('[data-wh-hook="wh3"]').waitFor();
+      assert.match(await pane.locator('[data-wh-hook="wh3"]').innerText(), /Bot held, custom\.deploy/, 'a code the catalog does not know shows as itself');
+      // The Messages area is thread.created and message.*; the page reads "All messages".
+      await pane.locator('[data-wh-hook-new]').click();
+      await dlg.locator('[name=name]').fill('Chat log');
+      await dlg.locator('[name=url]').fill('https://chat.acme.example/in');
+      await dlg.locator('[data-ev-choose]').click();
+      await dlg.locator('[data-ev-area="messages"] [data-ev-head]').check();
+      await dlg.locator('button[type=submit]').click();
+      await dlg.waitFor({state: 'detached'});
+      await pane.locator('[data-wh-event-facts]').waitFor();
+      assert.deepEqual(state.posts.at(-1)!.body.events, ['thread.created', 'message.*']);
+      assert.equal((await pane.locator('[data-wh-event-facts]').innerText()).trim(), 'All messages');
+      await pane.locator('[data-wh-back]').click();
+      // Three ticked, then All events: the boxes clear, the list closes, focus is on Choose, and it saves ['*'].
+      await pane.locator('[data-wh-hook-new]').click();
+      await dlg.locator('[name=name]').fill('Everything');
+      await dlg.locator('[name=url]').fill('https://all.acme.example/in');
+      await dlg.locator('[data-ev-choose]').click();
+      for (const n of ['task.done', 'bot.held', 'meeting.ready']) await dlg.locator(`[data-ev-name="${n}"]`).check();
+      await dlg.locator('[data-ev-back]').click();
+      assert.equal(await dlg.locator('[data-ev-pick]').isVisible(), false, 'the list closes');
+      assert.equal(await dlg.locator('[data-ev-name]:checked').count(), 0, 'the boxes clear');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).matches('[data-ev-choose]')), true, 'focus is on Choose');
+      assert.equal((await dlg.locator('[data-ev-words]').innerText()).trim(), 'All events');
+      // Narrow: three lists side by side, no "All", no inner scroll; the line counts; Send for all undoes it.
+      await dlg.locator('[data-filter-narrow]').click();
+      const narrowed = dlg.locator('[data-filter-pick]');
+      assert.equal(await narrowed.getAttribute('role'), 'group');
+      assert.equal(await narrowed.getAttribute('aria-label'), 'Sends for');
+      assert.deepEqual(await narrowed.locator('.wh-filter-k').allInnerTexts(), ['Departments', 'Bots', 'Pipelines']);
+      assert.equal(new Set(await narrowed.locator('.wh-filter').evaluateAll(cs => cs.map(c => Math.round(c.getBoundingClientRect().top)))).size, 1, 'three columns');
+      await narrowed.locator('[data-filter="departments"] input[value="engineering"]').check();
+      await narrowed.locator('[data-filter="departments"] input[value="sales"]').check();
+      await narrowed.locator('[data-filter="bots"] input[value="ops"]').check();
+      assert.doesNotMatch(await narrowed.innerText(), /\bAll\b/);
+      assert.deepEqual(await narrowed.locator('.wh-filter-items').evaluateAll(ls => ls.filter(l => l.scrollHeight > l.clientHeight + 1 || getComputedStyle(l).overflowY !== 'visible').length), 0, 'no inner scroll');
+      assert.equal((await dlg.locator('[data-filter-words]').innerText()).trim(), '2 departments, 1 bot');
+      assert.deepEqual(await dlg.locator('.wh-sum-row').nth(1).locator('button:visible').allInnerTexts(), ['Send for all']);
+      if (shots) { await settled(page); await dlg.screenshot({path: path.join(shots, 'outgoing-narrow-desktop.png')}); }
+      await dlg.locator('[data-filter-back]').click();
+      assert.equal(await narrowed.isVisible(), false);
+      assert.equal(await narrowed.locator('input:checked').count(), 0, 'Send for all unticks everything');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).matches('[data-filter-narrow]')), true, 'focus is on Narrow');
+      await dlg.locator('button[type=submit]').click();
+      await dlg.waitFor({state: 'detached'});
+      const all = state.posts.at(-1)!.body;
+      assert.deepEqual(all.events, ['*']);
+      assert.equal(all.filter, undefined, 'nothing narrowed sends no filter');
+      await pane.locator('[data-wh-back]').click();
+      // Edit an endpoint with two events (one the catalog does not know), a pipeline filter and a header: all three
+      // sections open, and Save without changes sends what it had.
+      await pane.locator('[data-wh-hook="wh3"]').click();
+      await pane.locator('[data-wh-hook-edit]').click();
+      await dlg.locator('[data-wh-events]').waitFor();
+      assert.equal(await dlg.locator('[data-ev-pick]').isVisible(), true);
+      assert.equal(await dlg.locator('[data-filter-pick]').isVisible(), true);
+      assert.equal(await dlg.locator('[data-hdr]').count(), 1);
+      assert.equal(await dlg.locator('[data-ev-name="bot.held"]').isChecked(), true);
+      assert.equal(await dlg.locator('[data-ev-area="bots"] [data-ev-head]').evaluate(h => (h as HTMLInputElement).indeterminate), true);
+      assert.equal(await dlg.locator('[data-ev-area="other"] [data-ev-name="custom.deploy"]').isChecked(), true, 'an unknown code stays, ticked, under Other');
+      assert.equal(await dlg.locator('[data-filter="pipelines"] input[value="engineering"]').isChecked(), true);
+      assert.equal((await dlg.locator('[data-ev-words]').innerText()).trim(), 'Bot held, custom.deploy');
+      assert.equal((await dlg.locator('[data-filter-words]').innerText()).trim(), '1 pipeline');
+      if (shots) { await settled(page); await dlg.screenshot({path: path.join(shots, 'outgoing-edit-open-desktop.png')}); }
+      await dlg.locator('button[type=submit]').click();
+      await dlg.waitFor({state: 'detached'});
+      const kept = state.posts.find(x => x.path === '/api/v2/webhooks/wh3/update')!.body;
+      assert.deepEqual(kept.events, ['bot.held', 'custom.deploy']);
+      assert.deepEqual(kept.filter, {departments: [], bots: [], pipelines: ['engineering']});
+      assert.deepEqual(kept.headers, [{name: 'x-team', value: 'acme', secret: false}]);
+      // Every whDialog: title alone in the header, one footer pinned to the bottom, Cancel then the submit (Close when
+      // there is none), Signing's Turn off far left.
+      await go(page, '#/automations/webhooks/shop');
+      const incoming = page.locator(INCOMING);
+      await incoming.locator('[data-wh-calls]').waitFor();
+      for (const [open, buttons] of [['[data-wh-edit]', ['Cancel', 'Save']], ['[data-wh-sign]', ['Turn off', 'Cancel', 'Save']],
+        ['[data-wh-call="d2"] [data-wh-payload]', ['Close']]] as [string, string[]][]) {
+        await incoming.locator(open).click();
+        await dlg.locator('.wh-foot').waitFor();
+        const seen = await dialogLook(page);
+        assert.deepEqual(seen.head, ['h2'], open);
+        assert.equal(seen.footLast, true, open);
+        assert.deepEqual(seen.footButtons, buttons, open);
+        assert.equal(seen.footPinned, true, open);
+        await dlg.locator('[data-close]').click();
+        await dlg.waitFor({state: 'detached'});
+      }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // Phone, 400px: Choose and Narrow open stack in one column, the footer stays in view while the body scrolls, and
+      // nothing scrolls sideways.
+      const {page, errors} = await open(browser, '#/tools/webhooks', {width: 400, height: 800});
+      const pane = page.locator(OUTGOING), dlg = page.locator('.wh-dialog');
+      await pane.locator('[data-wh-hook-new]').click();
+      await dlg.locator('[data-ev-choose]').click();
+      await dlg.locator('[data-filter-narrow]').click();
+      const cols = await dlg.evaluate(d => ['.wh-area', '.wh-area-items', '.wh-filters'].map(sel => getComputedStyle(d.querySelector(sel)!).gridTemplateColumns.split(' ').length));
+      assert.deepEqual(cols, [1, 1, 1], 'one column each');
+      const look = await dialogLook(page);
+      assert.equal(look.scrolls, true, 'the body scrolls here');
+      assert.equal(look.footPinned, true, 'the footer stays at the bottom');
+      await dlg.evaluate(d => { d.scrollTop = d.scrollHeight / 2; });
+      assert.equal((await dialogLook(page)).footPinned, true, 'and while scrolled');
+      assert.ok(await dlg.evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'nothing sideways');
+      if (shots) { await settled(page); await page.screenshot({path: path.join(shots, 'outgoing-new-open-phone.png')}); }
+      assert.deepEqual(errors, []);
+      await page.close();
     }
     {
       // Phone: list, detail, outgoing and Gateway with nothing sideways.

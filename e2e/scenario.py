@@ -312,9 +312,14 @@ def capture(client, ids, token=OWNER):
 
 
 def events(stream):
-    """The catch-up stream read from change 0: every change up to `ready`, then anything that follows in half a second."""
-    stream.until(lambda event: event["event"] == "ready")
-    stream.drain(0.5)
+    """The catch-up stream read from change 0, through the change `ready` names as newest.
+
+    `ready` comes first and the catch-up follows it, so this waits (with the stream's deadline) for the frame whose id
+    reaches `ready`'s seq: the server always ends a catch-up there, with the last event or a `cursor` frame. Reading a
+    fixed time after `ready` instead missed the whole catch-up when the first read was slow (a busy CI computer)."""
+    newest = stream.until(lambda event: event["event"] == "ready")["data"]["seq"]
+    if newest > 0:
+        stream.until(lambda event: event["event"] == "reset" or int(event.get("id") or -1) >= newest)
     return [
         {"event": e["event"], "id": e.get("id"), "data": e.get("data")}
         for e in stream.seen

@@ -215,3 +215,44 @@ def test_the_library_does_not_say_a_page_is_on_someone_elses_dashboard(api):
 
     assert row("cara-test")[0]["pins"] == ["person:cara"] and row("cara-test", "&pinned=true")
     assert row("ana-test")[0]["pins"] == [] and row("ana-test", "&pinned=true") == []
+
+
+def test_needs_attention_rows_lead_with_the_task_title(api):
+    # Two tasks of Cara's ask the same thing of her: each row reads its own task's title, with the ask as its line.
+    task(api, "human:cara", "Fix the invoice export")
+    task(api, "human:cara", "Ship the pricing page")
+    cards = {p["card"]["template"]: p["card"]["data"] for p in place(api, "person:me", "cara-test")["pins"]}
+    rows = [it for it in cards["needs_attention"]["items"] if it["kind"] == "task"]
+    assert sorted(it["title"] for it in rows) == ["Fix the invoice export", "Ship the pricing page"]
+    assert all(it["line"] and it["line"] != it["title"] and it["act"] == "done" for it in rows), rows
+    assert len({it["line"] for it in rows}) == 1  # the same ask, two different rows
+
+
+def test_needs_brief_titles_by_task_and_words_what_is_needed():
+    from backend.cards import needs_brief
+
+    def item(kind, line, title="Send an email", **more):
+        return {"id": kind + line, "kind": kind, "line": line, "task_id": "t1", "task": {"title": title, **more}}
+
+    items = [
+        item("task", "Say when the work is done"),
+        item("ask", "Send this email?") | {"ask": {"kind": "ok"}},
+        item("ask", "Which date works?", "Pick a launch date") | {"ask": {"kind": "answer"}},
+        item("mention", "@ana can you look?"),
+        item("task", "Say when the work is done", "Stuck one", turn={"state": "paused"}),
+        item("task", "Say when the work is done", "Late one", late={"level": "person"}),
+        item("paused", "Connect Google", "Sync the calendar"),
+        {"id": "m2", "kind": "mention", "line": "@ana in Launch", "task_id": None, "task": None},
+    ]
+    rows = needs_brief(items, len(items))
+    assert [(r["title"], r["act"]) for r in rows] == [
+        ("Send an email", "done"),
+        ("Send an email", "ok"),
+        ("Pick a launch date", "answer"),
+        ("Send an email", "reply"),
+        ("Stuck one", "fix"),
+        ("Late one", "fix"),
+        ("Connect Google", "fix"),  # a Paused cause is not about one task: its own line
+        ("@ana in Launch", "reply"),  # a mention outside a task: its own line
+    ]
+    assert [r["line"] for r in rows] == [it["line"] for it in items]

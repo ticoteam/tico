@@ -13,15 +13,15 @@ It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
 header: opening flies it up from the row (or tab) to its place beside the name, quickly, closing flies it back down; while the
-panel is open a close mark holds the dot's place. Bots' questions
-and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
+panel is open a close mark holds the dot's place. The thread holds only your conversation and the Confirm previews of
+a send, a spend or a publish, by when they were asked. What waits on you stays in Needs you, and the Assistant names it
+when you ask ("anything need me?"): one plain line per item, or per group of alike items.
 
 The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-Nothing speaks up beside the dot. Bot questions and Confirm cards wait in the panel, and the dot never carries a sound
-or a count.
+Nothing speaks up beside the dot. Confirm cards wait in the panel, and the dot never carries a sound or a count.
 
 The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
@@ -32,10 +32,8 @@ Opening and closing change no `hidden` attribute anywhere and add nothing to the
 a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
 but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
 
-What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
-its own Home, with its Confirm and Cancel, and up to three bots' asks to you from Needs you. An ask with two to
-six choices is answered with a tap, any other with a line of words (an ask with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
+A Confirm card BotOps (or another bot) left in its own Home comes into the DM with its Confirm and Cancel. Bots' asks
+to you are never added to the chat: they wait in Needs you. You can answer one by telling the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
 records it as your answer. It answers only when your words give what the ask needs, such as a price, a pick, a yes or
 no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer
 nothing: the ask stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell
@@ -123,7 +121,20 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 The DM is a personal thread (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
 Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
-chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
+chat routes still refuse it (`403`).
+
+You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
+**Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is
+on it at first, and only you change it, on your own click in Tico: not your Assistant, not BotOps acting for you, not a
+personal API token, not the owner or an admin (`GET`/`POST /api/v2/assistant/viewers`, `DELETE /api/v2/assistant/viewers/{bot}`). A bot on your list
+reads your messages, the Assistant's replies and its cards (what each proposed and what became of it, never its
+request or result) with `tico assistant shared` and `tico assistant shared-read <person>` (`GET
+/api/v2/assistant/shared/{person}`). It can never post, react or act on a card there: those routes still refuse it.
+**Remove** refuses its next read at once. What it has learned about you stays out unless you also tick **Include what
+it has learned about me** (`PUT /api/v2/assistant/viewers/learned`), which goes back to off when you remove the last
+bot; the company layer is never shared. If you leave the team or your sign-in is turned off, every read is refused. Each bot's
+last read shows beside it, and every read is in the audit log (`assistant.shared_read`, naming the bot and you). The
+list is never shared with people or another team, and no team-wide switch shares everyone's chat. Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
@@ -319,7 +330,8 @@ Tell it how you like things ranked and summarised ("launches matter more than hi
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your DM
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
 asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
-Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
+Assistant, and not a bot doing other work for you, BotOps included; a bot you let view your chat reads it only if you
+tick **Include what it has learned about me** ([Private to you](#private-to-you)). The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
 
 Each turn in your DM is handed the layer as it is when the turn starts, so a line you delete is not used from the
 next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant

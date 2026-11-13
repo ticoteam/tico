@@ -3581,6 +3581,8 @@ class AutomationIn(Contract):
     builtin: bool = False
     spend_cap: dict | None = None
     batch: dict | None = None
+    # A scheduled routine's run settings (automation_flow._check_release, backend/wake_presets.py).
+    release: dict | None = None
     trigger: dict
     steps: list = Field(default_factory=list)
     destinations: list | None = None
@@ -3593,6 +3595,7 @@ class AutomationPatch(Contract):
     enabled: bool | None = None
     spend_cap: dict | None = None
     batch: dict | None = None
+    release: dict | None = None  # a scheduled routine's run settings; null takes them away
     trigger: dict | None = None
     steps: list | None = None
     destinations: list | None = None  # null takes them away
@@ -3615,7 +3618,19 @@ class RunNow(Contract):
     input: dict = Field(default_factory=dict)  # shaped like the trigger's output: message, task, item, event, body
 
 
-FLOW_KEYS = ("name", "owner", "group", "enabled", "builtin", "spend_cap", "batch", "trigger", "steps", "destinations")
+FLOW_KEYS = (
+    "name",
+    "owner",
+    "group",
+    "enabled",
+    "builtin",
+    "spend_cap",
+    "batch",
+    "release",
+    "trigger",
+    "steps",
+    "destinations",
+)
 
 
 def page(rows, limit, offset, cap):
@@ -3900,11 +3915,11 @@ def install(app, store, auth, mutate):
             before = flow_of(row)
             changes = body.model_dump(exclude_unset=True)
             summary = changes.pop("summary", None)
-            if "spend_cap" in changes and changes["spend_cap"] is None:
-                changes.pop("spend_cap")
-                before_cap = {k: v for k, v in before.items() if k != "spend_cap"}
-            else:
-                before_cap = before
+            # A null spend cap or routine settings takes them away.
+            cleared = [k for k in ("spend_cap", "release") if k in changes and changes[k] is None]
+            for key in cleared:
+                changes.pop(key)
+            before_cap = {k: v for k, v in before.items() if k not in cleared}
             # What it reads is checked when that changes; pausing or renaming one whose owner lost access still works.
             merged = {**before_cap, **changes}
             flow = _checked(

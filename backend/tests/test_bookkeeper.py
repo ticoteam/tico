@@ -503,3 +503,63 @@ def test_the_tick_that_sets_finance_up_builds_the_bookkeeper_too(environment):
     assert failures == []
     with store.read() as c:
         assert FR.is_set_up(c) and granted(c) == DEFAULT_RIGHTS
+
+
+def _bot_payment_rules(c):
+    return c.execute("SELECT id, active, condition FROM fin_rules WHERE id=?", (BK.BOT_PAYMENT_RULE,)).fetchall()
+
+
+def _bot_payment_events(c):
+    return c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.bot_payment_rule'").fetchone()[0]
+
+
+def test_a_bots_payment_rule_is_seeded_once_and_an_owners_change_sticks(environment):
+    """The Security Owner's condition for the default view: one editable gate rule, "a bot's payment asks a finance
+    admin", seeded once per install with one event. The owner turns it off or deletes it on purpose and no start
+    restores it."""
+    api = built(environment)
+    ensure(api)
+    ensure(api)
+    store = api.app.state.store
+    with store.read() as c:
+        ((rid, on, _),) = _bot_payment_rules(c)
+        assert on == 1 and _bot_payment_events(c) == 1
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "rule_disable", {"rule_id": rid}, "rule-off").status == "committed"
+    ensure(api)
+    with store.read() as c:
+        assert [r["active"] for r in _bot_payment_rules(c)] == [0] and _bot_payment_events(c) == 1
+    with store.transaction() as c:  # deleted outright: still not restored
+        c.execute("DELETE FROM fin_rules WHERE id=?", (rid,))
+    ensure(api)
+    check(api)
+    with store.read() as c:
+        assert _bot_payment_rules(c) == [] and _bot_payment_events(c) == 1
+
+
+def test_an_install_that_already_has_the_default_view_gets_the_bots_payment_rule_at_its_next_start(environment):
+    """An rc.23 install: the view grant happened before the rule existed. Its next start seeds the rule anyway, and
+    the view grant is not made again."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DELETE FROM fin_rules WHERE id=?", (BK.BOT_PAYMENT_RULE,))
+        c.execute("DELETE FROM events WHERE action='bookkeeper.bot_payment_rule'")
+        assert _granted_events(c) == 1
+    ensure(api)
+    with store.read() as c:
+        assert [r["active"] for r in _bot_payment_rules(c)] == [1] and _bot_payment_events(c) == 1
+        assert len(_view_grants(c, "active")) == 1 and _granted_events(c) == 1
+
+
+def test_a_paused_finance_owner_still_gets_the_bots_payment_rule(environment):
+    api = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        c.execute("UPDATE bots SET state='paused' WHERE id=?", (BK.SLUG,))
+    ensure(api)
+    with store.read() as c:
+        assert len(_bot_payment_rules(c)) == 1 and _bot_payment_events(c) == 1

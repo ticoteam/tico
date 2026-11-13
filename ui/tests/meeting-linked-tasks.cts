@@ -89,6 +89,8 @@ async function taskMeetings({hub, browser}: Ctx) {
         try {
           await page.goto(hub.url + '/#/task/' + task.id);
           await page.locator('[data-task-meetings]').waitFor({state: 'attached', timeout: t(20000)});
+          // A phone's task window shows Meetings in its Info tab (task #409).
+          if (phone) await page.locator('#task-modal[open]').getByRole('tab', {name: 'Info'}).click();
           assert.equal(await page.locator('[data-task-meetings]').isHidden(), true);
           await page.waitForFunction(() => liveConnected(), null, {timeout: t(20000)});
           await call('POST', `meetings/${meeting.id}/tasks`, {task_ids: [task.id]});
@@ -106,6 +108,7 @@ async function taskMeetings({hub, browser}: Ctx) {
           await linked.waitFor();
           assert.match(await linked.innerText(), /Review the launch plan/);
           await linked.click();
+          if (phone) await page.locator('#task-modal[open]').getByRole('tab', {name: 'Info'}).click({timeout: t(20000)});
           await page.locator('[data-task-meetings] h3').waitFor({timeout: t(20000)});
           await call('DELETE', `meetings/${meeting.id}/tasks/${task.id}`);
           await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-task-meetings]')?.hidden, null, {timeout: t(20000)});
@@ -128,6 +131,7 @@ async function taskMeetings({hub, browser}: Ctx) {
         page.on('request', req => { if (req.method() === 'GET' && new URL(req.url()).pathname === `/api/v2/tasks/${expandedTask.id}/meetings`) reads++; });
         try {
           await page.goto(hub.url + '/#/task/' + expandedTask.id);
+          if (phone) await page.locator('#task-modal[open]').getByRole('tab', {name: 'Info'}).click({timeout: t(20000)});
           const list = page.locator('[data-task-meetings]');
           await list.locator('[data-meetings-more]').click({timeout: t(20000)});
           await page.waitForFunction(() => document.querySelectorAll('[data-meeting-id]').length === 25 && liveConnected(), null, {timeout: t(20000)});

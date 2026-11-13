@@ -809,7 +809,7 @@ def task_update(api, args):
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
 
 
-RELATION_KINDS = ("related", "duplicate_of", "follow_up")
+RELATION_KINDS = ("related", "duplicate_of", "follow_up", "depends_on")
 
 
 def _after(args):
@@ -821,8 +821,8 @@ def _after(args):
 
 
 BLOCKING_GONE = (
-    'A task does not wait on another by a relation: file a sub-task (tico task file --parent <id> "title") or ask a '
-    "person (tico task ask)."
+    "A task that cannot go on until another ends depends on it: tico task relate <id> depends_on <task>. It shows "
+    "Blocked by that task, with no date, and you are woken when it ends."
 )
 
 
@@ -902,15 +902,16 @@ def task_followers(api, args):
 @tool(
     "tico_task_relate",
     "Relate another task to this one, read as `id kind task`: related (they belong together, the default), "
-    "duplicate_of, follow_up (it was split off or followed up from task). A relation is a note: a task waits only on "
-    "its requirements and the tasks it filed (tico_task_file), and its parent is set when it is filed. `remove` takes "
-    "the relation off. The reply's `readback` says what was stored, both ends: check it before reporting the link as "
-    "fixed.",
+    "duplicate_of, follow_up (it was split off or followed up from task), or depends_on (this task cannot go on until "
+    "task ends: it shows Blocked by it, with no date, nobody is woken for it, and its owner is woken once when task "
+    "ends; use it, never a snooze, when you wait on another task, its PR, a fix for main or a release). The other "
+    "relations are notes, and a task's parent is set when it is filed. `remove` takes the relation off. The reply's "
+    "`readback` says what was stored, both ends: check it before reporting the link as fixed.",
     {
         "id": TASK_ID,
         "task": {**TASK_ID, "description": "The other task: its id or 8+ leading characters"},
         # No enum: blocks and blocked_by are answered with what to do instead, not with a list of choices.
-        "kind": _s("related (the default), duplicate_of or follow_up", default="related"),
+        "kind": _s("related (the default), duplicate_of, follow_up or depends_on", default="related"),
         "remove": {"type": "boolean", "default": False},
     },
     required=("id", "task"),
@@ -918,13 +919,19 @@ def task_followers(api, args):
 )
 def task_relate(api, args):
     kind = args.get("kind") or "related"
-    if kind in ("blocks", "blocked_by"):
+    if args.get("other"):  # the CLI's three words, `tico task relate <id> depends_on <task>`
+        named = str(args.get("kind") or "related").strip().lower().replace("-", "_")
+        if named not in ("related", str(args["task"]).strip().lower().replace("-", "_")):
+            raise ValueError(f"Two kinds given: {args['task']} and --kind {args['kind']}. Give one.")
+        kind, args = str(args["task"]), {**args, "task": args["other"]}
+    kind = kind.strip().lower().replace("-", "_")
+    if kind in ("blocks", "blocked_by", "blocked", "block"):
         raise ValueError(BLOCKING_GONE)
     if kind not in RELATION_KINDS:
         raise ValueError(f"A relation is {', '.join(RELATION_KINDS)}, not {kind}")
     return api.post(
         f"tasks/{args['id']}/relations",
-        {"task": args["task"], "kind": kind, "remove": bool(args.get("remove"))},
+        {"task": str(args["task"]).lstrip("#"), "kind": kind, "remove": bool(args.get("remove"))},
         key=_key(args),
     )
 

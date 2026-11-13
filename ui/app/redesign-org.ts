@@ -24,8 +24,6 @@ interface RdoState {
 }
 /** A chart's transform: its scale and its offset in the pane. */
 interface RdoPose { x: number; y: number; s: number }
-/** A mouse drag on the pane: where it began, the scroll it began at, and whether it moved. */
-interface RdoDrag { x: number; y: number; left: number; top: number; moved: boolean }
 /** Per-draw context: the nodes drawn so far, and (Rules › Internal) a group renderer in place of rdoGroupBlock. */
 type RdoCtx = {seen: Set<string>; group?: typeof rdoGroupBlock};
 
@@ -384,22 +382,7 @@ function rdoWire(pane: HTMLElement): void {
   pane.addEventListener('touchmove', byHand, {passive: true});
   pane.addEventListener('touchend', ev => { if (ev.touches.length < 2) pinch = null; });
   // A mouse drags the chart about (a finger pans natively); a drag is not a tap on the card it started on.
-  let drag: RdoDrag | null = null;
-  pane.addEventListener('pointerdown', ev => {
-    if (ev.pointerType !== 'mouse' || ev.button !== 0) return;
-    drag = {x: ev.clientX, y: ev.clientY, left: pane.scrollLeft, top: pane.scrollTop, moved: false};
-  });
-  pane.addEventListener('pointermove', ev => {
-    if (!drag) return;
-    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
-    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
-    drag.moved = true; byHand(); pane.classList.add('dragging');
-    pane.scrollLeft = drag.left - dx; pane.scrollTop = drag.top - dy;
-  });
-  const end = () => { if (drag?.moved) { pane.classList.remove('dragging'); pane.dataset.dragged = '1'; setTimeout(() => delete pane.dataset.dragged, 0); } drag = null; };
-  pane.addEventListener('pointerup', end);
-  pane.addEventListener('pointerleave', end);
-  pane.addEventListener('click', ev => { if (pane.dataset.dragged) { ev.stopPropagation(); ev.preventDefault(); } }, true);
+  dragPan(pane, {onDrag: byHand});
   // A trackpad's pinch arrives as a wheel with ctrlKey.
   pane.addEventListener('wheel', ev => {
     byHand();

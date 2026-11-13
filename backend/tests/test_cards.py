@@ -142,8 +142,9 @@ def test_needs_you_and_spend_show_only_their_own_reader(api):
     assert shown["hidden"] is True and shown["data"] is None  # a member sees no company spend
 
 
-def test_needs_you_rows_say_each_items_own_line(api):
-    """A Needs you row says what the item asks of its reader (the ask's line), not the title of the task it is on."""
+def test_needs_you_rows_lead_with_the_task_and_carry_the_ask(api):
+    """A Needs you row is titled by the task it is on, so asks with the same wording on different tasks read apart; the
+    ask itself goes along as its line, with the word for what it needs."""
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
@@ -151,7 +152,9 @@ def test_needs_you_rows_say_each_items_own_line(api):
         H.task_ask(c, "human:ben", work["id"], "human:ana", "Which region?")
     needs = next(p["card"] for p in place(api, "dashboard")["pins"] if p["card"]["template"] == "needs_you")
     asks = [row for row in needs["data"]["items"] if row["kind"] == "ask"]
-    assert [(row["title"], row["task_id"]) for row in asks] == [("Which region?", work["id"])]
+    assert [(row["title"], row["line"], row["act"], row["task_id"]) for row in asks] == [
+        ("Launch plan", "Which region?", "answer", work["id"])
+    ]
 
 
 def test_a_page_pinned_by_a_person_widens_to_the_places_audience_and_is_in_its_activity(api):

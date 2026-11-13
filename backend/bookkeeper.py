@@ -8,7 +8,8 @@ rules), recorded by one `bookkeeper.rights_granted` event so a later revoke stic
 a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). It sees the books
 by default: one Finance view grant of Everything in the owner's name, made once per install (`grant_view`, one
 `bookkeeper.view_granted` event, one notice to the owner), so revoking it in Finance → Access sticks and a change of
-owner pauses it. Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
+owner pauses it. Before it, one editable gate rule makes any bot's payment ask a finance admin, seeded once per install
+(`seed_bot_payment_rule`, one `bookkeeper.bot_payment_rule` event, so an owner's edit or delete sticks). Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
 the Finance Owner was ever revoked, and its open "Let the Finance Owner see the books" task is closed for the owner.
 
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
@@ -148,6 +149,52 @@ VIEW_NOTICE = (
 )
 
 
+BOT_PAYMENT_RULE = "rule:bot-payment"
+BOT_PAYMENT_EVENT = "bookkeeper.bot_payment_rule"
+BOT_PAYMENT = (
+    "Bot payments",
+    "A bot's payment asks a finance admin.",
+    {"kind": "payment_create", "actor.kind": "bot"},
+    {"outcome": "needs_approval", "who": "finance_admin"},
+    [
+        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 5000}, "expect": "needs_approval"},
+        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 5000}, "expect": "allow"},
+    ],
+)
+
+
+def seed_bot_payment_rule(c, at: str | None = None) -> bool:
+    """The Security Owner's condition for the default view (grant_view): with Everything in view and finance.pay, the
+    Finance Owner could pay any known vendor up to the $1,000 rule, against any line, with nobody asked. So one gate
+    rule, "a bot's payment asks a finance admin" (any amount, any recipient, any bot), is seeded once per install and
+    recorded by one `bookkeeper.bot_payment_rule` event: the owner may edit it, turn it off or delete it in Finance and
+    no later start restores it (unlike gates.DEFAULTS, which setup re-inserts by id). It does not wait for the view
+    grant or an active Finance Owner: an install that got the view before this rule existed gets it at its next start.
+    A bot's rule change already asks a finance admin (gating._gate), so the Finance Owner cannot turn it off itself.
+    Whether it was seeded now."""
+    from .finance import reads as FR
+    from .finance.context import owner as finance_owner
+    from .finance.store import banking as SK
+
+    if not FR.is_set_up(c) or _has_event(c, BOT_PAYMENT_EVENT):
+        return False
+    name, words, when, outcome, examples = BOT_PAYMENT
+    by = finance_owner(c) or H.KEEPER
+    made = SK.seed_rule(
+        c,
+        rule_id=BOT_PAYMENT_RULE,
+        name=name,
+        words=words,
+        when=when,
+        outcome=outcome,
+        examples=examples,
+        by=by,
+        at=at or H.now(),
+    )
+    H.event(c, H.KEEPER, BOT_PAYMENT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "made": made})
+    return made
+
+
 def grant_view(c, owner: str, at: str | None = None):
     """The Finance Owner's Finance view, once per install: one grant of Everything (company-wide) made in the owner's
     name, recorded by one `bookkeeper.view_granted` event so a later revoke in Finance → Access sticks. The owner is
@@ -200,7 +247,7 @@ def grant_view(c, owner: str, at: str | None = None):
 
 def ensure(c, onboarding, auth):
     """At start and when a computer enrolls: once Finance is set up, build the Finance Owner if this install has none,
-    then its default rights, its default view, and the outside due dates it owns (finance/tax.py seed_dues). Best
+    then its default rights, the bots' payment rule (seed_bot_payment_rule), its default view, and the outside due dates it owns (finance/tax.py seed_dues). Best
     effort: a start never fails because of it."""
     from .finance import reads as FR
 
@@ -208,6 +255,7 @@ def ensure(c, onboarding, auth):
         return None
     made = onboarding.ensure_bookkeeper(c)
     grant_defaults(c)
+    seed_bot_payment_rule(c)  # before the view: Everything plus finance.pay asks a finance admin from the start
     grant_view(c, _owner(c, auth))
     from .finance import tax as FT
 

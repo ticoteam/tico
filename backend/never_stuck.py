@@ -19,6 +19,8 @@ are on it:
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
+- Stage rules whose When is a timer (N h in the stage, N h quiet, N h waiting on a person) are judged after the
+  tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
 - A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
   (`_ready_snoozes`).
 
@@ -33,7 +35,7 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, task_wakes
+from . import batch_work, hubdb_core, merge_order, stage_rule_timers, task_depends, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -73,6 +75,8 @@ _OPEN = (
     "JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    # A task blocked by one it depends on is nobody's turn, never Late, and goes on when that ends (task_depends).
+    f"AND NOT {task_depends.BLOCKED % 't'} "
     "ORDER BY v.entered_at, v.id"
 )
 
@@ -186,6 +190,19 @@ def check(
     finally:
         if conn.in_transaction:
             conn.execute("RELEASE never_stuck_room")
+    _keeping_reads(conn, "SAVEPOINT never_stuck_stage_rules")
+    try:
+        # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
+        timers: Any = stage_rule_timers
+        timers.sweep(conn, at)
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute("ROLLBACK TO never_stuck_stage_rules")
+        failures.append(("stage_rules", error))
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE never_stuck_stage_rules")
     return done
 
 
@@ -233,6 +250,7 @@ _REQUESTS = (
     "AND s.requests_move_on=1 "
     "AND v.entered_how='new' AND t.requester_id LIKE 'human:%' "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    f"AND NOT {task_depends.BLOCKED % 't'} "
     "ORDER BY v.entered_at, v.id"
 )
 
@@ -620,19 +638,43 @@ def _person(conn: "sqlite3.Connection", row: Row) -> str | None:
 
 # ----------------------------------------------------------------------------- late
 def _spent(conn: "sqlite3.Connection", visit: Row, at: str) -> float:
-    """Seconds the task has been in this visit, not counting the time it was snoozed."""
+    """Seconds the task has been in this visit, not counting the time it was snoozed or blocked by a task it depends
+    on (task_depends), each moment once."""
     H = _h()
     now, entered = H.parse_ts(at), H.parse_ts(visit["entered_at"])
     if not now or not entered:
         return 0.0
-    spent = (now - entered).total_seconds()
-    for created, ended in conn.execute(
-        "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=?", (visit["task_id"], visit["id"])
-    ).fetchall():
-        start, end = H.parse_ts(created), H.parse_ts(ended or at)
-        if start and end:
-            spent -= max((end - start).total_seconds(), 0.0)
-    return spent
+    aside: list[tuple[str, str | None]] = [
+        (str(created), ended)
+        for created, ended in conn.execute(
+            "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=?", (visit["task_id"], visit["id"])
+        ).fetchall()
+    ]
+    aside += task_depends.spans(conn, str(visit["task_id"]), str(visit["entered_at"]))
+    return (now - entered).total_seconds() - _covered(aside, str(visit["entered_at"]), at)
+
+
+def _covered(spans: "list[tuple[str, str | None]]", start: str, end: str) -> float:
+    """Seconds of [start, end] inside at least one of `spans` ((from, to); a None `to` runs to `end`)."""
+    H = _h()
+    lo, hi = H.parse_ts(start), H.parse_ts(end)
+    if not lo or not hi:
+        return 0.0
+    cut: list[tuple[Any, Any]] = []
+    for begun, ended in spans:
+        a, b = H.parse_ts(begun), H.parse_ts(ended or end)
+        if a and b:
+            a, b = max(a, lo), min(b, hi)
+            if b > a:
+                cut.append((a, b))
+    total, reach = 0.0, None
+    for a, b in sorted(cut):
+        if reach is not None and a < reach:
+            a = reach
+        if b > a:
+            total += (b - a).total_seconds()
+            reach = b if reach is None else max(reach, b)
+    return total
 
 
 def _span(seconds: float) -> str:

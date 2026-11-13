@@ -260,6 +260,28 @@ def _check_move(rule, where, targets):
         _need(rule.get("stop") in (None, True), where, "to ends the thread, so stop is true or left out")
 
 
+RELEASE_KEYS = {"warm", "wait_hours", "deadline", "session"}
+MAX_WAIT_HOURS = 14 * 24  # a weekly routine waits up to 7 days; twice that is the most a routine keeps
+
+
+def _check_release(release, kind):
+    """A scheduled routine's run settings (backend/wake_presets.py, the release policy): Wait for a warm session
+    (`warm`), Up to N hours (`wait_hours`), At the deadline Run cold or Skip (`deadline`), and Session Fresh or Continue
+    latest (`session`). Only a schedule's runs wait."""
+    where = "release"
+    _need(kind == "schedule", where, "is for a scheduled routine only")
+    _need(isinstance(release, dict) and set(release) <= RELEASE_KEYS, where, "has warm, wait_hours, deadline, session")
+    _need(isinstance(release.get("warm", False), bool), where, "warm is true or false")
+    hours = release.get("wait_hours", 0)
+    _need(
+        isinstance(hours, (int, float)) and not isinstance(hours, bool) and 0 <= hours <= MAX_WAIT_HOURS,
+        where,
+        f"wait_hours is a number of hours from 0 to {MAX_WAIT_HOURS}",
+    )
+    _need(release.get("deadline", "run") in ("run", "skip"), where, "deadline is run or skip")
+    _need(release.get("session", "fresh") in ("fresh", "continue"), where, "session is fresh or continue")
+
+
 def _check_trigger(trigger):
     _need(isinstance(trigger, dict), "trigger", "is a map with a type")
     kind = trigger.get("type")
@@ -618,6 +640,8 @@ def check(flow):
         )
         _check_zone(batch.get("tz") or "UTC", "batch")
     _check_trigger(flow.get("trigger"))
+    if flow.get("release") is not None:
+        _check_release(flow["release"], flow["trigger"]["type"])
     # A flow without destinations (every flow saved before them) keeps none; null is the same as leaving them out.
     targets = _check_destinations(flow["destinations"]) if flow.get("destinations") is not None else frozenset()
     counts = [0, False, flow["trigger"]["type"]]  # steps so far, a find seen, the trigger (for a paths `by`)

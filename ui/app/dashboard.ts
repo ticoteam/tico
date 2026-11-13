@@ -38,6 +38,9 @@ const DASH_PLACES: Record<string, DashPlace> = {};
 // By template: the heading a card shows when it has no title of its own, and what it says when it shows nothing.
 const DASH_HEADING: Record<string, (card: DashCard) => string | undefined> = {};
 const DASH_EMPTY: Record<string, string> = {};
+// By template, HTML for a card that shows nothing, in place of DASH_EMPTY's words: Growth's empty cards name the setup
+// step that fills them, with a link (ui/app/growth-start.ts).
+const DASH_NONE: Record<string, (card: DashCard) => string> = {};
 
 // A place as GET /v2/places/<place> answers it (backend/cards.py), with who sees a team page.
 type DashCard = import('../types/api').Card;
@@ -63,7 +66,7 @@ interface DashView {
 }
 // What a built-in card shows, by template (backend/cards.py): each template's card carries its own of these fields.
 interface DashWeek { week: string; done: number }
-interface DashNeedsItem { task_id?: string | null; title?: string | null }
+interface DashNeedsItem { task_id?: string | null; title?: string | null; line?: string | null; act?: string | null }
 interface DashThread extends ThreadRow { unread?: number | null; updated_at?: string | null }
 interface DashTask { id: string; title?: string | null; due_at?: string | null }
 interface DashUpdate { read?: boolean; headline?: string | null; author?: string | null; created_at?: string | null }
@@ -146,9 +149,28 @@ function dashPageRow(p: DashPageItem) {
 }
 // A thread's address: the threads page's own when this build has it (ui/app/threads*.js).
 const dashThreadHref = (id: string) => typeof window.threadHref === 'function' ? window.threadHref(id) : '#/threads/' + encodeURIComponent(id);
+// Needs you cards (needs_attention, needs_you): each row its title and the word for what it needs; the count is dashHeadN's.
+const DASH_ACT: Record<string, string> = {done: 'Done', ok: 'OK', answer: 'Answer', reply: 'Reply', fix: 'Fix'};
+// A count card's number sits on its header line, 13px muted (#355): the field that holds it, where it links, what it counts.
+const DASH_HEAD_N: Record<string, [string, string, string]> = {
+  needs_you: ['count', NEEDS_YOU, 'waiting on you'], needs_attention: ['count', NEEDS_YOU, 'waiting on you'],
+  my_tasks: ['count', TASKS + '?view=list', 'open'], updates: ['unread', UPDATES, 'unread'],
+  automation_runs: ['total', AUTOMATIONS, 'runs in 24 hours'],
+};
+function dashHeadCount(card: DashCard): [number, string, string] | null {
+  const h = DASH_HEAD_N[card.template];
+  if (!h || card.hidden || !card.data) return null;
+  return [Number((card.data as Record<string, unknown>)[h[0]]) || 0, h[1], h[2]];
+}
+// The header count beside the card's <h2> (a sibling, so a long name never cuts it); hidden at 0.
+function dashHeadN(card: DashCard) {
+  const c = dashHeadCount(card);
+  if (!c) return '';
+  const [n, href, words] = c;
+  return `<a class="dash-head-n" href="${href}" aria-label="${dashNum(n)} ${words}" title="${dashNum(n)} ${words}"${n ? '' : ' hidden'}>${dashNum(n)}</a>`;
+}
 function dashNeeds(d: DashCardData) {
-  return `<a class="dash-big" href="${NEEDS_YOU}"><strong>${dashNum(d.count)}</strong><span class="muted">waiting on you</span></a>
-    ${d.items.length ? `<ul class="dash-list">${d.items.map(it => `<li>${it.task_id ? `<a href="#/task/${encodeURIComponent(it.task_id)}">${esc(it.title || 'Untitled')}</a>` : `<a href="${NEEDS_YOU}">${esc(it.title || 'Untitled')}</a>`}</li>`).join('')}</ul>` : ''}`;
+  return d.items.length ? `<ul class="dash-list dash-needs">${d.items.map(it => `<li><a href="${it.task_id ? '#/task/' + encodeURIComponent(it.task_id) : NEEDS_YOU}"${it.line && it.line !== it.title ? ` title="${esc(it.line)}"` : ''}><span class="dash-needs-t">${esc(it.title || 'Untitled')}</span>${it.act && DASH_ACT[it.act] ? `<span class="muted">${DASH_ACT[it.act]}</span>` : ''}</a></li>`).join('')}</ul>` : `<p class="muted dash-none"><a href="${NEEDS_YOU}">Nothing waiting on you</a></p>`;
 }
 const dashDue = (due: string | null | undefined) => {
   if (!due) return '';
@@ -167,12 +189,10 @@ const DASH_BODY: Record<string, DashBody> = {
   needs_attention: dashNeeds,
   unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(threadTitle(t))}</a>
       <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated_at)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
-  my_tasks: d => d.tasks.length ? `<a class="dash-big" href="${TASKS}?view=list"><strong>${dashNum(d.count)}</strong><span class="muted">open</span></a>
-    <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due_at)}</li>`).join('')}</ul>`
+  my_tasks: d => d.tasks.length ? `<ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due_at)}</li>`).join('')}</ul>`
     : '<p class="muted dash-none">No open tasks</p>',
-  updates: d => `<a class="dash-big" href="${UPDATES}"><strong>${dashNum(d.unread)}</strong><span class="muted">unread</span></a>
-    ${d.updates.length ? `<ul class="dash-list">${d.updates.map(u => `<li><a href="${UPDATES}"${u.read ? '' : ' class="dash-unread"'}>${esc(u.headline || 'Update')}</a>
-      <span class="muted">${esc(String(u.author || '').startsWith('human:') ? (S.people || []).find(p => 'human:' + p.id === u.author)?.name || '' : dashBot(u.author))} · ${agoSpan(u.created_at)}</span></li>`).join('')}</ul>` : ''}`,
+  updates: d => `${d.updates.length ? `<ul class="dash-list">${d.updates.map(u => `<li><a href="${UPDATES}"${u.read ? '' : ' class="dash-unread"'}>${esc(u.headline || 'Update')}</a>
+      <span class="muted">${esc(String(u.author || '').startsWith('human:') ? (S.people || []).find(p => 'human:' + p.id === u.author)?.name || '' : dashBot(u.author))} · ${agoSpan(u.created_at)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">No updates</p>'}`,
   spend: d => {
     const pct = d.budget ? Math.min(100, d.spent / d.budget * 100) : 0;
     return `<div class="dash-big"><strong>${dashMoney(d.spent)}</strong><span class="muted">${d.budget ? 'of ' + dashMoney(d.budget) : 'no budget'} · ${esc(d.month)}</span></div>
@@ -180,14 +200,14 @@ const DASH_BODY: Record<string, DashBody> = {
   },
   kpi: d => `<div class="dash-big"><strong>${dashNum(d.value)}${d.unit ? ` <small>${esc(d.unit)}</small>` : ''}</strong>
     <span class="muted">${esc(d.name)}${d.at ? ' · ' + esc(d.at) : ''}</span></div>${dashSpark(d.spark || [])}`,
-  automation_runs: d => `<a class="dash-big" href="${AUTOMATIONS}"><strong>${dashNum(d.total)}</strong><span class="muted">runs in 24h${d.failed ? ` · <span class="dash-bad">${d.failed} failed</span>` : ''}${d.running ? ` · ${d.running} running` : ''}</span></a>
+  automation_runs: d => `${d.failed || d.running ? `<p class="muted dash-sub">${[d.failed ? `<span class="dash-bad">${d.failed} failed</span>` : '', d.running ? `${d.running} running` : ''].filter(Boolean).join(' · ')}</p>` : ''}
     ${d.runs.length ? `<ul class="dash-list">${d.runs.map(r => `<li><span class="dash-dot ${r.status === 'failed' ? 'bad' : r.status === 'succeeded' || r.status === 'done' ? 'ok' : ''}" aria-hidden="true"></span>${esc(r.name)} <span class="muted">${agoSpan(r.started_at)}</span></li>`).join('')}</ul>` : ''}`,
   latest_pages: d => d.pages.length ? `<ul class="dash-list dash-pages">${d.pages.map(dashPageRow).join('')}</ul>` : '<p class="muted dash-none">No pages yet</p>',
 };
 // What a built-in card shows (its template's fields).
 const dashData = (card: DashCard) => card.data as DashCardData;
 function dashCardBody(card: DashCard) {
-  if (card.hidden || !card.data) return `<p class="muted dash-none">${esc(DASH_EMPTY[card.template] || 'Not shown to you')}</p>`;
+  if (card.hidden || !card.data) return DASH_NONE[card.template]?.(card) ?? `<p class="muted dash-none">${esc(DASH_EMPTY[card.template] || 'Not shown to you')}</p>`;
   return (DASH_BODY[card.template] || (() => ''))(dashData(card), card);
 }
 // A page pin: the page itself through pageCard (ui/app/pages.ts) when this build has it, else a link to it.
@@ -311,6 +331,8 @@ function dashCardsPatch(template: string, patch: (d: DashCardData, card: DashCar
     v.pins[i] = {...pin, card: next};
     const body = state.root?.querySelector(`.dash-pin[data-at="${i}"] .dash-pin-body`);
     if (body) body.innerHTML = dashCardBody(next);
+    const n = state.root?.querySelector(`.dash-pin[data-at="${i}"] .dash-head-n`);
+    if (n) n.outerHTML = dashHeadN(next).trim();
   });
 }
 // My tasks (backend/cards.py my_tasks): the open tasks the reader owns, the soonest due first, the first N and how many.
@@ -353,11 +375,13 @@ function dashTasksPut(events: LiveTaskEvent[]): void {
   });
 }
 // Needs you (needs_attention, and needs_you without a team): the list the app holds (S.v2.needs, in the server's order)
-// and its count, each item by its task's title or its line. A team's card counts the items its bots are behind, which
+// and its count, each item by the server's rule (backend/cards.py needs_brief): its task's title, a Paused cause or an
+// item without a task by its line, with the line as its tooltip and the word for what it needs. A team's card counts the items its bots are behind, which
 // the held items do not say: the safety read.
+const dashAct = (it: NeedsEntry) => ({ok: 'ok', question: 'answer', yours: 'done', stuck: 'fix', fix: 'fix', mention: 'reply'} as Record<string, string>)[decideKind(it)] || '';
 function dashNeedsLive(): void {
   const items = S.v2?.needs || [], count = S.v2?.needsCount ?? items.length;
-  const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: it.task?.title || it.line || '',
+  const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: (it.kind !== 'paused' && it.task?.title) || it.line || '', line: it.line || '', act: dashAct(it),
     task_id: (it.task_id as string | undefined) || (it.kind === 'task' || it.kind === 'ask' ? String(it.id) : null)}));
   for (const [template, n] of [['needs_attention', 5], ['needs_you', 3]] as const)
     dashCardsPatch(template, (d, card) => {
@@ -462,7 +486,7 @@ function dashDraw(state: DashState) {
     el.className = 'dash-pin' + (pin.card ? '' : ' dash-pin-page'); el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
     el.innerHTML = `<header class="dash-pin-head">
         ${v.can_edit ? `<button type="button" class="dash-grip" data-dash-grip aria-label="Move ${esc(dashPinTitle(pin, v))}" title="Move">${BOT_SVG.grip}</button>` : ''}
-        <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>
+        <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>${pin.card ? dashHeadN(pin.card) : ''}
         <span class="spacer"></span>
         ${v.can_edit ? `<button type="button" class="dash-more" data-dash-menu aria-haspopup="menu" aria-expanded="false" aria-label="${esc(dashPinTitle(pin, v))} menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}</header>
       <div class="dash-pin-body"></div>`;

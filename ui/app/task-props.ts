@@ -107,14 +107,9 @@ function taskPropsHTML(t: PropTask): string {
   const asker = taskAsker(t), askerLabel = taskAskerLabel(t);
   rows.push(row('asker', 'Asked by', asker ? (taskFiledByBuiltin(t) ? '' : actorFace(asker, 16)) + txt(askerLabel) : txt('Unknown'), {words: askerLabel || 'Unknown', empty: !asker}));
   if (t.roles && Object.keys(t.roles).length) rows.push(taskPeopleRowHTML(t, r));
-  // Private: the box only; Who can see, below it, says who does
-  rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}></label></span></div>`);
-  rows.push(taskReadersRowHTML(t, r));
+  // Visible to: Team, Public roadmap or Private · its people, one row (taskVisibleRowHTML). Size is not shown.
+  rows.push(taskVisibleRowHTML(t, r));
   rows.push(taskFollowersRowHTML(t, r));
-  if (roadmapTask(t)) {
-    rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
-    rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size data-task-field="size" min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
-  }
   // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due_at);
   const info = taskDueInfo(t);
@@ -146,7 +141,7 @@ function taskPropsHTML(t: PropTask): string {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS: Record<string, string> = {readers: 'Who can see', followers: 'Followers', stage: 'Stage', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', people: 'People', publication: 'Public', size: 'Size', snooze: 'Snooze'};
+const PROP_WORDS: Record<string, string> = {visible: 'Visible to', readers: 'Visible to', followers: 'Followers', stage: 'Stage', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', people: 'People', publication: 'Public', size: 'Size', snooze: 'Snooze'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -160,18 +155,39 @@ function taskPeopleRowHTML(t: PropTask, r: PropRights): string {
     : `<button type="button" class="prop-v empty" data-prop="people" aria-haspopup="menu" aria-label="People: none, add someone"><span class="prop-txt">Add</span></button>`;
   return `<div class="prop" data-prop-row="people"><span class="prop-k" aria-hidden="true">People</span><span class="prop-vwrap"><span class="prop-tags" aria-label="People">${chips}${add}</span></span></div>`;
 }
-// Who can see: Public, or a private task's requester and owner with its readers (people, bots, groups); × takes a
-// reader off, + adds one. The server decides who may change it (hubdb.set_task_readers).
-function taskReadersRowHTML(t: PropTask, r: PropRights): string {
-  const head = '<div class="prop" data-prop-row="readers"><span class="prop-k" aria-hidden="true">Who can see</span><span class="prop-vwrap">';
-  if (!t.private) return head + '<span class="prop-v ro" aria-label="Who can see: Public"><span class="prop-txt">Public</span></span></span></div>';
-  const may = r.mover || r.party;
-  const chip = (a: string, off: boolean): string => `<span class="prop-chip">${actorAvatar(a, 16)}<span class="prop-txt">${esc(actorName(a))}</span>${off
-    ? `<button type="button" class="prop-x" data-prop-clear-reader="${esc(a)}" aria-label="Take ${esc(actorName(a))} off" title="Take off">${TL_ICON.x}</button>` : ''}</span>`;
-  const parties = [...new Set([taskRequester(t) || t.requester_id, t.owner_id].filter((a): a is string => !!a))];
-  const chips = parties.map(a => chip(a, false)).join('') + (t.readers || []).map(a => chip(a, may)).join('');
-  const add = may ? `<button type="button" class="prop-add" data-prop="readers" aria-haspopup="menu" aria-label="Add who can see" title="Add">${TL_ICON.plus}</button>` : '';
-  return head + `<span class="prop-tags" aria-label="Who can see">${chips}${add}</span></span></div>`;
+// Visible to: one row with one menu (taskVisibleChoices) in place of the Private, Who can see and Public rows. It writes
+// the fields they did: `private`, the readers (their own route) and `visibility`. A private task lists its requester and
+// owner, then its readers: × takes a reader off and + adds one. "Public" only ever means the public roadmap.
+type TaskVisible = 'team' | 'public' | 'private';
+const VISIBLE_WORDS: Record<TaskVisible, string> = {team: 'Team', public: 'Public roadmap', private: 'Private'};
+const taskVisibleNow = (t: PropTask): TaskVisible => t.private ? 'private' : t.visibility === 'public' && roadmapTask(t) ? 'public' : 'team';
+// The states this reader may move the task to from where it is (the server holds the rules; hubdb.set_task_private).
+function taskVisibleChoices(t: PropTask, r: PropRights): TaskVisible[] {
+  const now = taskVisibleNow(t), unprivate = r.party && myActor() === t.requester_id;
+  const may: Record<TaskVisible, boolean> = {
+    team: now === 'private' ? unprivate : r.reopen,
+    public: roadmapTask(t) && r.reopen && (now !== 'private' || unprivate),
+    private: now !== 'private' && r.party,
+  };
+  return (Object.keys(may) as TaskVisible[]).filter(k => k !== now && may[k]);
+}
+function taskVisibleRowHTML(t: PropTask, r: PropRights): string {
+  const now = taskVisibleNow(t), word = VISIBLE_WORDS[now], choices = taskVisibleChoices(t, r);
+  const icon = `<span class="nav-icon prop-ic" aria-hidden="true">${now === 'private' ? 'lock' : now === 'public' ? 'travel_explore' : 'groups'}</span>`;
+  const value = choices.length
+    ? `<button type="button" class="prop-v" data-prop="visible" aria-haspopup="menu" aria-label="Visible to: ${esc(word)}">${icon}<span class="prop-txt">${esc(word)}</span></button>`
+    : `<span class="prop-v ro" aria-label="Visible to: ${esc(word)}">${icon}<span class="prop-txt">${esc(word)}</span></span>`;
+  let people = '';
+  if (t.private) {
+    const may = r.mover || r.party;
+    const chip = (a: string, off: boolean): string => `<span class="prop-chip">${actorAvatar(a, 16)}<span class="prop-txt">${esc(actorName(a))}</span>${off
+      ? `<button type="button" class="prop-x" data-prop-clear-reader="${esc(a)}" aria-label="Take ${esc(actorName(a))} off" title="Take off">${TL_ICON.x}</button>` : ''}</span>`;
+    const parties = [...new Set([taskRequester(t) || t.requester_id, t.owner_id].filter((a): a is string => !!a))];
+    const chips = parties.map(a => chip(a, false)).join('') + (t.readers || []).map(a => chip(a, may)).join('');
+    const add = may ? `<button type="button" class="prop-add" data-prop="readers" aria-haspopup="menu" aria-label="Add who can see it" title="Add">${TL_ICON.plus}</button>` : '';
+    people = `<span class="prop-sep" aria-hidden="true">·</span><span class="prop-tags" aria-label="Who can see it">${chips}${add}</span>`;
+  }
+  return `<div class="prop" data-prop-row="visible" data-visible="${now}"><span class="prop-k" aria-hidden="true">Visible to</span><span class="prop-vwrap">${value}${people}</span></div>`;
 }
 // Adds or takes off readers, then draws the task again (a reader is not a task field: it has its own route).
 async function taskReaders(d: TaskDialog, task: PropTask, body: PropPatch): Promise<void> {
@@ -407,11 +423,28 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
           if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(role)) { d.propsErrs = {id: String(task.id), map: new Map([['people', 'A role is a short name: letters, digits, - or _.']])}; taskPropsMsgPaint(d); return; }
           setTimeout(() => pick(role));
         }});
+    } else if (key === 'visible') {
+      const now = taskVisibleNow(task);
+      const items = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k))
+        .map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now, html: `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
+      propMenu(d, b, {label: 'Visible to', items, onPick: it => {
+        const to = it.value as TaskVisible;
+        if (to === now) return;
+        if (to === 'private') {
+          // Private opens the people picker once it is saved.
+          void Promise.resolve(save('visible', {private: true})).then(ok => {
+            if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
+          });
+        } else if (now === 'private') {
+          void save('visible', {private: false});
+          if (to === 'public') void save('visible', {visibility: 'public'});
+        } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
+      }});
     } else if (key === 'readers') {
       const have = new Set([...(task.readers || []), task.owner_id, task.requester_id]);
       const items = threadAddable().filter(it => !have.has(it.actor)).map(it => ({value: it.actor, text: it.label ?? '',
         html: `<span class="tl-opt-face">${actorAvatar(it.actor, 16)}</span><span>${esc(it.label)}</span>`}));
-      propMenu(d, b, {label: 'Who can see', find: 'Find a person, bot or team', items, none: 'Nobody to add',
+      propMenu(d, b, {label: 'Who can see it', find: 'Find a person, bot or team', items, none: 'Nobody to add',
         onPick: it => void taskReaders(d, task, {add: [it.value]})});
     } else if (key === 'follow-me') {
       const now = (TASK_FOLLOWERS.get(String(task.id)) || []).find(f => f.actor === myActor())?.notify;
@@ -445,8 +478,6 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       propMenu(d, b, {label: 'Add a tag', entry: 'Tag', none: 'Type a tag, then Enter', onEntry: add});
     }
   };
-  const publication = $('[data-task-public]', box);
-  if (publication) publication.onchange = () => save('publication', {visibility: publication.checked ? 'public' : 'private'});
   // A date saves only when it is whole and sensible. With the native picker that is its change; typed by hand (the
   // fallback field), only on Enter or leaving the field, so a half-typed year like 0002 never saves.
   const date: HTMLInputElement | null = $('[data-prop-date]', d);
@@ -468,6 +499,8 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (primary) items.push({text: 'Copy session ID', run: async () => {
       try { await navigator.clipboard.writeText(primary.thread_id); toast('Session ID copied'); } catch { toast('Could not copy the session ID', true); }
     }});
+    // Links, Runs on, Sessions, Runs, Related, Meetings and Files (task-modal.ts taskActivityOpen).
+    if ($('[data-task-activity]', d)) items.push({text: 'Activity and links', run: () => taskActivityOpen(d)});
     if (r.snooze) items.push(taskSnoozed(task) ? {text: 'Unsnooze', run: () => save('snooze', {unsnooze: true})}
       : {text: 'Snooze…', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     if (r.edit && task.pipeline_id) {

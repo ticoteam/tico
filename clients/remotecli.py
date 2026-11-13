@@ -58,6 +58,11 @@ def _contacts_args(args):
     return args
 
 
+# `tico bot` commands that are one tool each, run through via_tool: anything else under `tico bot` falls to bots(),
+# whose last branch is `bot create` and reads args.template.
+BOT_TOOLS = ("bot turns-at-once", "bot browser-exit", "bot app-view", "bot app-shot")
+
+
 def unwrap(result):
     """A write's task as the CLI prints it: the task alone when the answer is only `{"task": ...}`."""
     return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
@@ -502,6 +507,8 @@ def run(args, who=None):
         return integrations(client, args)
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
+    if fn in BOT_TOOLS:
+        return via_tool(client, args)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
@@ -667,7 +674,18 @@ def run(args, who=None):
     if args.cmd == "assistant":
         from clients import hubtools
 
-        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change", "morning"):
+        if args.sub in (
+            "read",
+            "send",
+            "learn",
+            "learned",
+            "withdraw",
+            "proposals",
+            "change",
+            "morning",
+            "shared",
+            "shared-read",
+        ):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
@@ -910,7 +928,7 @@ def run(args, who=None):
                 },
                 delegate=asked,
             )
-        if sub == "relate":
+        if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
             if getattr(args, "req", None):
@@ -1517,9 +1535,88 @@ def _table(rows, cols):
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip() for row in cells)
 
 
+def _source_health(row):
+    """A synced source's health in a few words: fresh, stale since, failing with the reason, waiting; - when typed."""
+    state = row.get("health")
+    if not state or state == "not_synced":
+        return "-"
+    if state == "failing":
+        return f"failing: {row.get('last_error') or ''}".rstrip(": ")
+    if state == "stale":
+        return f"stale since {(row.get('health_since') or '')[:16]}".rstrip()
+    return state
+
+
+def _source_run(result):
+    """One run's result: what it wrote and held, the rows it did not write, or why it failed. A database query source's
+    `sync` only starts its bot's run, and says so."""
+    if result.get("started"):
+        return str(result.get("text") or "Started.")
+    if not result.get("ok"):
+        return f"Failing: {result.get('error')}. Nothing changed; 0 numbers written."
+    lines = [f"Synced: {result.get('written', 0)} numbers written, {result.get('held', 0)} held beside a typed number."]
+    for row in result.get("not_written") or []:
+        lines.append(
+            f"  not written: row {row.get('row')} {row.get('channel') or 'Unknown'} {row.get('month')}: "
+            f"{row.get('reason')}"
+        )
+    more = (result.get("not_written_count") or 0) - len(result.get("not_written") or [])
+    if more > 0:
+        lines.append(f"  and {more} more rows not written")
+    return "\n".join(lines)
+
+
+GROWTH_STEPS = {"settings": "Settings", "channel": "First channel", "source": "Its source", "month": "First month"}
+
+
+def growth_next(setup):
+    """The next Growth setup step under a command's output (backend/growth_setup.py): what it is and its command, or
+    who may do it when the caller may not. Nothing once setup is done."""
+    nxt = (setup or {}).get("next") if not (setup or {}).get("done", True) else None
+    if not nxt:
+        return ""
+    lines = [f"Next (step {nxt.get('number')} of {len(GROWTH_STEPS)}): {nxt.get('says')}"]
+    if nxt.get("you_may"):
+        lines.append("  " + str(nxt.get("command")))
+        if nxt.get("then"):
+            lines.append("  then: " + str(nxt["then"]))
+    else:
+        names = ", ".join(str(p.get("name")) for p in nxt.get("who_may") or [])
+        who = "the owner, an admin or a bot" if nxt.get("bots_may") else "the owner or an admin"
+        lines.append(f"  Only {who} can" + (f": {names}." if names else "."))
+    return "\n".join(lines)
+
+
+def _growth_setup_text(result):
+    """`tico growth setup`: each step done or not, with when it was first done, then the next step and the dates."""
+    steps = result.get("steps") or []
+    done = sum(1 for s in steps if s.get("done"))
+    nxt = (result.get("next") or {}).get("step")
+    lines = ["Set up: done." if result.get("done") else f"Set up: {done} of {len(steps)} steps done."]
+    for i, s in enumerate(steps, 1):
+        mark = "done" if s.get("done") else "next" if s.get("step") == nxt else ""
+        when = f"  {str(s['at'])[:10]}" if s.get("at") else ""
+        lines.append(f"  {mark:<4}  {i}. {GROWTH_STEPS.get(s.get('step'), s.get('step'))}{when}")
+    for key, label in (("first_opened_at", "First opened"), ("numbers_seen_at", "Numbers first seen")):
+        if result.get(key):
+            lines.append(f"{label}: {str(result[key])[:10]}")
+    after = growth_next(result)
+    return "\n".join(lines) + ("\n" + after if after else "")
+
+
 def growth_text(fn, result):
-    """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
-    `--json` prints the API response instead."""
+    """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines, and
+    under a Growth read the next setup step while Growth is not set up. `--json` prints the API response instead."""
+    if not isinstance(result, dict) or not fn.startswith("growth "):
+        return _growth_body(fn, result)
+    if fn == "growth setup":
+        return _growth_setup_text(result)
+    body = _growth_body(fn, {k: v for k, v in result.items() if k not in ("setup", "you_may")})
+    after = growth_next(result.get("setup"))
+    return body + ("\n" + after if after else "")
+
+
+def _growth_body(fn, result):
     if not isinstance(result, dict):
         return "\n".join(_plain(result))
     if fn == "brand summary":
@@ -1532,6 +1629,12 @@ def growth_text(fn, result):
             f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
             for h in hits
         )
+    if fn == "growth channel list" and not result.get("channels"):
+        return "No channels yet."
+    if fn == "growth source list" and not result.get("sources"):
+        return "No sources yet."
+    if fn == "growth cohort list" and not result.get("cohorts"):
+        return "No months yet."
     if fn in ("growth channel list",):
         return _table(
             result.get("channels") or [],
@@ -1553,10 +1656,31 @@ def growth_text(fn, result):
                 ("system", "system"),
                 ("reach", lambda r: f"{r.get('reach_kind')}:{r.get('reach_ref') or ''}".rstrip(":")),
                 ("may", "may"),
+                ("fills", lambda r: ", ".join(r.get("fills") or []) or "typed by hand"),
+                ("health", lambda r: _source_health(r)),
             ],
         )
         conflicts = result.get("conflicts") or []
         return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
+    if fn in ("growth source push", "growth source sync", "growth source run"):
+        return _source_run(result)
+    if fn in ("growth cohort list", "growth economics") and "by" in result and "cohorts" in result:
+        return computed_text(result)
+    if fn == "growth customers load":
+        lines = [f"{result.get('customers')} customers loaded ({result.get('spells')} spells)."]
+        if result.get("removed"):
+            lines.append(f"{result['removed']} customers the last load had are gone.")
+        if result.get("unknown_channel"):
+            lines.append(f"{result['unknown_channel']} have no Growth channel and count as Unknown.")
+        lines.append(
+            _table(
+                result.get("new_by_month") or [],
+                [("month", "month"), ("channel", "channel"), ("new", "new_customers")],
+            )
+        )
+        return "\n".join(lines)
+    if fn == "growth customers delete":
+        return f"{result.get('deleted', 0)} customers deleted; the figures fall back to typed values."
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
         head = f"Month: {result.get('month') or 'none yet'}"
@@ -1594,6 +1718,82 @@ def growth_text(fn, result):
             ],
         )
     return "\n".join(_plain(result)) or "Nothing yet."
+
+
+def _retention_cell(figure):
+    """One retention figure as a person reads it: 79% (56/71), 12 of 19 (too few for a rate), not yet 2026-12-29."""
+    status = figure.get("status")
+    if status == "not_yet":
+        return f"not yet {figure.get('fills_on')}"
+    if status == "too_few":
+        return f"{figure.get('count')} of {figure.get('denominator')}"
+    if figure.get("value") is None:
+        return ""
+    return f"{figure['value']:g}% ({figure.get('count')}/{figure.get('denominator')})"
+
+
+def _value_cell(figure):
+    status = figure.get("status")
+    if status == "ok":
+        value = figure.get("value")
+        return "" if value is None else f"{value:g}"
+    return {
+        "too_few": "too few",
+        "not_split": "not split",
+        "spend_monthly": "spend is monthly",
+        "not_yet": "not yet",
+        "no_spend": "",
+        "missing": "",
+    }.get(status, "")
+
+
+def computed_text(result):
+    """`tico growth cohort list|economics --by ... --grain ...`: the computed cohorts as a table, then the notes, then
+    with --customers each retention figure's rule and, for those who may see them, the keys."""
+    cut = result.get("by") or "channel"
+    rows = result.get("cohorts") or []
+    if not rows:
+        return "No customer facts yet: load them with tico growth customers load <file>."
+    table = _table(
+        rows,
+        [
+            ("period", "period"),
+            (cut, lambda r: r.get("value") if r.get("value") is not None else "none"),
+            ("new", lambda r: r["new_customers"].get("value")),
+            ("day 30", lambda r: _retention_cell(r["kept_d30"])),
+            ("day 90", lambda r: _retention_cell(r["kept_d90"])),
+            ("day 180", lambda r: _retention_cell(r["kept_d180"])),
+            ("LTV", lambda r: _value_cell(r["ltv"])),
+            ("CAC", lambda r: _value_cell(r["cac"])),
+            ("payback", lambda r: _value_cell(r["payback_months"])),
+            ("source", lambda r: "computed"),
+        ],
+    )
+    notes = []
+    if any(r.get("too_few") for r in rows):
+        notes.append(f"Under {result.get('min_cohort')} customers a cohort shows counts only: too few for a rate.")
+    if result.get("cac_note"):
+        notes.append(f"CAC and payback are per channel: {result['cac_note']}.")
+    lines = [table, *notes]
+    for r in rows:
+        for window in (30, 90, 180):
+            figure = r.get(f"kept_d{window}") or {}
+            if not figure.get("rule"):
+                continue
+            lines.append("")
+            lines.append(f"{r['period']} {r.get('value') or 'none'} day {window}: {_retention_cell(figure)}")
+            lines.append("  " + figure["rule"])
+            who = figure.get("customers")
+            if who:
+                lines.append(f"  still customers ({len(who['still'])}): " + " ".join(who["still"]))
+                lines.append(
+                    f"  churned by day {window} ({len(who['churned'])}): "
+                    + " ".join(f"{c['key']} ({c['churned']})" for c in who["churned"])
+                )
+    if any(r.get("kept_d30", {}).get("rule") for r in rows) and not result.get("keys_visible"):
+        lines.append("")
+        lines.append("Customer keys show only to the owner, admins and the people they name in key_readers.")
+    return "\n".join(lines)
 
 
 def _entity_line(row):

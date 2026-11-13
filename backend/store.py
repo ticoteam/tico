@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS assignments(
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
  bot_id TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
- created_at TEXT NOT NULL, attempt_id TEXT);
+ created_at TEXT NOT NULL, attempt_id TEXT, release TEXT, release_after TEXT, released TEXT);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot_id,state,created_at);
 CREATE TABLE IF NOT EXISTS job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS credentials(
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
  tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT,
- has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT);
+ has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT, has_password INTEGER NOT NULL DEFAULT 1);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,

@@ -2169,7 +2169,43 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             if item["ask"] and item["ask"]["kind"] == "ok":
                 item["line"] = item["ask"]["line"]
                 item["missing"] = [item["ask"]["line"]]
+            elif item["ask"] and item["ask"]["kind"] == "page":
+                item["line"] = page_ask_line(item["ask"]["line"], (item.get("task") or {}).get("title"), item["line"])
     return sorted(items, key=needs_key)
+
+
+# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)", task_requirements._page):
+# the list says who it is for already, so they go; what comes before or after them (Jev's reason, a send back, a merge
+# conflict) stays. Only the last such phrase is the stage's: one inside Jev's reason is kept, and a name may hold
+# brackets ("OK Chris (Owner) (version 3)").
+_PAGE_OK_VERSION = re.compile(r"\(version \d+\)\.?")
+_PAGE_WORD = re.compile(r"\s+page$", re.IGNORECASE)
+
+
+def page_ask_line(name, title, waiting):
+    """A page OK in Needs you, in plain words: what it is, which task, and the decision, "Spec for Share Assistant
+    chat, ready for your OK", then anything the stage said about it. The requirement's name alone ("Spec page") said
+    neither the task nor what was asked (#330)."""
+    name = (name or "").strip() or "Page"
+    what = _PAGE_WORD.sub("", name) or name
+    title = (title or "").strip()
+    head = f"{what} for {title}, ready for your OK" if title else f"{name}, ready for your OK"
+    said = _without_page_ok(waiting or "")
+    return f"{head}. {said}" if said else head
+
+
+def _without_page_ok(waiting):
+    """`waiting` without its last "OK <name> (version N)" phrase, the one the stage wrote."""
+    versions = list(_PAGE_OK_VERSION.finditer(waiting))
+    if not versions:
+        return waiting.strip()
+    end = versions[-1]
+    start = waiting.rfind("OK ", 0, end.start())
+    while start > 0 and not waiting[start - 1].isspace():
+        start = waiting.rfind("OK ", 0, start)
+    if start < 0:
+        return waiting.strip()
+    return " ".join((waiting[:start] + " " + waiting[end.end() :]).split())
 
 
 def needs_key(x):
@@ -2716,7 +2752,7 @@ def install_views(app, store, auth, mutate, task_view):
                     "icon": icon_of(config),
                     "helper": helper(config),
                     # What Settings and the branch editor show and pick from (backend/wake_presets.py).
-                    "wake": wake_presets.effective(config),
+                    "wake": wake_presets.waits(config),
                     "profile": profiles.effective(config),
                     "my_access": mine_level,
                     **policy,
@@ -3217,10 +3253,14 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/runs")
-    def runs(request: Request):
+    def runs(request: Request, bot: str | None = None):
+        """The newest runs a person may read, or one bot's (`bot`, its id or slug). A bot page asks for its own: the
+        newest 200 of the whole company left a quiet bot's failed starts off its Runs card (Nov 12)."""
         human_only(request.state.identity)
         with store.read() as c:
-            rows = [turn for turn, _ in visible_turns(c, request.state.identity)]
+            if bot:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            rows = [turn for turn, _ in visible_turns(c, request.state.identity, bot)]
             made = ran_on(c, [turn["id"] for turn in rows])
             return [run_view(turn, c, made[turn["id"]]) for turn in rows]
 

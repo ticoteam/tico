@@ -2422,6 +2422,104 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
     assert not any(tier.get(t) == 0 for t in checks.UPGRADE_TESTS)
 
 
+def light_plan(changed, event, repo_map, added):
+    picked = checks.selection(changed, event, graph=repo_map, added=added)
+    return checks.narrow(picked, changed, event, added=added, graph=repo_map)
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize(
+    "changed",
+    [
+        # Nov 13: #3335 added tools columns and #3604 listening_items.delivered without backend/rows.py; neither plan
+        # picked test_rows_schema.py and main went red twice (fixed by #3603 and #3625).
+        ["backend/migrations/20261111145540_website_tools.py", "backend/website_tools.py", "backend/api_tools.py"],
+        ["backend/migrations/20261113030739_listening_items_delivered.py", "backend/listening.py"],
+    ],
+)
+def test_a_migration_runs_the_rows_schema_test_even_in_a_light_plan(event, changed, repo_map):
+    light = light_plan(changed, event, repo_map, added=changed[:1])
+    assert checks.ROWS_SCHEMA in light["python"] and light["narrow"]["tier"][checks.ROWS_SCHEMA] == 0
+    assert checks.ROWS_SCHEMA in light["guards"] and (ROOT / checks.ROWS_SCHEMA).is_file()
+    # The same modules without the migration leave it to the map: it is not lifted to always run.
+    rest = changed[1:]
+    tier = light_plan(rest, event, repo_map, added=[])["narrow"]["tier"]
+    assert tier.get(checks.ROWS_SCHEMA) != 0
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_new_ui_file_runs_the_release_shot_table_test_even_in_a_light_plan(event, repo_map):
+    # Nov 13: #3335 added ui/app/browser-view.ts and ui/styles/browser-view.css, which no PAGES, SHARED or UNSHOWN entry
+    # named; test_release_shots.py lists every tracked ui/ file through git, the plan never picked it, and main went red.
+    added = ["ui/app/browser-view.ts", "ui/styles/browser-view.css"]
+    changed = [*added, "ui/app/tools.ts"]
+    light = light_plan(changed, event, repo_map, added=added)
+    assert checks.RELEASE_SHOTS in light["python"] and light["narrow"]["tier"][checks.RELEASE_SHOTS] == 0
+    assert (ROOT / checks.RELEASE_SHOTS).is_file()
+    # A changed (not new) ui/ file, or a new browser test, cannot change the harness's listing.
+    for changed, added in ((["ui/app/tools.ts"], []), (["ui/tests/browser-view.cts"], ["ui/tests/browser-view.cts"])):
+        assert checks.RELEASE_SHOTS not in light_plan(changed, event, repo_map, added=added)["guards"], changed
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event, repo_map):
+    # Nov 13: #3598 added `tico growth source push src_1 --file signups.csv` in clients/commands/strategy.py; its light
+    # plan never ran test_cli_spec.py, which parses every example, and main went red (fixed by #3684).
+    changed = ["clients/commands/strategy.py", "backend/growth.py"]
+    light = light_plan(changed, event, repo_map, added=[])
+    assert checks.CLI_SPEC in light["python"] and light["narrow"]["tier"][checks.CLI_SPEC] == 0
+    assert checks.CLI_SPEC in light["guards"] and (ROOT / checks.CLI_SPEC).is_file()
+    assert checks.CLI_SPEC not in light_plan(["backend/growth.py"], event, repo_map, added=[])["guards"]
+
+
+def test_a_schema_line_in_a_backend_module_runs_the_rows_schema_test(tmp_path):
+    # A column added to a CREATE TABLE string (hubdb.py, store.py) or to the column list an ALTER TABLE loop reads
+    # changes the hub's schema without a migration: rows.py must follow, so test_rows_schema.py runs.
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    hubdb = 'SCHEMA = """\nCREATE TABLE IF NOT EXISTS kpis(\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL\n);\n"""\n'
+    loop = 'COLUMNS = (("slug", "TEXT"),)\n\n\ndef add(c):\n    for name, kind in COLUMNS:\n'
+    loop += '        c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")\n'
+    git("init", "-q", "-b", "main")
+    smoke_tree(tmp_path)
+    source(tmp_path, checks.ROWS_SCHEMA, "def test_rows():\n    pass\n")
+    source(tmp_path, "backend/hubdb.py", hubdb + "\n\ndef count():\n    return 1\n")
+    source(tmp_path, "backend/lifecycle.py", loop)
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+
+    def change(name, old, new):
+        text = (tmp_path / name).read_text()
+        assert old in text
+        source(tmp_path, name, text.replace(old, new, 1))
+        git("commit", "-qam", "Change")
+        found = checks.schema_changes(base, "HEAD", [name], tmp_path)
+        picked = checks.selection([name], root=tmp_path, base=base, head="HEAD", core=[], added=[])
+        git("reset", "-q", "--hard", base)
+        assert (checks.ROWS_SCHEMA in picked["guards"]) == bool(found)
+        assert (checks.ROWS_SCHEMA in picked["python"]) == bool(found)
+        return found
+
+    assert change("backend/hubdb.py", "  name TEXT NOT NULL\n", "  name TEXT NOT NULL,\n  slug TEXT\n")
+    assert change("backend/lifecycle.py", '(("slug", "TEXT"),)', '(("slug", "TEXT"), ("rank", "INTEGER"))')
+    assert not change("backend/hubdb.py", "return 1", "return 2")  # code beside the schema: the map decides
+    # A deleted module drops its tables.
+    git("rm", "-q", "backend/hubdb.py")
+    git("commit", "-qm", "Delete")
+    assert checks.schema_changes(base, "HEAD", ["backend/hubdb.py"], tmp_path) == {"backend/hubdb.py"}
+    git("reset", "-q", "--hard", base)
+    # Without a base (no diff to read), a module that holds a CREATE or ALTER TABLE counts; tests and migrations never.
+    assert checks.schema_changes(None, "HEAD", ["backend/hubdb.py", "backend/lifecycle.py"], tmp_path) == {
+        "backend/hubdb.py",
+        "backend/lifecycle.py",
+    }
+    assert not checks.schema_changes(None, "HEAD", [checks.ROWS_SCHEMA, "ui/app/x.ts"], tmp_path)
+
+
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
     tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
     seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}

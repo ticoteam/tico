@@ -325,7 +325,7 @@ class SettingsAdmin:
             "effort": effective.get("reasoning_effort") or row["effort"],
             "compact_at": compact_at(effective, providers.bot_choice(c, self.settings, effective)[1]),
             # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
-            "wake": wake_presets.effective(_json(config["config"], {}) or {}),
+            "wake": wake_presets.waits(_json(config["config"], {}) or {}),
             "profile": profiles.effective(_json(config["config"], {}) or {}),
             "session": effective.get("session"),
             "subtask_session": effective.get("subtask_session"),
@@ -1232,8 +1232,6 @@ class SettingsAdmin:
             return compact_at(declared, providers.bot_choice(c, self.settings, declared)[1])
         if field == start_places.BOT_KEY:
             return start_places.bot_limit(_json(config["config"], {}) or {})
-        if field == "wake_preset":
-            return wake_presets.preset_of(_json(config["config"], {}))
         if field == "profile":
             return profiles.snapshot(_json(config["config"], {}) or {})
         if field == "placement":
@@ -2267,35 +2265,6 @@ class SettingsAdmin:
             )
         H.event(c, who.actor, "bot.turns_at_once_changed", bot, {"before": before, "after": body.turns_at_once})
         return {"bot": bot, "turns_at_once": body.turns_at_once, "revision": config["revision"] + 1}
-
-    def set_wake_preset(self, c, who, bot, body):
-        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
-        one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
-        picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
-        CA.gate(c, who.actor, "cost", f"change how soon {(H.bot(c, bot) or {}).get('slug', bot)} wakes")
-        self._manager(c, who, bot)
-        config = self._config(c, bot)
-        if config["revision"] != body.expected_revision:
-            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
-        before = self.snapshot(c, bot, "wake_preset")
-        declared = _json(config["config"], {}) or {}
-        # Old clients may still send `current`; it now selects Performance.
-        chosen = wake_presets.preset_of({"wake_preset": body.wake_preset})
-        declared["wake_preset"] = chosen
-        if profiles.name_of(declared):
-            # A bot with a profile keeps it: the old setting only changes the profile's window (backend/profiles.py).
-            profiles.apply_preset(declared, chosen)
-        BS.write(c, bot, declared)
-        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
-        wake_presets.replan(c, bot)
-        self.record(c, who.actor, bot, "wake_preset", before, chosen)
-        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": chosen})
-        return {
-            "bot": bot,
-            "wake_preset": chosen,
-            "wake": wake_presets.effective(declared),
-            "revision": config["revision"] + 1,
-        }
 
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):

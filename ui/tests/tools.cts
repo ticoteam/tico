@@ -58,6 +58,7 @@ interface ApiFake {
   answer(p: string, method: string, body: FakeBody, url: URL): unknown;
 }
 
+declare function pageTools(): void;
 const at = (mins: number) => new Date(Date.UTC(2026, 10, 5, 12, 0) - mins * 60000).toISOString();
 // Rows as backend/api_tools.py index_page sends them: `who` is {kind: 'bot'|'person', id, name, initials}.
 const who = (kind: string, id: string, name: string) => ({kind, id, name, initials: name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()});
@@ -230,6 +231,27 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         assert.equal(await crm.locator('.tt-face').count(), 4, `${tag}: four faces`);
         assert.match(await crm.locator('.tt-more').innerText(), /\+3 more/, `${tag}: the rest counted`);
         assert.equal(await crm.locator('.tt-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
+        // Only a row that needs someone is coloured: Waiting and Key rejected keep their pill; Working, Connected and On
+        // are for screen readers only; Off is a plain word. Nobody yet is not shown, and Way in is plain text.
+        assert.deepEqual(await page.locator('tr[data-tl-row] .tt-st .pill').evaluateAll(p => p.map(x => [x.closest('tr')!.dataset.tlRow, x.textContent])),
+          [['api:t-billing', 'Key rejected'], ['slack', 'Waiting']], `${tag}: pills only where someone is needed`);
+        assert.equal(await crm.locator('.tt-st .sr-only').textContent(), 'Working', `${tag}: working is in the accessible text`);
+        assert.equal(await page.locator('tr[data-tl-row="github"] .tt-st').innerText(), 'Off', `${tag}: Off is a word`);
+        assert.equal(await page.locator('tr[data-tl-row="github"] .tt-st .muted').count(), 1, `${tag}: Off is muted`);
+        const number = page.locator('tr[data-tl-row="number:ibx-1"]');
+        assert.equal(await number.locator('.tt-who .sr-only').textContent(), 'Nobody yet', `${tag}: Nobody yet for screen readers`);
+        assert.equal(await number.locator('.tt-who .muted').count(), 0, `${tag}: Nobody yet not shown`);
+        assert.equal(await page.locator('tr[data-tl-row] .tt-way .pill').count(), 0, `${tag}: Way in is plain text`);
+        assert.equal(await number.locator('.tt-way').innerText(), 'Tico', `${tag}: Tico stays a word`);
+        if (tag === 'phone') {
+          const tool = (await number.locator('.tt-tool').boundingBox())!, st = (await number.locator('.tt-st').boundingBox())!, row = (await number.boundingBox())!;
+          assert.ok(row.y + row.height - (Math.max(tool.y + tool.height, st.y + st.height)) < 20, `${tag}: no empty line for Nobody yet`);
+        }
+        await page.fill('.tt-q', 'nobody');
+        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['number:ibx-1', 'github'], `${tag}: search still finds Nobody yet`);
+        await page.fill('.tt-q', 'working');
+        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-crm'], `${tag}: search still finds a blank status`);
+        await page.fill('.tt-q', '');
         await page.locator('[data-tl-show="needs"]').click();
         assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-billing', 'slack'], `${tag}: Needs you`);
         assert.deepEqual(await page.locator('tr[data-tl-row] [data-private]').evaluateAll(p => p.map(x => [x.closest('tr')!.dataset.tlRow, x.textContent])),
@@ -243,10 +265,22 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
         if (tag === 'desktop') await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached'});
         await shot(page, `list-${tag}`);
-        await rows.filter({hasText: 'Acme CRM'}).locator('.tt-st').click();
+        // The whole row opens the tool (its Status cell is blank while it works, so click Way in).
+        await rows.filter({hasText: 'Acme CRM'}).locator('.tt-way').click();
         await page.waitForFunction(() => location.hash === '#/tools/api/t-crm');
         await page.locator('#tool-access').waitFor();
         assert.deepEqual(seen.errors, [], `${tag}: list errors`);
+        await page.close();
+      }
+      // With nothing needing anyone, the Needs you filter leaves, as Websites does at zero; All always shows.
+      {
+        const {page, seen} = await start(browser, '#/tools', {width, ready: 'tr[data-tl-row]'});
+        await page.route('**/api/v2/tool-index', r => r.fulfill({contentType: 'application/json',
+          body: JSON.stringify({rows: ROWS.map(x => ({...x, needs_you: false})), counts: {...COUNTS, needs_you: 0}, next: null})}));
+        await page.evaluate(() => { pageTools(); });
+        await page.waitForFunction(() => !document.querySelector('[data-tl-show="needs"]') && document.querySelector('[data-tl-show] .tt-n'));
+        assert.deepEqual(await page.locator('[data-tl-show]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.tlShow)), ['', 'api', 'mail'], `${tag}: no Needs you at zero`);
+        assert.deepEqual(seen.errors, [], `${tag}: no Needs you errors`);
         await page.close();
       }
       // An API tool: Who can use it with levels, Recent, Keys, Check, Limits not yet.

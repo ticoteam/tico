@@ -70,6 +70,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
     await page.evaluate(t => taskModalShow(t), task);
     const modal = page.locator('#task-modal'), sec = modal.locator('[data-task-run-model]');
+    if (viewport.width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // a phone: Runs on is in Info (task #409)
     await sec.locator('.task-run-now', {hasText: "The bot's task model"}).waitFor();
 
     if (!canSet) {

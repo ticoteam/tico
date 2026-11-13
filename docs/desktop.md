@@ -2,8 +2,8 @@
 
 > **Beta** on Mac: the Mac app stays Beta until it is signed ([#45](https://github.com/ticoteam/tico/issues/45)); the Windows and Linux apps are not Beta. See [Beta features](support.md#beta-features).
 
-Download **Tico** from your server's **Download for Mac**, **Download for Windows** or
-**Download for Linux** link, or from the [latest GitHub release](https://github.com/ticoteam/tico/releases/latest).
+Download **Tico** from the [latest GitHub release](https://github.com/ticoteam/tico/releases/latest).
+A company with its own app offers it in its Tico menu ([below](#your-companys-app)).
 The same app connects to any Tico server.
 
 On macOS, open the universal `.dmg` and drag Tico to Applications. On Windows, run the
@@ -112,7 +112,8 @@ Download your company's app from your own Tico page. It has your team's name and
 your Team directly, and updates itself from your server. Each company has a stable bundle ID,
 so its app can coexist with another company's app and the generic Tico app. The download API
 `GET /api/download/{mac|windows|linux}` returns `app_kind: company` or `generic`; a frontend
-can show **Download Tico for <team name>** for a company build.
+can show **Download Tico for <team name>** for a company build. The web app offers only a
+company build; the generic app stays on the GitHub release page.
 
 If an older company app does not update itself, sign in to your team's Tico page, download the
 company app again and install it over the existing copy. Keep the app's saved data; its stable

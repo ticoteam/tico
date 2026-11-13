@@ -308,10 +308,10 @@ async function srSubmit(ev: SubmitEvent): Promise<void> {
   }
 }
 
-async function srRetire(id: string): Promise<void> {
+async function srRetire(id: string, from?: Element | null): Promise<void> {
   const open = SR, r = open?.list?.items.find(x => x.id === id);
   if (!open || !r) return;
-  if (!confirm(`Retire "${r.name}"? It stops applying.`)) return;
+  if (!await askConfirm(`Retire "${r.name}"? It stops applying.`, from)) return;
   try {
     await post(`/v2/stage-rules/${encodeURIComponent(id)}/retire`, {revision: r.revision});
     toast('Retired');
@@ -329,5 +329,5 @@ async function srClick(ev: MouseEvent): Promise<void> {
   const editId = el.dataset['srEdit'];
   if (editId) { srFormOpen(SR.list?.items.find(r => r.id === editId) ?? null); return; }
   const retireId = el.dataset['srRetire'];
-  if (retireId) await srRetire(retireId);
+  if (retireId) await srRetire(retireId, el);
 }

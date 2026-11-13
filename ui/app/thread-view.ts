@@ -749,6 +749,9 @@ function thvRoutedHTML(m: ThvMessage) {
 // page, and to what was open on it when the page can open it.
 const THV_FROM_PAGES: Record<string, (item?: PageChatItem) => string> = {
   listening: item => LISTENING + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  // the review view (file-review.ts), at the version that was on screen
+  file: item => item?.kind === 'file' && item.id ? fileReviewHref(item.id, {version: Number(String(item.name || '').replace(/^v/, '')) || null}) : '',
+  goals: item => goalsBase() + (item?.kind === 'goal' && item.id ? '/' + encodeURIComponent(item.id) : ''),
 };
 function thvFromHTML(m: ThvMessage) {
   const f = m.refs?.from_page;

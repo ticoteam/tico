@@ -836,6 +836,8 @@ class Vault:
                 'This account has no stored password; ask its holder or a credential administrator to replace the login.',
                 409,
             )
+        if not row['has_password']:
+            raise Problem('no_password', 'This account has no password; add one with Replace login.', 409)
         from . import website_tools
 
         website_tools.spend(cid)  # the same 20 an hour as fill, copy and code (429 slow_down)

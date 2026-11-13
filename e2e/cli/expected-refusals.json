@@ -8,6 +8,7 @@
  "assistant propose": "operation",
  "automation create": "file",
  "automation template": "not_found",
+ "bot app-shot": "forbidden",
  "bot branch": "not_found",
  "bot copy": "forbidden",
  "bot go-live": "no_computer",

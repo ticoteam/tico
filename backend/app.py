@@ -344,21 +344,38 @@ def create_app(settings=None):
                 stopping=stop.is_set,
             ).start()
             scheduler.drains = workers
-            try:
-                await run_passes(scheduler, recorded, release_check)
-            finally:
-                # No new claims; a call already started finishes within its own timeout.
-                await asyncio.to_thread(workers.stop, 75)
+            # The steps that call GitHub, and the release check and update feeds, on a worker of their own beside
+            # this loop (backend/heartbeat.py `Outside`): a slow GitHub never holds up a due time or a recovery.
+            from . import heartbeat
 
-        async def run_passes(scheduler, recorded, release_check):
+            outside = heartbeat.Outside(
+                scheduler,
+                app=app,
+                telemetry=telemetry,
+                also=lambda: recorded("release_check", release_check),
+                stopping=stop.is_set,
+            ).start()
+            scheduler.outside = outside
+            try:
+                await run_passes(scheduler)
+            finally:
+                # No new claims or passes; a call already started finishes within its own timeout.
+                outside.stop.set()
+                await asyncio.to_thread(workers.stop, 75)
+                await asyncio.to_thread(outside.halt, 15)
+
+        async def run_passes(scheduler):
             from . import heartbeat
 
             rest = heartbeat.Rest()
             while not stop.is_set():
-                # The Heartbeat (backend/heartbeat.py): GitHub sync, personal alerts, the tick's due-time and recovery
-                # steps, repository waits and call sweeps, in that order, each on its own (one failing never stops
-                # the next; each goes to telemetry as before).
+                # The Heartbeat (backend/heartbeat.py): personal alerts, the tick's due-time and recovery steps and the
+                # call sweeps, in that order, each on its own (one failing never stops the next; each goes to
+                # telemetry as before). The outside polls' worker is asked for its pass at the beat's time first, so
+                # it runs beside the beat and never more than one pass at a time.
                 ctx = heartbeat.Context(scheduler, app=app, telemetry=telemetry)
+                if scheduler.outside is not None:
+                    scheduler.outside.wake(ctx.at)
                 try:
                     await asyncio.to_thread(heartbeat.beat, ctx)
                 except Exception as exc:
@@ -368,7 +385,9 @@ def create_app(settings=None):
                 if rest.due(ctx):
                     try:
                         await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
-                        await asyncio.to_thread(recorded, "release_check", release_check)
+                        if scheduler.outside is not None:
+                            # The release check, here only while the worker's thread is dead.
+                            await asyncio.to_thread(scheduler.outside.rest_fallback)
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging
@@ -974,6 +993,7 @@ def create_app(settings=None):
                     "/api/v2/uploads/tasks",
                     "/api/v2/uploads/assistant/messages",
                     "/api/v2/meetings/import",
+                    "/api/v2/growth/customers",  # customer facts as CSV: 100,000 customers is about 7 MB
                 ) or re.fullmatch(
                     r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+|v2/uploads/threads/[^/]+/messages)",
                     request.url.path,
@@ -2484,11 +2504,14 @@ def create_app(settings=None):
 
         return place
 
-    def rule_check(who, operation, output, audience, obj="", context=None, place=None, *, track_route=False):
+    def rule_check(
+        who, operation, output, audience, obj="", context=None, place=None, *, track_route=False, late=False
+    ):
         """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
         is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
         place, or a function of (c, author, recipients) that reads it. `track_route` keeps the audience even when
-        nothing matches, so a send cannot move to an unchecked recipient."""
+        nothing matches, so a send cannot move to an unchecked recipient. `late`: when every rule it meets only warns,
+        the check runs right after the write instead of before it (org_rule_check `check_as`)."""
         author = org_rule_check.author_of(who, settings.assistant_bot)
         if not track_route and (not output or not author):
             return None
@@ -2502,7 +2525,7 @@ def create_app(settings=None):
                 return org_rule_check.refused(exc)
         verdict = (
             org_rule_check.preflight(
-                store, app.state.judge, who, operation, output, recipients, context, obj, place=place
+                store, app.state.judge, who, operation, output, recipients, context, obj, place=place, late=late
             )
             if in_force and output and author
             else None
@@ -5625,6 +5648,11 @@ def create_app(settings=None):
     from .learned import install as install_learned
 
     install_learned(app, store, auth, mutate)
+    from . import assistant_share
+
+    assistant_share.install(
+        app, store, auth, mutate
+    )  # bots a person lets view their Assistant chat (docs/assistant.md)
     from .mcp import install_mcp
 
     install_mcp(app, settings)

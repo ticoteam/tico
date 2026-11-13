@@ -29,7 +29,7 @@ wrong, do not say done: send the task back to the stage it comes from,
   earlier stages", beside Reviewer 1's), push, then `tico task done <id> -m "<what you fixed>" --version N`. When it
   found nothing, say done at once: `tico task done <id> -m "Review 2 found nothing to fix" --version N`.
 - **QA.** To leave: Checks pass, and the QA page, which Jev checks and then a person approves; approving it ships the
-  change. Build it with `skills/build-the-qa-page/SKILL.md` (`playbooks/qa.md` says what to do when it comes back) and
+  change. Build it with `skills/build-the-page/SKILL.md` (its `templates/review.html`, titled QA) (`playbooks/qa.md` says what to do when it comes back) and
   attach it to the requirement `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
   Commits you push after Review 2 are read by Reviewer 2 before the person is asked; when it sends them back, fix and
   push. After the person's OK, a rebase that changes the same lines keeps it; other new commits are read by Reviewer 2,
@@ -79,7 +79,7 @@ Always:
 - `skills/write-a-test-that-proves-the-change/SKILL.md`: read before any code change for a task.
 - `skills/answer-each-review-comment/SKILL.md`: read whenever a pull request has comments, before you reply to any.
 - `skills/get-the-checks-green-at-the-head/SKILL.md`: read whenever a check fails or you hand a commit on.
-- `skills/build-the-qa-page/SKILL.md`: read when a task you own enters QA.
+- `skills/build-the-page/SKILL.md`: read when a task you own enters QA, before you build the QA page: what changed and what to decide first, real screenshots with red numbered arrows, details last, rendered and looked at before it is attached.
 
 ## Method
 - **Test first.** A change is not ready until a test fails on the old code and passes on yours.

@@ -66,7 +66,12 @@ def test_a_warned_done_note_and_snooze_why_carry_the_line_and_go_through(ruled):
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     got = ops(api, f"tasks/{task['id']}/done", {"version": task["version"], "note": "Done: favorite color is red."})
-    assert got["rule_warning"] and row(api, task["id"])["status"] == "done"
+    # Under rules that only warn, a done note goes first and its check runs right after (backend/org_rule_check.py
+    # `late`): the line reaches the saved note then.
+    assert "rule_warning" not in got and row(api, task["id"])["status"] == "done"
+    from backend import org_rule_check
+
+    org_rule_check.drain_late(api.app.state.store, api.app.state.judge)
     said = json.dumps(sql(api, "SELECT notes FROM answers ORDER BY rowid DESC LIMIT 1"))
     assert "Warning:" in said and "favorite color is red" in said
     task = task_for_ops(api, "Write the second note")
@@ -282,6 +287,9 @@ def test_a_done_note_with_the_days_calls_spent_under_warn_rules_goes_with_its_li
     task = task_for_ops(api)
     got = done_by_ops(api, task, "All shipped.")
     assert "held" not in got and row(api, task["id"])["status"] == "done"
+    from backend import org_rule_check
+
+    org_rule_check.drain_late(api.app.state.store, api.app.state.judge)  # the check runs right after the write
     said = json.dumps(sql(api, "SELECT notes FROM answers ORDER BY rowid DESC LIMIT 1"))
     assert "could not be checked against the rule" in said
     assert reasons(api) == ["day_cap"]

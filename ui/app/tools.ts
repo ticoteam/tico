@@ -49,13 +49,20 @@ const toolsPill = (status?: ToolsStatus) => {
   const tone = TOOLS_TONE[status?.tone ?? ''];
   return `<span class="pill${tone ? ' ' + tone : ''} tt-status" data-tone="${esc(status?.tone || 'idle')}"><span class="tt-dot" aria-hidden="true"></span>${esc(status?.text || '')}</span>`;
 };
+// The list's Status cell shows only what needs someone: a working tool says so to screen readers only, one that is off
+// or unchecked says it in plain muted words, and waiting, failing or running keep the coloured pill. (A tool's own page
+// keeps toolsPill.)
+const toolsListStatus = (status?: ToolsStatus) => {
+  const tone = status?.tone || 'idle', text = esc(status?.text || '');
+  return tone === 'ok' ? `<span class="sr-only">${text}</span>` : tone === 'idle' ? `<span class="muted">${text}</span>` : toolsPill(status);
+};
 // One face: a bot's avatar, or a person's photo or initials.
 const toolsFace = (w: ToolsWho, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
   : personAvatar((S.people || []).find(p => p.id === w.id) || {id: w.id, name: w.name}, size);
 // Who can use it: up to four faces, each named on hover, then "+N more".
 function toolsWhoHTML(row: ToolsRow): string {
   const who = row.who || [], total = Math.max(row.who_total || 0, who.length);
-  if (!total) return '<span class="muted">Nobody yet</span>';
+  if (!total) return '<span class="sr-only">Nobody yet</span>';
   const shown = who.slice(0, TOOLS_WHO_SHOWN), more = total - shown.length;
   return `<span class="tt-faces">${shown.map(w => `<span class="tt-face" title="${esc(w.name || w.id)}">${toolsFace(w)}</span>`).join('')}</span>${
     more > 0 ? `<span class="muted tt-more">+${more} more</span>` : ''}`;
@@ -102,8 +109,8 @@ function toolsDraw() {
   const cur = TL;
   const rows = cur.rows || [], counts: Record<string, number> = cur.counts || {};
   const count = (k: string, test: (r: ToolsRow) => boolean) => counts[k] ?? rows.filter(test).length;
-  // Websites shows once there is one.
-  const filters = TOOLS_FILTERS.filter(([k, , test, c]) => k !== 'websites' || count(c, test) > 0 || cur.show === 'websites');
+  // Once the rows are read, a filter with nothing in it is left out (All and the one picked always show).
+  const filters = TOOLS_FILTERS.filter(([k, , test, c]) => !k || k === cur.show || !cur.rows || count(c, test) > 0);
   const bar = root.querySelector<HTMLElement>('.tt-filters');
   if (!bar) return;
   bar.innerHTML = filters.map(([k, label, test, c]) =>
@@ -113,7 +120,9 @@ function toolsDraw() {
   if (!box || !cur.rows) return;
   const test = (TOOLS_FILTERS.find(([k]) => k === cur.show) || TOOLS_FILTERS[0])?.[2] ?? (() => true);
   const words = cur.q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = rows.filter(r => test(r) && words.every(w => [r.name, r.detail, r.way, r.status?.text, ...(r.who || []).map(x => x.name)]
+  // Search reads the words, not the cells, so a status or "Nobody yet" the list leaves blank still finds its row.
+  const nobody = (r: ToolsRow) => Math.max(r.who_total || 0, (r.who || []).length) ? '' : 'Nobody yet';
+  const shown = rows.filter(r => test(r) && words.every(w => [r.name, r.detail, r.way, r.status?.text, nobody(r), ...(r.who || []).map(x => x.name)]
     .join(' ').toLowerCase().includes(w)));
   const err = cur.error ? `<p class="err" data-tl-error>${esc(cur.error)}</p>` : '';
   if (!shown.length) {
@@ -124,9 +133,9 @@ function toolsDraw() {
     <tbody>${shown.map(r => `<tr data-tl-row="${esc(r.id)}" data-tl-kind="${esc(r.kind)}"${r.needs_you ? ' data-tl-needs' : ''}>
       <td class="tt-tool"><a href="${esc(r.href || '#/tools')}"><span class="tt-tile" aria-hidden="true"><span class="nav-icon">${TOOLS_ICONS[r.kind] || 'link'}</span></span>
         <span class="tt-nm"><strong>${esc(r.name)}${r.private ? TOOLS_PRIVATE : ''}</strong>${r.detail ? `<span class="muted">${esc(r.detail)}</span>` : ''}</span></a></td>
-      <td class="tt-way">${r.way ? `<span class="pill">${esc(r.way)}</span>` : ''}</td>
+      <td class="tt-way">${r.way ? `<span class="muted">${esc(r.way)}</span>` : ''}</td>
       <td class="tt-who">${toolsWhoHTML(r)}</td>
-      <td class="tt-st">${toolsPill(r.status)}</td>
+      <td class="tt-st">${toolsListStatus(r.status)}</td>
       <td class="tt-chev" aria-hidden="true">›</td></tr>`).join('')}</tbody></table>`;
   // The whole row opens the tool; its own links (none today) keep theirs.
   const tbody = box.querySelector<HTMLElement>('tbody')!;   // drawn just above

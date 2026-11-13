@@ -768,6 +768,13 @@ def parser():
     s.set_defaults(fn="doc search")
     s = docs.add_parser("write", help="create or replace an internal doc at a path")
     s.add_argument("path")
+    s.add_argument(
+        "--base-version",
+        dest="base_version",
+        type=int,
+        help="the version you read (tico doc read); refused if someone saved since. Leave out only to create a doc "
+        "or to replace your own latest version",
+    )
     s.add_argument("--title")
     s.add_argument("--body-file", dest="body_file", help="the Markdown file; standard input when omitted")
     s.add_argument("--note", help="one line on what changed")
@@ -820,6 +827,13 @@ def parser():
     assistant.add_parser(
         "learned", help="what your chat bot has learned: your layer, and the company's for the owner"
     ).set_defaults(fn="assistant learned")
+    assistant.add_parser(
+        "shared", help="the people who chose you to view their Assistant chat, read only (a bot's own run)"
+    ).set_defaults(fn="assistant shared")
+    s = assistant.add_parser("shared-read", help="read one page of a person's Assistant chat they shared with you")
+    s.add_argument("person", help="the person's id, e.g. human:ana (tico assistant shared)")
+    s.add_argument("--before", default=None, help="next_before from the previous page, for older messages")
+    s.set_defaults(fn="assistant shared-read")
     s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
     s.add_argument("id", help="the card's proposal id (tico assistant proposals)")
     s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
@@ -1195,17 +1209,23 @@ def parser():
         s.set_defaults(
             fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
         )  # one tool: tico_task_follow
-    s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
-    s.add_argument("id")
-    s.add_argument("task")
-    s.add_argument(
-        "--kind",
-        default="related",
-        help="related (default); duplicate_of; follow_up: it was split off or followed up from task. A relation is a "
-        "note: a task waits only on its requirements and the tasks it filed",
-    )
-    s.add_argument("--remove", action="store_true", help="take it off instead")
-    s.set_defaults(fn="task relate")
+    for change, words in (
+        ("relate", "relate another task to this one: <id> [<kind>] <task>, e.g. <id> depends_on <task>"),
+        ("unrelate", "take a relation off: <id> [<kind>] <task>"),
+    ):
+        s = task.add_parser(change, help=words)
+        s.add_argument("id")
+        s.add_argument("task", help="the other task, or the kind when a third word names the task")
+        s.add_argument("other", nargs="?", help="the other task, when the second word is the kind")
+        s.add_argument(
+            "--kind",
+            default="related",
+            help="related (default); duplicate_of; follow_up: it was split off or followed up from task; depends_on: "
+            "this task cannot go on until task ends (Blocked by it, no date; never snooze for that)",
+        )
+        if change == "relate":
+            s.add_argument("--remove", action="store_true", help="take it off instead")
+        s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
     s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
     s.add_argument("id", help="the task that merges later")
     s.add_argument("task", help="the task it merges after")
@@ -1230,6 +1250,19 @@ def parser():
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
+    s.add_argument(
+        "--changed",
+        action="append",
+        metavar="LINE",
+        help="with --req: one line on what changed in this version (up to 5, 120 characters each)",
+    )
+    s.add_argument(
+        "--answered",
+        action="append",
+        metavar="ENTRY",
+        help='with --req: "<point>: done|not done, <why>" for each point of the last send back (up to 12). '
+        "Never quote their note back to them",
+    )
     s.set_defaults(fn="task attach")
     s = task.add_parser("context", help="readable page and meeting references for a task")
     s.add_argument("id")
@@ -2115,12 +2148,6 @@ def parser():
         nargs="?",
         choices=["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"],
         help="the profile to set; leave out to read the bot's and the choices",
-    )
-    s.add_argument(
-        "--batch-seconds", dest="batch_seconds", type=int, help="how long news waits to be batched (seconds)"
-    )
-    s.add_argument(
-        "--sweep-seconds", dest="sweep_seconds", type=int, help="least seconds between two runs of the same sweep"
     )
     s.add_argument(
         "--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest"

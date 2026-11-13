@@ -27,7 +27,6 @@ function settingsValue(field: string, value: SettingsValue) {
   if (field === 'model') return settingsChoiceLabel(obj.harness || obj.runtime, obj.model, obj.effort);
   if (field === 'fallback') return value ? settingsChoiceLabel(obj.harness, obj.model, obj.reasoning_effort || obj.effort) : 'None (fail)';
   if (field === 'profile') return profileHistoryWords(value as BpHistoryValue | null | undefined);
-  if (field === 'wake_preset') return SETTINGS_WAKE_PRESETS.find(([preset]) => preset === value)?.[1] || String(value);
   if (field === 'turns_at_once') return value == null ? 'No limit' : `${value} ${value === 1 ? 'turn' : 'turns'}`;
   if (field === 'task_model') return obj.model ? settingsChoiceLabel(obj.harness || obj.runtime, obj.model, obj.reasoning_effort) : 'Same as bot';
   if (field === 'identity') return [obj.display_name, obj.description].filter(Boolean).join(' · ') || 'blank';
@@ -284,7 +283,7 @@ interface SettingsHistoryPage {
 }
 // The label of each field in a change's line (the Changes list reads it as "Bot · field").
 const SETTINGS_FIELD_LABEL: Record<string, string> = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',
-  compact_at:'compact at',wake_preset:'wakes',profile:'profile',
+  compact_at:'compact at',profile:'profile',
   turns_at_once:'Turns at once',definition:'setup',task_model:'task model',identity:'name and description',
   manages_reports:'manages its reports', lifecycle:'archive or restore'};
 // A page of changes older than `before` (a page's next_before): the owner's list, or one bot's card with `bot`.

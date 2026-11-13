@@ -153,7 +153,7 @@ interface PageFullState {
   menu?: 'history' | null;
 }
 let PG: PageFullState | null = null;          // {id, page, versions, shown}
-async function pageFullView(id: string) {
+async function pageFullView(id: string, at = 0) {
   const main = $('#main');
   main.innerHTML = `<div class="pg-view" id="pg-view">${skelRows(3, {card: true})}</div>`;
   const state: PageFullState = PG = {id, page: null, versions: [], shown: 0, can: {}, diff: null};
@@ -167,7 +167,8 @@ async function pageFullView(id: string) {
   if (PG !== state) return;
   state.page = read.page; state.can = {manage: !!read.can_manage, del: !!read.can_delete};
   state.pinned = read.pinned || [];
-  state.shown = read.page.version;
+  // #/page/<id>?v=<n> (the decision view's review history) opens that version; past the newest, the newest.
+  state.shown = at >= 1 && at <= read.page.version ? at : read.page.version;
   pageFullDraw(state);
   get<{versions?: PageVersion[]}>(`/v2/files/${encodeURIComponent(id)}/versions`).then(v => {
     if (PG !== state) return;
@@ -325,6 +326,10 @@ const PAGE_TEXT_BLOCKS = new Set(['ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', '
 const PAGE_TEXT_SKIP = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'IFRAME', 'OBJECT', 'title']);
 function pageText(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  return doc.body ? pageTextLines(doc.body).join('\n') : '';
+}
+/** The lines pageText reads from one node and what is in it. */
+function pageTextLines(root: Node): string[] {
   const lines: string[] = [];
   let line = '';
   const flush = () => { const l = line.replace(/\s+/g, ' ').trim(); if (l) lines.push(l); line = ''; };
@@ -337,9 +342,29 @@ function pageText(html: string): string {
     for (const child of node.childNodes) walk(child);
     if (block) flush();
   };
-  if (doc.body) walk(doc.body);
+  walk(root);
   flush();
-  return lines.join('\n');
+  return lines;
+}
+// Each heading, paragraph, list item or table row of a page whose text is not in an earlier version's lines (pageText)
+// gets a 3 px amber bar in its left margin: the decision view's "Changes since vK" switch, off. The innermost block is
+// marked, so a changed list item marks that item, not its whole list. `marked`: how many blocks.
+const PAGE_MARK_BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,tr,dt,dd,blockquote,pre,figcaption,caption,summary';
+const PAGE_MARK_STYLE = '[data-tico-changed]{position:relative}[data-tico-changed]::before{content:"";position:absolute;'
+  + 'left:-6px;top:0;bottom:0;width:3px;border-radius:2px;background:#d97706}';
+function pageMarkChanged(html: string, before: string[]): {html: string; marked: number} {
+  const doc = new DOMParser().parseFromString(html, 'text/html'), had = new Set(before);
+  const blocks = [...doc.querySelectorAll<HTMLElement>(PAGE_MARK_BLOCKS)].reverse();   // innermost first
+  let marked = 0;
+  for (const el of blocks) {
+    if (el.querySelector('[data-tico-changed]') || !pageTextLines(el).some(l => !had.has(l))) continue;
+    el.setAttribute('data-tico-changed', ''); marked++;
+  }
+  if (!marked) return {html, marked};
+  const style = doc.createElement('style');
+  style.textContent = PAGE_MARK_STYLE;
+  doc.head.append(style);
+  return {html: (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML, marked};
 }
 // The versions What's changed? may compare against: those before the one on screen.
 const pageDiffBases = (state: PageFullState) => state.versions.filter(v => v.version < state.shown);
@@ -432,6 +457,8 @@ interface TaskPagesSlot extends HTMLDivElement {
   tpCards?: Map<string | null, TaskPagesRow>;
   tpFollow?: (() => void) | null;
   tpFollowCid?: string | null | undefined;
+  tpMakeOpen?: boolean;
+  tpCanLink?: boolean;
 }
 // The task's dialog, which holds its section (tpEl) and the release of its live handlers (tpOff).
 interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null; tpOff?: (() => void) | null; }
@@ -450,13 +477,20 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
   d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
+  // "+" offers Make page or Link page; the Describe box shows only once Make page is chosen (or a draft is kept).
+  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><button type="button" class="prop-add" data-tp-add aria-expanded="false" aria-label="Add a page" title="Add a page" hidden>${TL_ICON.plus}</button></header>
+    <div class="tp-actions" hidden><button type="button" class="ghost" data-tp-make>Make page</button><button type="button" class="ghost" data-tp-link>Link page</button></div>
     <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
       <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div>
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
     <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
+  slot.tpMakeOpen = !!prompt.value;
+  const add = $('[data-tp-add]', slot), choices = $('.tp-actions', slot);
+  const choose = (open: boolean) => { choices.hidden = !open; add.setAttribute('aria-expanded', String(open)); };
+  add.onclick = () => choose(choices.hidden);
+  $('[data-tp-make]', slot).onclick = () => { choose(false); slot.tpMakeOpen = true; make.hidden = false; prompt.focus(); };
   prompt.oninput = () => { try { if (prompt.value) localStorage.setItem(taskMakeDraftKey(id), prompt.value); else localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ } };
   make.onsubmit = async (ev: Event) => {
     ev.preventDefault();
@@ -466,7 +500,7 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
       const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
       if (d.tpEl !== slot) return;
       if (r.held) throw new Error('Not sent');
-      make.reset();
+      make.reset(); slot.tpMakeOpen = false;      // sent: the box folds back to "+" once the page is made
       try { localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ }
       taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
       await taskPageMakeLoad(d);
@@ -474,8 +508,8 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
   };
   const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
-  $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
-  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
+  $('[data-tp-link]', slot).onclick = () => { choose(false); picker.hidden = false; input.focus(); };
+  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; add.focus(); };
   let soon = 0, search = 0;
   input.oninput = () => {
     clearTimeout(soon);
@@ -540,6 +574,11 @@ function taskPageMakeDraw(d: TaskPagesHost, status: MakePageStatus | null) {
     finally { retry.disabled = false; }
   };
   $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
+  taskPageMakeShow(slot);
+}
+// The Describe box shows once Make page is chosen, while a draft is kept, or while a request is on its way or failed.
+function taskPageMakeShow(slot: TaskPagesSlot) {
+  $('.tp-make', slot).hidden = !slot.tpCanLink || !(slot.tpMakeOpen || ['making', 'update_required', 'failed'].includes(slot.tpMaking?.state ?? ''));
 }
 async function taskPageMakeLoad(d: TaskPagesHost) {
   const slot = d.tpEl;
@@ -557,20 +596,28 @@ async function taskPagesLoad(d: TaskPagesHost) {
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
     const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
-    $('[data-tp-link]', slot).hidden = !r.can_link;
-    $('.tp-make', slot).hidden = !r.can_link;
+    // A phone's Pages tab goes with the section: no pages and none to link, no tab that opens empty.
+    const tab = d.querySelector<HTMLElement>('[data-task-tab="pages"]');
+    if (tab) {
+      tab.hidden = slot.hidden;
+      // The last page went while its tab was shown: back to Chat rather than an empty body.
+      if (tab.hidden && tab.getAttribute('aria-selected') === 'true') d.querySelector<HTMLElement>('[data-task-tab="chat"]')?.click();
+    }
+    $('[data-tp-add]', slot).hidden = !r.can_link;
+    slot.tpCanLink = !!r.can_link;
+    taskPageMakeShow(slot);
+    // The Pages tab counts them (a phone's task window, ui/app/task-modal.ts TASK_TABS).
+    const count = d.querySelector<HTMLElement>('[data-task-page-count]');
+    if (count) count.textContent = pins.length ? String(pins.length) : '';
     const kept = slot.tpCards || new Map<string | null, TaskPagesRow>(), cards = new Map<string | null, TaskPagesRow>();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
       let row = kept.get(pin.id);
       if (!row || row.key !== key) {
+        // One row: the page's icon and name, and the row opens the page. Its version is on the chat's chip, not here.
         const el = document.createElement('div'); el.className = 'tp-page';
-        el.append(window.pageCard(pin.page, {size: pin.size || 'medium'}));
-        if (pin.can_unpin) {
-          const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost tp-unlink';
-          b.dataset.tpUnlink = String(pin.id); b.textContent = 'Unlink'; b.setAttribute('aria-label', 'Unlink ' + pin.page.title);
-          el.append(b);
-        }
+        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}"><span class="nav-icon" aria-hidden="true">article</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
+          ? `<button type="button" class="ghost tp-unlink" data-tp-unlink="${esc(pin.id)}" aria-label="${esc('Unlink ' + pin.page.title)}" title="Unlink">${TL_ICON.x}</button>` : ''}`;
         row = {key, el};
       }
       cards.set(pin.id, row);
@@ -806,7 +853,10 @@ function lfRowHTML(f: LfRow) {
   const kind = f.library_kind || 'other';
   const page = kind === 'page', link = f.locator === 'remote_link' || (f.hit && f.url);
   const url = page ? pageHref(f.id) : link ? (f.open?.url || f.url) : f.open?.url || `${API}/v2/files/${encodeURIComponent(f.id)}`;
-  const attrs = page ? '' : link ? ' target="_blank" rel="noopener noreferrer"' : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
+  // A Google file opens in the review view, in Google's own preview (file-review.ts); any other link at its site.
+  const google = link && !f.hit && !!googlePreviewUrl(String(url || ''));
+  const attrs = page ? '' : link ? ` target="_blank" rel="noopener noreferrer"${google ? ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.title)}"` : ''}`
+    : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
   const kindName = (LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other').replace(/s$/, '');
   const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '—';
   const pinned = f.pins || [];
@@ -837,7 +887,11 @@ function lfDraw() {
 // Called by redesignRoute (ui/app/redesign.ts) before the router's own list.
 function pagesRoute(r: string) {
   if (rdUnder(r, RD_FILES)) { pageLibraryFiles(); return true; }
-  if (r.startsWith(PAGE_ROUTE)) { void pageFullView(decodeURIComponent(r.slice(PAGE_ROUTE.length).split('?')[0] ?? '')); return true; }
+  if (r.startsWith(PAGE_ROUTE)) {
+    const [id = '', query = ''] = r.slice(PAGE_ROUTE.length).split('?');
+    void pageFullView(decodeURIComponent(id), Number(new URLSearchParams(query).get('v')) || 0);
+    return true;
+  }
   return false;
 }
 function pagesStop(r: string) {

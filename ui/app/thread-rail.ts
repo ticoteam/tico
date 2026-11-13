@@ -1,5 +1,5 @@
-/* ui/app/thread-rail.ts — The Threads page: the thread rail (Threads, Find a thread, Catch up, Pinned, the rest, Browse
-   threads) beside one thread's timeline (#/threads, #/thread/<id>). On a phone the rail and the thread each take the
+/* ui/app/thread-rail.ts — The Threads page: the thread rail (Threads, Find a thread, Catch up, Pinned, the rest, Unread,
+   Browse threads) beside one thread's timeline (#/threads, #/thread/<id>). On a phone the rail and the thread each take the
    screen. The lists are THREADS (ui/app/threads.ts); the timeline is threadMount (ui/app/thread-view.ts).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -42,20 +42,35 @@ function threadsShell() {
       <h3 class="tr-sec" data-sec="pinned" hidden>Pinned</h3><ul class="tr-list" data-list="pinned"></ul>
       <h3 class="tr-sec" data-sec="threads" hidden>Threads</h3><ul class="tr-list" data-list="threads"></ul>
       <button type="button" class="tr-more" data-tr-more hidden>More</button>
+      <h3 class="tr-sec" data-sec="unread" hidden>Unread</h3><ul class="tr-list" data-list="unread"></ul>
+      <button type="button" class="tr-more" data-tr-unread-more hidden></button>
       <p class="tr-none muted" hidden>No threads</p>
       <span class="tr-fill"></span>
       <button type="button" class="tr-browse" data-tr-browse hidden>${TR_SVG.browse}Browse threads</button>
     </nav>
     <section class="tr-pane" id="thread-pane"></section></div>`;
   shell = $('#threads-shell');
+  RAIL_UNREAD = railUnreadFresh();
   const rail = shell.querySelector('.tr-rail');
   rail.querySelector('#tr-find').oninput = () => railRender();
+  // While the pointer is on Unread its order holds: counts change in place and a new chat goes last (railUnreadRows).
+  // On a phone a touch holds it for 2s.
+  const unread = rail.querySelector('[data-list="unread"]');
+  const hold = () => { RAIL_UNREAD.order = [...unread.querySelectorAll('[data-thread]')].map((a: HTMLElement) => a.dataset.thread || ''); };
+  unread.addEventListener('pointerenter', (ev: PointerEvent) => { if (ev.pointerType !== 'touch') hold(); });
+  unread.addEventListener('pointerleave', (ev: PointerEvent) => { if (ev.pointerType !== 'touch') { RAIL_UNREAD.order = null; railRender(); } });
+  unread.addEventListener('touchstart', () => {
+    hold(); clearTimeout(RAIL_UNREAD.touch);
+    RAIL_UNREAD.touch = window.setTimeout(() => { RAIL_UNREAD.order = null; railRender(); }, RAIL_UNREAD_TOUCH_MS);
+  }, {passive: true});
   rail.onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLButtonElement>('button'); if (!b) return;
     if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch ?? '').catch(e => { b.disabled = false; toast(errorMessage(e, ''), true); }); }
     else if (b.matches('[data-tr-catch]')) void catchUpOpen();
     else if (b.matches('[data-tr-browse]')) void threadBrowseOpen();
     else if (b.matches('[data-tr-more]')) { b.disabled = true; threadsMore().catch(e => toast(e.message, true)).finally(() => { b.disabled = false; }); }
+    else if (b.matches('[data-tr-unread-more]')) { RAIL_UNREAD.all = true; railRender(); }
+    else if (b.matches('[data-tr-read]')) void railMarkRead(b.dataset.trRead ?? '');
   };
   return shell;
 }
@@ -100,7 +115,19 @@ async function pageThreads() {
   const id = (last && (listed.some(t => t.id === last) || THREADS.next) ? last : '') || THREADS.pinned[0]?.id || '';
   if (id) { location.replace(threadHref(id)); return; }
   threadUnmount(THREAD_PAGE?.view); THREAD_PAGE = null;
+  if (trUnreadPane(pane)) return;
   pane.innerHTML = TR_EMPTY_HTML;
+}
+// No thread to open but chats wait for you: say how many, and offer Catch up (never the empty picture).
+const trUnreadWords = (n: number): string => `${threadsCountText(n)} chat${n === 1 ? '' : 's'} with new messages`;
+function trUnreadPane(pane: Element): boolean {
+  const n = THREADS.rail === true ? threadsCatchUp() : 0;
+  if (!n) return false;
+  pane.innerHTML = `<div class="tr-empty" data-tr-unread-pane><div class="empty-state">${EMPTY_ART.unread}<p><b data-tr-unread-n>${esc(trUnreadWords(n))}</b></p>
+    <button type="button" class="primary" data-tr-catchup>Catch up</button></div></div>`;
+  const go = pane.querySelector<HTMLButtonElement>('[data-tr-catchup]');
+  if (go) go.onclick = () => void catchUpOpen();
+  return true;
 }
 // #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
 function pageThread(id: string) {
@@ -120,6 +147,65 @@ function pageThread(id: string) {
   threadsLastSet(id);
 }
 
+// ----------------------------------------------------------------- unread
+// The rail's Unread section: each chat Catch up counts that the rail does not list (THREADS.unread), while Catch up still
+// counts it. Eight rows, then "N more", which shows them all until the viewer leaves Threads; Find a thread lifts the cap.
+// The chat opened from it stays in place, current, until another row is opened. Kept per drawn rail (threadsShell).
+interface RailUnreadState {all: boolean; keep: ThreadUnread | null; keepAt: number; order: string[] | null; touch: number | undefined}
+const RAIL_UNREAD_CAP = 8, RAIL_UNREAD_TOUCH_MS = 2000;
+const railUnreadFresh = (): RailUnreadState => ({all: false, keep: null, keepAt: 0, order: null, touch: undefined});
+let RAIL_UNREAD: RailUnreadState = railUnreadFresh();
+// An Unread row as the thread helpers read a thread (its title, its mark).
+const railUnreadThread = (u: ThreadUnread): ThreadRow => ({...u, home: u.home_actor ? {actor: u.home_actor} : null});
+// The one other in a 1:1 chat, a bot or a person; else none.
+const railUnreadOther = (u: ThreadUnread) => Number(u.dm_with_count) === 1 && u.dm_with?.[0]?.actor ? u.dm_with[0] : null;
+function railUnreadName(u: ThreadUnread) {
+  const other = railUnreadOther(u);
+  if (other) return other.name || actorName(other.actor);
+  if (u.audience === 'home' && u.home_actor) return actorName(u.home_actor);
+  return threadTitle(railUnreadThread(u));
+}
+function railUnreadFace(u: ThreadUnread) {
+  const other = railUnreadOther(u);
+  if (other) return actorAvatar(other.actor, 20);
+  if (u.audience === 'home' && u.home_actor) return actorAvatar(u.home_actor, 20);
+  return threadMarkHTML(railUnreadThread(u), 20);
+}
+function railUnreadRowHTML(u: ThreadUnread, cur: string) {
+  const here = u.id === cur, n = Number(u.new_count) || 0, name = railUnreadName(u);
+  const count = here ? '' : u.mention ? '<span class="tr-count" aria-label="Mentions you">@</span>'
+    : n ? `<span class="tr-count" aria-label="${n} new">${esc(threadsCountText(n))}</span>` : '';
+  // No Mark read on a phone, on a mention (an open mention keeps the chat in Catch up, so the row would come back) or
+  // where nothing hovers (the CSS hides it there: on a touch screen it would cover the count).
+  const read = here || trPhone() || u.mention ? '' : `<button type="button" class="tr-arch" data-tr-read="${esc(u.id)}" aria-label="Mark read" title="Mark read"><span class="nav-icon" aria-hidden="true">check</span></button>`;
+  return `<li class="tr-item tr-unread"><a class="tr-row${here ? ' cur' : ' unread'}" href="${esc(threadHref(u.id))}" data-thread="${esc(u.id)}"${here ? ' aria-current="page"' : ''}>
+    <span class="tr-mark" aria-hidden="true">${railUnreadFace(u)}</span><span class="tr-title">${esc(name)}</span>${count}</a>${read}</li>`;
+}
+// The rows Unread holds now: the ones Catch up still counts, in the server's order (or the held order while the pointer is
+// on the list, new ones last), and the chat opened from it in its place.
+function railUnreadRows(cur: string): ThreadUnread[] {
+  const cu = THREADS.cu;
+  let rows = THREADS.unread.filter(u => !cu || cu.has(u.id) || u.id === cur);
+  const keep = RAIL_UNREAD.keep;
+  if (keep && keep.id !== cur) RAIL_UNREAD.keep = null;
+  else if (keep && !rows.some(u => u.id === keep.id)) rows.splice(Math.min(RAIL_UNREAD.keepAt, rows.length), 0, keep);
+  const opened = rows.findIndex(u => u.id === cur);
+  if (opened >= 0) { RAIL_UNREAD.keep = rows[opened]!; RAIL_UNREAD.keepAt = opened; }
+  const order = RAIL_UNREAD.order;
+  if (order) {
+    const at = (u: ThreadUnread) => { const i = order.indexOf(u.id); return i < 0 ? order.length : i; };
+    rows = rows.map((u, i) => ({u, i})).sort((a, b) => (at(a.u) - at(b.u)) || (a.i - b.i)).map(x => x.u);
+  }
+  return rows;
+}
+// Mark read from an Unread row (desktop): the row and its count go at once, nothing opens; the server reads it all.
+async function railMarkRead(id: string): Promise<void> {
+  if (!id) return;
+  threadsAllRead(id);
+  try { await post(thvPath(id) + '/read-all', {}); }
+  catch (e) { toast(errorMessage(e, ''), true); threadsRecount(); }
+}
+
 // ----------------------------------------------------------------- the rail
 const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? '') : '';
 function railRowHTML(t: ThreadRow, cur: string) {
@@ -137,7 +223,13 @@ function railRender() {
     rail.querySelector(`[data-sec="${key}"]`).hidden = !list.length;
     patchHTML(rail.querySelector(`[data-list="${key}"]`), list.map(t => railRowHTML(t, cur)).join(''));
   }
-  rail.querySelector('.tr-none').hidden = !(words && !lists.pinned.length && !lists.threads.length);
+  const unread = railUnreadRows(cur).filter(u => !words || railUnreadName(u).toLowerCase().includes(words));
+  const all = RAIL_UNREAD.all || !!words || unread.length <= RAIL_UNREAD_CAP;
+  rail.querySelector('[data-sec="unread"]').hidden = !unread.length;
+  patchHTML(rail.querySelector('[data-list="unread"]'), (all ? unread : unread.slice(0, RAIL_UNREAD_CAP)).map(u => railUnreadRowHTML(u, cur)).join(''));
+  const more = rail.querySelector('[data-tr-unread-more]');
+  more.hidden = all; more.textContent = all ? '' : `${unread.length - RAIL_UNREAD_CAP} more`;
+  rail.querySelector('.tr-none').hidden = !(words && !lists.pinned.length && !lists.threads.length && !unread.length);
   rail.querySelector('[data-tr-more]').hidden = !THREADS.next || !!words;
   const can = THREADS.rail === true, n = threadsCatchUp();
   const catchUp = rail.querySelector('[data-tr-catch]'), badge = catchUp.querySelector('.tr-badge');
@@ -146,6 +238,10 @@ function railRender() {
   badge.hidden = !n; badge.textContent = threadsCountText(n);
   catchUp.setAttribute('aria-label', n ? `Catch up, ${n}` : 'Catch up');
   rail.querySelector('[data-tr-browse]').hidden = !can;
+  // The pane's "N chats with new messages" follows the count; at 0 (and Catch up closed: nothing moves behind it) the
+  // pane is emptied first, so this cannot run again, and pageThreads() picks what shows instead.
+  const un = document.querySelector('[data-tr-unread-n]'), unPane = un?.closest('.tr-pane');
+  if (un && unPane) { if (n) un.textContent = trUnreadWords(n); else if (!CU.open && S.route === THREADS_ROUTE) { unPane.innerHTML = ''; void pageThreads(); } }
 }
 
 // ----------------------------------------------------------------- browse

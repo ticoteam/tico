@@ -105,6 +105,10 @@ class Standing:
     about: str | None = None
     since: str | None = None  # when it was asked of whom it waits on, when that is later than the visit began
     fix: str | None = None
+    # On a page a person is asked to OK: the sentences of `line` that say why they are asked again or what a bot read
+    # since (new commits since an OK, a bot's read of them). The decision view shows them on their own when it draws the
+    # page's rounds instead of the line (backend/page_rounds.py notices).
+    notices: tuple[str, ...] = ()
 
     @property
     def met(self) -> bool:
@@ -417,6 +421,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     answer = answer or carried
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         answer = None  # given on an earlier page
+    if signoff and carried and answer is carried and (held := _queued_as_is(conn, task, requirement)):
+        return held  # back from Merge at the commits the queue just ran: the OK waits for a fix (task #344)
     lapsed, lapsed_by, since_ok = "", None, None
     if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
         # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
@@ -465,12 +471,13 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if lapsed_by and not requirement.get("person_id") and lapsed_by.startswith("human:"):
         person = person or (lapsed_by if active_person(conn, lapsed_by) else None)
     after = sentence(f'Version {page["version"]}, after the send back: "{back["said"]}"') + " " if back else ""
+    notices = tuple(part.strip() for part in (lapsed, first) if part.strip())
     after = lapsed + after + first
     if said == "not_met":
         # A page a person OKs anyway that Jev sent back before on this visit: the owner had its round, so the person
         # decides with Jev's reason, as on an unsure (Initech, Nov 11: a page Jev could never pass left only a push-past).
         line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
-        return Standing(requirement, WAITING, person, after + line, since=asked)
+        return Standing(requirement, WAITING, person, after + line, since=asked, notices=notices)
     if said in ("unsure", "failed"):
         # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
         failure = " ".join(str((verdict or {}).get("last_error") or "").split())
@@ -482,7 +489,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         if oks_anyway:
             # A person OKs this page whatever Jev says: they are asked at once, every version, with Jev's reason. A bot
             # round trip adds nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks).
-            return Standing(requirement, WAITING, person, after + line, since=asked)
+            return Standing(requirement, WAITING, person, after + line, since=asked, notices=notices)
         routed = _unsure_to_bots(conn, task, requirement, line, failed=said == "failed")
         if routed:
             routed.since = asked if routed.state == WAITING else None
@@ -496,7 +503,9 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
 
         H: Any = hubdb
         name = H.actor_name(conn, person) if person else "someone"
-        return Standing(requirement, WAITING, person, f"{after}OK {name} (version {page['version']})", since=asked)
+        return Standing(
+            requirement, WAITING, person, f"{after}OK {name} (version {page['version']})", since=asked, notices=notices
+        )
     return Standing(requirement, MET, line="Jev passed it")
 
 
@@ -683,6 +692,47 @@ def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row 
     if not ok or ok["answer"] != "ok" or not ok.get("heads") or not str(ok["by_id"]).startswith("human:"):
         return None
     return ok
+
+
+# The end of the line when a task came back from the stage that queues its PRs at the commits the queue ran (task #344).
+QUEUED_AS_IS = "The OK from before {stage} comes back once there are new commits"
+
+
+def _queued_as_is(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Standing | None:
+    """The person's OK carried back from Merge (`page_for`) does not count while a linked PR is still at the commit it
+    was last queued at: the queue ran that commit and it did not merge, so the task waits for the Builder's fix instead
+    of going straight back to be queued as it is (Tico Team, Nov 12-13: four bounces, a queue run each). Once every PR
+    has new commits, C22 decides (`_after_ok`). None when no PR is at its queued commit."""
+    from .item_sources import github as F
+
+    still = F.queued_as_is(conn, task["id"])
+    if not still:
+        return None
+    one = len(heads_now(conn, task)) == 1
+    said: list[str] = []
+    for each in still:
+        at = str(each["head"])[:7] if one else f"{each['ref']} at {str(each['head'])[:7]}"
+        why = ", ".join(str(word) for word in (each.get("reason"), each.get("check")) if word)
+        # "failed" only for a failed check: a removal by hand or a conflict says the run did not merge, and why.
+        outcome = "it failed" if each.get("failed") else "it did not merge"
+        # No removal recorded: it was taken out of Merge while still queued, so the queue may never have run it.
+        said.append(
+            f"Merge queue ran {at} and {outcome} ({why}): push a fix"
+            if why
+            else f"Merge queue had {at} and it did not merge: push a fix"
+        )
+    # The visit it came back from: its stage's name, and the note the move back gave, so the one wake on entering
+    # (task_engine._wake_turn, whose "Missing to leave" carries this line) says what the mover said.
+    found = conn.execute(
+        "SELECT s.name, v.how, v.why FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
+        "ORDER BY v.entered_at DESC, v.rowid DESC LIMIT 1 OFFSET 1",
+        (task["id"],),
+    ).fetchone()
+    stage = str(found[0]) if found and found[0] else "Merge"
+    note = " ".join(str(found[2] or "").split()) if found and found[1] == "back" else ""
+    if note:
+        said.append(f"Sent back from {stage}: {note}")
+    return Standing(requirement, NOT_MET, task.get("owner_id"), sentences(*said, QUEUED_AS_IS.format(stage=stage)))
 
 
 def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> tuple[Standing | None, list[Row]]:

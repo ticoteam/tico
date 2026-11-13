@@ -32,6 +32,28 @@ REPO = str(Path(__file__).resolve().parents[2])  # printed as <repo>: a path in 
 RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
 ROOT_HELP = hubcli.parser().description
 
+# Growth's setup block (backend/growth_setup.py) for a bot: settings done, a channel next, which only people may add.
+_GROWTH_MAY = {"settings": False, "channels": False, "sources": False, "months": True}
+_GROWTH_SETUP = {
+    "done": False,
+    "steps": [
+        {"step": "settings", "done": True},
+        {"step": "channel", "done": False},
+        {"step": "source", "done": False},
+        {"step": "month", "done": False},
+    ],
+    "next": {
+        "step": "channel",
+        "number": 2,
+        "says": "Add your first channel: where customers come from (search ads, SEO, partners).",
+        "command": 'tico growth channel add <slug> --name "<name>"',
+        "tool": "tico_growth_channel_add",
+        "you_may": False,
+        "who_may": [{"ref": "human:ana", "name": "Ana"}],
+        "bots_may": False,
+    },
+}
+
 # What the fake API answers, by "METHOD path" with the query left off; anything else answers {"ok": true}.
 _TRIGGER = {"id": "stripe", "name": "Stripe events", "event": "webhook.stripe", "preset": "stripe", "hourly": 60}
 _RELAY = {"trigger": "stripe", "address": "https://gateway.example/r/stripe"}
@@ -90,9 +112,25 @@ ANSWERS = {
     "GET growth/channels": {"channels": [_CHANNEL]},
     "GET growth/sources": {
         "sources": [
-            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"}
+            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"},
+            {
+                "id": "s4",
+                "truth_for": "new customers",
+                "system": "Signups sheet",
+                "reach_kind": "person",
+                "fills": ["new_customers"],
+                "health": "failing",
+                "last_error": 'column "channel" not found',
+            },
         ],
         "conflicts": [{"truth_for": "bookings", "sources": ["s2", "s3"]}],
+    },
+    "POST growth/sources/s1/sync": {
+        "ok": True,
+        "written": 4,
+        "held": 1,
+        "not_written": [{"row": 4, "channel": "podcast", "month": "2026-10", "reason": "no such channel"}],
+        "not_written_count": 1,
     },
     "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},
     "GET growth/economics": {
@@ -100,7 +138,55 @@ ANSWERS = {
         "rows": [{"name": "Google search", "spend": 900, "new_customers": 3, "cac": 300, "ltv": 1200, "ltv_cac": 4}],
         "total": {"name": "total", "spend": 900, "new_customers": 3, "cac": 300},
     },
-    "GET growth/kpis": {"kpis": [{"id": "k1", "name": "Bookings", "role": "north_star"}]},
+    "GET growth/kpis": {"kpis": [], "you_may": _GROWTH_MAY, "setup": _GROWTH_SETUP},
+    "GET growth/setup": {
+        **_GROWTH_SETUP,
+        "steps": [{**s, "at": "2026-11-13T09:00:00Z" if s["done"] else None} for s in _GROWTH_SETUP["steps"]],
+        "channel": None,
+        "you_may": _GROWTH_MAY,
+        "first_opened_at": "2026-11-13T08:55:00Z",
+        "numbers_seen_at": None,
+    },
+    "GET growth/computed": {
+        "by": "plan",
+        "grain": "month",
+        "min_cohort": 30,
+        "cac_note": "spend is not split by plan",
+        "keys_visible": False,
+        "cohorts": [
+            {
+                "period": "2026-09",
+                "value": "pro",
+                "too_few": False,
+                "new_customers": {"value": 71, "status": "ok"},
+                "kept_d30": {"value": 78.9, "status": "ok", "count": 56, "denominator": 71},
+                "kept_d90": {"value": None, "status": "not_yet", "fills_on": "2026-12-29"},
+                "kept_d180": {"value": None, "status": "not_yet", "fills_on": "2027-03-29"},
+                "ltv": {"value": 640, "status": "ok"},
+                "cac": {"value": None, "status": "not_split"},
+                "payback_months": {"value": None, "status": "not_split"},
+            },
+            {
+                "period": "2026-09",
+                "value": "solo",
+                "too_few": True,
+                "new_customers": {"value": 19, "status": "ok"},
+                "kept_d30": {"value": None, "status": "too_few", "count": 12, "denominator": 19},
+                "kept_d90": {"value": None, "status": "not_yet", "fills_on": "2026-12-29"},
+                "kept_d180": {"value": None, "status": "not_yet", "fills_on": "2027-03-29"},
+                "ltv": {"value": None, "status": "too_few"},
+                "cac": {"value": None, "status": "not_split"},
+                "payback_months": {"value": None, "status": "not_split"},
+            },
+        ],
+    },
+    "POST growth/customers": {
+        "customers": 120,
+        "spells": 121,
+        "removed": 2,
+        "unknown_channel": 4,
+        "new_by_month": [{"month": "2026-09", "channel": "google-search", "new_customers": 116}],
+    },
     "GET goals": {"goals": [_GOAL]},
     "POST goals": {"goal": _GOAL},
     **{f"{verb} goals/{id}{tail}": {"goal": _GOAL} for id in ("id-1", "1") for verb, tail in _GOAL_CALLS},

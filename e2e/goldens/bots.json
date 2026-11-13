@@ -46,8 +46,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "bot",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day.",
         "digest_hour": 9,
@@ -56,7 +54,6 @@
         "options": {},
         "pulls": "none",
         "summary": "",
-        "sweep_seconds": "<volatile>",
         "sweeps": false,
         "takes": "all"
       },
@@ -64,7 +61,7 @@
       "repo": "emp-assistant",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -86,9 +83,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "bot",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": 9,
         "immediate": [
           "A person's message or request",
@@ -98,11 +92,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "lead",
+        "repeat_seconds": "<volatile>",
         "summary": "The rest of the news arrives once a day, at 09:00 team time. People, escalations and asks wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     },
     {
@@ -156,8 +153,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "bot",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day.",
         "digest_hour": 9,
@@ -166,7 +161,6 @@
         "options": {},
         "pulls": "none",
         "summary": "",
-        "sweep_seconds": "<volatile>",
         "sweeps": false,
         "takes": "all"
       },
@@ -174,7 +168,7 @@
       "repo": "emp-cpo",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -196,9 +190,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "bot",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": 9,
         "immediate": [
           "A person's message or request",
@@ -208,11 +199,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "lead",
+        "repeat_seconds": "<volatile>",
         "summary": "The rest of the news arrives once a day, at 09:00 team time. People, escalations and asks wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     },
     {
@@ -261,8 +255,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
         "digest_hour": null,
@@ -270,8 +262,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
-        "sweep_seconds": "<volatile>",
+        "summary": "News about its tasks waits 5 min; a routine runs at least 15 min after its last run.",
         "sweeps": true,
         "takes": "all"
       },
@@ -279,7 +270,7 @@
       "repo": "emp-doc-updater",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -301,9 +292,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": null,
         "immediate": [
           "A person's message or request",
@@ -313,11 +301,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "repeat_seconds": "<volatile>",
+        "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     },
     {
@@ -366,8 +357,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
         "digest_hour": null,
@@ -375,8 +364,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
-        "sweep_seconds": "<volatile>",
+        "summary": "News about its tasks waits 5 min; a routine runs at least 15 min after its last run.",
         "sweeps": true,
         "takes": "all"
       },
@@ -384,7 +372,7 @@
       "repo": "emp-finance",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -406,9 +394,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": null,
         "immediate": [
           "A person's message or request",
@@ -418,11 +403,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "repeat_seconds": "<volatile>",
+        "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     },
     {
@@ -471,8 +459,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
         "digest_hour": null,
@@ -480,8 +466,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
-        "sweep_seconds": "<volatile>",
+        "summary": "News about its tasks waits 5 min; a routine runs at least 15 min after its last run.",
         "sweeps": true,
         "takes": "all"
       },
@@ -489,7 +474,7 @@
       "repo": "emp-inbox",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -511,9 +496,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": null,
         "immediate": [
           "A person's message or request",
@@ -523,11 +505,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "repeat_seconds": "<volatile>",
+        "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     },
     {
@@ -589,8 +574,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
         "digest_hour": null,
@@ -598,8 +581,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
-        "sweep_seconds": "<volatile>",
+        "summary": "News about its tasks waits 5 min; a routine runs at least 15 min after its last run.",
         "sweeps": true,
         "takes": "all"
       },
@@ -607,7 +589,7 @@
       "repo": "emp-ops",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -641,9 +623,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": null,
         "immediate": [
           "A person's message or request",
@@ -653,11 +632,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "repeat_seconds": "<volatile>",
+        "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     },
     {
@@ -711,8 +693,6 @@
       ],
       "private_tasks_default": false,
       "profile": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
         "chosen": true,
         "description": "Works the tasks it is given. News about them is batched; people and hand-offs wake it at once.",
         "digest_hour": null,
@@ -720,8 +700,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
-        "sweep_seconds": "<volatile>",
+        "summary": "News about its tasks waits 5 min; a routine runs at least 15 min after its last run.",
         "sweeps": true,
         "takes": "all"
       },
@@ -729,7 +708,7 @@
       "repo": "emp-product-design",
       "repo_url": "",
       "reports_to": null,
-      "revision": 3,
+      "revision": 2,
       "runtime": "fake",
       "shared": false,
       "shared_from": "",
@@ -751,9 +730,6 @@
       "turns_at_once": null,
       "update_subscriptions": [],
       "wake": {
-        "batch_scope": "conversation",
-        "batch_seconds": "<volatile>",
-        "chosen": true,
         "digest_hour": null,
         "immediate": [
           "A person's message or request",
@@ -763,11 +739,14 @@
           "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
           "An actionable blocker"
         ],
-        "label": "Performance",
-        "preset": "performance",
+        "notice_seconds": "<volatile>",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
-        "sweep_seconds": "<volatile>"
+        "repeat_seconds": "<volatile>",
+        "summary": "Finished requests, review comments and check results wait 5 min, one wake per conversation; a routine runs at least 15 min after its last run started, and waits for a warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it at once.",
+        "warm_window": [
+          2700,
+          3300
+        ]
       }
     }
   ],

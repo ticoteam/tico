@@ -74,7 +74,8 @@ def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id
 NOT_HTML = (
     "A page for an OK must be HTML, and this version is not (it reads as Markdown or plain text). Write it as HTML: "
     "two or three lines at the top saying what it is and what to decide, then the sections, with simple inline CSS and "
-    "screenshots as images. A Spec page: skills/build-the-spec-page. A QA page: skills/build-the-qa-page. "
+    "screenshots as images. Every such page: skills/build-the-page (a spec, Checked in production, a review, a QA "
+    "page). "
     "Then tico page publish the .html and attach the new version."
 )
 HEAD_BYTES = 4096  # enough to get past a byte-order mark, blank lines and a long comment-free preamble
@@ -161,15 +162,21 @@ def attach(
     by: str,
     *,
     seen_version: int | None = None,
+    note: str | None = None,
+    changed: list[str] | None = None,
+    answered: list[str] | None = None,
 ) -> Row:
     """Attach a page to a page requirement of the task's open visit. `requirement` is its id or its name (`name_of`),
     `ref` a `parse_ref` page. Who may: the task's owner, whoever holds it now, or any person. Refuses
     `task_requirement` (no such page requirement on this visit, not a page, no such version, a PR not read yet),
     `task_changed` (a bot's stale or missing `seen_version`), `task_ended`, and `lint` (a version that is not HTML,
-    `NOT_HTML`: a page for an OK is drawn as HTML). The route checks the caller may open the
+    `NOT_HTML`: a page for an OK is drawn as HTML; `changed` or `answered` not in their form, or a note or line that
+    quotes the person's last send back to them: page_rounds). `note`, `changed` and `answered` are what the bot says
+    with this version (page_rounds.said), kept on the `page_attached` event. The route checks the caller may open the
     file. Returns the `requirement_pages` row."""
     from . import hubdb
     from . import hubdb_core
+    from . import page_rounds as R
     from . import page_verdicts as V
     from . import task_engine as E
     from . import waiting_on as W
@@ -202,6 +209,11 @@ def attach(
     if not _version_is_html(conn, file_id, version):
         # A writing correction, as `lint` is everywhere: fixed by publishing HTML, never counted toward quarantine.
         _refuse(conn, by, "lint", NOT_HTML, task_id)
+    saying, wrong = R.said(note, changed, answered)
+    if wrong:
+        _refuse(conn, by, "lint", wrong, task_id)
+    if R.quoted_back(R.last_sent_back(conn, task_id, found["id"]), R.parts_of(saying)):
+        _refuse(conn, by, "lint", R.QUOTED, task_id)
     rubric, context = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     unread = sorted(ref_ for ref_, sha in heads.items() if not sha)
@@ -243,7 +255,7 @@ def attach(
         f"page:{was['file_id']}@{was['version']}" if was else None,
         f"page:{file_id}@{version}",
         None,
-        {"requirement": found["id"], "file_id": file_id, "version": version},
+        {"requirement": found["id"], "file_id": file_id, "version": version, **{k: v for k, v in saying.items() if v}},
     )
     if E.advance(conn, task_id) is None:
         E.changed(conn, task_id, by)

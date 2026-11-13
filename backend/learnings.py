@@ -1065,6 +1065,10 @@ def market_subjects(c, delivery, saw_text):
     return list(out.values())
 
 
+def _items(n):
+    return f"{n} item" if n == 1 else f"{n} items"
+
+
 def night_view(c, auth, who, run, team_names):
     sections = {"bots": [], "docs": [], "market": []}
     for d in c.execute("SELECT * FROM learning_deliveries WHERE run_id=? ORDER BY recipient", (run["id"],)).fetchall():
@@ -1079,9 +1083,11 @@ def night_view(c, auth, who, run, team_names):
         title = ""
         if not d["task_id"]:
             count = len(json.loads(d["sent_item_keys"] or "[]"))
-            title = f"{count} items sent in Update" if d["update_batch_id"] else f"{len(keys)} items waiting for Update"
+            title = (
+                f"{_items(count)} sent in Update" if d["update_batch_id"] else f"{_items(len(keys))} waiting for Update"
+            )
             if d["expired_at"] is not None:
-                title = f"{len(keys)} items expired"
+                title = f"{_items(len(keys))} expired"
             if d["learnings_saved"] is not None:
                 title += f"; {d['learnings_saved']} saved, {count - d['learnings_saved']} dropped"
         if entries or not d["task_id"]:

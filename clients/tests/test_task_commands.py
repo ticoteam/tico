@@ -231,12 +231,38 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     for kind in ("blocks", "blocked_by"):
         with pytest.raises(ValueError) as refused:
             hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
-        assert str(refused.value) == hubtools.BLOCKING_GONE and "tico task file --parent" in str(refused.value)
+        assert str(refused.value) == hubtools.BLOCKING_GONE and "depends_on" in str(refused.value)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     cli = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
     assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 64
     assert json.loads(capsys.readouterr().out)["detail"] == hubtools.BLOCKING_GONE and cli.writes() == []
+
+
+def test_depends_on_takes_three_words_and_unrelate_takes_it_off(monkeypatch):
+    """`tico task relate 307 depends_on 304` (the spec's words), `--kind depends_on` and the MCP tool all write the same
+    relation; `tico task unrelate` takes it off."""
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    sent = []
+    for words in (
+        ["relate", "T1", "depends_on", "#T2"],
+        ["relate", "T1", "T2", "--kind", "depends_on"],
+        ["unrelate", "T1", "depends_on", "T2"],
+    ):
+        cli = Recorder()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+        remotecli.run(hubcli.parser().parse_args(["task", *words]))
+        sent.append(cli.writes())
+    write = ("POST", "tasks/T1/relations", {"task": "T2", "kind": "depends_on", "remove": False})
+    assert sent == [[write], [write], [(*write[:2], {**write[2], "remove": True})]]
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "depends_on"})
+    assert api.writes() == [write]
+    same = Recorder()
+    hubtools.task_relate(same, {"id": "T1", "task": "depends_on", "other": "T2", "kind": "depends-on"})
+    assert same.writes() == [write]
+    with pytest.raises(ValueError, match="Two kinds"):
+        hubtools.task_relate(Recorder(), {"id": "T1", "task": "depends_on", "other": "T2", "kind": "follow_up"})
 
 
 def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatch, capsys):

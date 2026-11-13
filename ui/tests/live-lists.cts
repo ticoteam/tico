@@ -216,11 +216,21 @@ const holdNext = (match: Held['match']): Held => {
     event(task('t13', 'Pack the boxes', 'spec', {owner_id: 'human:sam'}), 'insert'));
   await pin('My tasks').locator('li', {hasText: 'Renew the domain'}).waitFor();
   assert.deepEqual(await pin('My tasks').locator('li a').allTextContents(), ['Renew the domain', 'Sign the lease 20']);
-  assert.equal((await pin('My tasks').locator('.dash-big strong').textContent())?.trim(), '2');
-  // Needs you as the app holds it.
-  await page.evaluate(() => { S.v2.needs = [{id: 'n1', kind: 'task', task_id: 'n1', line: 'Approve the budget'}]; S.v2.needsCount = 1; liveEmit('needs-list', S.v2.needs); });
+  assert.equal((await pin('My tasks').locator('.dash-head-n').textContent())?.trim(), '2', 'the header count follows a live task change');
+  // Needs you as the app holds it, drawn by the server's rule (backend/cards.py needs_brief): the task's title, the word
+  // for what it needs, the ask as the tooltip; the count on the header line.
+  await page.evaluate(() => {
+    S.v2.needs = [{id: 'n1', kind: 'task', task_id: 'n1', line: 'Say when the work is done', task: {id: 'n1', title: 'Approve the budget'}},
+      {id: 'a2', kind: 'ask', task_id: 'n2', line: 'Say when the work is done', task: {id: 'n2', title: 'Print the flyers'}, ask: {kind: 'ok', may: []}},
+      {id: 'p3', kind: 'paused', line: 'Connect Google', task: {id: 'n3', title: 'Sync the calendar'}}] as unknown as typeof S.v2.needs;
+    S.v2.needsCount = 3; liveEmit('needs-list', S.v2.needs);
+  });
   await pin('Needs attention').locator('li', {hasText: 'Approve the budget'}).waitFor();
-  assert.equal((await pin('Needs attention').locator('.dash-big strong').textContent())?.trim(), '1');
+  assert.deepEqual(await pin('Needs attention').locator('.dash-needs-t').allTextContents(), ['Approve the budget', 'Print the flyers', 'Connect Google']);
+  assert.deepEqual(await pin('Needs attention').locator('.dash-needs li > a > .muted').allTextContents(), ['Done', 'OK', 'Fix']);
+  assert.equal(await pin('Needs attention').locator('.dash-needs li > a').first().getAttribute('title'), 'Say when the work is done');
+  assert.equal((await pin('Needs attention').locator('.dash-head-n').textContent())?.trim(), '3', 'the header count follows the needs list');
+  assert.equal(await pin('Needs attention').locator('.dash-big').count(), 0);
   // Threads holds Launch: unread to 7, read to 5.
   await page.evaluate(() => {
     THREADS.threads = [{id: 'th1', title: 'Launch', audience: 'company', last_seq: 7, last_unread_seq: 7, activity_seq: 7, me: {member: true, unread: 1, activity: true, last_read_seq: 5}}];

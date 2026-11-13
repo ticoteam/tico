@@ -138,8 +138,6 @@ function settingsManagesReportsRun(box: HTMLInputElement): BotRun {
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/manages-reports`,
     {manages_reports, expected_revision: rev}))?.revision ?? rev + 1;
 }
-// The old wake presets, for history rows written before profiles (backend/profiles.py replaced them).
-const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
 // A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
 // through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
 // computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
