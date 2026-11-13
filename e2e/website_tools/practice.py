@@ -8,7 +8,7 @@ import threading
 import urllib.parse
 from http.cookies import SimpleCookie
 
-import totp
+from e2e.website_tools import totp
 
 
 def field(name, kind="text", extra=""):

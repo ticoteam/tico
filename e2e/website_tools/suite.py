@@ -24,10 +24,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(ROOT))
 
-import totp
-from practice import Practice
+from e2e.website_tools import totp
+from e2e.website_tools.practice import Practice
 
 
 class Failure(Exception):
