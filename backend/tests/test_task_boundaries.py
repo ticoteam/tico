@@ -38,6 +38,7 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
         {
             'to': 'ana',
             'line': 'Which packet is final?',
+            'why': 'It decides what ships next.',
             'version': get(api, 'tasks/' + target['id'])['task']['version'],
         },
         token=bot_token(api, 'ops'),

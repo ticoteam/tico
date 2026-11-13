@@ -2806,6 +2806,16 @@ SCHEMAS = {
             "who": "n",
             "asked_by": "n",
             "choices": {"type": ["array", "null"], "items": {"type": "string"}},
+            # A bot's question to a person: why it matters, a line per choice on what happens (in the choices' order)
+            # and the choice it recommends (backend/ask_shape.py). Absent on an ask that carried none.
+            "brief": obj(
+                {
+                    "why": "s",
+                    "details": {"type": ["array", "null"], "items": {"type": "string"}},
+                    "recommend": "n",
+                },
+                required=["why", "details", "recommend"],
+            ),
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),

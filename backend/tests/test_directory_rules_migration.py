@@ -145,7 +145,9 @@ def _rule_sources_move_onto_entities(path):
     }
     # org_rules names its From by entity, and the source_id column is gone.
     assert "source_id" not in _columns(conn, "org_rules")
-    assert dict(conn.execute("SELECT id, source_entity_id FROM org_rules").fetchall()) == {
+    assert dict(
+        conn.execute("SELECT id, source_entity_id FROM org_rules WHERE suggested_by != 'keeper'").fetchall()
+    ) == {
         "rule-vendor": "organization/acme-co",
         "rule-gov": "organization/california",
         "rule-internal": None,

@@ -146,7 +146,15 @@ def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
     task = task_for_ops(api)
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": "Is our favorite color is red okay?", "version": task["version"]},
+        json={
+            "to": "ana",
+            "line": "Is our favorite color is red okay?",
+            "why": "The launch note needs one color before it goes out.",
+            "choices": ["Yes", "No"],
+            "details": ["The note ships in red.", "The note waits for another color."],
+            "recommend": "Yes",
+            "version": task["version"],
+        },
         headers=headers("ops-test"),
     )
     assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text

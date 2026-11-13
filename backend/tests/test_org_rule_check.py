@@ -2321,7 +2321,12 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
     task = task_for_ops(api)
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": "May I say our favorite color is blue?", "version": task["version"]},
+        json={
+            "to": "ana",
+            "line": "May I say our favorite color is blue?",
+            "version": task["version"],
+            "why": "It sets what goes out on launch day.",
+        },
         headers=headers("ops-test"),
     )
     assert r.status_code >= 400 and COLOR in r.text, r.text
@@ -2333,7 +2338,12 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
     judge.fail = TimeoutError("down")
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": "May I say our favorite color is green?", "version": task["version"]},
+        json={
+            "to": "ana",
+            "line": "May I say our favorite color is green?",
+            "version": task["version"],
+            "why": "It sets what goes out on launch day.",
+        },
         headers=headers("ops-test"),
     )
     assert r.status_code == 200 and r.json()["requirement_id"], r.text

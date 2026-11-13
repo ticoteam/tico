@@ -2516,7 +2516,7 @@ def create_app(settings=None):
         if not track_route and (not output or not author):
             return None
         with store.read() as c:
-            in_force = org_rule_check.in_force(c)
+            in_force = org_rule_check.in_force(c, org_rule_check.asking(place))
             if not track_route and not in_force:
                 return None  # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:

@@ -54,3 +54,12 @@ def edit(api, rule_id, body, token="ana-test", expected=200):
     r = api.post(f"/api/v2/rules/{rule_id}", json=body, headers=headers(token))
     assert r.status_code == expected, r.text
     return r.json()
+
+
+def builtin_off(api):
+    """Turn off the built-in "Asks to a person" (org_rules.ensure_builtin), as a team may on the Rules page: for a test
+    that lists the rules it made, where the built-in one would be one more."""
+    from backend import org_rules as OR
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET status='retired' WHERE text=?", (OR.ASKS_TO_A_PERSON,))

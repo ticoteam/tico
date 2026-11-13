@@ -79,8 +79,11 @@ customer-facing stays a draft until your sending policy in Tico lets you send.
 Deliver files with `tico task attach <id> <file> --note "..."`. The same task and name adds a version.
 For a comment, use `tico task comment <id> "..." --attach <file>`.
 When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
-`tico task ask <id> --to <person> "<one sentence>" [--choices Yes,No] [--show file:<ID@N>] --version N`
-(MCP: `tico_task_ask`). `--kind ok` asks them to OK the thing you show, or send it back with notes. The task stays in
+`tico task ask <id> --to <person> "<one sentence>" --why "<why it matters to them>" --choice "<Label>|<what happens>"
+--choice "<Label>|<what happens>" --recommend <Label> [--show page:<ID>] --version N` (MCP: `tico_task_ask`). A question
+to a person says why it matters and gives 2 to 4 choices, each with what happens, and the one you recommend (or no
+choices, for a typed answer); what it shows is a page, file or task by its id, or a link, never a path in your
+repository. Otherwise it is refused before anyone sees it. `--kind ok` asks them to OK the thing you show, or send it back with notes. The task stays in
 its stage until they answer, the ask is one line in their Needs you with buttons, and their answer wakes you once on
 the task. Act on that answer, and don't ask again. Ask once per version: never re-ask about an answered version;
 attach a new version when the work changes, and ask about that. Answers record who replied; you decide the next step.

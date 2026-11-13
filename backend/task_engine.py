@@ -1945,8 +1945,10 @@ def add_requirement(
     shows: object = None,
     seen_version: int | str | None = None,
     for_action: bool = False,
+    brief: Row | None = None,
 ) -> Row:
-    """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
+    """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
+    choices' lines and the one recommended (backend/ask_shape.py), kept in the requirement's settings. The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
     `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
     (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
@@ -1995,7 +1997,7 @@ def add_requirement(
     requirement_id = H.new_id()
     conn.execute(
         "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
-        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "settings, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             requirement_id,
             visit["id"],
@@ -2007,6 +2009,7 @@ def add_requirement(
             line.strip(),
             None if shows is None else json.dumps(shows),
             None if choices is None else json.dumps(choices),
+            json.dumps({"brief": brief} if brief else {}),
             ts,
         ),
     )

@@ -8,9 +8,10 @@ from backend.tests.helpers.tasks_board import bot_token
 
 class FakeModel:
     """Answers the set as told: clear/recommends as probabilities, kind, meets (the option whose line holds
-    `meets`), covered (the option whose title holds `covered`) and urgency 0-3."""
+    `meets`), covered (the option whose title holds `covered`) and urgency 0-3. A chore by default: a decision is
+    refused outright (asked as a question instead), so the budget is read for a chore."""
 
-    def __init__(self, clear=0.95, kind="decision", meets=None, urgency=1.0, recommends=0.1, covered=None):
+    def __init__(self, clear=0.95, kind="chore", meets=None, urgency=1.0, recommends=0.1, covered=None):
         self.clear, self.kind, self.meets, self.urgency = clear, kind, meets, urgency
         self.recommends, self.covered = recommends, covered
         self.calls, self.fail, self.hold, self.before = [], None, None, None

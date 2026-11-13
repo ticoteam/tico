@@ -361,7 +361,18 @@ def test_a_question_to_the_person_waits_in_their_list_and_the_answer_wakes_the_a
     before = co.needs_you()
     product = request(co)
     owner = co.handoff(product, "Spec", "product-owner")
-    owner.cli("task", "ask", product, "--to", "owner", "Integers only?", "--version", owner.version())
+    owner.cli(
+        "task",
+        "ask",
+        product,
+        "--to",
+        "owner",
+        "Integers only?",
+        "--why",
+        "It decides the input type.",
+        "--version",
+        owner.version(),
+    )
     owner.end()
     co.beat()
     assert co.new_in_list(before) == [("ask", product)], "the question did not reach the person's list once"

@@ -13,6 +13,7 @@ from backend.store import encode
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (the api fixture)
 from backend import bot_settings as BS
 from backend.tests.helpers.org_rules import as_bot, edit, org, rule
+from backend.tests.helpers.org_rules import builtin_off
 
 
 def matched(api, author, recipients=()):
@@ -173,6 +174,7 @@ def _source(api):
 
 
 def test_mine_reads_the_bots_rules_and_settings_without_writing(api):
+    builtin_off(api)
     org(api)
     rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     before = len(_events(api))
@@ -333,6 +335,7 @@ def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
 
 
 def test_a_page_of_the_longest_rules_stays_under_the_byte_cap(api):
+    builtin_off(api)
     org(api)
     text = "\U0001f642" * O.TEXT_MAX  # four bytes each in UTF-8
     description = "\U0001f642" * O.DESCRIPTION_MAX

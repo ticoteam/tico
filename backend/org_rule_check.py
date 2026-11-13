@@ -205,11 +205,19 @@ def on(c):
     return bool(team_rules.load(c).get(TEAM_RULE, True))
 
 
-def in_force(c):
+def in_force(c, ask=False):
     """Whether any output can be checked now: an active rule exists and checks are on. One `SELECT ... LIMIT 1` when
     none is: a caller asks this before it resolves a write's audience (a roster read), so an install with no rules
-    reads nothing more."""
-    return bool(R.any_active(c)) and on(c)
+    reads nothing more. `ask`: the write is a bot's question to a person, which a `kind:ask` rule meets too."""
+    return bool(R.any_active(c, ask)) and on(c)
+
+
+def asking(place):
+    """Whether a write's place (a dict, or the function that reads it) is a bot's question to a person: marked by
+    task_rule_gate.TaskRules.place, read before anything else so no other write pays for a `kind:ask` rule."""
+    if isinstance(place, dict):
+        return bool(place.get("ask"))
+    return bool(getattr(place, "asks_person", False))
 
 
 def watched(c, bot):
@@ -219,7 +227,8 @@ def watched(c, bot):
         if not R.any_active(c) or not on(c):
             return False
         key = R.who_key(c, "bot:" + slug)
-        return any(R._hits(row["who"], key) for row in R._active(c))
+        # A rule met only by a bot's question to a person (`kind:ask`) never reads a live reply.
+        return any(R._hits(row["who"], key) for row in R._active(c) if not R.asks_only(row["where"]))
     except Exception:  # noqa: BLE001 - no tables yet (an old copy): nothing to hide
         return False
 
@@ -229,7 +238,7 @@ def watched_bots(c):
     try:
         if not R.any_active(c) or not on(c):
             return []
-        rules, ctx = R._active(c), R._ctx(c)
+        rules, ctx = [rule for rule in R._active(c) if not R.asks_only(rule["where"])], R._ctx(c)
         return [
             row["id"]
             for row in H.bots(c)
@@ -533,7 +542,7 @@ def check_as(
         recipients = sorted({r for r in recipients or () if r and r != author})
         is_person = H.is_human(author)
         with store.read() as c:
-            if not in_force(c):
+            if not in_force(c, asking(place)):
                 return None  # no rule in force: nothing more is read, and the output is never serialized
             where = _place_now(c, place, author, recipients)
             rules = _rule_rows(R.matching(c, author, recipients, where))

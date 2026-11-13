@@ -304,7 +304,15 @@ def test_replay_answers_the_bots_asks_the_way_the_server_asks_them(api):
     asked = api.post(
         f"/api/v2/tasks/{tid}/asks",
         headers=headers(attempt["token"]),
-        json={"to": "ana", "line": "Which week?", "choices": ["This week", "Last week"], "version": version},
+        json={
+            "to": "ana",
+            "line": "Which week?",
+            "choices": ["This week", "Last week"],
+            "why": "It decides what ships next.",
+            "details": ["The newest numbers.", "The full week."],
+            "recommend": "This week",
+            "version": version,
+        },
     )
     assert asked.status_code == 200, asked.text
     rid = asked.json()["requirement_id"]
