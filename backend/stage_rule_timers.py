@@ -27,7 +27,6 @@ Each Tell and Move back is written on the task's history (kind `stage_rule`, "Ru
 `stage_rule.told` or `stage_rule.moved_back`.
 """
 
-import importlib
 import logging
 from typing import Any
 
@@ -40,7 +39,28 @@ H: Any = _hubdb
 
 
 def _mod(name: str) -> Any:
-    return importlib.import_module(f".{name}", __package__)
+    """A module read lazily (each imports this one, or is a hub), named literally so the PR test map can follow it."""
+    # Every name is a literal import: a computed import would make this module, and the never-stuck pass that imports
+    # it, depend on every file in the PR test selection (scripts/pr_checks.py DependencyMap).
+    if name == "never_stuck":
+        from . import never_stuck as found
+    elif name == "rules":
+        from . import rules as found
+    elif name == "stage_rules":
+        from . import stage_rules as found
+    elif name == "store":
+        from . import store as found
+    elif name == "task_engine":
+        from . import task_engine as found
+    elif name == "task_trigger_rules":
+        from . import task_trigger_rules as found
+    elif name == "task_wakes":
+        from . import task_wakes as found
+    elif name == "waiting_on":
+        from . import waiting_on as found
+    else:
+        raise ValueError(name)
+    return found
 
 
 KINDS = ("in_stage", "quiet", "waiting_person")
