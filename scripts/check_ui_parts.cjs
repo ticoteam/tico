@@ -152,15 +152,15 @@ function main() {
         if (!ts.isTypeOfExpression(around.parent)) problems.push(`${at}: ${name} is used as ${file} runs, but ui/${home} declares it and index.html lists it later`);
       }
       if (!theirs || theirs === mine) return;
+      // `typeof NAME` only asks whether it is there (a stand-in is a function), here as anywhere.
+      const asked = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;
+      if (ts.isTypeOfExpression(asked.parent)) return;
       if (mine && depsOf.get(mine).has(theirs)) {
         // Loaded with this part, but never used as the part runs: a dep that failed to load (Retry fetches it again)
         // would leave the name undefined while this part's own top level had already run.
         if (!inFn) problems.push(`${at}: ${name} (${theirs} part) is used as the ${mine} part runs: a dep that failed to load would leave it undefined; use it inside a function`);
         return;
       }
-      // `typeof NAME` only asks whether it is there (a stand-in is a function).
-      const around = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;
-      if (ts.isTypeOfExpression(around.parent)) return;
       const e = entry.get(name);
       if (uses) {
         let u = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;

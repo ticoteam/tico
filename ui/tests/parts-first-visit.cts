@@ -87,6 +87,20 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
     }
     assert.ok(routes.some(r => r.startsWith('#/bot/')), 'the sidebar links a bot');
 
+    // An owner's first visit, the tour not seen yet: the first-visit tour starts from the shell, and the welcome's code
+    // (with Settings') loads only for a team that came in from the company file, which this one did not.
+    {
+      await must(hub, 'dana', 'POST', 'setup/getting-started/state', {tour: false});
+      const open = await cold(browser, hub);
+      await open.page.goto(hub.url + '/#/home');
+      await drawn(open.page, '#/home (tour not seen)');
+      await open.page.waitForTimeout(1000);
+      assert.deepEqual(open.errors, [], "an owner's first visit: errors on the page");
+      assert.deepEqual(open.parts, [], "an owner's first visit downloads no page part");
+      await must(hub, 'dana', 'POST', 'setup/getting-started/state', {tour: true});
+      await open.close();
+    }
+
     // Home stays the shell alone after it opens: the background refresh (every 2 minutes), a bot's status change on the
     // live stream, and browser notifications kept at boot for someone who allowed them load no page's code.
     {

@@ -166,8 +166,11 @@ window.gsBoot = function () {
   // owner of a team that came in from the company file gets the welcome (onbWelcome) in its place.
   void gsRefresh().then(async seen => {
     if (!seen || seen.tour_seen || S.config?.onboarding_needed || S.route === '#/welcome') return;
-    // Only an owner can get the welcome: anyone else skips loading its code (ui/parts.json).
-    if (!(S.me?.role === 'owner' && await onbWelcome())) gsTourStart();
+    // Only the owner of a team that came in from the company file gets the welcome: its code (a page part,
+    // ui/parts.json, with Settings') loads only then, so every other first visit stays the shell alone.
+    if (S.me?.role !== 'owner') { gsTourStart(); return; }
+    const setup = await get<Partial<OnbRecord> | null>('/v2/setup').catch(() => null);
+    if (!(setup?.completed && setup.company_import && await onbWelcome(setup))) gsTourStart();
   });
   // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
   setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);
