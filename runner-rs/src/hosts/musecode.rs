@@ -855,7 +855,7 @@ impl MuseCodeHost {
         effort: Option<&str>,
     ) -> Command {
         let argv = self.argv(thread_id, settings, prompt, effort);
-        let mut command = crate::isolation::command(&argv[0]);
+        let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::null())

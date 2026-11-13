@@ -220,9 +220,9 @@ impl<W: Wire> OneShot<W> {
             ));
         }
         let mut command = if W::ISOLATED {
-            crate::isolation::command_as(settings.identity, &argv[0])
+            super::harness_command(settings.identity, &argv[0])
         } else {
-            tokio::process::Command::new(&argv[0])
+            super::own_user_harness_command(&argv[0])
         };
         command
             .args(&argv[1..])

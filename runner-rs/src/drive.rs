@@ -316,6 +316,23 @@ impl Runner {
                     continue;
                 }
                 let kind = text_of(&event["kind"]);
+                if kind == "turn_failed" || (kind == "error" && truthy(event.get("host_restart"))) {
+                    // A harness killed at its memory limit fails with whatever its own exit looks like; the
+                    // turn's scope knows why (crate::turn_limits).
+                    if let Some(text) = crate::turn_limits::oom_failure(aid).await {
+                        crate::util::log(&format!(
+                            "Tico runner: {}: {aid}: {text}",
+                            crate::turn_limits::CATEGORY
+                        ));
+                        let _ = self.state.append(
+                            aid,
+                            "diagnostic",
+                            &json!({"category": crate::turn_limits::CATEGORY, "end_reason": text}),
+                        );
+                        event["error"] = json!(text);
+                        event["limit"] = json!(false);
+                    }
+                }
                 if !STREAMED.contains(&kind.as_str()) {
                     // Whatever else writes to the outbox comes after the rows drained before it.
                     self.write_rows(d, &mut rows).await?;

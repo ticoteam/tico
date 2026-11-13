@@ -111,6 +111,24 @@ pub fn command_under(
     cmd
 }
 
+/// `command_as` started by `parent` (a program and its first arguments), which execs the rest in its own place:
+/// the bot-user switch, when isolation is on, comes after the parent.
+pub fn command_after(
+    parent: &[std::ffi::OsString],
+    id: Option<(u32, u32)>,
+    program: impl AsRef<std::ffi::OsStr>,
+) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(&parent[0]);
+    cmd.args(&parent[1..]);
+    if let Some(p) = id.or_else(identity).map(prefix_for) {
+        cmd.args(&p);
+        // SAFETY: the closure only calls umask.
+        unsafe { cmd.pre_exec(umask_group) };
+    }
+    cmd.arg(program);
+    cmd
+}
+
 /// `command` for std's blocking Command.
 pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     std_command_as(identity(), program)
