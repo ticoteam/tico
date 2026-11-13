@@ -2,6 +2,7 @@
 between typed and synced numbers, the months a run writes, and health. Acme, a home-cleaning company, keeps its
 sign-ups per channel in a sheet it exports each week."""
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from backend import growth_sync as GS
@@ -276,3 +277,16 @@ def test_a_number_remapped_away_from_its_source_can_be_typed_again(api):
     typed = put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "new_customers": 120})
     assert typed["new_customers"] == 120 and typed["origins"]["new_customers"]["origin"] == "typed"
     put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "revenue_month": 95}, expected=409)
+
+
+def test_the_source_list_columns_leave_out_the_stored_file():
+    """The list selects every gtm_sources column but the stored file (up to 1 MB a source), and says whether one is
+    kept."""
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE gtm_sources (id TEXT, system TEXT, last_payload TEXT, retired_at TEXT)")
+    c.execute("INSERT INTO gtm_sources VALUES ('s1', 'Signups sheet', 'month,channel\n', NULL)")
+    cols = GS.listed(c)
+    assert "last_payload," not in cols + "," and "id" in cols and "retired_at" in cols
+    row = c.execute(f"SELECT {cols} FROM gtm_sources").fetchone()
+    assert row == ("s1", "Signups sheet", None, 1)
+    assert GS.listed(c, "s").startswith("s.id, s.system")
