@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from .store import H
 from . import task_relations as TR
+from . import task_depends
 from .migrations import renames
 
 
@@ -403,6 +404,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         for table in TASK_ROWS:
             column, where = _task_key(table)
             _delete(c, table, column, [tid], where)
+        # A task that depended on this one is no longer blocked by it: its owner hears, once (task_depends.deleted).
+        task_depends.deleted(c, tid, task.get("number"), actor)
         c.execute("DELETE FROM task_relations WHERE from_task=? OR to_task=?", (tid, tid))
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):

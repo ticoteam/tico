@@ -214,3 +214,76 @@ def test_the_migration_lets_an_old_table_take_depends_on_and_keeps_its_rows():
         conn.execute("INSERT INTO task_relations VALUES('a','b','blocks','human:ana','2026-11-13T00:00:01Z')")
     indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")}
     assert indexes == {"task_relations_to", "task_relations_from", "task_relations_one_parent"}
+
+
+def blocked_since(c, task_id, minutes):
+    """The task entered its stage and its dependency was written `minutes` ago."""
+    at = H.shift(H.now(), minutes=-minutes)
+    c.execute("UPDATE visits SET entered_at=? WHERE task_id=? AND left_at IS NULL", (at, task_id))
+    c.execute("UPDATE task_relations SET created_at=? WHERE from_task=? AND kind='depends_on'", (at, task_id))
+    c.execute(
+        "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='depends_on'",
+        (at, task_id),
+    )
+
+
+@pytest.mark.parametrize("how", ["done", "unrelate", "delete"])
+def test_three_hours_blocked_in_a_one_hour_stage_is_not_late_however_the_block_ends(c, how):
+    """Review 1: taking the dependency off, or deleting the blocker, removes the relation row; the blocked time must not
+    count toward Late after that, as it does not when the blocker is done."""
+    from backend import task_delete
+
+    build(c, minutes=60)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    blocked_since(c, blocked, 180)
+    if how == "done":
+        ended(c, blocker)
+    elif how == "unrelate":
+        TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
+    else:
+        assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
+    assert not D.blocked(c, blocked)
+    NS.check(c, later(1))
+    assert "late" not in X.events(c, blocked) and "ladder" not in X.events(c, blocked)
+
+
+def test_a_deleted_blocker_wakes_the_owner_once(c):
+    from backend import task_delete
+
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    number = ref(c, blocker)
+    assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
+    (body,) = bodies(c, blocked)
+    assert f"{number} was deleted" in body
+
+
+def test_a_dependency_holds_only_until_its_task_first_ends(c):
+    """Review 1: a blocker reopened after its dependent went on does not silently block the dependent again."""
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    ended(c, blocker)
+    E.move(c, blocker, E.REOPEN, X.ANA, "Found another case")
+    assert not D.blocked(c, blocked)
+    assert not any(D.is_wait(w.requirement_id) for w in W.waiting_on(c, blocked))
+    # Both tasks' history says it came off when the blocker ended.
+    assert "depends_on" in X.events(c, blocked) and "blocks" in X.events(c, blocker)
+
+
+def test_a_refused_move_of_the_dependent_never_stops_its_blocker_ending(c, monkeypatch):
+    """Review 1: release moves the dependent inside the blocker's own move; a refusal there must not refuse the end."""
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+
+    def refuse(conn, task_id):
+        H.refuse(conn, "system", "stage_rule", "A rule holds it")
+
+    monkeypatch.setattr(E, "advance", refuse)
+    ended(c, blocker)
+    assert E.task(c, blocker)["status"] == "done"
+    (body,) = bodies(c, blocked)
+    assert f"{ref(c, blocker)} is done" in body

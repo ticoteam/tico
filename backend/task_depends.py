@@ -11,15 +11,19 @@ date. It is a named wait, not a state:
   woken and the never-stuck check passes it by. It holds no slot where a stage has a limit, is never Late (the time
   it is blocked does not count, never_stuck._spent), does not move on by itself (task_engine.advance), and leaves its
   owner's Needs you. A reader who may not open the blocker reads "Blocked by a task you can't open".
-- `release`: when a task ends, each task that depends on it and has no other open dependency is read again: it moves on
-  if everything its stage asks is met (task_engine.advance), else its owner is woken once, "#304 is done" or "#304 was
-  closed without doing it" so they re-plan. No poll and no date.
+- `release`: when a task ends, every dependency on it comes off (a dependency holds until its task first ends, so a
+  reopened task blocks nothing again), and each task that depended on it and has no other open dependency is read
+  again: it moves on if everything its stage asks is met (task_engine.advance), else its owner is woken once, "#304 is
+  done" or "#304 was closed without doing it" so they re-plan. A deleted task does the same, "#304 was deleted"
+  (`deleted`). No poll and no date. Every dependency written or taken off leaves a history row on the waiting task,
+  from which `spans` gives the time it was blocked.
 - `check`: the writer must be able to change the waiting task and read the other one (task_relations.relate); a loop,
   or a dependency of or on a task that has ended, is refused.
 
 Snooze stays for "look again on a date". A PR, main or a release is reached through the task that carries it.
 """
 
+import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +33,7 @@ if TYPE_CHECKING:
     import sqlite3
 
 Row = dict[str, Any]
+LOG = logging.getLogger(__name__)
 
 RELATION = "depends_on"
 KIND = "depends_on"  # the prefix of the wait's requirement id; never a stored requirement
@@ -36,6 +41,7 @@ LINE = "Blocked by {ref} {title}, in {stage}"
 UNNAMED = "Blocked by a task you can't open"
 DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
+DELETED = "{ref} was deleted"
 WAKE = "unblocked"
 
 # A task, aliased by `%s`, with a dependency still open: for filters beside the open snooze's (hubdb.SNOOZED).
@@ -138,19 +144,27 @@ def _depends_on(conn: "sqlite3.Connection", task_id: str) -> list[str]:
 
 
 def spans(conn: "sqlite3.Connection", task_id: str, since: str) -> list[tuple[str, str | None]]:
-    """(from, to) of each time the task was blocked from `since` on: from when the dependency was written (or `since`)
-    to when its task ended, None while it is open. For Late (never_stuck._spent)."""
+    """(from, to) of each time the task was blocked, from `since` on, for Late (never_stuck._spent): from when a
+    dependency was written to when it came off (its task ended, it was taken off, or its task was deleted), None while
+    it is on. Read from the task's history, where every write and removal of a dependency leaves a row, so a span
+    outlives its relation row; a relation row with no history (a trash restore) counts from its own date."""
+    opened: dict[str, str] = {}
     out: list[tuple[str, str | None]] = []
-    for created, status, done_at, closed_at, updated_at in conn.execute(
-        "SELECT d.created_at, b.status, b.done_at, b.closed_at, b.updated_at FROM task_relations d "
-        "JOIN tasks b ON b.id = d.to_task WHERE d.from_task=? AND d.kind='depends_on'",
-        (task_id,),
+    for old, new, at in conn.execute(
+        "SELECT old, new, created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
+        "ORDER BY created_at, rowid",
+        (task_id, RELATION),
     ).fetchall():
-        end = None if status == "open" else str(done_at or closed_at or updated_at or "") or None
-        start = max(str(created), since)
-        if end is None or end > start:
-            out.append((start, end))
-    return out
+        if new:
+            opened.setdefault(str(new), str(at))
+        elif old and str(old) in opened:
+            out.append((opened.pop(str(old)), str(at)))
+    for blocker, created in conn.execute(
+        "SELECT to_task, created_at FROM task_relations WHERE from_task=? AND kind=?", (task_id, RELATION)
+    ).fetchall():
+        out.append((opened.pop(str(blocker), str(created)), None))
+    out += [(at, None) for at in opened.values()]
+    return [(max(start, since), end) for start, end in out if end is None or end > since]
 
 
 # ----------------------------------------------------------------------------- writes
@@ -200,15 +214,46 @@ def _path(conn: "sqlite3.Connection", start: str, goal: str) -> list[str]:
 
 
 def release(conn: "sqlite3.Connection", ended_id: str, by: str) -> int:
-    """`ended_id` ended: each task that depends on it and now has no open dependency moves on, or its owner is woken
-    once (`release_one`). Returns how many were released."""
-    return sum(release_one(conn, task_id, ended_id, by) for task_id in dependents(conn, ended_id))
+    """`ended_id` ended: each dependency on it comes off, with a history row on both tasks, so a dependency holds only
+    until its task first ends (reopening that task blocks nothing again). Then each task that depended on it and has no
+    open dependency left moves on, or its owner is woken once (`release_one`). Returns how many were released."""
+    from . import task_relations as TR
+
+    waiting = dependents(conn, ended_id)
+    for task_id in waiting:
+        conn.execute(
+            "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (task_id, ended_id, RELATION)
+        )
+        TR._history(conn, by, task_id, ended_id, RELATION, False, "it ended")  # pyright: ignore[reportPrivateUsage]
+    found: Any = conn.execute("SELECT number, status FROM tasks WHERE id=?", (ended_id,)).fetchone()
+    said = (DONE if found and found[1] == "done" else CLOSED).format(
+        ref=ref({"id": ended_id, "number": found[0] if found else None})
+    )
+    return sum(release_one(conn, task_id, ended_id, said) for task_id in waiting)
 
 
-def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, by: str) -> int:
-    """One task whose dependency `ended_id` ended. Still blocked by another: nothing, and nobody is woken. Else it moves
-    on if everything is met and there is room; if not, its owner is woken once with how the task it waited on ended.
-    1 when it was released."""
+def deleted(conn: "sqlite3.Connection", task_id: str, number: object, by: str) -> int:
+    """`task_id` is being deleted: each dependency on it comes off (a history row on the task that waited), and each
+    task left with no open dependency moves on, or its owner is woken once, "#304 was deleted". Call it before the
+    relation rows go."""
+    from . import hubdb
+
+    H: Any = hubdb
+    waiting = dependents(conn, task_id)
+    for waiter in waiting:
+        conn.execute(
+            "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (waiter, task_id, RELATION)
+        )
+        H._task_event(conn, waiter, by, RELATION, task_id, None, "it was deleted")
+    said = DELETED.format(ref=ref({"id": task_id, "number": number}))
+    return sum(release_one(conn, waiter, task_id, said) for waiter in waiting)
+
+
+def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: str) -> int:
+    """One task whose dependency `ended_id` came off. Still blocked by another: nothing, and nobody is woken. Else it
+    moves on if everything is met and there is room; if not, its owner is woken once with `said`. A move the engine
+    refuses is logged and the owner is told instead: a dependent never stops its blocker from ending. 1 when it was
+    released."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row or row["status"] != "open" or not row.get("visit"):
@@ -216,10 +261,19 @@ def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, by: str
     if _open_of(conn, [task_id])[task_id]:
         return 0
     E.changed(conn, task_id, E.SYSTEM)
-    if E.advance(conn, task_id):
+    from . import hubdb
+
+    H: Any = hubdb
+    try:
+        conn.execute("SAVEPOINT depends_release")
+        moved = E.advance(conn, task_id)
+        conn.execute("RELEASE depends_release")
+    except H.Refused as refused:  # advance logged it (task_engine.log_refused_move)
+        conn.execute("ROLLBACK TO depends_release")
+        conn.execute("RELEASE depends_release")
+        LOG.info("dependency released %s but its move was refused: %s", task_id, refused)
+        moved = None
+    if moved:
         return 1
-    ended: Any = conn.execute("SELECT number, status FROM tasks WHERE id=?", (ended_id,)).fetchone()
-    found: Row = {"id": ended_id, "number": ended[0] if ended else None}
-    text = (DONE if ended and ended[1] == "done" else CLOSED).format(ref=ref(found))
-    E.tell_owner(conn, task_id, text, f"{WAKE}:{ended_id}")
+    E.tell_owner(conn, task_id, said, f"{WAKE}:{ended_id}")
     return 1
