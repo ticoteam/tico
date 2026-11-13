@@ -40,14 +40,25 @@ async function grBoardRead(load: number) {
   GR_BOARD_PIPE = pipe;
   if (DASH?.place === 'growth' && DASH.root) grBoardLinks(DASH.root);
 }
-// The Sources list as the server answers it (GET /api/v2/growth/sources): one row per source of a truth.
-interface GrSource { id: string; truth_for: string; system: string; reach_kind: string; reach_ref?: string | null; may: string; owner_ref: string | null; retired_at?: string | null }
+// The Sources list as the server answers it (GET /api/v2/growth/sources): one row per source of a truth. A source with a
+// `kind` syncs (backend/growth_sync.py view): what it fills, the columns it reads, and its health.
+type GrHealth = 'fresh' | 'stale' | 'failing' | 'waiting' | 'not_synced';
+interface GrSyncMap { month?: string; channel?: string; fields?: Record<string, string> }
+interface GrSource {
+  id: string; truth_for: string; system: string; reach_kind: string; reach_ref?: string | null; may: string; owner_ref: string | null; retired_at?: string | null;
+  kind?: string | null; fills?: string[]; map?: GrSyncMap; health?: GrHealth; health_since?: string | null; last_good_run?: string | null; last_error?: string | null; has_file?: boolean;
+}
 interface GrSourcesData { src: GrSource[]; conflicts: string[]; may: boolean }
 interface GrState { load: number; sub: string; month: string; data: GrSourcesData | null }
 // The card data the Growth cards read (backend/cards.py growth_*). A Card's data is unknown per template, so each card's
 // reader casts it once to the shape written down here.
 type GrSeriesPoint = { month: string; value: number | null };
-type GrNumberData = { label?: string; channel_name?: string; value: number | null; prev: number | null; format: string; good: string | null; month: string; from?: string | null; series?: GrSeriesPoint[] };
+type GrNumberData = { label?: string; channel_name?: string; value: number | null; prev: number | null; format: string; good: string | null; month: string; from?: string | null; series?: GrSeriesPoint[]; origin?: GrOrigin | null };
+// Where a Number's figure came from (backend/cards.py growth_origin): its synced sources, its typed numbers, the inputs a
+// worked-out figure is made from, and the numbers a source disagrees with.
+type GrOriginSource = { source_id: string; source: string; at: string; health: GrHealth | null; since: string | null };
+type GrConflict = { channel: string; channel_name: string; month: string; field: string; typed: number | null; value: number | null; source: string | null; may: boolean };
+type GrOrigin = { fields: string[]; synced: GrOriginSource[]; typed: { count: number; by: string | null; at: string | null; quality: string } | null; conflicts: GrConflict[]; conflict_count: number };
 type GrNorthStar = { id: string; name: string; value: number | null; unit: string; prev: number | null; target: number | null };
 type GrFunnelStage = { stage: string; label: string; kpi: string | null; name: string | null; value: number | null; unit: string; prev: number | null; conv: number | null; series?: GrValue[]; north_star?: boolean };
 type GrFunnelData = { stages: GrFunnelStage[]; north_star?: GrNorthStar | null };
@@ -224,6 +235,9 @@ DASH_PLACES.growth = {
     if (!root) return;   // G: the grid is there before a place is wired
     root.querySelector('[data-gr-settings]')?.addEventListener('click', () => { if (GR) void gcSettings(GR); });
     if (GR) grStartMount(GR, root);   // the Get started panel under the head while setup is not done
+    // A stale or failing source is said once, over the cards (grHealthRead).
+    root.querySelector('.dash-head')?.insertAdjacentHTML('afterend', '<div class="gr-banner gr-amber gr-health" data-gr-health role="status" hidden></div>');
+    grResolveWire(root);
     const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
     if (!sel) return;   // G
     // A month picked reads every card again for it; the address keeps it.
@@ -242,6 +256,7 @@ DASH_PLACES.growth = {
     const v = state.view, root = state.root;
     if (!v || !root) return;   // G: drawn only once the place has its view and its grid
     grBoardLinks(root);
+    void grHealthRead(state);
     // The month picker: the months with numbers, newest first, and the one the cards read.
     const months = [...new Set([...(v.months || []), ...(v.month ? [v.month] : [])])].sort().reverse();
     const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
@@ -289,10 +304,109 @@ DASH_HEADING.growth_number = card => {
 // A Number: the picked month's value with its change from the month before and its trend; a value carried back from
 // an earlier month (retention, LTV) says which.
 function grNumberCard(d: GrNumberData) {
-  if (d.value == null) return `<p class="muted dash-none">None for ${esc(grMonth(d.month))}</p>`;
+  if (d.value == null) return `<p class="muted dash-none">None for ${esc(grMonth(d.month))}</p>${grConflicts(d.origin)}`;
   const series = d.series || [], at = d.from ? series.findIndex(p => p.month === d.from) : series.length - 1;
   return `<div class="grc-num"><span class="grc-num-v">${esc(grFmt(d.format, d.value))}</span>${grSpark(series.map(p => p.value), at, {w: 72, h: 22})}</div>
-    <div class="grc-num-d">${grDelta(d.value, d.prev, {good: d.good, points: d.format === 'pct'})}${d.from ? `<span class="muted">${esc(grMonthShort(d.from))}</span>` : ''}</div>`;
+    <div class="grc-num-d">${grDelta(d.value, d.prev, {good: d.good, points: d.format === 'pct'})}${d.from ? `<span class="muted">${esc(grMonthShort(d.from))}</span>` : ''}</div>
+    ${grOriginLine(d.origin)}${grConflicts(d.origin)}`;
+}
+
+// ----------------------------------------------------------------- where each number came from (spec AC-9, AC-10, AC-12)
+// A cohort number's format, to write a typed value and a source's beside each other.
+const GR_FIELD_FMT: Record<string, string> = {spend: 'usd', bot_cost: 'usd', revenue_month: 'usd', new_customers: 'count', kept_d30: 'pct', kept_d90: 'pct', kept_d180: 'pct', margin_pct: 'pct'};
+const grFieldWord = (f: string) => (GR_METRIC[f] || f).toLowerCase();
+const grList = (words: string[]) => words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+const grBadHealth = (h: string | null | undefined) => h === 'stale' || h === 'failing';
+// One synced source on a number's line: its name, how long ago it synced, and Stale or Failing when it is.
+const grOriginSrc = (s: GrOriginSource) => `<span class="gr-o-src">${esc(s.source)} · ${agoSpan(s.at)}${grBadHealth(s.health)
+  ? ` <span class="pill ${s.health === 'failing' ? 'fail' : 'waiting'}" title="${esc(s.health === 'failing' ? 'Its last run failed' : 'No good run in twice its refresh time')}">${s.health === 'failing' ? 'failing' : 'stale'}</span>` : ''}</span>`;
+// A number's origin line: each source it was synced from, then who typed the rest (actual or estimate). A worked-out
+// figure (CAC, LTV) says it is worked out from its inputs, which the hover names.
+function grOriginLine(o: GrOrigin | null | undefined) {
+  if (!o || (!o.synced.length && !o.typed)) return '';
+  const parts = o.synced.map(grOriginSrc), t = o.typed;
+  if (t) {
+    const who = `${t.by ? ` by ${esc(grWho(t.by))}` : ''}${t.at ? `, ${esc(grDay(t.at))}` : ''}`;
+    parts.push(`<span class="gr-o-typed">${t.count > 1 ? `${t.count} typed${o.synced.length ? '' : `, newest${who}`}` : `typed${o.synced.length ? '' : who}`} · ${t.quality === 'estimate' ? 'estimate' : 'actual'}</span>`);
+  }
+  const made = o.fields.length ? `Worked out from ${grList(o.fields.map(grFieldWord))}` : '';
+  return `<div class="gr-origin muted" data-gr-origin${made ? ` title="${esc(made)}"` : ''}>${made ? '<span class="gr-o-from">from</span> ' : ''}${parts.join('<span aria-hidden="true"> · </span>')}</div>`;
+}
+// The numbers a source disagrees with: one is said in the line (the typed value, the source's, Keep and Use for its
+// owner or an admin); more open a list.
+const grResolveAttrs = (c: GrConflict) => `data-gr-resolve data-channel="${esc(c.channel)}" data-month="${esc(c.month)}" data-field="${esc(c.field)}"`;
+function grConflictLine(c: GrConflict, withWhere: boolean) {
+  const f = (v: number | null) => grFmt(GR_FIELD_FMT[c.field] || 'count', v);
+  const where = withWhere ? `${esc(c.channel_name)} · ${esc(grMonthShort(c.month))} · ${esc(grFieldWord(c.field))}: ` : '';
+  return `<span>${where}typed ${esc(f(c.typed))}, ${esc(c.source || 'its source')} says ${esc(f(c.value))}</span>${c.may
+    ? `<span class="gr-c-acts"><button type="button" class="ghost small" ${grResolveAttrs(c)} data-keep="typed">Keep ${esc(f(c.typed))}</button><button type="button" class="ghost small" ${grResolveAttrs(c)} data-keep="source">Use ${esc(f(c.value))}</button></span>` : ''}`;
+}
+function grConflicts(o: GrOrigin | null | undefined) {
+  if (!o?.conflict_count) return '';
+  const only = o.conflict_count === 1 ? o.conflicts[0] : undefined;
+  if (only) return `<div class="gr-conflict" data-gr-conflict>${grConflictLine(only, true)}</div>`;
+  return `<div class="gr-conflict" data-gr-conflict><span>${o.conflict_count} numbers differ from their source</span>
+    <button type="button" class="ghost small" data-gr-conflicts="${esc(JSON.stringify(o.conflicts))}">Choose</button></div>`;
+}
+// Keep or Use, on a card or in the list: the source's owner or an admin chooses (the server checks), then the cards read again.
+function grResolveWire(root: HTMLElement) {
+  root.addEventListener('click', ev => {
+    const t = ev.target instanceof Element ? ev.target : null;
+    const list = t?.closest<HTMLButtonElement>('[data-gr-conflicts]');
+    if (list) {
+      let rows: GrConflict[] = [];
+      try { rows = JSON.parse(list.dataset.grConflicts || '[]') as GrConflict[]; } catch { /* none */ }
+      const dlg = grDialog('Numbers that differ from their source', `<p class="muted gr-note">A source never writes over a number someone typed as actual. Keep the typed number, or use the source's.</p>
+        <ul class="gr-conflicts">${rows.map(c => `<li class="gr-conflict">${grConflictLine(c, true)}</li>`).join('')}</ul>`, '', null);
+      grResolveWire(dlg);
+      return;
+    }
+    const btn = t?.closest<HTMLButtonElement>('[data-gr-resolve]');
+    if (btn) void grResolve(btn);
+  });
+}
+async function grResolve(btn: HTMLButtonElement) {
+  const {channel, month, field, keep} = btn.dataset;
+  const row = btn.closest<HTMLElement>('.gr-conflict');
+  row?.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
+  try {
+    await post('/v2/growth/cohorts/conflicts', {channel, month, field, keep});
+    toast(keep === 'typed' ? 'Kept the typed number' : "Using the source's number");
+    const dlg = btn.closest<HTMLDialogElement>('dialog');
+    if (dlg?.dataset.closeOnResolve) dlg.close();
+    row?.remove();
+    if (GR) grReload(GR);
+  } catch (e) {
+    toast(errorMessage(e, 'Not changed'), true);
+    row?.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
+  }
+}
+// The banner over the cards: which sources are Failing (since when, and why) or Stale (no good run since when), and
+// which numbers they fill, which their cards mark. None while every source is Fresh. Read at most once a minute.
+function grHealthBanner(sources: GrSource[]) {
+  const live = sources.filter(s => s.kind && !s.retired_at);
+  const failing = live.filter(s => s.health === 'failing'), stale = live.filter(s => s.health === 'stale');
+  if (!failing.length && !stale.length) return '';
+  const count = [failing.length ? `${failing.length} source${failing.length > 1 ? 's' : ''} failing` : '',
+    stale.length ? `${stale.length}${failing.length ? '' : ` source${stale.length > 1 ? 's' : ''}`} stale` : ''].filter(Boolean).join(', ');
+  const each = [...failing.map(s => `<b>${esc(s.system)}</b> since ${esc(grDay(s.health_since))}${s.last_error ? `: ${esc(s.last_error)}` : ''}`),
+    ...stale.map(s => `<b>${esc(s.system)}</b> ${s.last_good_run ? `no good run since ${esc(grDay(s.last_good_run))}` : 'no good run yet'}`)];
+  const fills = [...new Set([...failing, ...stale].flatMap(s => s.fills || []))].map(grFieldWord);
+  const marked = fills.length ? ` ${esc(grList(fills).replace(/^./, c => c.toUpperCase()))} ${fills.length > 1 ? 'are' : 'is'} marked where shown.` : '';
+  return `<span><b>${esc(count)}</b> · ${each.join('; ')}.${marked}</span><span class="spacer"></span><a class="gr-btn" href="${GR_SOURCES}" data-gr-health-sources>Sources</a>`;
+}
+let GR_HEALTH_READ: {state: DashState; at: number} | null = null;
+async function grHealthRead(state: DashState) {
+  if (GR_HEALTH_READ?.state === state && Date.now() - GR_HEALTH_READ.at < 60_000) return;
+  GR_HEALTH_READ = {state, at: Date.now()};
+  let sources: GrSource[];
+  try { sources = (await get<{sources?: GrSource[]}>('/v2/growth/sources', {fresh: true})).sources || []; }
+  catch { return; }   // no banner rather than a wrong one
+  const el = DASH === state ? state.root?.querySelector<HTMLElement>('[data-gr-health]') : null;
+  if (!el) return;
+  const html = grHealthBanner(sources);
+  el.hidden = !html;
+  patchHTML(el, html);
 }
 // The Funnel: Reach to Refer, each stage's KPI with its share of the stage before; the North Star marked, and Refer
 // feeding Reach again.
