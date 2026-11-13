@@ -426,7 +426,10 @@ def _questions(check: str | None = None) -> dict[str, Any]:
         return asked
     met: dict[str, Any] = asked["met"]
     rules = str(met["instructions"])
-    rules = rules[rules.index("`work.title`") :]
+    # The set's rules for reading the work start at `work.title`; its first sentence (about the whole rubric) is not
+    # this question's. Without that anchor (the set reworded), every rule is kept rather than the call failing.
+    start = rules.find("`work.title`")
+    rules = rules[start:] if start >= 0 else rules
     return {
         "part_" + part.key: {
             **met,

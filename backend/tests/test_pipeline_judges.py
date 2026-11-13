@@ -523,3 +523,38 @@ def test_the_grouped_jev_step_asks_the_parts_in_one_call_and_reads_each(monkeypa
     (result,) = P.judge_many(Store(), [(_spec_req(), ATTACHMENT)])
     assert calls == [["part_criteria", "part_goal", "part_in_scope", "part_out_of_scope"]]
     assert (result["verdict"], result["reason"]) == ("not_met", "No out-of-scope list found.")
+
+
+def test_a_shipped_check_keeps_its_parts_when_its_page_is_asked_with_other_requirements(monkeypatch):
+    """With one page read once for several requirements (SAME_PAGE), a shipped check is never merged into the
+    whole-rubric call: it is still asked, and read, as its parts."""
+    calls = []
+
+    def raw(state, questions, label):
+        calls.append(sorted(questions))
+        answers = {q: {"type": "noul", "noul": 0.1 if q == "part_out_of_scope" else 0.9} for q in questions}
+        return {"answers": answers, "model": "tico-decide-low", "provider": "gateway", "cost_usd": 0.001, "ms": 3}
+
+    class Store:
+        settings = None
+
+        @contextmanager
+        def read(self):
+            yield None
+
+    monkeypatch.setattr(P, "ASK", raw)
+    monkeypatch.setattr(P, "SAME_PAGE", True)
+    monkeypatch.setattr(P.judge, "over_spend_cap", lambda c, s: None)
+    other = {"id": "req-own", "name": "Names the risks", "rubric": "Names the risks", "pipeline_id": None}
+    spec, own = P.judge_many(Store(), [(_spec_req(), ATTACHMENT), (other, ATTACHMENT)])
+    assert ["part_criteria", "part_goal", "part_in_scope", "part_out_of_scope"] in calls, calls
+    assert (spec["verdict"], spec["reason"]) == ("not_met", "No out-of-scope list found.")
+    assert own["verdict"] == "met"
+
+
+def test_part_questions_still_build_when_the_question_set_is_reworded(monkeypatch):
+    reworded = {"questions": {"met": {"type": "noul", "instructions": "Does the attachment meet the requirement?"}}}
+    monkeypatch.setattr(P.J, "load_set", lambda name: reworded)
+    questions = P._questions("spec")
+    assert sorted(questions) == ["part_criteria", "part_goal", "part_in_scope", "part_out_of_scope"]
+    assert "Does the attachment meet the requirement?" in questions["part_goal"]["instructions"]
