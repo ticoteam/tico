@@ -320,7 +320,8 @@
    "app/vault.ts",
    "app/tools.ts",
    "app/tools-api.ts",
-   "app/redesign-library.ts"
+   "app/redesign-library.ts",
+   "app/tools-website.ts"
   ],
   "deps": [
    "finance",
@@ -338,7 +339,8 @@
    "pageToolApi",
    "pageToolService",
    "pageTools",
-   "toolsInboxPage"
+   "toolsInboxPage",
+   "pageToolWebsite"
   ],
   "calls": [
    "directorySettingsShow",
