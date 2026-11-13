@@ -24,7 +24,7 @@ from clients.tico import APIError
     "places the state on ordered levels (criteria: [level, ...]) and answers {score, confidence}; "
     "`noul` answers {noul: probability the statement is true}. Use it for a decision (classify, route, "
     "dedupe, gate, rank, select a value from candidates), never for writing. Ask every question the "
-    "decision needs in one call (they run in parallel, as many as fit in its size) and read the answers your code needs. "
+    "decision needs in one call (they run in parallel, up to 40) and read the answers your code needs. "
     "The shared question sets are questions/*.json in the Tico checkout; send one's `questions` and its "
     "`id@version` as the label so the audit groups the calls. skills/decisions/SKILL.md says how to write "
     "a state and a question and how to act on confidence.",
