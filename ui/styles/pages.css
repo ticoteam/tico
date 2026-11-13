@@ -35,11 +35,14 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-view{max-width:1100px;margin:0 auto;padding:12px 20px 48px}
 .pg-head{display:flex;align-items:center;gap:6px;min-height:44px}
 .pg-head .spacer{flex:1}
+/* The title and the status line share the header line; on a narrow screen the status wraps under the title. */
+.pg-headline{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:2px}
+.pg-headline .pg-status{min-width:0}
+.pg-headline .pg-status .linkish{color:var(--link-quiet);font-size:inherit}
 .pg-title{margin:0;min-width:0;font-size:var(--t-lg);font-weight:600;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
 .pg-back{flex:none;width:36px;height:36px;margin-left:-8px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .pg-back .nav-icon{font-size:22px;width:22px;height:22px}
 .pg-archived{flex:none}
-.pg-ver{flex:none;max-width:150px;font-size:var(--t-sm)}
 .pg-menu{position:relative;flex:none}
 .pg-menu>summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:7px;color:var(--muted);cursor:pointer}
 .pg-menu>summary::-webkit-details-marker{display:none}
@@ -48,7 +51,22 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-menu-list>*{display:block;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;text-decoration:none;cursor:pointer}
 .pg-menu-list>*:hover{background:var(--hover);text-decoration:none}
 .pg-menu-list .danger{color:var(--fail)}
+.pg-menu-list>*:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-menu>summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-menu-list .pg-mi-name,.pg-menu-list .pg-mi-sub{display:block}
+.pg-menu-list .pg-mi-sub{max-width:260px;color:var(--muted);font-size:var(--t-xs);overflow-wrap:anywhere}
+.pg-menu-list [aria-checked=true] .pg-mi-name{font-weight:600}
+.pg-menu-list .pg-mi-back{display:flex;align-items:center;gap:2px;color:var(--muted)}
+.pg-menu-list .pg-mi-back .nav-icon{font-size:18px;width:18px;height:18px}
 .pg-body{margin-top:6px}
+/* The full view: the page on the view's own surface, with no border, rounded corner or white backdrop around it. */
+.pg-bare .pg-box,.pg-bare .page-frame,.pg-bare .pg-preview .html-view{border:0;border-radius:0;background:transparent}
+/* What's changed?: the page's text as a line diff (tfDiffHTML, ui/styles/task-files.css). */
+.pg-diff-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;font-size:var(--t-sm)}
+.pg-diff-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.pg-diff-head .spacer{flex:1}
+.pg-diff-from{flex:none;width:auto;min-width:64px;font-size:var(--t-sm)}
+.pg-diff .tf-diff-lines{max-height:none}
 .pg-full .page-frame{min-height:240px}
 .pg-preview{min-height:240px}
 .pg-preview .html-view{display:block;width:100%;height:calc(100dvh - 160px);min-height:320px;border:0;background:#fff}
@@ -142,7 +160,6 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 
 @media (max-width:760px){
   .pg-view{padding:8px 16px 40px}
-  .pg-ver{max-width:110px}
   .lf{padding:0 0 40px;--lf-grid:18px minmax(0,1fr)}   /* #main already keeps the 12px gutter */
   .lf-head{gap:8px}
   .lf-search{flex:1 1 auto;margin-left:0}
@@ -163,6 +180,4 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-pinned{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .pg-pinned a{color:var(--link-quiet)}
 
-.pg-access { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; }
-.pg-access button { text-align: left; white-space: normal; }
 .pg-lock { font-size: 14px; vertical-align: middle; }

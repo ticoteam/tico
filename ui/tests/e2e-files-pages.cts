@@ -50,11 +50,14 @@ async function filesPages({hub, browser, phone}: PassContext) {
     assert.match(view, /Engineering weekly/, `${where}: the page shows its title`);
     const audienceReader = await open(browser, hub, 'priya', {phone, hash: new URL(page.url()).hash});
     await audienceReader.locator('#pg-view .pg-title').waitFor();
-    assert.equal(await audienceReader.locator('[data-pg-audience]').count(), 0);
+    assert.equal(await audienceReader.locator('[data-pg-act=access]').count(), 0);
     expectFailure(audienceReader, 404, /^\/api\/v2\/pages\//, 'GET');
-    const access = page.locator('[data-pg-audience]');
+    // Who can see it is the manager's first ⋯ item, with the audience under it.
+    const more = page.locator('#pg-view .pg-menu summary'), access = page.locator('#pg-view [data-pg-act=access]');
+    const audienceText = () => page.evaluate(() => document.querySelector('#pg-view [data-pg-act=access] .pg-mi-sub')?.textContent || '');
+    await more.click();
     await access.waitFor();
-    assert.equal((await access.innerText()).trim(), "Everyone who can see where it's filed");
+    assert.equal(await audienceText(), "Everyone who can see where it's filed");
     await access.click();
     const editor = page.locator('#access-editor');
     await editor.locator('[data-access-everyone]').uncheck();
@@ -62,17 +65,21 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const saved = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
     await editor.locator('button[type=submit]').click();
     assert.equal((await saved).status(), 200);
+    // Without a reload: the status line shows the lock and the item the new audience.
     await page.locator('.pg-status .pg-lock').waitFor();
+    assert.notEqual(await audienceText(), "Everyone who can see where it's filed", `${where}: the item shows the new audience`);
     await drawn(audienceReader, '#pg-view', text => text.includes('not yours to see'), `${where}: audienceReader loses the open page`);
     assert.equal(await audienceReader.locator('.pg-card').count(), 0);
-    await page.locator('[data-pg-audience]').click();
+    await more.click();
+    await access.click();
     await editor.locator('[data-access-everyone]').check();
     const cleared = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
     await editor.locator('button[type=submit]').click();
     assert.equal((await cleared).status(), 200);
-    await drawn(page, '[data-pg-audience]', text => text.includes("Everyone who can see where it's filed"), `${where}: cleared audience`);
+    await page.waitForFunction(() => document.querySelector('#pg-view [data-pg-act=access] .pg-mi-sub')?.textContent === "Everyone who can see where it's filed"
+      && !document.querySelector('#pg-view .pg-lock'), null, {timeout: 10000}).catch(() => assert.fail(`${where}: cleared audience`));
     await audienceReader.locator('#pg-view .pg-title').waitFor();
-    assert.equal(await audienceReader.locator('[data-pg-audience], .pg-lock').count(), 0);
+    assert.equal(await audienceReader.locator('[data-pg-act=access], .pg-lock').count(), 0);
     assertClean(audienceReader, `${where}: audienceReader regains the page`);
     const audienceId = new URL((await saved).url()).pathname.split('/').pop();
     const legal = await must<{id: string}>(hub, 'dana', 'POST', 'groups', {name: 'Legal'});
