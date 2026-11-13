@@ -206,6 +206,12 @@ async function openChat(page: Page) {
       const {page} = await start(browser, {width: 360});
       await page.locator('.tt-chat [data-pgc-open]').click();
       await page.locator('.tt-pgc.pgc-full .p-text').waitFor();
+      // Full screen over the page, as page-chat's phone layout says, not a block under the list.
+      const panel = await page.locator('.tt-pgc').evaluate(el => {
+        const r = el.getBoundingClientRect();
+        return {position: getComputedStyle(el).position, top: Math.round(r.top), height: Math.round(r.height)};
+      });
+      assert.deepEqual(panel, {position: 'fixed', top: 0, height: 780}, 'the chat covers the phone screen');
       await paste(page, `jira user chris / ${PASSWORD}, posthog ${['ph', 'x_', 'k3JdP9xQa8LmZ2vR7tYbW4nE6'].join('')}, more ${TOKEN}`);
       await page.locator('.tt-pgc .kd-wide').waitFor();
       assert.equal(await page.locator('.tt-pgc [data-kd-for]').count(), 3, 'three items open the tray with For');

@@ -210,13 +210,13 @@ section.card.tt-soon>header .pill{margin-left:auto}
 .tt-chat{display:inline-flex}
 .tt-chat:empty{display:none}
 /* Keys dropped in that chat (ui/app/tools-key-drop.ts): items show what they are, never a value. */
-.kd-tray{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0}
+.kd-tray{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0;max-height:40vh;max-height:40dvh;overflow-y:auto;overscroll-behavior:contain}
 .kd-tray[hidden]{display:none}
 .kd-head{font-weight:600;font-size:var(--t-sm)}
 .kd-item{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-xs);min-width:0}
 .kd-suspect{border-style:dashed}
 .kd-kind{font-weight:600;min-width:0;overflow-wrap:anywhere}
-.kd-name{width:16ch;max-width:100%;min-width:0;font:inherit;font-family:var(--mono,monospace);padding:2px 4px}
+.kd-name{width:21ch;max-width:100%;min-width:0;font:inherit;font-family:var(--mono,monospace);padding:2px 4px}
 .kd-preview{color:var(--muted);font-family:var(--mono,monospace)}
 .kd-state{color:var(--muted)}
 .kd-ok{color:var(--ok,inherit)}
