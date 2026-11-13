@@ -518,6 +518,7 @@ def of(
         name = ahead["name"] if ahead else "the next stage"
         line = f"No room in {name}" if full else f"Moving to {name}"
         held = E.shut_out(conn, row, ahead) if ahead and not full else None
+        share = None
         if held:
             # The next stage's owner, or someone it asks, cannot read this private task: it waits until someone who
             # can see it shares it (the engine never adds a reader). Who that is, and why.
@@ -530,7 +531,7 @@ def of(
             # A company task turning private has no reader to add (a company task is seen by everyone): no share button.
             if H.task_private(conn, row):
                 shut = shut or tuple(held["whom"])
-        share = tuple(held["whom"]) if held and H.task_private(conn, row) else None
+                share = tuple(held["whom"])
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=share))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
