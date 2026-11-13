@@ -203,41 +203,70 @@ LABELS_THEN = (
 )
 
 
+def _experiment_stages(c):
+    """The stage ids of every Growth Experiments pipeline, retired ones too (history names them): all of them, and
+    the Running ones."""
+    every, running = [], []
+    for sid, pid, preset in c.execute(
+        "SELECT s.id, s.pipeline_id, p.preset FROM stages s JOIN pipelines p ON p.id=s.pipeline_id "
+        "WHERE p.preset=? AND s.kind='work'",
+        (MT.EXPERIMENTS,),
+    ):
+        every.append(sid)
+        if MT.stage_key(preset, pid, sid) == MT.RUNNING:
+            running.append(sid)
+    return every, running
+
+
+def _marks(n):
+    return ",".join("?" * n)
+
+
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
-    # A finish is a move that ended the task (into Done or Closed, by a person, a bot or a close of the task above it)
-    # while it was an idea. A task put back from the trash as it ended did not end again.
+    every, running = _experiment_stages(c)
+    # A start is a label change onto a running label, or a move into a Growth Experiments Running stage from anywhere
+    # else (or a task filed straight into it). A finish is a move that ended the task (into Done or Closed, by a
+    # person, a bot or a close of the task above it) while it was an idea or from a Growth Experiments stage. A task
+    # put back from the trash as it ended did not end again, nor start again.
     rows = H._rows(
         c.execute(
             "SELECT e.kind AS event, e.subject_id AS task_id, e.created_at, e.old, e.new, s.kind AS stage, t.title, "
             "t.goal_id FROM history_events e JOIN tasks t ON t.id=e.subject_id "
             "LEFT JOIN stages s ON e.kind='move' AND s.id=e.new "
             f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL}) "
-            "OR (e.kind='move' AND s.kind IN ('done','closed') "
-            "AND coalesce(json_extract(e.data, '$.move'), '')!='restored' "
-            f"AND {_has_any(LABELS_THEN, MT.LABELS)})) "
+            "OR (e.kind='move' AND coalesce(json_extract(e.data, '$.move'), '')!='restored' AND ("
+            f"(e.new IN ({_marks(len(running))}) AND coalesce(e.old, '') NOT IN ({_marks(len(running))})) "
+            f"OR (s.kind IN ('done','closed') AND ({_has_any(LABELS_THEN, MT.LABELS)} "
+            f"OR e.old IN ({_marks(len(every))})))))) "
             f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
-            [since, *MT.STARTED, *MT.STARTED, *MT.LABELS, MARKERS_MAX],
+            [since, *MT.STARTED, *MT.STARTED, *running, *running, *MT.LABELS, *every, MARKERS_MAX],
         )
     )
-    tags = {}
+    tags, results = {}, {}
     ids = list(dict.fromkeys(r["task_id"] for r in rows))
     if ids:
         for task_id, key in c.execute(
             "SELECT tt.task_id, tg.key FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id "
-            f"WHERE tt.task_id IN ({','.join('?' * len(ids))}) AND tg.key LIKE 'channel:%' ORDER BY tg.key",
-            ids,
+            f"WHERE tt.task_id IN ({_marks(len(ids))}) AND (tg.key LIKE 'channel:%' OR tg.key IN ({_marks(len(MT.RESULTS))})) "
+            "ORDER BY tg.key",
+            [*ids, *MT.RESULTS],
         ):
-            tags.setdefault(task_id, []).append(key[len("channel:") :])
+            if key in MT.RESULTS:
+                results[task_id] = key[len("result:") :]
+            else:
+                tags.setdefault(task_id, []).append(key[len("channel:") :])
     out = []
     for r in rows:
-        finished = r["event"] == "move"
+        finished = r["stage"] in ("done", "closed")
         out.append(
             {
                 "task_id": r["task_id"],
                 "title": r["title"],
                 "kind": "finished" if finished else "started",
                 "outcome": ("kept" if r["stage"] == "done" else "dropped") if finished else None,
+                # What its Results page found (result:failed, worked-once or watching), on a test that was kept.
+                "result": results.get(r["task_id"]) if r["stage"] == "done" else None,
                 "at": r["created_at"],
                 "channels": tags.get(r["task_id"], []),
                 "goal_id": r["goal_id"],

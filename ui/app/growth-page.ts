@@ -66,7 +66,7 @@ type GrTask = { id: string; title: string; stage: string };
 type GrChannelRow = { slug: string; name: string; new_customers: number | null; cac: number | null; ltv_cac: number | null; ltv_from?: string | null; origin?: Record<string, string | null>; series?: GrValue[]; tasks?: GrTask[]; more?: number | null };
 type GrChannelsData = { rows: GrChannelRow[] };
 type GrRetentionData = { columns: string[]; rows: Array<{ month: string; new_customers: number | null; kept: Array<number | null> }>; computed?: GrxView };
-type GrBoardCard = { id: string; title?: string | null; channel?: string | null; owner_id?: string | null };
+type GrBoardCard = { id: string; title?: string | null; channel?: string | null; owner_id?: string | null; slipping?: boolean };
 type GrBoardData = { lanes: Array<{ stage: string; label: string; count: number; cards: GrBoardCard[] }> };
 // A KPI as the Goals views hand it over: its latest reading and unit.
 type GrKpiVal = { latest?: number | null; unit?: string };
@@ -454,12 +454,13 @@ function grRetentionCard(d: GrRetentionData) {
   return `<div class="grc-ret"><table class="grc-table grc-ret-t"><thead><tr><th scope="col">Joined</th><th scope="col" class="grc-n">New</th>${d.columns.map(c => `<th scope="col" class="grc-k-h">${esc(c)}</th>`).join('')}</tr></thead>
     <tbody>${d.rows.map(r => `<tr><th scope="row">${esc(grMonthShort(r.month))}</th><td class="grc-n">${r.new_customers == null ? '' : esc(grX(r.new_customers, 0))}</td>${r.kept.map(cell).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
-// The Growth board: Live, Working, In development and On deck, each lane's newest tasks with their channel and owner.
+// The Growth board: Live, Working, In development and On deck, each lane's newest tasks with their channel and owner; a
+// Growth Monitoring task in Slipping is marked so.
 function grBoardCard(d: GrBoardData) {
   const face = (ref: string | null | undefined) => { const pid = actorPerson(ref), who = pid ? personDisplay(pid) : grWho(ref); return who ? `<span class="grc-face" title="${esc(who)}"><span aria-hidden="true">${esc(grInitials(who))}</span><span class="sr-only">${esc(who)}</span></span>` : ''; };
   const lanes = d.lanes.filter(l => l.count);
   return `<div class="grc-board">${lanes.map(l => `<section class="grc-lane" data-lane="${esc(l.stage)}"><h3 class="grc-lane-h"><i class="grc-sq" data-stage="${esc(l.stage)}" aria-hidden="true"></i>${esc(l.label)} <span class="muted">${esc(l.count)}</span></h3>
-    <ul class="grc-cards">${l.cards.map(c => `<li><a class="grc-card" href="${grTaskHref(c.id)}"><span class="grc-card-t">${esc(c.title || 'Untitled')}</span>${c.channel ? `<span class="grc-card-c">${esc(c.channel)}</span>` : ''}${face(c.owner_id)}</a></li>`).join('')}</ul>
+    <ul class="grc-cards">${l.cards.map(c => `<li><a class="grc-card" href="${grTaskHref(c.id)}"><span class="grc-card-t">${esc(c.title || 'Untitled')}</span>${c.channel || c.slipping ? `<span class="grc-card-c">${esc(c.channel || '')}${c.slipping ? `${c.channel ? ' · ' : ''}<span class="grc-slip">slipping</span>` : ''}</span>` : ''}${face(c.owner_id)}</a></li>`).join('')}</ul>
     ${l.count > l.cards.length ? grBoardLink('grc-more', `+${l.count - l.cards.length} more`) : ''}</section>`).join('')}</div>`;
 }
 Object.assign(DASH_BODY, {growth_number: grNumberCard, growth_funnel: grFunnelCard, growth_channels: grChannelsCard,
