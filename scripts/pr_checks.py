@@ -55,6 +55,35 @@ UPGRADE_TESTS = (
     "backend/tests/test_upgrade.py",  # a database an older release made boots twice
     "backend/tests/test_upgrade_boot.py",  # schema_pre_cleanup.sql through create_app and backend.boot
 )
+# Guard tests check a repository-wide invariant through a path the map cannot follow, so a change that can break one
+# names it directly, and it runs in a light plan too (level 0, like UPGRADE_TESTS). On Nov 13 main went red three times
+# on guards the change's plan never picked:
+# - ROWS_SCHEMA builds a Store and compares every table with backend/rows.py. A migration reaches it only through the
+#   app's start (#3335 tools columns, #3604 listening_items.delivered); a schema string in a backend module (a CREATE
+#   TABLE in hubdb.py or store.py, a column list an ALTER TABLE loop reads) only through a hub a light plan stops at.
+#   A changed backend module picks it when the diff's added or removed lines hold SCHEMA_LINE (schema_changes).
+# - RELEASE_SHOTS runs scripts/screenshots/index.cts --list-pages, which lists every tracked ui/ file through git: a new
+#   ui/ file that no PAGES, SHARED or UNSHOWN entry names fails it (#3335 ui/app/browser-view.ts), and a gone one can
+#   leave a glob that matches no file. A ui/ file added or gone, outside the folders the harness ignores, picks it.
+ROWS_SCHEMA = "backend/tests/test_rows_schema.py"
+RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
+SCHEMA_LINE = re.compile(
+    r"\b(?:CREATE|ALTER|DROP)\s+TABLE\b|\b(?:ADD|DROP|RENAME)\s+COLUMN\b|\b(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b"
+)
+SCHEMA_TABLE = re.compile(r"\b(?:CREATE|ALTER)\s+TABLE\b")
+SHOT_IGNORED = ("ui/tests/", "ui/baselines/", "ui/types/")
+
+
+def schema_module(name):
+    """A backend Python module outside the tests and the migrations: where a schema string can live."""
+    return name.startswith("backend/") and name.endswith(".py") and not name.startswith(("backend/tests/", MIGRATIONS))
+
+
+def shot_listed(name):
+    """A ui/ file the release-shot harness classifies (select.cts NON_RENDERING ignores tests, baselines, types, docs)."""
+    return name.startswith("ui/") and not name.startswith(SHOT_IGNORED) and not name.endswith(".md")
+
+
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
 CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
@@ -1012,6 +1041,41 @@ def changed_definitions(base, head, names, root=ROOT):
     return out
 
 
+def schema_changes(base, head, names, root=ROOT):
+    """The backend modules in `names` (schema_module) whose diff from base's merge point to head adds or removes a line
+    holding SCHEMA_LINE: a table, a column or a column type. With no base, or git failing, a module whose text holds a
+    CREATE or ALTER TABLE counts, and a gone one whose text cannot be read counts too."""
+    modules = [n for n in names if schema_module(n)]
+    if not modules:
+        return set()
+    ancestor = None
+    if base:
+        try:
+            ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
+        except (subprocess.CalledProcessError, OSError):
+            ancestor = None
+    found = set()
+    for path in modules:
+        if ancestor:
+            try:
+                diff = subprocess.check_output(
+                    ["git", "diff", "-U0", "--no-renames", ancestor, head, "--", path], cwd=root, text=True
+                )
+            except (subprocess.CalledProcessError, OSError):
+                diff = None
+            if diff is not None:
+                lines = (line[1:] for line in diff.splitlines() if line[:1] in "+-" and line[:3] not in ("+++", "---"))
+                if any(SCHEMA_LINE.search(line) for line in lines):
+                    found.add(path)
+                continue
+        try:
+            if SCHEMA_TABLE.search((root / path).read_text(errors="replace")):
+                found.add(path)
+        except OSError:
+            found.add(path)
+    return found
+
+
 def callers(root, defined, scripts):
     """The browser scripts among `scripts` that name any of `defined` (top-level UI names) as a whole word."""
     if not defined:
@@ -1182,6 +1246,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
+    9. Guard tests (`guards`, which a light plan keeps): a file under MIGRATIONS, or a backend module whose diff from `base`
+       to `head` changes a schema line (schema_changes), runs ROWS_SCHEMA; a ui/ file the release-shot harness lists
+       that is added or gone runs RELEASE_SHOTS.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1207,6 +1274,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         }
     notes, uncertain = [], []
     sweeps = content_sweeps(changed)
+    guards = set()
 
     def plan(python=(), browser=(), caddy=False, contracts=False, reason=None, direct=()):
         return {
@@ -1218,6 +1286,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             "contracts": contracts or bool(sweeps),
             "sweeps": sweeps,
             "browser_direct": sorted(direct),
+            "guards": sorted(guards),
             "reason": reason or "; ".join(dict.fromkeys(["measured dependency map", *notes])),
             "uncertain": uncertain,
         }
@@ -1373,6 +1442,14 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if any(n.startswith(MIGRATIONS) for n in names):  # rule 8
         python |= {t for t in UPGRADE_TESTS if (root / t).is_file()}
         notes.append("rule 8: a migration runs the upgrade tests")
+    schema = [n for n in names if n.startswith(MIGRATIONS)] + sorted(schema_changes(base, head, names, root))
+    if schema and (root / ROWS_SCHEMA).is_file():  # rule 9
+        guards.add(ROWS_SCHEMA)
+        notes.append("rule 9: a migration or schema string runs the rows schema test")
+    if any(shot_listed(n) and (n in added or n in gone) for n in names) and (root / RELEASE_SHOTS).is_file():
+        guards.add(RELEASE_SHOTS)
+        notes.append("rule 9: a new or gone ui/ file runs the release-shot table test")
+    python |= guards
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
@@ -1685,6 +1762,8 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     full = set(picked["python"])
     # Rule 8: a migration's upgrade tests reach it only through the app's start; they always run, like a changed test.
     upgrade = set(UPGRADE_TESTS) & full if any(n.startswith(MIGRATIONS) for n in names) else set()
+    # Rule 9: a guard test checks the whole repository through a path the map cannot follow; it runs like a changed test.
+    upgrade |= set(picked.get("guards", ())) & full
     level = {**level, **dict.fromkeys(upgrade, 0)}
     python = {p for p in full if p in level}
     left = sorted(full - python)
