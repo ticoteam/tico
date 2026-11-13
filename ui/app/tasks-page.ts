@@ -467,7 +467,7 @@ function tasksRender(state: TasksPageState | null) {
 function tasksAskOff() {
   if (typeof pipelineAskLeave === 'function') pipelineAskLeave();
 }
-/** The rail's host is emptied and hidden away from a pipeline (and the rail's own reads stop, pipeline-rail.ts). */
+/** The rail's host is emptied and hidden away from a pipeline (and its chat goes, pipeline-rail.ts). */
 function tasksRailOff() {
   const rail = document.getElementById('task-rail');
   if (rail && !rail.hidden) { rail.hidden = true; rail.replaceChildren(); }

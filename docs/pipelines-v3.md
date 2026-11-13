@@ -1514,22 +1514,18 @@ Today: a pipeline with the manager rail at the side.
 
 **New:**
 
-- **Top:** the manager's avatar and "Eng Manager".
-- **Tabs:** "Log" (selected), "Tasks 2", "Learned".
-- **Group "Late", count 2:** "Calibration export retries" · "30h"; "Refund flow" · "3d". Rows here have no mark and no
-  avatar.
-- **Log lines,** dimmed, time then text: "07:50 Builder moved Docs for saved carts past Review 2"; "07:12 Scout snoozed
-  Carrier contract with no end".
-- **Chat:** a message from "Eng Manager", "1d": "Calibration first-try is 84 percent. The target is 95 and the fix is in
-  ring 3."
-- A "Message Eng Manager" box.
+- **Top:** the manager's avatar, "Eng Manager" and the close button.
+- **Chat:** the direct chat with the manager, filling the rest of the column: a message from "Eng Manager", "1d":
+  "Calibration first-try is 84 percent. The target is 95 and the fix is in ring 3."
+- A "Message Eng Manager" box, always at the bottom of the window; the messages scroll above it, newest in view.
 
 Rules:
 
-- Kept as it is: Log, Tasks, Learned, and the chat.
-- Two fixes: tasks show by title, not by id. "Ran 07:50" goes.
-- A pipeline manager doesn't own tasks (C25). Its Tasks tab lists the ones it was woken about.
-- The Log shows each push past and each snooze a bot made with no end date.
+- The rail is the chat alone. The Log, Tasks and Learned tabs and the Late list are gone (Nov 13).
+- The rail is as tall as the window, never as tall as the board; scrolling the board does not move it.
+- Late tasks show on the board's cards and stage headers. The Log (each push past, each snooze with no end date, as C1
+  and F30 describe) stays in the API, GET /api/v2/pipelines/{id}/log, for bots and the CLI; no screen reads it.
+- A phone has no rail: the board's Ask bar opens the same chat as a sheet.
 
 ### S11. Pipeline editor and stage settings
 
