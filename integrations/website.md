@@ -35,7 +35,8 @@ download, upload and ask, with who, the page and where it ran (own or central). 
 ```bash
 tico browser open app.example.com                      # the first site's home page, signed in as your account
 tico browser open app.example.com https://app.example.com/billing
-tico browser read app.example.com                      # the page as text; each control as [e12] button "Sign in"
+tico browser read app.example.com                      # the page as text; each control as [e12] button "Sign in",
+                                                       # each link with where it goes: [e3] link "2:54 PM" -> https://…
 tico browser click app.example.com e12
 tico browser type app.example.com e13 "March invoices" --submit
 tico browser press app.example.com Escape

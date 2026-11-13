@@ -18,7 +18,7 @@ const LOGIN: &str = r#"<!doctype html><html><head><title>Practice sign-in</title
 <label><input type="checkbox" id="keep"> Keep me signed in</label>
 <select id="state" aria-label="State"><option>AL</option><option selected>CA</option></select>
 <button type="submit">Sign in</button></form>
-<p id="out"></p><a href="/other">Forgot?</a>
+<p id="out"></p><a href="/other?token=link-canary-7#top">Forgot?</a>
 </body></html>"#;
 
 /// A one-page server on 127.0.0.1 for as long as the test runs.
@@ -105,6 +105,15 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
     assert!(text.contains("placeholder \"you@example.com\""));
     assert!(text.contains("checkbox \"Keep me signed in\" (unchecked)"));
     assert!(text.contains("select \"State\" = \"CA\" options: \"AL\", \"CA\""));
+    assert!(
+        text.contains("link \"Forgot?\" -> http://127.0.0.1:"),
+        "{text}"
+    );
+    assert!(
+        text.contains("/other\n") || text.ends_with("/other"),
+        "{text}"
+    );
+    assert!(!text.contains("link-canary-7"), "{text}");
     let (email, pw, button) = (
         ref_of(&text, "Email"),
         ref_of(&text, "Password"),
