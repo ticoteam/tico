@@ -23,8 +23,12 @@ const tasks = (() => {
   const CREATED = /[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/;
 
   async function detail(page: Page) {
+    // A phone shows the rows on its Info tab: the Chat tab hides them.
+    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click());
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      // Details is one line until opened: its rows are read open.
+      m?.querySelectorAll<HTMLDetailsElement>('details.task-details').forEach(x => { x.open = true; });
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
@@ -82,8 +86,12 @@ const tasks = (() => {
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-manager'}).getAttribute('value');
-    await form.locator('select[name=owner]').selectOption(owner!);
+    // For whom: Give to…, searched by the bot's slug.
+    await form.locator('button[data-give-to]').click();
+    await page.locator('.gt-pop input[role=combobox]').fill('engineering-manager');
+    await page.keyboard.press('Enter');
+    await page.locator('.gt-pop').waitFor({state: 'detached'});
+    assert.ok(await form.locator('input[name=owner]').inputValue(), `${where}: an owner is picked`);
     await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
     assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
     await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
@@ -249,9 +257,11 @@ const newBot = (() => {
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const option = form.locator('select[name=owner] option', {hasText: 'Sales Helper'}).first();
-    assert.equal(await option.getAttribute('value'), bot, `${where}: the owner choice is the bot's id`);
-    await form.locator('select[name=owner]').selectOption(bot);
+    await form.locator('button[data-give-to]').click();
+    await page.locator('.gt-pop input[role=combobox]').fill('Sales Helper');
+    await page.keyboard.press('Enter');
+    await page.locator('.gt-pop').waitFor({state: 'detached'});
+    assert.equal(await form.locator('input[name=owner]').inputValue(), bot, `${where}: the owner choice is the bot's id`);
     await form.locator('textarea[name=body]').fill('The sheet is in Files; send it with a short note.');
     await form.locator('button[type=submit]').click();
     // The new task opens once made.
@@ -296,8 +306,12 @@ const newBot = (() => {
     go(page, '#/task/' + task);
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
       && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
-    const owner = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
-      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '');
+    const owner = await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click();
+      document.querySelectorAll<HTMLDetailsElement>('#task-modal details.task-details').forEach(x => { x.open = true; });
+      return [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '';
+    });
     assert.match(owner, /Sales Helper|revenue-helper/, `${where}: the task's owner row names the bot`);
     assert.doesNotMatch(owner, new RegExp(bot), `${where}: the owner row shows no id`);
     assertClean(page, `${where}: after the rename`);

@@ -7,7 +7,9 @@ Engineering is managed by Ben."""
 
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import as_member, get, post
+from backend.stage_rules import NEEDS_TIMER
 from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.org_rules import builtin_off
 
 BUILD, FIX = "eng-build", "eng-fixes-1"
 
@@ -35,6 +37,10 @@ OWNER_ON_TEAM = {
 }
 
 
+# A timer When: Tell and Move back need one in step 1 (stage_rules.NEEDS_TIMER).
+QUIET = {"event": "timer", "timer": {"kind": "quiet", "hours": 6}}
+
+
 def test_the_stage_panel_lists_every_rule_that_applies_grouped_most_specific_first(api):
     engineering(api)
     build = add(api, OWNER_ON_TEAM)
@@ -58,7 +64,7 @@ def test_the_stage_panel_lists_every_rule_that_applies_grouped_most_specific_fir
         },
     )
     other_stage = add(api, {**OWNER_ON_TEAM, "name": "Fixes only", "stages": [FIX]})
-    other_pipeline = add(api, {"name": "Spec rule", "pipeline": "prod", "event": "enters", "then": "tell_owner"})
+    other_pipeline = add(api, {"name": "Spec rule", "pipeline": "prod", **QUIET, "then": "tell_owner"})
 
     got = get(api, "stage-rules?pipeline=eng&stage=" + BUILD, token="cara-test")
     ids = [r["id"] for r in got["items"]]
@@ -101,10 +107,10 @@ def test_the_pipelines_manager_adds_edits_and_retires_a_stage_rule_a_member_cann
 
 def test_a_company_rule_is_the_owners_and_admins_alone(api):
     engineering(api)
-    add(api, {"name": "Everywhere", "event": "enters", "then": "tell_owner"}, token="ben-test", expected=403)
-    add(api, {"name": "Everywhere", "event": "enters", "then": "tell_owner"}, token="ana-test")
+    add(api, {"name": "Everywhere", **QUIET, "then": "tell_owner"}, token="ben-test", expected=403)
+    add(api, {"name": "Everywhere", **QUIET, "then": "tell_owner"}, token="ana-test")
     # A company rule picks no stages.
-    add(api, {"name": "Bad", "event": "enters", "then": "tell_owner", "stages": [BUILD]}, expected=422)
+    add(api, {"name": "Bad", **QUIET, "then": "tell_owner", "stages": [BUILD]}, expected=422)
 
 
 def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
@@ -143,7 +149,7 @@ def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
     post(api, f"stage-rules/{gone['id']}/accept", {}, token="ben-test")
     assert made["id"] not in [r["id"] for r in get(api, "stage-rules?pipeline=eng&stage=" + BUILD)["items"]]
     # --mine: only the rules the caller wrote or suggested.
-    add(api, {"name": "Ana's", "event": "enters", "then": "tell_owner"})
+    add(api, {"name": "Ana's", **QUIET, "then": "tell_owner"})
     assert [r["id"] for r in get(api, "stage-rules?status=any&mine=true", token="ops-test")["items"]] == [
         made["id"],
         change["id"],
@@ -152,11 +158,12 @@ def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
 
 
 def test_the_rules_page_lists_every_kind_of_rule_in_its_group_with_a_count(api):
+    builtin_off(api)
     engineering(api)
     before = {g["key"]: g["count"] for g in get(api, "rule-groups")["groups"]}
     add(api, OWNER_ON_TEAM)
     add(api, {**OWNER_ON_TEAM, "name": "Fixes only", "stages": [FIX]})
-    add(api, {"name": "From a bot", "pipeline": "eng", "event": "enters", "then": "tell_owner"}, token="ops-test")
+    add(api, {"name": "From a bot", "pipeline": "eng", **QUIET, "then": "tell_owner"}, token="ops-test")
     post(api, "rules", {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})
     post(api, "rules", {"kind": "internal", "text": "Cite sources."}, token="ops-test")
 
@@ -229,3 +236,24 @@ def test_a_suggestion_says_what_accepting_it_does_and_goes_stale_when_the_rule_c
     post(api, f"stage-rules/{gone['id']}/accept", {}, token="ben-test", expected=409)
     post(api, f"stage-rules/{gone['id']}/skip", {}, token="ben-test")
     assert get(api, f"stage-rules/{made['id']}")["retired_at"] is None
+
+
+def test_tell_or_move_back_on_an_action_when_is_refused_with_its_reason(api):
+    engineering(api)
+    for then in ("tell_manager", "tell_owner", "move_back"):
+        got = add(api, {"name": "Never acts", "pipeline": "eng", "event": "enters", "then": then}, expected=422)
+        assert got["error"]["detail"] == NEEDS_TIMER
+    made = add(api, {**OWNER_ON_TEAM, "name": "Timer", **QUIET, "cond": {}, "then": "tell_manager"})
+    assert made["not_acting"] == ""
+    # An edit that turns a timer into an action keeps the reason.
+    got = post(api, f"stage-rules/{made['id']}", {"revision": made["revision"], "event": "enters"}, expected=422)
+    assert got["error"]["detail"] == NEEDS_TIMER
+
+
+def test_a_retire_flag_in_the_request_does_not_skip_the_refusal(api):
+    # Only a bot's retire suggestion copies a rule of the refused shape; a saved field never turns that on.
+    engineering(api)
+    body = {"name": "Never acts", "pipeline": "eng", "event": "enters", "then": "tell_owner"}
+    for token in ("ana-test", "ops-test"):
+        got = add(api, {**body, "then_params": {"retire": True}}, token=token, expected=422)
+        assert got["error"]["detail"] == NEEDS_TIMER

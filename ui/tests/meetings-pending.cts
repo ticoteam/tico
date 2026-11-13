@@ -39,7 +39,7 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
       const newRequestId=()=>crypto.randomUUID();
       const actorLabel=a=>a==='human:ben'?'Sam':'Ana', activeEmps=()=>[], getForget=()=>{}, toast=()=>{}, liveOn=()=>{};
       const copyText=async text=>{window.copiedText=text;};
-      const taskOwnerOptions=()=>'<option value="human:ben">Sam</option>', botByRef=()=>null;
+      const giveToFieldHTML=()=>'', botByRef=()=>null;
       const get=p=>fetch(API+p).then(r=>r.json());
       const post=async(p,body)=>{const r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json','X-Viewer':me},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const e=new Error(data.error?.detail || data.error);e.body=data;throw e;}return data;};
     </script><script src="/helpers.js"></script><script src="/shared-edit.js"></script><script src="/meetings.js"></script><script>

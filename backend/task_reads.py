@@ -209,12 +209,14 @@ def _could_read(c, visible_sql, tid, ref):
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
-    `pushed_past` (it entered its stage pushed past a requirement), `stage_since` (when it entered its stage: its open
-    visit, else when it was filed; a board card's age) and `on_person` (it waits only on a person's OK or
-    answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one read of the
-    open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
-    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed turn's
-    line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
+    `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
+    `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
+    person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
+    entered its stage: its open visit, else when it was filed; a board card's age) and `on_person` (it waits only on a
+    person's OK or answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one
+    read of the open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is
+    named by neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed
+    turn's line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
     keeps it whole."""
     from . import waiting_on as W
     from .store import H
@@ -224,13 +226,16 @@ def brief(c, rows, visible_sql="1"):
         return rows
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    late, pushed, entered = {}, set(), {}
+    late, pushed, entered, stuck = {}, set(), {}, set()
     for r in c.execute(
-        "SELECT task_id, late_told_at, late_person_at, entered_how, entered_at FROM visits WHERE left_at IS NULL "
+        "SELECT task_id, late_told_at, late_person_at, entered_how, entered_at, level FROM visits "
+        "WHERE left_at IS NULL "
         "AND task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
         entered[r[0]] = r[4]
+        if r[5] == "person":
+            stuck.add(r[0])
         if r[1]:
             late[r[0]] = {"since": r[1], "level": "person" if r[2] else "told"}
         if r[3] == "pushed_past":
@@ -242,6 +247,7 @@ def brief(c, rows, visible_sql="1"):
             (marks,),
         )
     }
+    blocked_by, blocks = _dependencies(c, ids, visible_sql)
     heads = {tid: found[0] if found else None for tid, found in waits.items()}
     named = sorted({head.about for head in heads.values() if head and head.about})
     shown = (
@@ -267,11 +273,47 @@ def brief(c, rows, visible_sql="1"):
                 turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
         row["late"] = late.get(row["id"])
-        row["snoozed"] = row["id"] in snoozed
+        if row["id"] in stuck:
+            row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
+        # Blocked wins over a snooze: no list says Snoozed for a blocked task (hubdb.tasks' snoozed filter agrees).
+        row["snoozed"] = row["id"] in snoozed and not blocked_by.get(row["id"])
+        # Only on a row with a dependency: 500 rows of empty lists would cost the list's byte budget.
+        if blocked_by.get(row["id"]):
+            row["blocked_by"] = blocked_by[row["id"]]
+        if blocks.get(row["id"]):
+            row["blocks"] = blocks[row["id"]]
         row["pushed_past"] = row["id"] in pushed
         row["stage_since"] = entered.get(row["id"]) or row.get("created_at")
         row["on_person"] = row["id"] in person
     return rows
+
+
+def _dependencies(c, ids, visible_sql):
+    """({task id: [{id, number}]} of the open tasks each one depends on, {task id: [{id, number}]} of the open tasks
+    each one blocks), for a board card's stop mark and "#304", and "Blocks #307" (backend/task_depends.py). Two reads
+    for every row. A task it depends on that the reader may not open is there with neither id nor number, so the card
+    still shows it is blocked; a task it blocks that the reader may not open is left out."""
+    from . import task_depends as D
+
+    on = {tid: [other for other, _since in found] for tid, found in D.blockers_of(c, ids).items()}
+    of = D.blocking(c, ids)
+    others = sorted({other for found in on.values() for other in found} | {d for f in of.values() for d, _n, _s in f})
+    if not others:
+        return {}, {}
+    seen = {
+        r[0]: r[1]
+        for r in c.execute(
+            f"SELECT id, number FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(others),),
+        )
+    }
+    blocked_by = {
+        tid: [{"id": o, "number": seen[o]} if o in seen else {"id": None, "number": None} for o in found]
+        for tid, found in on.items()
+        if found
+    }
+    blocks = {tid: [{"id": d, "number": n} for d, n, _s in found if d in seen] for tid, found in of.items() if found}
+    return blocked_by, blocks
 
 
 def _running(c, bots):

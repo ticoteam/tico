@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS assignments(
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
  bot_id TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
- created_at TEXT NOT NULL, attempt_id TEXT);
+ created_at TEXT NOT NULL, attempt_id TEXT, release TEXT, release_after TEXT, released TEXT);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot_id,state,created_at);
 CREATE TABLE IF NOT EXISTS job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
@@ -2130,6 +2130,10 @@ class Store:
                 from .org_rules import ensure as ensure_org_rules
 
                 ensure_org_rules(c)
+                # The built-in rule "Asks to a person", once per team (org_rules.ensure_builtin).
+                from .org_rules import ensure_builtin as ensure_builtin_rules
+
+                ensure_builtin_rules(c)
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
 

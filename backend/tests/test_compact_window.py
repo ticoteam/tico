@@ -117,3 +117,59 @@ def test_a_saved_window_larger_than_the_models_is_lowered_to_fit_on_the_turn():
     assert providers.with_compact_default({"model": "grok-4.6", "compact_at": 600_000})["compact_at"] == 500_000
     assert providers.with_compact_default({"model": "claude-opus-5-5", "compact_at": 700_000})["compact_at"] == 700_000
     assert providers.with_compact_default({"model": "grok-4.6"})["compact_at"] == 250_000
+
+
+def saved_window(api, bot="ops"):
+    with api.app.state.store.transaction() as c:
+        return BS.read(c, bot).get("compact_at", "unsaved")
+
+
+def test_a_saved_window_goes_back_to_the_models_default_and_then_moves_with_the_model(api):
+    # Task #364: null clears the saved size; the bot then follows its model's default, through a model change too.
+    machine = ops_on_sonnet(api)
+    on_model(api, "claude-opus-5-5")
+    post(api, "bots/ops/compact-at", {"compact_at": 700_000, "expected_revision": revision(api)})
+    cleared = post(api, "bots/ops/compact-at", {"compact_at": None, "expected_revision": revision(api)})
+    assert (cleared["compact_at"], cleared["compacts_at"]) == (None, 400_000)
+    assert saved_window(api) == "unsaved"
+    assert get(api, "bots/ops")["compact_at"] == 400_000
+    with api.app.state.store.transaction() as c:
+        rows = c.execute(
+            "SELECT before, after FROM settings_changes WHERE bot='ops' AND field='compact_at' ORDER BY created_at"
+        ).fetchall()
+    assert [(r["before"], r["after"]) for r in rows][-1] == ("700000", "null")
+    on_model(api, "claude-haiku-5-5")
+    assert get(api, "bots/ops")["compact_at"] == 150_000
+    assert chat_turn(api, machine)["config"]["compact_at"] == 150_000
+
+
+def test_clearing_a_window_that_was_never_saved_changes_nothing(api):
+    ops_on_sonnet(api)
+    before = revision(api)
+    cleared = post(api, "bots/ops/compact-at", {"compact_at": None, "expected_revision": before})
+    assert (cleared["compact_at"], cleared["compacts_at"], cleared["revision"]) == (None, 250_000, before)
+    assert revision(api) == before
+    with api.app.state.store.transaction() as c:
+        assert not c.execute("SELECT 1 FROM settings_changes WHERE bot='ops' AND field='compact_at'").fetchone()
+
+
+def test_compact_at_is_still_required(api):
+    ops_on_sonnet(api)
+    post(api, "bots/ops/compact-at", {"expected_revision": revision(api)}, expected=422)
+
+
+def test_an_agent_puts_the_window_back_on_the_default_with_tico_bot_model(api):
+    ops_on_sonnet(api)
+    on_model(api, "claude-opus-5-5")
+    post(api, "bots/ops/compact-at", {"compact_at": 700_000, "expected_revision": revision(api)})
+    err, out = call(api, "tico_bot_model", {"bot": "ops", "compact_at": "default"})
+    assert not err, out
+    assert saved_window(api) == "unsaved"
+    assert get(api, "bots/ops")["compact_at"] == 400_000
+
+
+def test_tico_bot_model_takes_compact_at_default_on_the_command_line():
+    from clients import hubcli
+
+    args = hubcli.parser().parse_args(["bot", "model", "ops", "--compact-at", "default"])
+    assert args.compact_at == "default"

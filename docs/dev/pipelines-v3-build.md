@@ -582,18 +582,19 @@ page          no page attached                          not_met  owner   No page
               verdict owed                               waiting  jev     Jev is checking
               verdict failed (3 tries), a bot holds it,  waiting  manager Decide if it meets the check: OK it or send it
                 manager bot set (not the holder)                          back, and say why. Jev couldn't check this:
-                                                                          <error> [The check: <rubric>]
-              verdict failed otherwise (people only:     waiting  person  Jev couldn't check this: <error> (once per
-                every version)                                            visit, then not_met on the owner)
-              not_met                                    not_met  owner   Jev sent it back: <reasons>
-              unsure, a person OKs it anyway             waiting  person  [Version <n>, after the send back: "<notes>". ]
-                (people only or naming one: every version)               Jev is unsure: <reasons>
-              unsure, a bot holds it, first this visit   not_met  owner   Not yet met: fix it or explain it on the page.
-                                                                          Jev is unsure: <reasons> [The check: <rubric>]
-              unsure again this visit, manager bot set   waiting  manager Decide if it meets the check: OK it or send it
-                (not the holder)                                          back, and say why. Jev is unsure: <reasons>
-              unsure otherwise (a person holds it, no    waiting  person  Jev is unsure: <reasons> (once per visit, then
-                manager bot, the manager holds it)                        not_met on the owner)
+                                                                          <error>
+              not_met (not a Spec page a person OKs)     not_met  owner   Jev sent it back: <the missing parts, one line
+                                                                          each, at most three>
+              not_met, Spec page a person OKs            waiting  person  [Version <n>, after the send back: "<notes>". ]
+                                                                          Jev: <the missing parts>
+              unsure or failed, a person OKs it anyway   waiting  person  [Version <n>, after the send back: "<notes>". ]
+                (people only or naming one: every version)               OK <name> (version <n>)  (nothing from Jev)
+              unsure, a bot holds it, manager bot set    waiting  manager Decide if it meets the check: OK it or send it
+                (not the holder; woken once per version)                  back, and say why. Jev is unsure: <the parts
+                                                                          it can't tell>
+              unsure or failed otherwise (a person       waiting  person  Jev is unsure: <parts> (once per visit, then
+                holds it, no manager bot, the manager                     not_met on the owner)
+                holds it)
               met, person_id set, no OK for this version waiting  person  [Version <n>, after the send back: "<notes>". ]
                                                                           OK <name> (version <n>)
               person said no for this version            not_met  owner   Sent back: <notes>[ Attach the new version; Tico

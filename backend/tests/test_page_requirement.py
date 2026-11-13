@@ -227,24 +227,16 @@ def _again(c, store, row, fid, verdict="unsure", reasons="Still can't tell", tex
     return _say(c, _attach(c, row, "page:" + fid), verdict, reasons)
 
 
-def test_unsure_on_a_bots_stage_goes_back_to_the_bot_once_then_to_the_pipelines_manager(c, store):
-    """The two sign-offs rule (Nov 11): Jev unsure of a page on a stage a bot holds is the bot's to fix or explain, with
-    Jev's reason and the check; unsure again in the same visit is the manager bot's to decide, with why. No person."""
+def test_unsure_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_once(c, store):
+    """Jev unsure of a page on a stage a bot holds: the manager bot looks once, with Jev's line naming the part and never
+    the whole check, and decides with why. The page's bot is not sent back to rewrite it (task #351). No person."""
     rid = _pipeline(c, page_settings={"rubric": "Says what done looks like"})
     row = _task(c)
     fid, _ = _page(c, store)
-    _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell if the scope is set")
-    standing = _standing(c, row)
-    assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
-    assert standing.line == (
-        f"{R.FIX_OR_EXPLAIN} Jev is unsure: Can't tell if the scope is set. The check: Says what done looks like"
-    )
-    with _refused("task_requirement"):
-        A.answer(c, row["id"], rid, BEN, "ok")  # nobody's to OK: it is the bot's turn
-    _again(c, store, row, fid)
+    _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell if the scope is set.")
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-    assert standing.line.startswith(f"{R.DECIDE} Jev is unsure: Still can't tell"), standing.line
+    assert standing.line == f"{R.DECIDE} Jev is unsure: Can't tell if the scope is set."
     for who in (BEN, WRITER):
         with _refused("task_requirement"):
             A.answer(c, row["id"], rid, who, "ok", "Looks fine", seen_version=_v(c, row))
@@ -273,7 +265,7 @@ def test_unsure_on_a_bots_stage_goes_back_to_the_bot_once_then_to_the_pipelines_
     assert "Scope is in its second section; it meets the check" in notes, "the decision is on the task with its why"
 
 
-def test_jevs_unsure_wakes_the_bot_with_the_reason_then_the_manager(store, seeded, monkeypatch):
+def test_jevs_unsure_wakes_the_manager_with_the_line_not_the_bot(store, seeded, monkeypatch):
     def build(c):
         _pipeline(c, page_settings={"rubric": "Says what done looks like"})
         row = _task(c)
@@ -293,15 +285,10 @@ def test_jevs_unsure_wakes_the_bot_with_the_reason_then_the_manager(store, seede
                 )
             ]
 
-    (told,) = woken(WRITER)
-    assert 'Jev is unsure of "Spec page": Not yet met' in told and "Says what done looks like" in told
-    with store.transaction() as c:
-        fid = P.current(c, E.task(c, row["id"])["visit"]["id"], _standing(c, row).requirement["id"])["file_id"]
-        _page(c, store, "<p>v2, the scope is the importer only</p>", fid=fid)
-        _attach(c, row, "page:" + fid)
-    V.run(store, H.shift(H.now(), seconds=2))
+    assert woken(WRITER) == []
     (asked,) = woken("bot:manager")
-    assert "you decide it, as the pipeline's manager" in asked and R.DECIDE in asked
+    assert 'Jev is unsure of "Spec page": you decide it, as the pipeline\'s manager' in asked and R.DECIDE in asked
+    assert "Says what done looks like" not in asked, "the line, never the whole check"
 
 
 def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
@@ -311,23 +298,20 @@ def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
     row = _task(c)
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
-    assert _standing(c, row).state == R.NOT_MET, "the bot's one round first"
-    _again(c, store, row, fid)
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev is unsure: Still can't tell")
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev is unsure: Can't tell"), (
+        "no bot round"
+    )
     A.answer(c, row["id"], rid, BEN, "no", "Set the scope")
     _again(c, store, row, fid, text="<p>v3</p>")
     assert (_standing(c, row).state, _standing(c, row).on) == (R.NOT_MET, WRITER), "a person decided one this visit"
 
 
-def test_unsure_on_the_managers_own_stage_goes_back_to_it_once_then_to_a_person(c, store):
+def test_unsure_on_the_managers_own_stage_is_a_persons(c, store):
     _pipeline(c)
     row = _owned(c, "bot:manager")
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid, by="bot:manager"), "unsure", "Can't tell")
-    assert (_standing(c, row).state, _standing(c, row).on) == (R.NOT_MET, "bot:manager")
-    _page(c, store, "<p>v2</p>", fid=fid)
-    _say(c, _attach(c, row, "page:" + fid, by="bot:manager"), "unsure", "Still can't tell")
     assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, None)
 
 
@@ -347,15 +331,13 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
     standing = _standing(c, row)
-    assert (standing.state, standing.line) == (R.WAITING, "Jev is unsure: Can't tell"), "no bot round trip"
+    assert (standing.state, standing.line) == (R.WAITING, "OK someone (version 1)"), "no bot round trip, no Jev line"
     A.answer(c, row["id"], rid, BEN, "no", "Round the result to 10 places")
     assert _standing(c, row).on == WRITER
     _again(c, store, row, fid)
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, BEN), "asked again of the person who sent it back"
-    assert standing.line == (
-        'Version 2, after the send back: "Round the result to 10 places". Jev is unsure: Still can\'t tell'
-    )
+    assert standing.line == ('Version 2, after the send back: "Round the result to 10 places". OK Ben (version 2)')
     # The bot never asks its own OK of the page, or "OK to merge?" of it: Tico asks the person.
     page = [f"page:{fid}@2"]
     for kind, choices, shows in (("ok", None, page), ("ok", None, None), ("answer", ["Yes", "No"], page)):
@@ -566,7 +548,7 @@ def test_a_failed_check_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_o
     _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-    assert standing.line == f"{R.DECIDE} Jev couldn't check this: no model. The check: Says what done looks like"
+    assert standing.line == f"{R.DECIDE} Jev couldn't check this: no model."
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, BEN, "ok")
     with _refused("task_why"):
@@ -588,7 +570,7 @@ def test_a_failed_check_on_a_page_a_person_oks_anyway_is_theirs(c, store):
     row = _task(c)
     _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev couldn't check this: no model")
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "OK someone (version 1)")
 
 
 def test_a_failed_check_goes_to_a_person_once_per_visit_with_no_manager_bot(c, store):
@@ -741,7 +723,7 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
     assert (standing.state, standing.on) == (R.WAITING, None), "now any person's"
     assert standing.line == (
         "reviewer reviewed the commits since the reviews: Read dce5a62: sign() fixed, the tests cover 0. "
-        "Jev is unsure: Can't tell"
+        "OK someone (version 1)"
     )
     # The decision view draws the page's rounds instead of this line: the bot's read stays on the face as a notice,
     # and so does a merge conflict the person's OK hands to the Builder (as Needs you adds it to the line).
@@ -873,6 +855,91 @@ def test_a_send_back_of_the_commits_after_the_ok_asks_the_person_again_after_the
     assert E.task(c, row["id"])["stage"]["name"] == "QA"
     A.answer(c, row["id"], rid, BEN, "ok")
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
+
+
+def test_a_page_published_again_with_no_new_commits_keeps_the_persons_ok(c, store):
+    """Live, Nov 13 (#3584): Chris OK'd the Fixes 2 page, then the Builder published the same page again with the PR's
+    head unchanged, and Chris was asked "OK Chris (version 3)" again. The OK was for that code: a new version of the
+    same page at the same commits keeps it, and nobody is asked."""
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _pre_release(c, store, row, fid=fid)
+    standing = _f2(c, row)
+    assert standing.met and standing.line == "OK'd by Ben on version 1; no new commits since"
+    assert not _ben_asked(c, row)
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
+
+
+def test_another_page_after_the_ok_is_asked_again(c, store):
+    """The OK carries only for the same page: another file at the same commits is a person's to OK again."""
+    row, _, _ = _oked_at_bbbbbbb(c, store)
+    _pre_release(c, store, row)  # a new file replaces the OK'd one
+    standing = _f2(c, row)
+    assert standing.state == R.WAITING and standing.line.endswith("OK someone (version 1)")
+
+
+def test_a_page_published_again_after_new_commits_is_asked_again(c, store):
+    """The OK carries only at the commits it was given at: a new version after a new commit is asked again."""
+    row, rid, _ = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _push(c, "acme/app", 45, "ccccccc00000")
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d2")
+    _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc.")
+    assert _f2(c, row).met, "the reviewer's read keeps Ben's OK on version 1"
+    _pre_release(c, store, row, fid=fid)
+    standing = _f2(c, row)
+    assert (standing.state, standing.met) == (R.WAITING, False)
+    assert standing.line.endswith("OK someone (version 2)")
+
+
+def test_an_ok_brought_back_from_merge_is_not_carried_to_a_newer_version(c, store):
+    """An OK carried back from Merge (`page_for`) is left to the rules for a task back from Merge: the carry-over to a
+    newer version of the same page applies only on the visit where the person gave it."""
+    made = X.pipeline(
+        c,
+        "eng",
+        "Engineering",
+        (
+            {
+                "name": "Review",
+                "owner": REVIEWER,
+                "requirements": [{"kind": "page", "line": "Review", "settings": {"at_head": True}}],
+            },
+            {
+                "name": "QA",
+                "owner": WRITER,
+                "requirements": [
+                    {"kind": "page", "line": "Pre-release", "who_oks": "people_only"},
+                    {"kind": "owner_done"},
+                ],
+            },
+            {
+                "name": "Merge",
+                "owner": WRITER,
+                "on_enter": {"act": "github.queue"},
+                "requirements": [{"kind": "owner_done"}],
+            },
+        ),
+        manager="bot:manager",
+    )
+    rid = made["requirements"]["QA"][0]
+    row = X.new_task(c, ANA, "Absolute value", "eng", assignee=REVIEWER)
+    _link_pr(c, row["id"], "acme/app", 45, "62de57f623fc")
+    review, _ = _page(c, store, "<p>Reviewed 62de57f</p>")
+    _say(c, _attach(c, row, "page:" + review, by=REVIEWER, requirement="Review"), "met")
+    assert E.advance(c, row["id"])["stage"]["name"] == "QA"
+    fid = _pre_release(c, store, row)
+    A.answer(c, row["id"], rid, BEN, "ok")
+    _pre_release(c, store, row, fid=fid)  # version 2, same commits: Ben's OK stays
+    assert _f2(c, row).met
+    done_id = next(r["id"] for r in R.for_visit(c, E.task(c, row["id"])["visit"]) if r["kind"] == "owner_done")
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] == "Merge"
+    E.move(c, row["id"], "QA", ANA, "The queue dropped it")
+    standing = _f2(c, row)
+    assert not standing.met and standing.line.endswith("(version 2)")
 
 
 def _bodies(c, row):
@@ -1063,7 +1130,7 @@ def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monk
 
 def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
     """Jev answers a probability and no prose (Acme, Nov 11: three Review pages "Jev is unsure" with nothing after it).
-    The verdict, its history line and the standing a person or the owner reads all say what was checked."""
+    The verdict, its history line and the standing the manager reads all name the requirement, never its rubric."""
 
     def build(c):
         _pipeline(c, page_settings={"rubric": "Says what done looks like"})
@@ -1083,8 +1150,8 @@ def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, 
                 (row["id"],),
             )
         ]
-    assert line.startswith(f"{R.FIX_OR_EXPLAIN} Jev is unsure: Jev could not tell") and "done looks like" in line, line
-    assert notes and all("Says what done looks like" in (n or "") for n in notes), notes
+    assert line == f'{R.DECIDE} Jev is unsure: Can\'t tell if it meets "Spec page".', line
+    assert notes == ['Can\'t tell if it meets "Spec page".'], notes
 
 
 def test_the_judge_is_told_the_one_linked_prs_repo_number_and_author(store, seeded, monkeypatch):
@@ -1540,4 +1607,173 @@ def test_needs_you_names_a_page_ok_by_its_task_and_decision_not_the_requirement(
     conflict = "OK Ana (version 1). The PR has a merge conflict: builder fixes it after your OK."
     assert views.page_ask_line("Review page", "X", conflict) == (
         "Review for X, ready for your OK. The PR has a merge conflict: builder fixes it after your OK."
+    )
+
+
+# ----------------------------------------------------------------------------- Jev says what is missing (task #351)
+def _shipped(name):
+    from backend import pipeline_settings as PS
+
+    return getattr(PS, name)
+
+
+def _parts(ps):
+    """Jev (pipeline_judges.ENGINE) answering each part it is asked with ps[key], 0.95 when not named."""
+
+    def ask(model, state, questions, label):
+        answers = {qid: {"noul": ps.get(qid.removeprefix("part_"), 0.95)} for qid in questions}
+        return PJ._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
+
+    return ask
+
+
+def _jev_lines(r, row):
+    notes = [
+        n[0]
+        for n in r.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='jev_verdict'",
+            (row["id"],),
+        )
+    ]
+    return [n for n in notes if n]
+
+
+@pytest.mark.parametrize("rubric", ["SPEC_RUBRIC", "QA_RUBRIC"])
+@pytest.mark.parametrize("ps", [{}, {"goal": 0.6, "built": 0.6}], ids=["every part yes", "a part unsure"])
+def test_a_page_a_person_oks_shows_nothing_from_jev_unless_a_part_is_missing(store, seeded, monkeypatch, rubric, ps):
+    def build(c):
+        _pipeline(c, page_settings={"rubric": _shipped(rubric)}, who_oks="people_only")
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        return row
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", _parts(ps))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert standing.state == R.WAITING and standing.line == "OK someone (version 1)", standing.line
+        assert "Jev" not in standing.line
+        assert _jev_lines(r, row) == [], "the task page shows no Jev line either"
+        view = H.task_view(r, row["id"], ANA)
+        assert "Jev" not in json.dumps(view.get("to_leave")), view.get("to_leave")
+
+
+def test_a_spec_page_missing_a_part_goes_to_the_person_with_that_line_not_back_to_the_bot(store, seeded, monkeypatch):
+    """Jev's verdict on a spec predicts nothing a person decides, so it never gates a Spec page: the person sees the one
+    line, and the bot that wrote it is not sent back."""
+
+    def build(c):
+        _pipeline(c, page_settings={"rubric": _shipped("SPEC_RUBRIC")}, who_oks="people_only")
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        X.settled(c)
+        return row
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"out_of_scope": 0.05}))
+    V.run(store, H.shift(H.now(), seconds=1))
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert (standing.state, standing.line) == (R.WAITING, "Jev: No out-of-scope list found.")
+        assert standing.on != WRITER
+        assert _jev_lines(r, row) == ["No out-of-scope list found."]
+        sent = r.execute(
+            "SELECT 1 FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (WRITER, row["id"] + ":%:jev:%")
+        ).fetchall()
+        assert not sent, "the spec's bot is not woken to rewrite it"
+
+
+def test_a_qa_page_missing_a_part_still_goes_back_to_its_bot_first(c, store):
+    rid = _pipeline(c, page_settings={"rubric": _shipped("QA_RUBRIC")}, who_oks="people_only")
+    assert rid
+    row = _task(c)
+    _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "not_met", "Reviewer 2's findings are missing.")
+    standing = _standing(c, row)
+    assert (standing.state, standing.on, standing.line) == (
+        R.NOT_MET,
+        WRITER,
+        "Jev sent it back: Reviewer 2's findings are missing.",
+    )
+
+
+def _validate(c, store):
+    _pipeline(c, page_settings={"rubric": _shipped("VALIDATE_RUBRIC")})
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _attach(c, row, "page:" + fid)
+    X.settled(c)
+    return row, fid
+
+
+def _jev_wakes(r, row, who):
+    return [
+        m[0]
+        for m in r.execute(
+            "SELECT body FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (who, row["id"] + ":%:jev:%")
+        )
+    ]
+
+
+def test_unsure_on_a_bots_stage_wakes_the_manager_once_per_version_and_not_the_pages_bot(store, seeded, monkeypatch):
+    row, fid = seeded(lambda c: _validate(c, store))
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"version": 0.5}))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
+        assert standing.line == f"{R.DECIDE} Jev is unsure: Can't tell if the version production runs is named."
+        (asked,) = _jev_wakes(r, row, "bot:manager")
+        assert "Can't tell if the version production runs is named." in asked
+        assert _shipped("VALIDATE_RUBRIC") not in asked, "the line, never the whole check"
+        assert _jev_wakes(r, row, WRITER) == [], "the page's own bot is not woken to rewrite it"
+    # Judged again at the same version (as at release: an open unsure is judged once more): no new wake.
+    with store.transaction() as c:
+        c.execute("UPDATE page_verdicts SET verdict=NULL, next_try_at=NULL WHERE file_id=?", (fid,))
+    assert V.run(store, H.shift(H.now(), seconds=2)) == 1
+    with store.read() as r:
+        assert len(_jev_wakes(r, row, "bot:manager")) == 1, "a second unsure of the same version wakes nobody new"
+        assert _jev_wakes(r, row, WRITER) == []
+
+
+def test_a_part_that_is_no_on_a_bots_stage_still_goes_back_to_the_pages_bot(store, seeded, monkeypatch):
+    row, _fid = seeded(lambda c: _validate(c, store))
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"shown": 0.05}))
+    V.run(store, H.shift(H.now(), seconds=1))
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
+        assert (
+            standing.line == "Jev sent it back: Doesn't say what was run or looked at in production and what it gave."
+        )
+        (told,) = _jev_wakes(r, row, WRITER)
+        assert "Doesn't say what was run or looked at in production" in told
+        assert _jev_wakes(r, row, "bot:manager") == []
+
+
+def test_at_release_an_open_unsure_is_judged_again_and_old_lines_lose_their_probability(c, store):
+    """The migration that ships this: the open task's unsure page is owed again; a closed one's verdict stays, and
+    every line in the old template is said the new way."""
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261113070000_jev_reasons_by_part")
+    _pipeline(c)
+    open_row = _task(c)
+    closed_row = X.new_task(c, ANA, "Billing spec", "product", assignee=WRITER)
+    old = "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): Spec page"
+    waiting = _say(c, _attach(c, open_row, "page:" + _page(c, store)[0]), "unsure", old)
+    shut = _say(c, _attach(c, closed_row, "page:" + _page(c, store)[0]), "unsure", old)
+    E.move(c, closed_row["id"], E.CLOSED, ANA, "not needed")
+    migration.up(c)
+    again = V.get(c, waiting["file_id"], waiting["version"], waiting["rubric_hash"])
+    assert (again["verdict"], again["reasons"], again["tries"]) == (None, None, 0)
+    assert V.owed(c, H.shift(H.now(), seconds=1)) and again["id"] in [
+        o["id"] for o in V.owed(c, H.shift(H.now(), seconds=1))
+    ]
+    kept = V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])
+    assert (kept["verdict"], kept["reasons"]) == ("unsure", "Can't tell if it meets the check.")
+    migration.up(c)  # a second run changes nothing it already changed
+    assert (
+        V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])["reasons"]
+        == "Can't tell if it meets the check."
     )

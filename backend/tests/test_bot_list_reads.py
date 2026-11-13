@@ -123,7 +123,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                 "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                 "task_model_warning": task_models.warning(c, settings, bot["slug"], declared, task_models.of(declared)),
                 "manages_reports": report_managers.switch_on(declared),
-                "wake": wake_presets.effective(declared),
+                "wake": wake_presets.waits(declared),
                 "profile": profiles.effective(declared),
                 "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"]),
             }

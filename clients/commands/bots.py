@@ -648,18 +648,6 @@ _PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "cus
     {
         "bot": _s("Bot slug"),
         "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
-        "batch_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 604800,
-            "description": "How long news waits to be batched",
-        },
-        "sweep_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 604800,
-            "description": "Least time between two runs of a sweep",
-        },
         "digest_hour": {
             "type": "integer",
             "minimum": 0,
@@ -692,9 +680,7 @@ def bot_profile(api, args):
     if not args.get("profile"):
         return {**current, "choices": who.get("profiles")["profiles"]}
     body = {
-        k: args[k]
-        for k in ("batch_seconds", "sweep_seconds", "digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules")
-        if args.get(k) is not None
+        k: args[k] for k in ("digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules") if args.get(k) is not None
     }
     return who.post(
         path, {**body, "profile": args["profile"], "expected_revision": current["revision"]}, key=_key(args)
@@ -742,9 +728,10 @@ COMPACT_SIZES = (
         "effort": _s("Reasoning effort that model supports"),
         "harness": _s("A harness from that model's harnesses list"),
         "compact_at": {
-            "type": "integer",
-            "enum": list(COMPACT_SIZES),
-            "description": "Where the bot's conversation compacts, in tokens; leave out to keep it",
+            "type": ["integer", "string"],
+            "enum": [*COMPACT_SIZES, "default"],
+            "description": "Where the bot's conversation compacts, in tokens; `default` puts it back on its model's "
+            "default (it then moves with the model); leave out to keep it",
         },
         "on_behalf_of": ON_BEHALF_OF,
     },
@@ -772,12 +759,13 @@ def bot_model(api, args):
         out = _set_bot_model(who, catalog, current, args)
     if args.get("compact_at"):
         revision = (out or {}).get("revision") or who.get(f"bots/{args['bot']}")["revision"]
+        size = None if args["compact_at"] == "default" else args["compact_at"]
         saved = who.post(
             f"bots/{args['bot']}/compact-at",
-            {"compact_at": args["compact_at"], "expected_revision": revision},
+            {"compact_at": size, "expected_revision": revision},
             key=_key(args, ":compact"),
         )
-        out = {**(out or {}), "compact_at": saved["compact_at"], "revision": saved["revision"]}
+        out = {**(out or {}), **{k: saved.get(k) for k in ("compact_at", "compacts_at", "revision")}}
     return out
 
 

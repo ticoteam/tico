@@ -180,6 +180,10 @@ interface ThvOpts {
   back?: string;
   empty?: string;
   from?: () => PageChatFrom | null;  // a page's chat (page-chat.ts): each message names the page and what is open on it
+  keyDrop?: {tools: () => string[]};      // the Tools owner's chat (tools-key-drop.ts): keys are caught and saved, never sent
+  // What goes with each message, as a chip above the box that ✕ removes (pipeline-ask.ts: the board on screen).
+  context?: {label: () => string; refs: () => ThvRefs | null};
+  autofocus?: boolean;               // the box takes the focus when the composer first draws
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -231,6 +235,7 @@ interface ThvView extends ThvConv {
   key: number;
   host: HTMLElement;
   opts: ThvOpts;
+  contextOff?: boolean;             // ✕ on the context chip: messages stop carrying opts.context
   follow: (() => void) | null;
   gone: boolean;
   el: HTMLElement;
@@ -294,7 +299,7 @@ const THV_DRAFTS = new Map<string, {text: string; files: File[]; lib: ThvLibFile
 const thvDraftKey = (view: ThvView) => view.opts.id ? 't:' + view.opts.id : view.opts.home ? 'h:' + view.opts.home : 'd:' + (view.opts.dm || '');
 function thvDraftSave(view: ThvView) {
   const C = view.composer, key = thvDraftKey(view);
-  if (!C) return;
+  if (!C || view.opts.keyDrop) return;  // the Tools chat keeps no draft: a key may have been typed
   const text = C.el.querySelector<HTMLTextAreaElement>('.p-text')?.value || '';
   THV_DRAFTS.delete(key);
   if (text.trim() || C.files.length || C.lib.length) THV_DRAFTS.set(key, {text, files: C.files.slice(), lib: C.lib.slice()});
@@ -308,6 +313,7 @@ const thvDraftTexts = (): Record<string, string> => {
   return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Record<string, string> : {};
 };
 function thvDraftTextKeep(view: ThvView, text: string) {
+  if (view.opts.keyDrop) return;
   const all = thvDraftTexts(), key = thvDraftKey(view);
   if (text.trim()) all[key] = text; else delete all[key];
   const keys = Object.keys(all);
@@ -352,6 +358,7 @@ const thvConvFresh = (): ThvConv => ({id: '', thread: null, breadcrumb: [], mess
 function threadUnmount(view: ThvView | null | undefined) {
   if (!view || view.gone) return;
   thvDraftSave(view);
+  if (view.opts.keyDrop) kdForget(view);
   view.gone = true;
   view.follow?.();
   view.shown?.disconnect();
@@ -556,9 +563,9 @@ const thvCanPost = (view: ThvView) => view.opts.canPost ?? (view.thread ? !!view
 // Archive on a root thread the viewer manages (not a Home): it leaves Threads and Catch up (threadsArchive). An archived
 // one offers Unarchive.
 const thvArchivable = (t: ThvThread | null | undefined) => !!t && !t.parent_id && t.audience !== 'home' && !!t.me?.can_manage;
-const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive aria-label="${t.archived_at ? 'Unarchive' : 'Archive'}" title="${t.archived_at ? 'Unarchive' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${t.archived_at ? 'unarchive' : 'archive'}</span></button>` : '';
+const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive>${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : '';
 // Delete, only when the server says the thread is deletable: every message deleted and nobody else in it.
-const thvDeleteHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t?.deletable ? `<button type="button" class="ghost thv-del" data-thv-delete aria-label="Delete thread" title="Delete thread"><span class="nav-icon" aria-hidden="true">delete</span></button>` : '';
+const thvDeleteHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t?.deletable ? `<button type="button" class="ghost thv-del" data-thv-delete aria-label="Delete thread">Delete</button>` : '';
 function thvActsHTML(view: ThvView) {
   const t = view.thread!, list = view.memberList;
   const members = !t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience);
@@ -795,6 +802,8 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
   else if (m.refs?.call?.card) body = callCardHTML(m);
+  // The Tools owner's proposal: rows the server built, and Grant (tools-key-drop.ts).
+  else if (m.refs?.card === 'key_grant') body = kgCardHTML(m);
   // A met or stopped goal: the one line the chat showed (chat-goal.js).
   else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.ts, ui/credential-card.ts).
@@ -1185,13 +1194,24 @@ liveOn('bots', (d: {bot?: string}) => { for (const view of THV_VIEWS) if (view.c
 liveOn('reset', () => { for (const view of THV_VIEWS) if (view.goals && !view.gone) void thvRunRead(view); });
 
 // ----------------------------------------------------------------- the composer
+/** The chip above the box naming what goes with each message (opts.context); ✕ stops sending it. */
+function thvContextDraw(view: ThvView) {
+  const host = view.el.querySelector<HTMLElement>('.thv-ctx'), ctx = view.opts.context;
+  if (!host) return;
+  host.hidden = !ctx || !!view.contextOff;
+  if (host.hidden || !ctx) return;
+  const label = ctx.label();
+  host.innerHTML = `<span class="thv-ctx-chip"><span class="thv-ctx-l">${esc(label)}</span>`
+    + `<button type="button" class="thv-ctx-x" aria-label="${esc(`Don't send ${label}`)}" title="Don't send this">✕</button></span>`;
+  (host.querySelector('.thv-ctx-x') as HTMLElement).onclick = () => { view.contextOff = true; thvContextDraw(view); view.composer?.el.querySelector<HTMLTextAreaElement>('.p-text')?.focus(); };
+}
 function thvComposerDraw(view: ThvView) {
   const host = view.el.querySelector('.thv-composer') as HTMLElement;
   const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);
   // Hidden, not removed, while posting is closed (archived, loading): unarchiving shows it again with its draft.
   if (!can) { host.hidden = true; return; }
   host.hidden = false;
-  if (view.composer) { thvReplyingDraw(view); thvComposerLabel(view); return; }
+  if (view.composer) { thvReplyingDraw(view); thvComposerLabel(view); thvContextDraw(view); return; }
   // One line, as the bot chat's pill was: (a bot's Home or DM: the bot, on a phone) the words, Attach, the ways to send
   // and Send, which Stop replaces while the bot runs. `pill-thread` keeps the task question card's frame (.ask,
   // ui/styles/task-files.css) off it. A bot's composer takes the old chat's "/" commands (slash-commands.js) through the
@@ -1204,7 +1224,7 @@ function thvComposerDraw(view: ThvView) {
     newChat: view.opts.dm ? () => thvNewDm(view) : null} as ThvComposer;
   // Above the box: the message being answered.
   // Files waiting to be sent sit above the box, an image as its thumbnail (#138).
-  host.innerHTML = `<div class="thv-replying" hidden></div><div class="ask pill-thread thv-ask"><div class="p-chips"></div><div class="p-pill">
+  host.innerHTML = `<div class="thv-replying" hidden></div><div class="thv-ctx" hidden></div><div class="ask pill-thread thv-ask"><div class="p-chips"></div><div class="p-pill">
       ${bot ? pillBotHTML(bot) : ''}
       ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
@@ -1225,8 +1245,12 @@ function thvComposerDraw(view: ThvView) {
     mode: () => C.ways ? thvWayMode(view) : '', text: () => (C.el.querySelector('.p-text') as HTMLTextAreaElement).value, reply: () => view.replyTo});
   (host.querySelector('.thv-replying') as HTMLElement).onclick = ev => { if (eventElement(ev)?.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text') as HTMLTextAreaElement, file = C.el.querySelector('.p-file') as HTMLInputElement, menu = C.el.querySelector('.thv-attach-menu') as HTMLElement;
+  thvContextDraw(view);
+  if (view.opts.autofocus) box.focus({preventScroll: true});
   const grow = () => pillGrow(box);
   box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); thvDraftTextKeep(view, box.value); });
+  // The Tools chat catches a paste first and keeps it out of the box (tools-key-drop.ts).
+  if (view.opts.keyDrop) kdWire(view, view.opts.keyDrop.tools);
   // A pasted screenshot (or file) is a chip; pasted words go in at the cursor (pill.ts pillPasteWire).
   pillPasteWire(box, files => { C.files.push(...files); thvChips(view); });
   box.addEventListener('keydown', (ev: KeyboardEvent) => {
@@ -1261,8 +1285,9 @@ function thvComposerDraw(view: ThvView) {
     if (kind === 'lib') C.lib.splice(Number(i), 1); else pillPreviewForget(C.files.splice(Number(i), 1)[0]);
     thvChips(view);
   };
-  thvDropZone(view);
-  const draft = THV_DRAFTS.get(thvDraftKey(view)), kept = draft ? '' : thvDraftTexts()[thvDraftKey(view)];
+  if (!view.opts.keyDrop) thvDropZone(view);
+  const draft = view.opts.keyDrop ? undefined : THV_DRAFTS.get(thvDraftKey(view));
+  const kept = draft || view.opts.keyDrop ? '' : thvDraftTexts()[thvDraftKey(view)];
   if (draft) { box.value = draft.text; C.files.push(...draft.files); C.lib.push(...draft.lib); thvChips(view); requestAnimationFrame(grow); }
   else if (typeof kept === 'string' && kept) { box.value = kept; requestAnimationFrame(grow); }
   if (view.goals) chatGoalRender(view.goals);
@@ -1560,7 +1585,13 @@ function thvMentionClose(view: ThvView) {
 // ----------------------------------------------------------------- sending
 async function thvComposerSend(view: ThvView) {
   const C = view.composer, box = C.el.querySelector('.p-text') as HTMLTextAreaElement;
-  const text = box.value.trim();
+  let text = box.value.trim(), unmarked: string[] = [];
+  // The Tools chat: each key goes to Credentials first, and the words carry only its name (tools-key-drop.ts).
+  if (view.opts.keyDrop && text) {
+    const ready = await kdBeforeSend(view);
+    if (!ready) return;
+    ({text, unmarked} = ready);
+  }
   // Goal mode: the words are the bot's goal for this thread (POST /v2/conversations/<thread>/goal), not a message.
   if (chatGoalThreadMode(C)) { if (await chatGoalSend(C, text)) thvDraftDrop(view); return; }
   if (!text && !C.files.length && !C.lib.length) { box.focus(); return; }
@@ -1578,18 +1609,21 @@ async function thvComposerSend(view: ThvView) {
   box.value = ''; box.style.height = ''; thvChips(view);
   thvDraftDrop(view);
   thvReplyStart(view, null);
-  await thvSend(view, {text, files, lib, way, replyTo});
+  await thvSend(view, {text, files, lib, way, replyTo, unmarked});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway. A reply goes to this thread too, naming what it answers.
 // `refs`: what the message carries besides its files (pipeline-ask.ts sends the board it was asked from as `board`).
-async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, replyTo = null, refs: more = null}: {text: string; files?: File[]; lib?: ThvLibFile[]; way?: object | null; replyTo?: ThvMessage | null; refs?: ThvRefs | null}) {
+async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, replyTo = null, refs: more = null, unmarked = []}: {text: string; files?: File[]; lib?: ThvLibFile[]; way?: object | null; replyTo?: ThvMessage | null; refs?: ThvRefs | null; unmarked?: string[]}) {
   const p: ThvPending = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: true});
   const from = view.opts.from?.() || null;
+  const extra = view.opts.context && !view.contextOff ? view.opts.context.refs() : null;
+  if (extra) thvContextDraw(view);   // the chip says what this message carries (the count can have changed)
+  if (extra) more = {...extra, ...more};
   const refs = lib.length || more || from ? {...more, ...(lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : {}), ...(from ? {from_page: from} : {})} : null;
-  const body = {text, ...(refs ? {refs} : {}), ...(replyTo ? {in_reply_to: replyTo.id} : {}), ...(way || {})};
+  const body = {text, ...(refs ? {refs} : {}), ...(replyTo ? {in_reply_to: replyTo.id} : {}), ...(way || {}), ...(unmarked.length ? {unmarked} : {})};
   try {
     let r: (ThvSendReply & ThvThread) | undefined;
     // An upload goes to a thread, so a first message with files makes the DM before it sends; so does one with refs
@@ -1691,6 +1725,7 @@ async function thvClick(view: ThvView, ev: Event) {
   const m = thvMsgOf(view, row);
   const upd = t.closest<HTMLElement>('[data-th-update]');
   if (upd) { thvUpdateToggle(view, upd); return; }
+  if (kgClick(view, ev)) return;
   const file = t.closest<HTMLElement>('[data-th-file]');
   if (file) { void openFileLink(file.dataset.thFile, file.dataset.name); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }

@@ -229,6 +229,64 @@ def test_the_owner_and_admins_see_every_bot_and_a_member_only_the_ones_they_run(
     assert usage(api, "ana-test")["totals"]["runs"] == 5
 
 
+def test_a_bots_detail_lists_its_top_tasks_with_the_rest_summed_and_every_model_under_the_filters(api):
+    """The opened bot explains its spend in the one response: its top 10 tasks by spend (the rest as one count and sum)
+    and every model it used, each with the usual figures and its share of the bot's spend, under the page's filters."""
+    seed(api)
+    hidden = post(api, "tasks", {"owner": "ops", "title": "Board deck", "body": "Do it.", "private": True})["id"]
+    ids = [post(api, "tasks", {"owner": "ops", "title": f"Job {n:02}", "body": "Do it."})["id"] for n in range(12)]
+    ids[1] = hidden
+    with api.app.state.store.transaction() as c:
+        for n, tid in enumerate(ids):
+            c.execute(
+                "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id, input_tokens, cached_tokens, "
+                "cache_write_tokens, output_tokens, usage_model, est_cost_usd, billing) "
+                "VALUES(?, 'ops', ?, ?, 'completed', ?, 100, 900, 0, 10, ?, ?, 'api')",
+                (
+                    f"j{n}",
+                    DAY + "T12:00:00Z",
+                    DAY + "T12:05:00Z",
+                    tid,
+                    "gpt-6-sol" if n % 2 else "mystery-model",
+                    None if n % 2 == 0 else 1.0 + n,
+                ),
+            )
+    got = usage(api, bot="ops")
+    tasks, more, total = got["tasks"], got["tasks_more"], got["totals"]
+    assert len(tasks) == 11  # ten tasks and the runs with none
+    assert [t["name"] for t in tasks[:3]] == ["Job 11", "Job 09", "Job 07"]
+    spends = [(t["est_cost_usd"] or 0) + t["subscription_equiv_usd"] for t in tasks]
+    assert spends == sorted(spends, reverse=True)
+    assert "Board deck" not in json.dumps(got) and "A private task" in [t["name"] for t in tasks]
+    assert "Chats and other runs" in [t["name"] for t in tasks] and all("share" in t for t in tasks)
+    # The 10 rows and the rest add up to the bot's figures.
+    assert more["count"] == 3
+    assert sum(t["runs"] for t in tasks) + more["runs"] == total["runs"]
+    assert sum(t["cached_tokens"] for t in tasks) + more["cached_tokens"] == total["cached_tokens"]
+    whole = (total["est_cost_usd"] or 0) + total["subscription_equiv_usd"]
+    rest = (more["est_cost_usd"] or 0) + more["subscription_equiv_usd"]
+    assert sum(spends) + rest == pytest.approx(whole)
+    # Every model, an unpriced one with no cost.
+    models = {m["value"]: m for m in got["models"]}
+    assert set(models) == {"gpt-6-sol", "mystery-model", "claude-opus-5"}
+    assert models["mystery-model"]["est_cost_usd"] is None and models["mystery-model"]["runs"] == 6
+    assert models["gpt-6-sol"]["name"] == "gpt-6-sol" and got["models"][0]["value"] == "gpt-6-sol"
+    assert sum(m["share"] for m in got["models"]) == pytest.approx(1, abs=1e-3)
+    # A filter on the page narrows every list.
+    only = usage(api, bot="ops", model="mystery-model")
+    assert {m["value"] for m in only["models"]} == {"mystery-model"}
+    assert sum(t["runs"] for t in only["tasks"]) + only["tasks_more"]["runs"] == only["totals"]["runs"] == 6
+    # Runs with no task are never counted as "more tasks": they keep their own row even when they cost least.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET est_cost_usd=0, billing='api' WHERE bot_id='ops' AND task_id IS NULL")
+    cheap = usage(api, bot="ops")
+    assert "Chats and other runs" in [t["name"] for t in cheap["tasks"]]
+    assert cheap["tasks_more"]["count"] == 3 and len(cheap["tasks"]) == 11
+    assert sum(t["runs"] for t in cheap["tasks"]) + cheap["tasks_more"]["runs"] == cheap["totals"]["runs"]
+    # Ten tasks or fewer: nothing more.
+    assert usage(api, bot="cpo")["tasks_more"] == {**usage(api, bot="cpo")["tasks_more"], "count": 0, "runs": 0}
+
+
 def test_a_bot_or_a_computer_cannot_ask(api):
     r = runner(api)
     assert api.get("/api/v2/usage", headers=headers(r["token"])).status_code in (401, 403)

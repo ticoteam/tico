@@ -185,13 +185,13 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       const shows = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget));
       const goto = async (hash: string) => {
         await page.goto('https://tico-ui.test/' + hash);
-        if (phone) await page.locator('.bot-switch button', {hasText: 'Tasks'}).click().catch(() => {});
+        if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click().catch(() => {});
       };
 
       // Loading until the layout arrives: no widget is drawn and then moved.
       await goto('#/bot/lead');
       await page.waitForFunction(() => document.querySelector('#pane-tasks')?.hasAttribute('data-loading'));
-      if (phone) await page.locator('.bot-switch button', {hasText: 'Tasks'}).click();
+      if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click();
       await rail.locator('.bot-rail-loading').waitFor();
       assert.deepEqual(await shows(), [], at + ': nothing drawn while the layout loads');
       release();

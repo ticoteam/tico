@@ -35,6 +35,9 @@ QUOTED = "Don't quote their note back; say what you did with each point (--answe
 # The point is everything before the last ": done," or ": not done,"; the why is what follows.
 _ANSWERED = re.compile(r"^(?P<point>.+):\s*(?P<state>not done|done)\s*,\s*(?P<why>\S.*)$", re.IGNORECASE | re.DOTALL)
 _WORD = re.compile(r"[\w']+")
+# Jev's stored reason (pipeline_judges.reason_for) carries its probability: "(p 0.81)" or "(p 0.73, between 0.2 and
+# 0.75)". The chip shows the reason without it.
+_P_VALUE = re.compile(r"\s*\(p [0-9.]+(?:, between [0-9.]+ and [0-9.]+)?\)")
 
 
 def parse_answered(entry: str) -> Row | None:
@@ -123,6 +126,8 @@ def _jev(verdict: Row | None) -> Row:
     reason = " ".join(str(verdict.get("last_error") if said_ == "failed" else verdict.get("reasons") or "").split())
     if said_ == "failed":
         reason = f"Jev couldn't check this: {reason}" if reason else "Jev couldn't check this"
+    else:
+        reason = _P_VALUE.sub("", reason, count=1)
     return {"verdict": said_, "reason": reason}
 
 

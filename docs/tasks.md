@@ -65,6 +65,9 @@ tico task ask <id> --to <person> --kind ok "Approve the launch post" --show page
 tico task ask <id> --withdraw -m "why"
 ```
 
+An ask may carry a short title of at most 60 characters (`--title "Launch note tone"`). The decision view shows it as
+the heading, with the full question once under it; an ask without one is headed by its question.
+
 A bot has one ask of its own open on a task at a time: asking again replaces it. An ask never expires. A person
 answers it from Needs you. A bot named on one answers with `tico task answer <id> <requirement> ok|no|again|<answer>`,
 or gives it to someone else with `tico task give <id> <requirement> --to <person>`.
@@ -353,6 +356,11 @@ names everyone in it, read at each check.
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with
   `{"readers": [...]}`. A task lists at most 50 readers.
 - A reader reads that task only: not the task above it or its other sub-tasks.
+- A private task stuck because the next stage's owner or someone it asks can't see it says so on its person's Needs
+  you card, naming everyone shut out ("Stuck in Build: Reviewer 1 can't see this task"), with **Let Reviewer 1 see
+  it**: one press adds exactly them as readers and moves the task on (`POST /api/v2/tasks/{id}/move` with
+  `{"to": "next", "let_see": ["<actor>", ...]}`, the list the task's `turn.share` gives; refused, adding nobody, when
+  it now waits on someone else). A bot is never told how to share it: its refusal names the person to ask.
 
 ### A private task with no person on it
 
@@ -417,7 +425,7 @@ tico task done <id> -m "what was done" --version N
 tico task move <id> next|<stage>|done|closed|reopen -m "why" --version N
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
-tico task ask <id> --to <person> "line" [--kind ok] [--choices a,b] [--show page:12] --version N
+tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
 tico task ask <id> --withdraw
 tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N

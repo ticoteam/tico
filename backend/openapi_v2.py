@@ -1057,7 +1057,8 @@ STABLE = [
         "relateTask",
         "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take "
         "the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and "
-        "on depends_on, in any stage (Blocked by task until it ends)",
+        "on depends_on, in any stage (Blocked by task until it ends; with until: released, until production runs a "
+        "release that holds task's merged PRs)",
         "TaskResult",
     ),
     (
@@ -2120,7 +2121,7 @@ STABLE = [
         "getUsage",
         "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
         "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
-        "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
+        "or own. ?bot=<bot id or slug> is that bot's daily series, top routines, top 10 tasks (the rest summed) and models instead",
         "Usage",
     ),
     (
@@ -2613,6 +2614,10 @@ SCHEMAS = {
             "late": {
                 "oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}],
             },
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "lane": "s",
             "labels": items({"type": "string"}),
             "acceptance_criteria": items({"type": "string"}),
@@ -2645,7 +2650,11 @@ SCHEMAS = {
             "description": "Who really filed it, when not its requester: a bot id (BotOps on a person's rights) or a "
             "built-in source key (check-health, postal-mail). Display only; absent otherwise",
         },
-        snoozed={"type": "boolean", "description": "On a list row: whether the task is set aside"},
+        snoozed={
+            "type": "boolean",
+            "description": "On a list row: whether the task is set aside. A blocked task is not (see blocked_by), and "
+            "snoozed=only leaves it out",
+        },
         pipeline={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
             "description": "On the task's own read: the pipeline it is in",
@@ -2658,6 +2667,16 @@ SCHEMAS = {
             "description": "On the task's own read: the stage it is in",
         },
         pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
+        blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}}))
+        | {
+            "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by #304\"), oldest "
+            "first; one the reader may not open has a null id and number. Absent when there are none"
+        },
+        blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}}))
+        | {
+            "description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\"). "
+            "Absent when there are none"
+        },
         stage_since={
             "type": ["string", "null"],
             "description": "On a list row: when it entered its stage, else when it was filed",
@@ -2724,6 +2743,7 @@ SCHEMAS = {
                     ["id", "title", "status", "owner_id", "direction"],
                     number={"type": ["integer", "null"]},
                     stage={"type": ["string", "null"]},
+                    since={"type": "string", "description": "depends_on only: when the dependency was written"},
                 )
             ),
         },
@@ -2770,6 +2790,12 @@ SCHEMAS = {
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
             "again",
         },
+        share={
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "A private task waits on these actors being let in (the next stage's owner and those it "
+            "asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list",
+        },
     ),
     "TaskRequirement": obj(
         {
@@ -2781,6 +2807,18 @@ SCHEMAS = {
             "who": "n",
             "asked_by": "n",
             "choices": {"type": ["array", "null"], "items": {"type": "string"}},
+            # A bot's question to a person: why it matters, a line per choice on what happens (in the choices' order)
+            # and the choice it recommends (backend/ask_shape.py). Absent on an ask that carried none.
+            "brief": obj(
+                {
+                    "why": "s",
+                    "details": {"type": ["array", "null"], "items": {"type": "string"}},
+                    "recommend": "n",
+                },
+                required=["why", "details", "recommend"],
+            ),
+            # The ask's short title (at most 60 characters), the decision view's heading. Absent on an ask without one.
+            "title": "s",
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
@@ -3678,11 +3716,36 @@ SCHEMAS = {
             "due_at": "n",
             "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "snoozed": "b",
             "pushed_past": "b",
             "stage_since": "n",
             "on_person": "b",
-        }
+        },
+        [
+            "id",
+            "number",
+            "title",
+            "status",
+            "version",
+            "pipeline_id",
+            "stage_id",
+            "owner_id",
+            "assignee_id",
+            "requester_id",
+            "due_at",
+            "turn",
+            "late",
+            "snoozed",
+            "pushed_past",
+            "stage_since",
+            "on_person",
+        ],
+        blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}})),
+        blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}})),
     ),
     "GranolaStatus": obj(
         {
@@ -4686,6 +4749,27 @@ SCHEMAS = {
             "name": "s",
             "daily": items({"type": "object", "additionalProperties": True}),
             "routines": items({"type": "object", "additionalProperties": True}),
+            "tasks": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: its top 10 tasks by spend, as group=task names them (value and name), plus runs with no task, "
+                    "each with the usage figures and `share`, its part of the bot's spend",
+                    "additionalProperties": True,
+                }
+            ),
+            "tasks_more": {
+                "type": "object",
+                "description": "?bot only: `count`, the tasks past the top 10, and their usage figures summed",
+                "additionalProperties": True,
+            },
+            "models": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: every model it used, value (null when not recorded) and name, with "
+                    "the usage figures and `share`",
+                    "additionalProperties": True,
+                }
+            ),
         },
         required=["from", "to", "prices_as_of", "totals"],
     ),
@@ -7312,9 +7396,6 @@ SCHEMAS.update(
                 "name": "s",
                 "label": "s",
                 "description": "s",
-                "batch_seconds": "i",
-                "batch_scope": "s",
-                "sweep_seconds": "i",
                 "digest_hour": {"type": ["integer", "null"]},
                 "pulls": "s",
                 "sweeps": "b",
@@ -11147,7 +11228,8 @@ SCHEMAS.update(
                 "task_id": "s",
                 "title": "s",
                 "kind": {"enum": "started finished".split()},
-                "outcome": {"enum": ["won", "lost", "inconclusive", "dropped", None]},
+                "outcome": {"enum": ["won", "lost", "inconclusive", "kept", "dropped", None]},
+                "result": {"enum": ["failed", "worked-once", "watching", None]},
                 "at": "s",
                 "channels": items({"type": "string"}),
                 "goal_id": "n",

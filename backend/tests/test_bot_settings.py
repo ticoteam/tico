@@ -228,9 +228,9 @@ def test_a_new_file_has_no_trigger_or_view_reading_the_column(tmp_path):
 
 def _moved(c, bot):
     """The declaration after the move, less the defaults Store.initialize gives a bot that names none (profiles and
-    wake_presets.ensure, as they did when the declaration lived in config)."""
+    wake_presets.ensure, which since the presets were retired leaves no wake preset)."""
     config = BS.read(c, bot)
-    assert config.pop("profile", "doer") == "doer" and config.pop("wake_preset", "performance") == "performance"
+    assert config.pop("profile", "doer") == "doer" and "wake_preset" not in config
     return config
 
 
@@ -240,7 +240,10 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
     store = boot(path)
     with store.read() as c:
         assert "config" not in {r[1] for r in c.execute("PRAGMA table_info(bot_config)")}
-        assert BS.read(c, "full") == {k: v for k, v in {**SETTINGS, **ODD}.items() if v is not None}
+        # Every setting moves; the retired wake preset is then removed by wake_presets.ensure (spec v4).
+        assert BS.read(c, "full") == {
+            k: v for k, v in {**SETTINGS, **ODD}.items() if v is not None and k != "wake_preset"
+        }
         assert _moved(c, "empty") == {} and _moved(c, "broken") == {} and _moved(c, "list") == {}
         assert _moved(c, "many1199") == {"model": "m1199", "turns_per_day": 1199, "team": "ops"}
         assert c.execute("SELECT count(*) FROM bot_settings").fetchone()[0] == 1204
@@ -254,8 +257,8 @@ def test_migration_moves_every_declaration_drops_the_column_and_runs_once(tmp_pa
         ]
         assert any("reports_to" in sql for sql in bot_config_triggers)
         _no_reader_of_the_column(c)
-        # wake_presets.ensure gives every declaration its preset after the move, as it did inside config.
-        assert c.execute("SELECT count(*) FROM bot_settings WHERE wake_preset IS NULL").fetchone()[0] == 0
+        # wake_presets.ensure leaves no declaration a wake preset after the move (the presets are retired).
+        assert c.execute("SELECT count(*) FROM bot_settings WHERE wake_preset IS NOT NULL").fetchone()[0] == 0
     before = sqlite3.connect(path).execute("SELECT * FROM bot_settings ORDER BY bot_id").fetchall()
     boot(path)
     assert sqlite3.connect(path).execute("SELECT * FROM bot_settings ORDER BY bot_id").fetchall() == before
@@ -282,7 +285,6 @@ def test_an_explicit_null_reads_back_as_null_and_stateless_answers_as_before_the
         assert json.loads(c.execute(BS.ONE_SQL, ("nulls",)).fetchone()[0]) == {
             **config,
             "profile": "doer",
-            "wake_preset": "performance",
         }
         after = H.stateless(BS.read(c, "nulls"))
     assert before is False and after is False

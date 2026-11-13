@@ -244,6 +244,14 @@ def _claim(b, slug):
     """The bot's computer's next job for the bot, polled as the runner polls: an empty claim is a pass, and the next
     poll comes CLAIM_POLL later on the demo clock."""
     for _ in range(CLAIM_TRIES):
+        # A scheduled run waits on the job hold until the scheduler's release check lets it go (backend/wake_presets.py);
+        # the demo has no scheduler, so its routines' runs (wait 0) are let go here as that check would, and nothing else.
+        with b.store.transaction() as c:
+            c.execute(
+                "UPDATE jobs SET held=0,released=json_object('warm',0,'waited',0,'at',?) WHERE held=1 "
+                "AND state='queued' AND wake_class='routine' AND hold_reason IS NULL",
+                (H.now(),),
+            )
         claim = b.call("POST", "jobs/claim", {"bot": slug}, token=_computer(b, slug)["token"])["attempt"]
         if claim:
             return claim

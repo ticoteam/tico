@@ -5,7 +5,8 @@
 'use strict';
 
 /** The task fields the section reads (GET /v2/tasks/{id}). */
-type TaskReqTask = Pick<TaskV3, 'id' | 'status' | 'version' | 'to_leave' | 'stage'>;
+/** What the section reads; who asked, the title, body and tags feed Ask someone's suggestions when the task has them. */
+type TaskReqTask = Pick<TaskV3, 'id' | 'status' | 'version' | 'to_leave' | 'stage'> & Partial<Pick<TaskV3, 'requester_id' | 'title' | 'body' | 'tags'>>;
 
 const taskStageOf = (t: Pick<TaskV3, 'stage'> | null | undefined): TaskStageV3 | null =>
   t?.stage && typeof t.stage === 'object' && 'name' in t.stage ? t.stage as unknown as TaskStageV3 : null;
@@ -34,7 +35,7 @@ function taskRequirementsHTML(t: TaskReqTask): string {
     <h3 class="rail-h">${esc(head)}<button type="button" class="prop-add" data-req-ask aria-label="Ask someone" title="Ask someone">${TL_ICON.plus}</button></h3>
     ${reqs.map(taskReqRowHTML).join('')}
     <form class="task-req-ask" data-req-ask-form hidden>
-      <select name="to" aria-label="Who" required>${taskOwnerOptions('', 'Who')}</select>
+      ${giveToFieldHTML({name: 'to', label: 'Ask', placeholder: 'Who', task: t})}
       <input name="line" maxlength="500" autocomplete="off" placeholder="What to ask" aria-label="What to ask" required>
       <label class="task-req-ok"><input type="checkbox" name="ok"> OK</label>
       <button type="submit" class="primary">Ask</button>
@@ -53,7 +54,7 @@ function taskRequirementsBind(root: ParentNode, t: TaskReqTask, redraw: (task: T
     const el = eventElement(ev);
     if (el?.closest('[data-req-ask]') && form) {
       form.hidden = !form.hidden;
-      if (!form.hidden) form.querySelector<HTMLSelectElement>('select')?.focus();
+      if (!form.hidden) form.querySelector<HTMLButtonElement>('button[data-give-to]')?.focus();
       return;
     }
     const drop = el?.closest<HTMLButtonElement>('[data-req-withdraw]');
@@ -65,6 +66,7 @@ function taskRequirementsBind(root: ParentNode, t: TaskReqTask, redraw: (task: T
   if (form) form.onsubmit = ev => {
     ev.preventDefault();
     const data = new FormData(form), to = String(data.get('to') || ''), line = String(data.get('line') || '').trim();
+    if (!to && line) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }
     if (!to || !line) return;
     const actor = to.includes(':') ? to : 'bot:' + to;
     const send = form.querySelector<HTMLButtonElement>('button[type=submit]');

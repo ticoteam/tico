@@ -203,9 +203,9 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .bot-top-acts[hidden]{display:none}
 .bot-top-acts .thv-titleline{gap:4px;padding:0}
 @media (max-width:1099px){.bot-top-acts{order:2}}
-/* Incognito (a private DM, not the team's Home): a lock in the top line beside More; it says Incognito only while on */
+/* Incognito (a private DM, not the team's Home): a lock in the top line beside More, raised while on */
 .bot-incognito{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:32px;height:32px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.bot-incognito[hidden],.bot-incognito:not([aria-pressed=true]) .bi-label{display:none}
+.bot-incognito[hidden],.bot-incognito .bi-label{display:none}   /* an icon, raised when on (#282) */
 .bot-incognito .nav-icon{font-size:18px}
 @media (max-width:1099px){.bot-incognito{order:2}}
 .pill-thread .p-pill{border-color:var(--g5)}   /* the composer's edge reads against the page (3:1) */
@@ -337,3 +337,10 @@ body.in-call #main.chat-layout{padding-bottom:72px}
 .thv-compact .thv-call-note{font-size:var(--t-sm)}
 /* a message opened from search */
 .th-msg.th-focus{background:var(--surface2);box-shadow:inset 2px 0 0 var(--accent,var(--ink))}
+/* what goes with each message (opts.context): a chip above the box, ✕ removes it */
+.thv-ctx{display:flex;margin-bottom:6px}
+.thv-ctx[hidden]{display:none}
+.thv-ctx-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;height:28px;padding:0 2px 0 10px;border:1px solid var(--line);border-radius:14px;color:var(--muted);font-size:var(--t-sm)}
+.thv-ctx-l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thv-ctx-x{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);cursor:pointer}
+.thv-ctx-x:hover{background:var(--surface2);color:var(--ink)}

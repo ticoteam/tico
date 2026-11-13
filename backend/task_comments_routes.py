@@ -114,6 +114,7 @@ def register(
             delegate=directs and way != "defer",
             reach=who if who.role == "bot" else None,
         )
+        org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
         due = None
         # The bot the comment went to first: the follower it was for, or the bot its @mention reached.
         reached = msg.get("recipient_id") if H.is_bot(msg.get("recipient_id")) else None
@@ -187,6 +188,7 @@ def register(
             body.text,
             lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text),
             place=task_place(who, tid),
+            late=True,
         )
         result = mutate(request, body, lambda c: comment_write(c, who, tid, body, None, rc, request.state.identity))
         if body.attachments:

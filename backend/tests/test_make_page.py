@@ -88,7 +88,6 @@ def test_old_runner_never_claims_make_page_and_upgrade_recovers_the_same_request
             "model_subscriptions_v1",
             "model_subscription_activation_v1",
             "browser_exit_v1",
-            "memory_tidy_packets_v1",
             "threads_v1",
             "harness_allocation_v1",
             "make_page",

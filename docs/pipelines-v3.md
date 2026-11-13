@@ -342,21 +342,23 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: 3 tries, then the manager bot, then a person.
 5. **Jev is checking**
    - Starts: A page is attached.
-   - Bar: Jev answers a probability; 0.75 or more is met, 0.2 or less is not met, anything between is unsure. One
-     bar for every company and pipeline (backend/pipeline_judges.py `MET_AT`). (Changed Nov 11 from 0.8.)
-   - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with reasons; on a page a person OKs anyway,
-     a second fail in the same visit is that person's to decide, with Jev's reason (Changed Nov 11: a page Jev could
-     never pass left only a push-past). Unsure: on a page a person OKs
-     anyway (people only, or naming someone), that person at once, every version, with Jev's reason; after a send
-     back, the person who sent it back, with their words. On a stage a bot holds: back to that bot once, "not yet
-     met: fix it or explain it on the page", with Jev's reason and the check; the next unsure in the same visit goes
-     to the pipeline's manager bot, who OKs it or sends it back and says why; with no manager bot, or when the
-     manager holds the stage, a person as before. A bot never asks its own OK of a page a person OKs already, nor a
-     yes/no that shows that page: it attaches the new version. A plain yes/no question is still its to ask. (Changed Nov 11 by the two sign-offs rule.)
+   - Asked: a check Tico ships (Spec, Review, QA, Checked in production) is asked as its named parts, each a yes/no
+     in the same one call (backend/pipeline_judges.py `CHECKS`); a company's own rubric is asked whole. Each check has
+     its bar in `BARS` (today 0.75 yes, 0.2 no for all four). Met when every part is yes, not met when any part is no,
+     unsure when none is no and one can't be told. The reason names the missing parts in one line each, at most
+     three ("No out-of-scope list found."), never a probability or the check's wording. (Changed Nov 13, task #351.)
+   - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with the missing parts; on a page a person OKs
+     anyway, a second fail in the same visit is that person's to decide. A Spec page is never sent back by Jev: a
+     missing part goes to the person as "Jev: <part>". Unsure: on a page a person OKs anyway (people only, or naming
+     someone), that person at once, every version, shown nothing from Jev; after a send back, the person who sent it
+     back, with their words. On a stage a bot holds: the pipeline's manager bot looks once per page version, with the
+     part Jev can't tell, and OKs it or sends it back and says why; the page's bot is not sent back to rewrite it.
+     With no manager bot, or when the manager holds the stage, a person as before. A bot never asks its own OK of a
+     page a person OKs already, nor a yes/no that shows that page: it attaches the new version. A plain yes/no
+     question is still its to ask.
    - If not: Retried 3 times. Then, on a stage a bot holds and a page that is not people only, the pipeline's
      manager bot decides it and says why; with no manager bot, or when the manager holds the stage, a person once
-     per visit, then the owner. A page a person OKs anyway goes to that person. (Changed Nov 11 by the two sign-offs
-     rule.)
+     per visit, then the owner. A page a person OKs anyway goes to that person, shown nothing from Jev.
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.
    - Ends: The metadata arrives, by webhook or by the 5-minute read.
@@ -849,7 +851,8 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   it that change the same lines (GitHub's diff of each from where it branched off, without line numbers or context,
   as `git patch-id` reads it) keep it. Others are read by Reviewer 2 the same way, the 2 rounds counted from the OK:
   its OK keeps the person's; its send back goes to the Builder, and the person is asked again once the next commits
-  were read. Until Tico has read what the new commits change, the page waits on GitHub.
+  were read. Until Tico has read what the new commits change, the page waits on GitHub. A new version of the same page
+  published at the commits the person OK'd keeps the OK: nobody is asked again (Nov 13); another page is asked again.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back

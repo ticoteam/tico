@@ -68,6 +68,8 @@ const init = () => {
    const info = async () => { if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click(); };
    await page.evaluate(async task => taskModalShow(task), task);
    await info();
+   // Details is one line until opened (task #419); the due date's field is one of its rows.
+   await page.locator('#task-modal[open] details.task-details:not([open]) > summary').click({timeout: 1000}).catch(() => {});
    const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
    const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tk-row, #task-body .empty'));
    const emit = (topic: string) => page.evaluate(topic => {

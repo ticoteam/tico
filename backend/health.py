@@ -27,6 +27,7 @@ from . import (
     releases,
     replication,
     runner_versions,
+    runs,
     setup_stuck,
     sleep_idle,
     usage_limits,
@@ -76,6 +77,7 @@ NEEDS_YOU_MINUTES = 30  # this quiet, its owner is asked to bring it back
 # getting through. The floor is for the default one-minute sync; a longer interval holds more files between uploads.
 BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
+FAILED_RUNS = "#/settings/history?view=runs&failed=1"
 GITHUB_HEALTH = "github:token"
 PROXIES = {
     "cloudflare": "Cloudflare Access",
@@ -2290,15 +2292,9 @@ def _server_settings(c, settings):
 
 
 def _failed(c):
-    since = H.shift(H.now(), hours=-RECENT_HOURS)
-    rows = c.execute(
-        "SELECT bot_id,state,finished_at FROM attempts WHERE state IN ('failed','expired') AND finished_at>? "
-        "ORDER BY finished_at DESC LIMIT 5",
-        (since,),
-    ).fetchall()
-    total = c.execute(
-        "SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished_at>?", (since,)
-    ).fetchone()[0]
+    """How many jobs failed in the last day and the newest five of them (runs.failed): a retry that went back in the
+    queue is not one."""
+    total, rows = runs.failed(c, H.shift(H.now(), hours=-runs.FAILED_HOURS), limit=5)
     return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 
@@ -3981,7 +3977,8 @@ def view(c, who, settings, auth, github, config):
             "Failed runs",
             "warn" if failed else "ok",
             f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
-            [_fix("Open Runs", "#/settings", "runs")] if failed and full else [],
+            # Runs showing only these failures (backend/views.py runs), so none is lost among the day's other runs.
+            [_fix("Open failed runs", FAILED_RUNS)] if failed and full else [],
         )
     )
     return {

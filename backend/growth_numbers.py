@@ -9,8 +9,9 @@
 - `kpis`: the KPI tree by growth role, each with its last 24 readings as the sparkline plots them (one value per period,
   partials left out, oldest first). A KPI with no growth field is left out; `other` holds one with a stage or loop but
   no role.
-- `markers`: when a marketing idea's test started (it took a `growth:running` or `idea:live` label) or the idea finished
-  (done: `kept`; closed: `dropped`), newest first, at most 200 (backend/marketing_tasks.py). Each is one marker, so an
+- `markers`: when a marketing idea's test started (it moved into a Growth Experiments Running stage, or, never having
+  been in Growth Experiments, took a `growth:running` or `idea:live` label) or the idea finished (done: `kept`, with its
+  `result` tag when it has one; closed: `dropped`), newest first, at most 200 (backend/marketing_tasks.py). Each is one marker, so an
   idea started twice gives two. The window is the first month's start to now (the last twelve months when there are no
   cohorts).
 
@@ -67,9 +68,45 @@ SERIES_KEYS = (
 )
 
 
-def _month(row, month):
-    """A channel's or the total's figures for one month."""
-    return {"month": month, **{key: row.get(key) for key in SERIES_KEYS}}
+# A figure worked out from others is computed when any of them came from customer facts (growth.beside), else typed.
+KEPT = ("kept_d30", "kept_d90", "kept_d180")
+MADE_FROM = {
+    "cac": ("new_customers",),
+    "expected_months": KEPT,
+    "ltv": KEPT,
+    "ltv_cac": ("new_customers", *KEPT),
+    "payback_months": ("new_customers",),
+}
+
+
+def origins(row):
+    """{figure: computed or typed} for each figure a channel's month has."""
+    given = row.get("computed_or_typed") or {}
+    out = {}
+    for key in SERIES_KEYS:
+        if key == "quality" or row.get(key) is None:
+            continue
+        made = [given.get(k) for k in MADE_FROM.get(key, (key,))]
+        out[key] = "computed" if "computed" in made else "typed"
+    return out
+
+
+def total_origins(rows):
+    """Every channel together: computed or typed when every channel's figure is, else mixed."""
+    found = {}
+    for row in rows:
+        for key, origin in origins(row).items():
+            found.setdefault(key, set()).add(origin)
+    return {key: origin.pop() if len(origin) == 1 else "mixed" for key, origin in found.items()}
+
+
+def _month(row, month, origin=None):
+    """A channel's or the total's figures for one month, and whether each is computed or typed."""
+    return {
+        "month": month,
+        **{key: row.get(key) for key in SERIES_KEYS},
+        "origin": origins(row) if origin is None else origin,
+    }
 
 
 def _window(c, months, until=None):
@@ -167,41 +204,73 @@ LABELS_THEN = (
 )
 
 
+def _experiment_stages(c):
+    """The stage ids of every Growth Experiments pipeline, retired ones too (history names them): all of them, and
+    the Running ones."""
+    every, running = [], []
+    for sid, pid, preset in c.execute(
+        "SELECT s.id, s.pipeline_id, p.preset FROM stages s JOIN pipelines p ON p.id=s.pipeline_id "
+        "WHERE p.preset=? AND s.kind='work'",
+        (MT.EXPERIMENTS,),
+    ):
+        every.append(sid)
+        if MT.stage_key(preset, pid, sid) == MT.RUNNING:
+            running.append(sid)
+    return every, running
+
+
+def _marks(n):
+    return ",".join("?" * n)
+
+
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
-    # A finish is a move that ended the task (into Done or Closed, by a person, a bot or a close of the task above it)
-    # while it was an idea. A task put back from the trash as it ended did not end again.
+    every, running = _experiment_stages(c)
+    # A start is a label change onto a running label, or a move into a Growth Experiments Running stage from anywhere
+    # else (or a task filed straight into it). A task that has been in Growth Experiments starts by its moves alone,
+    # so one with both forms starts once: its pipeline stage wins over its label. A finish is a move that ended the task (into Done or Closed, by a
+    # person, a bot or a close of the task above it) while it was an idea or from a Growth Experiments stage. A task
+    # put back from the trash as it ended did not end again, nor start again.
     rows = H._rows(
         c.execute(
             "SELECT e.kind AS event, e.subject_id AS task_id, e.created_at, e.old, e.new, s.kind AS stage, t.title, "
             "t.goal_id FROM history_events e JOIN tasks t ON t.id=e.subject_id "
             "LEFT JOIN stages s ON e.kind='move' AND s.id=e.new "
-            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL}) "
-            "OR (e.kind='move' AND s.kind IN ('done','closed') "
-            "AND coalesce(json_extract(e.data, '$.move'), '')!='restored' "
-            f"AND {_has_any(LABELS_THEN, MT.LABELS)})) "
+            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL} "
+            "AND NOT EXISTS (SELECT 1 FROM history_events m WHERE m.subject_type='task' "
+            f"AND m.subject_id=e.subject_id AND m.kind='move' AND m.new IN ({_marks(len(every))}))) "
+            "OR (e.kind='move' AND coalesce(json_extract(e.data, '$.move'), '')!='restored' AND ("
+            f"(e.new IN ({_marks(len(running))}) AND coalesce(e.old, '') NOT IN ({_marks(len(running))})) "
+            f"OR (s.kind IN ('done','closed') AND ({_has_any(LABELS_THEN, MT.LABELS)} "
+            f"OR e.old IN ({_marks(len(every))})))))) "
             f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
-            [since, *MT.STARTED, *MT.STARTED, *MT.LABELS, MARKERS_MAX],
+            [since, *MT.STARTED, *MT.STARTED, *every, *running, *running, *MT.LABELS, *every, MARKERS_MAX],
         )
     )
-    tags = {}
+    tags, results = {}, {}
     ids = list(dict.fromkeys(r["task_id"] for r in rows))
     if ids:
         for task_id, key in c.execute(
             "SELECT tt.task_id, tg.key FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id "
-            f"WHERE tt.task_id IN ({','.join('?' * len(ids))}) AND tg.key LIKE 'channel:%' ORDER BY tg.key",
-            ids,
+            f"WHERE tt.task_id IN ({_marks(len(ids))}) AND (tg.key LIKE 'channel:%' OR tg.key IN ({_marks(len(MT.RESULTS))})) "
+            "ORDER BY tg.key",
+            [*ids, *MT.RESULTS],
         ):
-            tags.setdefault(task_id, []).append(key[len("channel:") :])
+            if key in MT.RESULTS:
+                results[task_id] = key[len("result:") :]
+            else:
+                tags.setdefault(task_id, []).append(key[len("channel:") :])
     out = []
     for r in rows:
-        finished = r["event"] == "move"
+        finished = r["stage"] in ("done", "closed")
         out.append(
             {
                 "task_id": r["task_id"],
                 "title": r["title"],
                 "kind": "finished" if finished else "started",
                 "outcome": ("kept" if r["stage"] == "done" else "dropped") if finished else None,
+                # What its Results page found (result:failed, worked-once or watching), on a test that was kept.
+                "result": results.get(r["task_id"]) if r["stage"] == "done" else None,
                 "at": r["created_at"],
                 "channels": tags.get(r["task_id"], []),
                 "goal_id": r["goal_id"],
@@ -214,15 +283,16 @@ def numbers(c, auth, who, months, hidden, until=None):
     """The numbers for the newest `months` months with rows up to `until` (default: all of them)."""
     window = _window(c, months, until)
     conf = G.settings(c)
-    totals, by_month = {}, {}
+    totals, by_month, total_origin = {}, {}, {}
     for m in window:
         econ = G.economics(c, m)
         per, total = _money(c, m, conf)
         totals[m] = _with_money(econ["total"], total)
         by_month[m] = {row["channel"]: _with_money(row, per[row["channel"]]) for row in econ["rows"]}
+        total_origin[m] = total_origins(econ["rows"])
     return {
         "months": window,
-        "series": [_month(totals[m], m) for m in window],
+        "series": [_month(totals[m], m, total_origin[m]) for m in window],
         "channels": _channels(c, window, by_month),
         "kpis": _kpis(c, hidden),
         "markers": _markers(c, auth, who, _since(window)),

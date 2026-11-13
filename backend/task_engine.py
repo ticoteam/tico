@@ -340,9 +340,27 @@ def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
     name = H.actor_name(conn, who)
     return {
         "who": who,
-        "cause": f"{name} cannot read this private task",
-        "fix": f"Someone who can see it adds {name} under Who can see, then asks again",
+        "cause": f"{name} can't see this private task",
+        "fix": f"Add {name} under Who can see, then ask again",
     }
+
+
+def fix_for(conn: "sqlite3.Connection", by: str | None, row: Row, said: Row) -> str:
+    """The fix of a `shut_out` or `not_shared` as `by` reads it. A person reads the fix on the task's own page. A bot is
+    never told how to share a private task, only whom to ask (task #392): the person the task falls to
+    (`waiting_on.person_for`), who may read it already."""
+    if not by or not is_bot(by):
+        return str(said["fix"])
+    from . import waiting_on as W
+
+    sharer = W.person_for(conn, row)
+    asks = f"Ask {_h().actor_name(conn, sharer)}" if sharer else "Ask someone who can see this task"
+    return f"{asks} to let them see it"
+
+
+def told(conn: "sqlite3.Connection", by: str, row: Row, said: Row) -> str:
+    """A `shut_out` or `not_shared` refusal as `by` reads it: the cause, then `fix_for` them."""
+    return f"{said['cause']}. {fix_for(conn, by, row, said)}."
 
 
 def shut_out(
@@ -377,6 +395,9 @@ def shut_out(
         return None
     who, how = blocked[0]
     name = H.actor_name(conn, who)
+    # Everyone the stage shuts out, once each: a person lets them all in with one press (task #392), never one at a
+    # time, which the move would refuse again for the next one.
+    whom = list(dict.fromkeys(actor for actor, _ in blocked))
     if goes_private:
         cause = (
             f"{name} {how} {target['name']} and could not read this task there: "
@@ -384,9 +405,20 @@ def shut_out(
         )
         fix = f"Make it private and add {name} under Who can see"
     else:
-        cause = f"{name} {how} {target['name']} and cannot read this private task"
-        fix = f"Add {name} under Who can see" if new else f"Someone who can see it adds {name} under Who can see"
-    return {"who": who, "cause": cause, "fix": fix}
+        # Plain words (task #392): who does the next step and that they can't see it, never the stage's internals.
+        # A move to another stage (back, or a restore) names that stage: it is not the next step.
+        ahead = next_stage(conn, row) if not new and how == "owns" and row.get("stage") else None
+        cause = (
+            f"{name} {how} {target['name']} and cannot read this private task"
+            if new
+            else f"{name} does the next step but can't see this private task"
+            if how == "owns" and ahead and ahead["id"] == target["id"]
+            else f"{name} owns {target['name']} but can't see this private task"
+            if how == "owns"
+            else f"{name} is asked in {target['name']} but can't see this private task"
+        )
+        fix = f"Add {name} under Who can see" if new else f"Add {name} under Who can see, then move it again"
+    return {"who": who, "whom": whom, "cause": cause, "fix": fix}
 
 
 # ----------------------------------------------------------------------------- the writer
@@ -1006,12 +1038,12 @@ def move(
             conn,
             by,
             "task_not_shared",
-            f"{held['cause']}. {held['fix']}, then move it again.",
+            told(conn, by, row, held),
             task_id,
             row=row,
-            then=("snooze", "close"),
+            then=("ask", "snooze", "close") if is_bot(by) else ("snooze", "close"),
             version=row.get("version"),
-            said=held,
+            said={**held, "fix": fix_for(conn, by, row, held)},
         )
     ts = H.now()
     visit = row["visit"]
@@ -1913,8 +1945,12 @@ def add_requirement(
     shows: object = None,
     seen_version: int | str | None = None,
     for_action: bool = False,
+    brief: Row | None = None,
+    title: str | None = None,
 ) -> Row:
-    """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
+    """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
+    choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
+    requirement's settings. The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
     `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
     (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
@@ -1952,7 +1988,8 @@ def add_requirement(
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
     if unshared:
-        _refuse(conn, by, "private", f"{unshared['cause']}. {unshared['fix']}.", task_id, said=unshared)
+        said = {**unshared, "fix": fix_for(conn, by, row, unshared)}
+        _refuse(conn, by, "private", told(conn, by, row, unshared), task_id, said=said)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
     ts = H.now()
@@ -1962,7 +1999,7 @@ def add_requirement(
     requirement_id = H.new_id()
     conn.execute(
         "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
-        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "settings, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             requirement_id,
             visit["id"],
@@ -1974,6 +2011,7 @@ def add_requirement(
             line.strip(),
             None if shows is None else json.dumps(shows),
             None if choices is None else json.dumps(choices),
+            json.dumps({**({"brief": brief} if brief else {}), **({"title": title} if title else {})}),
             ts,
         ),
     )

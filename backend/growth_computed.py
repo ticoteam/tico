@@ -405,6 +405,8 @@ def computed(
     return {
         "by": cut,
         "grain": grain,
+        "month": month,
+        "week": week,
         "as_of": today(conf).isoformat(),
         "min_cohort": min_cohort(conf),
         "computed_from": len(rows),

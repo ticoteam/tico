@@ -22,7 +22,7 @@ interface StageRuleCore {
 /** A stage rule as the API sends it (backend/stage_rules_api.py view: names, `can_edit`, and for a bot's suggested
  *  change or retire the rule it `replaces` and whether it `retires` it). */
 interface StageRule extends StageRuleCore {
-  status: string; cost: string; can_edit?: boolean; created_by?: string; suggests?: string;
+  status: string; cost: string; can_edit?: boolean; not_acting?: string; created_by?: string; suggests?: string;
   replaces?: StageRuleCore; retires?: boolean; retire_why?: string;
 }
 /** A behaviour in code that applies at a stage: listed, never edited. */
@@ -32,6 +32,8 @@ interface StageRulesList { items: StageRule[]; built_in: StageBuiltIn[]; may_add
 const SR_EVENTS: [SrEvent, string][] = [['enters', 'A task enters'], ['owner_changes', 'The owner changes'], ['bot_snoozes', 'A bot snoozes'], ['timer', 'A timer']];
 const SR_TIMERS: [string, string][] = [['in_stage', 'in the stage'], ['quiet', 'quiet'], ['waiting_person', 'waiting on a person']];
 const SR_THENS: [SrThen, string][] = [['block', 'Block'], ['tell_manager', 'Tell the manager'], ['tell_owner', 'Tell the owner'], ['move_back', 'Move back']];
+/** Step 1 carries out Tell and Move back on timers alone, so an action When offers Block only (stage_rules.NEEDS_TIMER). */
+const SR_ACTION_THENS: [SrThen, string][] = SR_THENS.filter(([k]) => k === 'block');
 const SR_GROUPS: [SrScope, string][] = [['stage', 'This stage'], ['pipeline', 'The whole pipeline'], ['company', 'Company']];
 const SR_FREE = 'free';
 
@@ -166,6 +168,9 @@ function srParts(r: StageRuleCore): {when: string; ifs: string; act: string} {
   return {when, ifs: ifs.join(', '), act: srWord(SR_THENS, r.then)};
 }
 
+/** "Not acting: …": a rule saved before Tell and Move back needed a timer; it never acts until it is changed. */
+const srIdleHTML = (r: StageRule) => r.not_acting ? `<div class="sr-idle" data-sr-idle>Not acting: ${esc(r.not_acting)}</div>` : '';
+
 function srRowHTML(r: StageRule): string {
   const cost = r.cost === SR_FREE ? 'Free' : r.cost.charAt(0).toUpperCase() + r.cost.slice(1);
   const acts = r.can_edit
@@ -173,7 +178,7 @@ function srRowHTML(r: StageRule): string {
       + `<button type="button" class="ghost sr-act" data-sr-retire="${esc(r.id)}">Retire</button></span>` : '';
   return `<li class="sr-rule" data-sr-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
     + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}" data-sr-cost>${esc(cost)}</span>${acts}</div>`
-    + `<div class="sr-what muted">${esc(srSentence(r))}</div>${r.reason ? `<div class="sr-says muted">“${esc(r.reason)}”</div>` : ''}</li>`;
+    + `<div class="sr-what muted">${esc(srSentence(r))}</div>${srIdleHTML(r)}${r.reason ? `<div class="sr-says muted">“${esc(r.reason)}”</div>` : ''}</li>`;
 }
 
 function srDraw(): void {
@@ -233,7 +238,8 @@ function srFormHTML(r: StageRule | null): string {
         <input name="owner_team" maxlength="200" placeholder="A team's id; empty: the manager's team" aria-label="Team" value="${esc(team)}"></span>
         <input name="label" maxlength="200" placeholder="Has label" aria-label="Has label" value="${esc(str(cond['label']))}">
         <textarea name="jev" rows="2" maxlength="1000" placeholder="A question Jev answers" aria-label="A question Jev answers">${esc(r?.jev ?? '')}</textarea></div>
-      <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then">${srOptions(SR_THENS, r?.then ?? 'tell_manager')}</select></label>
+      <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then" required>${srOptions(SR_THENS, r?.then ?? 'block')}</select></label>
+      <p class="sr-idle" data-sr-thenline hidden></p>
       <label class="ru-fl"><span class="ru-lbl">Says</span><input name="reason" maxlength="1000" value="${esc(r?.reason ?? '')}" placeholder="What the Block or Tell says"></label>
       <p class="sr-costline muted" data-sr-costline></p>
       <p class="ru-status" role="status"></p>
@@ -248,6 +254,21 @@ function srFormSync(form: HTMLFormElement | null): void {
   const timer = f.event.value === 'timer';
   const box = form.querySelector<HTMLElement>('[data-sr-timer]');
   if (box) box.hidden = !timer;
+  // An action When offers Block alone: Tell and Move back need a timer in step 1.
+  // A Then the When no longer offers (an old rule that never acted) is never swapped for another in silence: the
+  // choice is left empty, and the required select stops Save until the person picks.
+  const thens = timer ? SR_THENS : SR_ACTION_THENS, picked = f.then.value, offered = thens.some(([k]) => k === picked);
+  const shown = `${offered ? '' : '-,'}${thens.map(([k]) => k).join(',')}`;
+  if (f.then.dataset['srThens'] !== shown) {
+    f.then.dataset['srThens'] = shown;
+    f.then.innerHTML = (offered ? '' : `<option value="" selected disabled>${esc(timer ? 'Pick a Then' : 'Pick Block, or a timer for Tell')}</option>`)
+      + srOptions(thens, offered ? picked : '');
+  }
+  const thenLine = form.querySelector<HTMLElement>('[data-sr-thenline]');
+  if (thenLine) {
+    thenLine.hidden = timer;
+    thenLine.textContent = timer ? '' : 'Tell and Move back need a timer in step 1: pick N h in the stage, quiet or waiting on a person.';
+  }
   const jev = !!f.jev.value.trim();
   const line = form.querySelector<HTMLElement>('[data-sr-costline]');
   if (line) line.textContent = jev ? 'Cost: one Jev call per event' : 'Cost: free';

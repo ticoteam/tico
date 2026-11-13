@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request
 
 from . import ask_ingest as _ask_ingest
+from . import ask_shape
 from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
@@ -27,6 +28,7 @@ from . import task_caps as _task_caps
 from . import task_rule_gate as _task_rule_gate
 from . import stage_rules as _stage_rules
 from . import task_engine as _task_engine
+from . import task_privacy as _task_privacy
 from .store import H as _H
 from .store import Problem
 
@@ -42,6 +44,7 @@ task_caps: Any = _task_caps
 task_rule_gate: Any = _task_rule_gate
 stage_rules: Any = _stage_rules
 task_engine: Any = _task_engine
+privacy: Any = _task_privacy
 
 # A snooze's bare date is the start of that day here, as the bot tools say ("the start of that day, Pacific").
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -133,8 +136,11 @@ def register(
         also: Callable[[Any, Any], Any] | None = None,
         hands_over: bool = False,
         ask: bool = False,
+        late: bool = False,
     ) -> None:
-        """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker)."""
+        """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker). `late`:
+        under rules that only warn, the write goes first and its check right after; its call says where its words went
+        (org_rule_check `late_on`)."""
         writes[operation] = {
             "model": model,
             "said": said,
@@ -143,6 +149,7 @@ def register(
             "also": also,
             "hands_over": hands_over,
             "ask": ask,
+            "late": late,
         }
 
     def carry(c: Any, who: Any, task_id: str, gate: Any, text: Any, version: Any) -> tuple[Any, Any]:
@@ -202,6 +209,8 @@ def register(
             to=spec["to"](body),
             also=reached(spec, params),
             hands_over=spec["hands_over"],
+            late=spec["late"],
+            ask=spec["ask"],
         )
 
     def checked(request: Request, tid: str, body: Any, operation: str, params: Any = None) -> Any:
@@ -251,9 +260,13 @@ def register(
     def done_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         setup_finished(c, who, task_id)
         note, version = carry(c, who, task_id, gate, body.note or "", body.version)
-        H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None)
+        done: dict[str, Any] = H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None) or {}
+        # A done note is kept on the answer it gave (answers.answer names it): a late check's warning line goes there.
+        answered: str | None = done.get("answer_id")
+        if answered:
+            org_rule_check.late_on(c, gate, "answer", answer=answered)
 
-    says("task_done", M.TaskDone, lambda body: [("Done", body.note)], done_call)
+    says("task_done", M.TaskDone, lambda body: [("Done", body.note)], done_call, late=True)
 
     @app.post("/api/v2/tasks/{tid}/done")
     def task_done(request: Request, tid: str, body: M.TaskDone):
@@ -265,6 +278,18 @@ def register(
         if str(body.to).strip().lower() == "done":
             setup_finished(c, who, task_id)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
+        if body.let_see:
+            if str(body.to).strip().lower() != "next":
+                raise Problem("bad_request", "Letting someone see a task moves it to the next stage: to is next", 422)
+            if who.via == "botops" and not who.confirmed:
+                # As the readers route: BotOps acting for a person changes who sees a task only on their own tap.
+                raise Problem("confirm_required", "Letting someone see a private task needs the person's own tap", 403)
+
+            def check(added: list[str]) -> None:
+                privacy.require_readers(c, who, task_id, added, task_id)
+
+            H.task_let_see(c, who.actor, task_id, body.let_see, version, mover=mover(c, who) or None, check=check)
+            return
         H.task_move(c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None)
 
     says("task_move", M.TaskMove, lambda body: [("Why", body.why)], move_call)
@@ -416,11 +441,82 @@ def register(
 
     # ------------------------------------------------------------------ asks
     def ask_said(body: Any) -> list[tuple[str, Any]]:
+        """What the rule check reads of an ask: its line, why it matters, each choice with its line (the one
+        recommended marked) and what it shows. One call reads all of it."""
+        details: list[str] = list(body.details or [])
+        best = ask_shape.recommended(body.choices, body.recommend)
+        choices = [
+            f"{label}{' (recommended)' if label.strip() == best else ''}"
+            + (f": {details[i]}" if i < len(details) and details[i] else "")
+            for i, label in enumerate(body.choices or [])
+        ]
         return [
+            ("Title", body.title),
             ("Ask", body.line),
-            ("Choices", " / ".join(body.choices or [])),
+            ("Why", body.why),
+            ("Choices", "\n".join(choices)),
             ("Shows", "\n".join(body.show or [])),
         ]
+
+    def ask_brief(body: Any) -> dict[str, Any] | None:
+        """What a question keeps besides its line and choices (task_calls._brief_of reads it back)."""
+        if not (body.why or "").strip():
+            return None
+        return {
+            "why": body.why.strip(),
+            "details": [d.strip() for d in body.details] if body.details else None,
+            "recommend": ask_shape.recommended(body.choices, body.recommend),
+        }
+
+    def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk) -> None:
+        """A bot's question to a person that is not shaped as one (backend/ask_shape.py) is refused before the rule
+        check's call, and nothing is written but the refusal (rule `task_ask_shape`: fixed by rewriting, never counted
+        toward quarantine)."""
+        caller: Any = request.state.identity
+        if caller.role != "bot" or body.kind != "answer":
+            return
+        with store.read() as c:
+            target = H.resolve_actor(c, body.to) or ""
+            if not H.is_human(target):
+                return
+            name = H.actor_name(c, target) or "They"
+
+            def exists(kind: str, ident: str, version: int | None) -> bool:
+                """A task by its id or number (the number through its unique index). A page or file by its id (pages
+                are files), not archived, not a deleted page, and at the version it pins when it pins one."""
+                if kind == "task":
+                    number = int(ident) if ident.isdigit() and int(ident) < 2**63 else None
+                    return (
+                        c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
+                    )
+                found = c.execute(
+                    "SELECT f.current_version FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.id=? "
+                    "AND f.archived=0 AND (p.file_id IS NULL OR (p.deleted_at IS NULL AND p.archived=0))",
+                    (ident,),
+                ).fetchone()
+                if found is None:
+                    return False
+                if version is None:
+                    return True
+                sql = "SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?"
+                return c.execute(sql, (ident, version)).fetchone() is not None
+
+            detail = ask_shape.refusal(
+                name,
+                why=body.why,
+                choices=body.choices,
+                details=body.details,
+                recommend=body.recommend,
+                shows=body.show,
+                exists=exists,
+            )
+        if detail:
+            work(
+                request,
+                tid,
+                body,
+                lambda c, who, task_id: H.refuse(c, who.actor, "task_ask_shape", detail, task=task_id),
+            )
 
     def ask_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         from . import lifecycle as _lifecycle
@@ -441,16 +537,23 @@ def register(
             shows=body.show or None,
             seen_version=version,
             mover=mover(c, who) or None,
+            brief=ask_brief(body),
+            title=(body.title or "").strip() or None,
         )
+        if gate and gate.get("late"):
+            saved: dict[str, Any] = H.task(c, task_id) or {}
+            org_rule_check.late_on(c, gate, "task_note", task=task_id, note=saved.get("note") or "")
         return {"requirement_id": made.get("requirement_id")}
 
-    says("task_ask", M.TaskAsk, ask_said, ask_call, to=lambda body: body.to, ask=True)
+    says("task_ask", M.TaskAsk, ask_said, ask_call, to=lambda body: body.to, ask=True, late=True)
 
     @app.post("/api/v2/tasks/{tid}/asks")
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
         """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19). A
         bot's ask a company rule covers is refused with the rule's words (docs/pipelines-v3.md, "How a rule stops the
-        next one")."""
+        next one"). A bot's question to a person says why it matters, and its choices (2 to 4) each say what happens
+        and which one it recommends (backend/ask_shape.py): refused before any check otherwise."""
+        ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 
     def withdraw_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:

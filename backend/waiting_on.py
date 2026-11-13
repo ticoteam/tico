@@ -69,7 +69,9 @@ class Wait:
     may not open that task is not told them (`unnamed`). `fix` is set on a Paused wait a person fixes before any bot
     can act (a requirement's `Standing.fix`, such as Connect GitHub): where they fix it. Nobody is woken for it. `href`
     is the page that shows a Paused bot's cause (task_wakes.cause_href: Settings > Computers for a bot with no computer,
-    Billing when out of credit), for a link beside the line; it changes nothing about who is woken."""
+    Billing when out of credit), for a link beside the line; it changes nothing about who is woken. `share` is who a
+    private task waits on to be let in (the next stage's owner, or someone it asks, who can't see it): the person who
+    has the task lets exactly them see it from their Needs you card (task #392; task_calls.task_let_see)."""
 
     state: str
     who: str | None = None
@@ -81,6 +83,7 @@ class Wait:
     about: str | None = None
     fix: str | None = None
     href: str | None = None
+    share: tuple[str, ...] | None = None
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -121,6 +124,10 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     del out["about"], out["fix"]
     if out["href"] is None:
         del out["href"]
+    if out["share"] is None:
+        del out["share"]
+    else:
+        out["share"] = list(out["share"])
     return out
 
 
@@ -336,12 +343,19 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
     return None
 
 
-def _share_line(conn: "sqlite3.Connection", who: str, verb: str = "Add") -> str:
-    """What the person who has a private task does for someone it asks who may not open it (`unreadable`)."""
+def names_of(conn: "sqlite3.Connection", whom: Sequence[str]) -> str:
+    """'Reviewer 1', 'Reviewer 1 and Other', 'A, B and C'."""
     from . import hubdb
 
     H: Any = hubdb
-    return f"{verb} {H.actor_name(conn, who)} under Who can see"
+    names = [str(H.actor_name(conn, who)) for who in whom]
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _share_line(conn: "sqlite3.Connection", whom: Sequence[str]) -> str:
+    """Why a private task waits on its person, in their words (task #392): `whom` (asked, or the next step's) can't
+    see it. Their card's button lets exactly them see it (`Wait.share`)."""
+    return f"{names_of(conn, whom)} can't see this task"
 
 
 _FILED_OPEN_SQL = (
@@ -429,7 +443,8 @@ def of(
 
     # While it waits on a task it merges after, GitHub's "Not queued until #40 merges" is that same wait (merge_order).
     ordered = any(merge_order.is_order(s.requirement) for s in unmet)
-    shut = unreadable(conn, row, unmet)  # asked, and may not open it
+    asked_out = unreadable(conn, row, unmet)  # asked, and may not open it
+    shut: tuple[str, ...] | None = (asked_out,) if asked_out else None
     for standing in unmet:
         requirement = standing.requirement
         # An ask's wait counts from when it was asked (a page's version, once Jev looked), else when the stage began.
@@ -469,7 +484,8 @@ def of(
                 continue
             if shut and named and E.not_shared(conn, row, named):
                 # Someone who may not open it: the task's person shares it first. Work of theirs, not an ask.
-                out.append(Wait(PERSON, person_for(conn, row), _share_line(conn, named), requirement["id"], since))
+                line = _share_line(conn, (named,))
+                out.append(Wait(PERSON, person_for(conn, row), line, requirement["id"], since, share=(named,)))
                 continue
             out.append(_turn(conn, row, named, line, requirement["id"], since, True, seen))
         elif by_hand or asked:
@@ -502,6 +518,7 @@ def of(
         name = ahead["name"] if ahead else "the next stage"
         line = f"No room in {name}" if full else f"Moving to {name}"
         held = E.shut_out(conn, row, ahead) if ahead and not full else None
+        share = None
         if held:
             # The next stage's owner, or someone it asks, cannot read this private task: it waits until someone who
             # can see it shares it (the engine never adds a reader). Who that is, and why.
@@ -510,22 +527,27 @@ def of(
             H: Any = hubdb
             sharer = person_for(conn, row)
             by = str(H.actor_name(conn, sharer)) if sharer else "someone who can see it"
-            line = f"Waits on {by} to share it: {held['cause']}"
-        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
+            line = f"Waits on {by}: {held['cause']}"
+            # A company task turning private has no reader to add (a company task is seen by everyone): no share button.
+            if H.task_private(conn, row):
+                shut = shut or tuple(held["whom"])
+                share = tuple(held["whom"])
+        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=share))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
         # first thing it says is why.
         late = visit.get("late_person_at")
         line = f"Late in {stage['name']}" if late else f"Stuck in {stage['name']}"
         if shut:
-            line = f"{line}: {_share_line(conn, shut, 'add')}"
+            line = f"{line}: {_share_line(conn, shut)}"
         since = late or visit.get("last_change_at") or entered
-        out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since))
+        out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
         # An OK or an answer asked of a person, and a cause a person fixes first, stay theirs, as under a bot's snooze.
-        out = [wait for wait in out if wait.state == SNOOZED or (wait.state == PERSON and wait.ask) or wait.fix] + [
+        # A snooze left open does not show: blocked wins, and the snooze's wait is back when the last blocker ends.
+        out = [wait for wait in out if (wait.state == PERSON and wait.ask) or wait.fix] + [
             Wait(
                 TASKS,
                 blocker,
@@ -1104,7 +1126,9 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     listed. A bot's snooze hides no ask: each OK or answer still asked of a person stays in their list (Acme rc.5, Nov
     11: a manager bot's snooze took a people-only OK out of the person's list for two days); the rest of the task is
     set aside. An ask the stage's merge conflict waits on says so in one more sentence
-    (pr_conflicts.held).
+    (pr_conflicts.held). A task of theirs that others depend on says "Blocks #307, #308" (`_blocks`), even when it is
+    not their turn; the tasks it blocks are in nobody's list. Like every entry here, that is for a task on a pipeline:
+    a plain task someone owns is not in Needs you, so its owner reads "Blocks" on the task itself.
 
     Read from the tasks that can put something in this person's list (`candidates`), each worked out as
     `needs_by_person` works out every task, so the list is the one it gives this person, item for item."""
@@ -1136,6 +1160,7 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
     seen = _seen(conn)
     fixers: dict[str, str | None] = {}
     read = prime(conn, task_ids)
+    holding = task_depends.blocking(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
@@ -1170,6 +1195,9 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
                         "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
                     }
                 )
+        owner = str(row.get("owner_id") or "")
+        if holding.get(str(task_id)) and owner in only and is_human(owner) and _holds_up(conn, row):
+            _blocks(conn, out.setdefault(owner, []), row, owner, holding[str(task_id)])
         for wait in waits:
             if wait.state != PAUSED or not wait.who:
                 continue
@@ -1205,6 +1233,51 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
         person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
         for person, items in out.items()
     }
+
+
+def _holds_up(conn: "sqlite3.Connection", row: Row) -> bool:
+    """Whether a task that others depend on is its person owner's to move on: not set aside by them, and not itself
+    blocked (the end of the chain is the one to move)."""
+    snooze: Row = row.get("snooze") or {}
+    if snooze and not is_bot(snooze.get("by_id")):
+        return False
+    return not task_depends.blocked(conn, str(row["id"]))
+
+
+def _blocks(
+    conn: "sqlite3.Connection", mine: list[Row], row: Row, owner: str, held: list[tuple[str, Any, str]]
+) -> None:
+    """ "Blocks #307, #308" in the Needs you of the person who owns a task others depend on (task_depends.blocking).
+    Said after the task's own line where it is already in their list, else as the task's one entry. A task they may
+    not read is counted, not named."""
+    from . import hubdb
+
+    H: Any = hubdb
+    named: list[str] = []
+    for other, number, _since in held:
+        found = H.task(conn, other)
+        if found and H.task_private_readable(conn, owner, found):
+            named.append(task_depends.ref({"id": other, "number": number}))
+    said = task_depends.blocks_line(named, len(held) - len(named))
+    task_id = str(row["id"])
+    entry: Row | None = next((e for e in mine if e.get("task_id") == task_id and e["kind"] == "task"), None)
+    if entry is None:
+        entry = {
+            "kind": "task",
+            "task_id": task_id,
+            "number": row.get("number"),
+            "title": row.get("title"),
+            "pipeline_id": row["pipeline_id"],
+            "stage_id": row["stage_id"],
+            "requirement_id": None,
+            "visit_id": None,
+            "line": "",
+            "missing": [],
+            "since": min(since for _other, _number, since in held),
+        }
+        mine.append(entry)
+    entry["line"] = R.sentences(str(entry["line"] or ""), said)
+    entry["blocks"] = named
 
 
 def listed(waits: list[Wait], row: Row) -> list[Wait]:

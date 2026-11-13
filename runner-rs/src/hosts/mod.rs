@@ -217,8 +217,6 @@ pub struct Settings {
     pub background_wait: Option<std::time::Duration>,
     /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
     pub require_existing_session: bool,
-    /// Packet-only tidy turns have no checkout tools or Hub MCP server.
-    pub packet_only: bool,
     /// Where Claude Code keeps its auto memory for this turn: `memory/claude/` in the turn's checkout of the bot's
     /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
     /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).
@@ -1161,6 +1159,20 @@ impl Host {
             Host::Cursor(h) => h.start_thread(settings).await,
             Host::Grok(h) => h.start_thread(bot, settings).await,
             Host::AppDriver(h) => Ok(h.start_thread(settings)),
+        }
+    }
+
+    /// A new thread started on a fork of session `from`, and whether it is one: only Claude Code forks a session;
+    /// every other host starts a plain new thread.
+    pub async fn start_thread_forked(
+        &self,
+        bot: &str,
+        settings: &Settings,
+        from: &str,
+    ) -> Result<(String, bool), HostError> {
+        match self {
+            Host::Claude(h) => Ok((h.start_thread_forked(settings, from), true)),
+            _ => Ok((self.start_thread(bot, settings).await?, false)),
         }
     }
 

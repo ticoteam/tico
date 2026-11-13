@@ -86,6 +86,9 @@ function snoozeMenu(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
       void save('snooze', {snooze: at.toISOString()});
     }});
 }
+// The tasks whose Details the reader opened: kept across a redraw, which would shut it.
+const TASK_DETAILS_OPEN = new Set<string>();
+function taskDetailsOpen(d: HTMLElement): void { const el: HTMLDetailsElement | null = $('details.task-details', d); if (el) el.open = true; }
 function taskPropsHTML(t: PropTask): string {
   const r = taskPropRights(t);
   const row = (key: string, label: string, value: string, o: PropRowOptions = {}): string => {
@@ -97,10 +100,11 @@ function taskPropsHTML(t: PropTask): string {
   };
   const txt = (s: string): string => `<span class="prop-txt">${esc(s)}</span>`;
   const rows: string[] = [];
+  let stageRow = '';
   // Stage: the pipeline and the stage it is in (Done or Closed once finished); its menu moves it back or on.
   const stageName = taskStatusLabel(t), pipeName = t.pipeline?.name || '';
-  rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
-    {edit: r.edit && !!t.pipeline_id, words: stageName}));
+  stageRow = row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
+    {edit: r.edit && !!t.pipeline_id, words: stageName});
   // Owner and who asked. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
@@ -118,16 +122,16 @@ function taskPropsHTML(t: PropTask): string {
   const dueWords = !dueAt ? '' : info?.kind === 'wake' ? `${info.words.split(' ')[0]} ${dueDay}` : dueDay;
   const dueLate = !!info?.late;
   const dueISO = dueAt ? new Date(Number(dueDayAt) - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
-  rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
+  rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('None')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date data-task-field="due" tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
   // Tags: chips (each opens its tag) and a small +
   const chips = tagChips(t.labels || [], t.tags || [], r.links, true);
-  rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips
-    || (r.links ? '' : '<span class="prop-v ro empty"><span class="prop-txt">None</span></span>')}${r.links
-    ? (chips ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>`
-      : `<button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Tags: none, add a tag"><span class="prop-txt">Add tags</span></button>`) : ''}</span></span></div>`);
+  if (chips) rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips}${r.links
+    ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>` : ''}</span></span></div>`);
+  // No tags: the row hides, and a lone button keeps the way to the first tag.
+  else if (r.links) rows.push(`<div class="prop" data-prop-row="add-tag"><span class="prop-k" aria-hidden="true"></span><span class="prop-vwrap"><button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag"><span class="prop-txt">Add a tag</span></button></span></div>`);
   // Part of: the parent's title is a link to it. A parent is fixed when the task is filed (backend/task_relations.py).
   // Other relations are in the Related section.
   const parent = taskParent(t);
@@ -137,8 +141,13 @@ function taskPropsHTML(t: PropTask): string {
   } else if (parent) {
     rows.push(`<div class="prop" data-prop-row="parent"><span class="prop-k" aria-hidden="true">Part of</span><span class="prop-vwrap">`
       + `<button type="button" class="prop-v prop-link" data-open-task="${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button></span></div>`);
-  } else rows.push(row('parent', 'Part of', txt('None'), {empty: true, words: 'none'}));
-  return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
+  }   // no parent: the row hides
+  // Details: one line (owner · who sees it · tags) that opens in place to the rows. Stage stays above it. A phone's Info
+  // tab is the whole window, so there the rows are open.
+  const tagCount = (t.labels || []).length;
+  const line = [actorLabel(t.owner_id), VISIBLE_WORDS[taskVisibleNow(t)], tagCount ? `${tagCount} tag${tagCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  const open = TASK_DETAILS_OPEN.has(String(t.id)) || matchMedia('(max-width:760px)').matches;
+  return `<div class="props">${stageRow}</div><details class="task-details" data-task-details="${esc(String(t.id))}"${open ? ' open' : ''}><summary><span class="task-details-k">Details</span><span class="task-details-line">${esc(line)}</span><span class="task-details-chev" aria-hidden="true">›</span></summary><div class="props">${rows.join('')}</div></details><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
 const PROP_WORDS: Record<string, string> = {visible: 'Visible to', readers: 'Visible to', followers: 'Followers', stage: 'Stage', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', people: 'People', publication: 'Public', size: 'Size', snooze: 'Snooze'};
@@ -368,6 +377,8 @@ function taskEarlierStages(t: PropTask): {id: string; name: string}[] {
 function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void {
   const box = $('[data-task-props]', d) as HTMLElement | null; if (!box) return;
   taskPropsMsgPaint(d);
+  const details: HTMLDetailsElement | null = $('details.task-details', d);
+  if (details) details.addEventListener('toggle', () => { TASK_DETAILS_OPEN[details.open ? 'add' : 'delete'](String(task.id)); });
   const msg = propsMsgBox(d);
   if (msg) msg.onclick = ev => {
     const anyway = d.propsAnyway;
@@ -408,12 +419,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     } else if (key === 'people') {
       // First the role (one already on the task, or a new name), then the person or bot.
       const pick = (role: string): void => {
-        const have = new Set((task.roles || {})[role] || []);
-        const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll<HTMLOptionElement>('option[value]:not([value=""])');
-        const items = [...opts].map(o => ({value: o.value, text: o.textContent ?? '', actor: o.value.includes(':') ? o.value : 'bot:' + o.value,
-          html: `<span class="tl-opt-face">${actorFace(o.value.includes(':') ? o.value : 'bot:' + o.value, 16)}</span><span>${esc(o.textContent ?? '')}</span>`}))
-          .filter(it => !have.has(it.actor));
-        propMenu(d, b, {label: 'Add as ' + roleWord(role), find: 'Find a person or bot', items, none: 'Everyone is on it',
+        giveToOpen(b, {label: 'Add as ' + roleWord(role), task, exclude: (task.roles || {})[role] || [], none: 'Everyone is on it',
           onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.actor]}}))});
       };
       propMenu(d, b, {label: 'Role', entry: 'Role, like reviewer', none: 'Type a role, then Enter',
@@ -461,11 +467,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       propMenu(d, b, {label: 'Add a follower', find: 'Find a person or bot', items, none: 'Nobody to add',
         onPick: it => void taskFollow(d, task, {actor: it.value, following: true})});
     } else if (key === 'owner') {
-      const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll<HTMLOptionElement>('option[value]:not([value=""])');
-      propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
-        const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-        return {value: o.value, text: o.textContent ?? '', html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent ?? '')}</span>`, checked: task.owner_id === actor, actor};
-      }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
+      // Give to… (give-to.ts): searchable, with suggestions for this task; the owner shows ✓.
+      if (!giveToJustClosed(b)) giveToOpen(b, {label: 'Owner', task, selected: task.owner_id || '',
+        onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
     } else if (key === 'due') {
       const input: HTMLInputElement | null = $('[data-prop-date]', d);
       d.focusProp = 'due';
@@ -507,7 +511,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       items.push({text: 'Move back…', run: () => setTimeout(() => void taskStageMenu(d, more, task, save, 'back'))});
       items.push({text: 'Move on', run: () => taskMoveOn(d, more, save)});
     }
-    if (r.edit) items.push({text: 'Reassign…', run: () => setTimeout(() => ($('[data-prop="owner"]', d) as HTMLElement | null)?.click())});
+    if (r.edit) items.push({text: 'Reassign…', run: () => setTimeout(() => { taskDetailsOpen(d); ($('[data-prop="owner"]', d) as HTMLElement | null)?.click(); })});
     // A reopen says why (docs/pipelines-v3.md C24): the menu takes the note, and Enter reopens it.
     if (!r.live && r.reopen) items.push({text: 'Reopen…', run: () => setTimeout(() => propMenu(d, more, {label: 'Reopen', entry: 'Why reopen it?',
       none: '', onEntry: v => void save('stage', {move: 'reopen', why: v})}))});

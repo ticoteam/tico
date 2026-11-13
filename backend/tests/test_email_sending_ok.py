@@ -107,7 +107,7 @@ def test_someone_who_may_not_approve_this_inbox_cannot_ok_it(store):
     with store.transaction() as c:
         task_id = K.task_of(c, queued["approval_id"])
         # The ask's task is private: it goes to Ben only once someone who sees it lets Ben see it too.
-        with pytest.raises(H.Refused, match="Ben cannot read this private task"):
+        with pytest.raises(H.Refused, match="Ben can't see this private task"):
             H.task_give(c, ANA, task_id, queued["approval_id"], BEN)
     with store.transaction() as c:
         H.set_task_readers(c, "bot:ops", task_id, add=[BEN])

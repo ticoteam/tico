@@ -236,6 +236,9 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
     reasons = " ".join(str(verdict.get("reasons") or verdict.get("last_error") or "").split())
     for page in pages:
         task_id = str(page["task_id"])
+        requirement = R.get(conn, page["requirement_id"]) or {"kind": "page"}
+        # On a page a person OKs, the task page shows Jev's line only when a part is missing (task #351).
+        quiet = said != "not_met" and bool(requirement.get("person_id") or R.people_only(requirement))
         E._event(  # pyright: ignore[reportPrivateUsage]
             conn,
             task_id,
@@ -243,14 +246,13 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
             "jev_verdict",
             None,
             said,
-            reasons or None,
+            None if quiet else (reasons or None),
             {"requirement": page["requirement_id"], "file_id": page["file_id"], "version": page["version"]},
         )
         if E.advance(conn, task_id) is not None:
             continue
         E.changed(conn, task_id, E.SYSTEM)
-        if said == "not_met":
-            requirement = R.get(conn, page["requirement_id"]) or {"kind": "page"}
+        if said == "not_met" and R.jev_gates(requirement):
             line = (
                 f'Jev sent back "{R.name_of(requirement)}": {reasons}'
                 if reasons
@@ -258,15 +260,15 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
             )
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
         elif said in ("unsure", "failed"):
-            _unsure_wake(conn, task_id, page, f"jev:{verdict['id']}")
+            # Once per page version: a second unsure of the same version (judged again) wakes nobody new.
+            _unsure_wake(conn, task_id, page, f"jev:{page['file_id']}@{page['version']}")
         # Jev has looked at a page a person OKs: commits since the reviews are a bot's to review first.
         task_wakes.review_new(conn, task_id)
 
 
 def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str) -> None:
-    """Jev unsure on a stage a bot holds goes to bots first (task_requirements._unsure_to_bots): wake the bot it is back
-    with, with Jev's reason and the check line, or the manager bot that decides it (at once when Jev could not check).
-    A person's turn wakes nobody."""
+    """Jev unsure on a stage a bot holds is the manager bot's to look at once (task_requirements._unsure_to_bots): wake
+    it with Jev's line naming the part. The page's own bot is not woken. A person's turn wakes nobody."""
     from . import task_engine as E
     from . import task_requirements as R
     from . import task_wakes
@@ -278,12 +280,9 @@ def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str)
     answer = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
     standing = R.standing(conn, row, requirement, answer)
     name = R.name_of(requirement)
-    if standing.state == R.NOT_MET and standing.line.startswith(R.FIX_OR_EXPLAIN):
-        E.tell_owner(conn, task_id, f'Jev is unsure of "{name}": {standing.line}', what)
-    elif standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
-        what_jev = "could not check" if "Jev couldn't check" in standing.line else "was unsure of"
-        twice = " twice" if what_jev == "was unsure of" else ""
-        lead = f'Jev {what_jev} "{name}"{twice}: you decide it, as the pipeline\'s manager.'
+    if standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
+        what_jev = "could not check" if "Jev couldn't check" in standing.line else "is unsure of"
+        lead = f'Jev {what_jev} "{name}": you decide it, as the pipeline\'s manager.'
         task_wakes.add(
             conn,
             row,

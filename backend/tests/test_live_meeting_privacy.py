@@ -279,7 +279,12 @@ def publication_responses(api, token):
     writes = {
         "human": (
             f"tasks/{team_task['id']}/asks",
-            {"to": "ana", "line": "Synthetic meeting summary?", "version": team_task["version"]},
+            {
+                "to": "ana",
+                "line": "Synthetic meeting summary?",
+                "version": team_task["version"],
+                "why": "It is shared.",
+            },
         ),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
         "task": (

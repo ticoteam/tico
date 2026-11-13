@@ -154,10 +154,17 @@ def build(hub, state):
                 "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('botops','hermes','x-botops',?,?)",
                 (H.now(), "human:owner"),
             )
+        facts["agent"] = "botops"  # the walk waits for its row on Settings > Computers before auditing
         ask = (
             {"to": "owner", "kind": "ok", "line": "OK to give the Builder write access to the app repository?"}
             if state == "sign-off"
-            else {"to": "owner", "kind": "answer", "line": "Which GitHub organization holds your app's code?"}
+            else {
+                "to": "owner",
+                "kind": "answer",
+                "line": "Which GitHub organization holds your app's code?",
+                # A bot's question to a person says why it matters (backend/ask_shape.py).
+                "why": "The Builder can only open pull requests in that organization.",
+            }
         )
         hub.call("post", f"tasks/{task['id']}/asks", {**ask, "version": task.get("version", 1)}, token=BOT_TOKEN)
         facts["task"] = task["id"]

@@ -10,7 +10,7 @@ type BpOption = Pick<BpChoice, 'name' | 'label' | 'description'>;
 interface BpProfile { name?: string; label?: string; description?: string; summary?: string; digest_hour?: number | null; pulls?: string | null; takes?: string | null; sweeps?: boolean | null; }
 interface BpBot { id: string; can_manage?: boolean; profile?: BpProfile | null; }
 // A history row's value for the profile field.
-interface BpHistoryValue { profile?: string | null; options?: { digest_hour?: number | null; batch_seconds?: number | null; takes?: string | null } | null; }
+interface BpHistoryValue { profile?: string | null; options?: { digest_hour?: number | null; takes?: string | null } | null; }
 
 // The picker reads its choices and their one-line descriptions from GET /v2/profiles, so a profile the server adds
 // shows with no UI change. The labels here are for history rows and a picker drawn before that answer lands.
@@ -97,7 +97,6 @@ function profileHistoryWords(value: BpHistoryValue | null | undefined): string {
   if (!value?.profile) return 'none';
   const o = value.options || {}, extra: string[] = [];
   if (o.digest_hour != null) extra.push('digest ' + profileHour(o.digest_hour));
-  if (o.batch_seconds != null) extra.push(`batch ${Math.round(o.batch_seconds / 60)} min`);
   if (o.takes) extra.push('takes ' + o.takes);
   return [profileLabel(value.profile), ...extra].join(' · ');
 }

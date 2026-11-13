@@ -2987,6 +2987,12 @@ def check_message_refs(refs, *, make_page=False):
         from .store import Problem
 
         raise Problem("forbidden", "Use the task’s Make page control", 403)
+    if refs and ("key_grant" in refs or refs.get("card") == "key_grant"):
+        from . import key_grants
+        from .store import Problem
+
+        if not key_grants.MINTING.get():  # only the Tools owner's proposal route builds a key grant card
+            raise Problem("forbidden", "A key grant card is built from the Tools owner's proposal", 403)
 
 
 def say(
@@ -7891,7 +7897,11 @@ def tasks(
         where.append("id IN (SELECT value FROM json_each(?))")
         args.append(json.dumps(list(ids)))
     if snoozed in ("hide", "only"):
-        where.append(("NOT " if snoozed == "hide" else "") + SNOOZED % "tasks")
+        # A blocked task is listed as blocked, never as snoozed, even under a snooze a bot left open (task_depends).
+        from . import task_depends
+
+        aside = f"({SNOOZED % 'tasks'} AND NOT {task_depends.BLOCKED % 'tasks'})"
+        where.append(("NOT " if snoozed == "hide" else "") + aside)
     if label:
         where.append(
             "EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
@@ -8196,6 +8206,7 @@ from .task_calls import (
     task_close as task_close,
     task_done as task_done,
     task_give as task_give,
+    task_let_see as task_let_see,
     task_move as task_move,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,

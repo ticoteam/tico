@@ -43,6 +43,30 @@ def state(attempt_state):
     return STATE[attempt_state]
 
 
+# A failed run, as Health counts it and Runs lists it: a try that ended failed, or one that started and was lost. A try
+# its computer never started (a lease that lapsed before the start, or a hand-back) went back in the queue, so it is a
+# retry: its job counts once, by the try that failed it, if it fails in the end (Nov 12: Health said 352 failed runs,
+# about 310 of them retries of one job).
+# "The last day" of failed runs: Health counts over it and Runs lists over it, so the two never differ.
+FAILED_HOURS = 24
+FAILED = "(state='failed' OR (state='expired' AND started_at IS NOT NULL))"
+
+
+def failed(c, since, limit=200):
+    """(how many jobs failed since `since`, the newest failed try of each of them, newest first, up to `limit`).
+    A run with no job (an older run record) counts as its own."""
+    total = c.execute(
+        f"SELECT count(DISTINCT coalesce(job_id,id)) FROM attempts WHERE {FAILED} AND finished_at>?", (since,)
+    ).fetchone()[0]
+    # SQLite takes the bare columns from the row that holds max(finished_at): each job's newest failed try.
+    rows = c.execute(
+        "SELECT id,bot_id,state,max(finished_at) AS finished_at FROM attempts "
+        f"WHERE {FAILED} AND finished_at>? GROUP BY coalesce(job_id,id) ORDER BY finished_at DESC LIMIT ?",
+        (since, limit),
+    ).fetchall()
+    return total, rows
+
+
 # The runner software's own calls (runner-rs, contracts/runner): enrollment, heartbeats, claims, leases, a run's
 # events and completion, its uploads and credentials. A person's or bot's other calls are the public contract.
 RUNNER_WIRE = re.compile(

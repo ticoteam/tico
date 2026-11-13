@@ -706,7 +706,7 @@ def github_5xx_for_hours(r: SoftRig) -> None:
 
 
 # ----------------------------------------------------------------------------- Jev
-@case("jev-fails-three-times", "Jev's call fails 3 times: a person decides, and their OK moves it")
+@case("jev-fails-three-times", "Jev's call fails 3 times on a spec: a person decides, shown nothing from Jev")
 def jev_fails_three_times(r: SoftRig) -> None:
     p = r.idea("Webhooks")
     r.by_hand(p)
@@ -715,30 +715,30 @@ def jev_fails_three_times(r: SoftRig) -> None:
         r.w.shift(gap + 1)
         r.jev()
         r.check()
-    r.says(p, "Jev couldn't check this")
+    r.says(p, "OK ")
     expect(r.fake_jev.counts[FAIL] == 3, f"Jev was called {r.fake_jev.counts[FAIL]} times, not 3")
     person = r.person_on(p)
     r.ok_page(p, person)
     r.at(p, "In development")
 
 
-@case("jev-unsure", "Jev is unsure: a person's turn with Jev's reasons; their OK moves it")
+@case("jev-unsure", "Jev is unsure of a spec: the person's turn with nothing from Jev; their OK moves it")
 def jev_unsure(r: SoftRig) -> None:
     p = r.idea("Audit trail")
     r.by_hand(p)
     r.attach(p, r.page(PM, "Spec: audit trail", verdict=UNSURE), PM)
     r.jev()
     r.check()
-    r.says(p, "Jev is unsure")
+    r.says(p, "OK ")
     r.ok_page(p)
     r.at(p, "In development")
 
 
 @case(
-    "jev-unsure-bot-first",
-    "Jev unsure of a Review page: back to the reviewer once, then the pipeline's manager decides with why; no person",
+    "jev-unsure-manager-looks",
+    "Jev unsure of a Review page: the pipeline's manager looks once and decides with why; the reviewer is not sent back",
 )
-def jev_unsure_bot_first(r: SoftRig) -> None:
+def jev_unsure_manager_looks(r: SoftRig) -> None:
     from backend import answers as A
     from backend import task_requirements as R
 
@@ -750,13 +750,8 @@ def jev_unsure_bot_first(r: SoftRig) -> None:
     r.attach(e, review, REVIEWER_1)
     r.jev()
     r.check()
-    r.says(e, R.FIX_OR_EXPLAIN)
-    expect(r.waits(e) == [("bot", REVIEWER_1)], f"Jev's first unsure left it waiting on {r.waits(e)}")
-    r.attach(e, r.page(REVIEWER_1, "Review 1: tags, read and run", verdict=UNSURE, page=review), REVIEWER_1)
-    r.jev()
-    r.check()
     r.says(e, R.DECIDE)
-    expect(r.waits(e) == [("bot", EM)], f"Jev's second unsure left it waiting on {r.waits(e)}, not the manager")
+    expect(r.waits(e) == [("bot", EM)], f"Jev's unsure left it waiting on {r.waits(e)}, not the manager")
     rid = r.requirement(e, "page")
     version = r.version(e)
     why = "It names the head, says what was run, and nothing blocks"
@@ -792,10 +787,10 @@ def conflict_in_review(r: SoftRig) -> None:
     r.settle(r.gh.ci_s)
     r.at(e, "Review 1")
     r.ok(ANA, lambda c: E.move(c, e, "Review 2", ANA, "Reviewed in the call"), "Ana drags it to Review 2")
-    r.attach(e, r.page(REVIEWER_2, "Review 2: bulk export", verdict=UNSURE), REVIEWER_2)
+    r.attach(e, r.page(REVIEWER_2, "Review 2: bulk export", verdict=NOT_MET), REVIEWER_2)
     r.jev()
     r.check()
-    r.says(e, "Jev is unsure")
+    r.says(e, "Jev sent it back")
 
     # The PR conflicts (Acme, Nov 11): the Builder is woken at once; the reviewer, who cannot push, gets a quiet line.
     before = len(r.wakes(e, REVIEWER_2))

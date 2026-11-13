@@ -8,6 +8,7 @@ import pytest
 
 from backend import answers as A
 from backend import page_rounds as PR
+from backend import pipeline_judges as J
 from backend import task_pages as P
 from backend.blobs import Blobs
 from backend.store import H
@@ -112,6 +113,34 @@ def test_a_version_jev_has_not_judged_has_no_verdict_and_another_requirement_has
     (only,) = PR.rounds(c, row["id"], rid)
     assert only["jev"] == {"verdict": None, "reason": ""} and only["note"] == "" and only["answered"] == []
     assert PR.rounds(c, row["id"], "no-such-requirement") == []
+
+
+_OLD_REASON = {
+    "met": "Jev found it meets the check (p {p:.2f}): {check}",
+    "not_met": "Jev found it does not meet the check (p {p:.2f}): {check}",
+    "unsure": "Jev could not tell whether it meets the check (p {p:.2f}, between 0.2 and 0.75): {check}",
+}
+
+
+@pytest.mark.parametrize(
+    ("verdict", "p", "shown"),
+    [
+        ("met", 0.81, "Jev found it meets the check: States the goal and who it is for"),
+        ("not_met", 0.12, "Jev found it does not meet the check: States the goal and who it is for"),
+        ("unsure", 0.73, "Jev could not tell whether it meets the check: States the goal and who it is for"),
+    ],
+)
+def test_jev_reason_on_the_chip_drops_the_p_value_jev_writes(verdict, p, shown):
+    """Validate on rc.27: the chip showed 'Jev found it meets the check (p 0.81): ...'. Verdicts stored before Jev
+    named parts still carry that sentence; the chip shows it without the '(p ...)' part. A reason Jev writes now has
+    no p-value and reaches the chip as it is."""
+    stored = _OLD_REASON[verdict].format(p=p, check="States the goal and who it is for")
+    assert PR._jev({"verdict": verdict, "reasons": stored}) == {"verdict": verdict, "reason": shown}
+    assert PR._jev({"verdict": verdict, "reasons": "Clear (and complete)"})["reason"] == "Clear (and complete)"
+    own = _OLD_REASON[verdict].format(p=p, check="Cites the rate (p 0.05) for each claim")
+    assert PR._jev({"verdict": verdict, "reasons": own})["reason"].endswith(": Cites the rate (p 0.05) for each claim")
+    now = J.reason_for(verdict, "Spec page")
+    assert "(p " not in now and PR._jev({"verdict": verdict, "reasons": now})["reason"] == now
 
 
 def test_an_attach_that_quotes_the_send_back_or_breaks_the_forms_is_refused_and_nothing_is_attached(c, store):

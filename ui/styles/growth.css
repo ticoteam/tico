@@ -165,6 +165,22 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grc-ret-t td.grc-k,.grc-ret-t th.grc-k-h{text-align:center;white-space:nowrap}
 .grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--grr-ink);background:color-mix(in srgb,var(--grr-hi) calc(var(--k,0) * 1%),var(--grr-lo))}
 .grc-ret-t td.grc-k-none{background:var(--surface2)}
+/* computed retention (growth-retention.ts): Cut by and Weekly / Monthly over the cohorts; a figure opens its customers */
+.grx{display:flex;flex-direction:column;gap:8px}
+.grx-bar{display:flex;flex-wrap:wrap;gap:6px 10px}
+.grx-t td.grx-not,.grx-t td.grx-few{text-align:center;white-space:nowrap;font-size:var(--t-sm)}
+.grx-t tr.grx-wk th{padding-top:8px;font-size:var(--t-xs);color:var(--muted);font-weight:600;text-align:left}
+.grx-open{all:unset;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;border-radius:3px}
+.grx-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grx-foot,.grc-foot{margin:0;font-size:var(--t-xs);line-height:1.4}
+.grx-up{align-self:flex-start}
+.grx-tag{font-size:var(--t-xs);font-weight:400}
+.grc-comp{text-decoration:underline dotted;text-underline-offset:3px}
+.grc-origin{font-size:var(--t-xs)}
+.grx-rule{margin:0 0 8px}
+.grx-keys{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 12px;max-height:220px;overflow-y:auto;font-size:var(--t-sm)}
+.grx-keys code{overflow-wrap:anywhere}
+.grx-refused{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:6px;background:var(--surface2);border-left:3px solid var(--fail)}
 
 /* the Growth board: a lane per stage, its newest tasks */
 .grc-board{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
@@ -176,6 +192,7 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grc-card:hover{background:var(--hover);text-decoration:none}
 .grc-card-t{grid-area:t;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .grc-card-c{grid-area:c;min-width:0;font-size:var(--t-xs);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grc-slip{color:var(--wait-ink)}
 .grc-face{grid-area:f;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--g3);color:var(--ink);font-size:var(--t-2xs);font-weight:600}
 
 /* ---------- Settings: the channels and their months */
@@ -382,3 +399,18 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
   .grs-bar{width:100%}
   .grs-step:not(.grs-done):not(.grs-next) .grs-l{display:none}
 }
+/* Where each number came from (ui/app/growth-page.ts grOriginLine, spec AC-9/AC-10/AC-12): one quiet line under a Number,
+   a source that disagrees with a typed number and its Keep / Use, and the banner over the cards for a stale or failing source. */
+.gr-health{margin:0 28px 12px}
+.gr-health>span:first-child{flex:1 1 24em;min-width:0}
+@media(max-width:760px){.gr-health{margin:0 12px 10px}}
+.gr-origin{margin-top:6px;font-size:var(--t-xs);line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gr-origin .pill{font-size:var(--t-2xs);padding:0 6px;vertical-align:1px}
+.gr-conflict{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:6px;font-size:var(--t-xs);line-height:16px}
+.gr-c-acts{display:inline-flex;gap:4px}
+.gr-conflicts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.gc-origin{font-size:var(--t-xs)}
+.gc-synced{font-size:var(--t-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:14em}
+.gsrc-sync{grid-column:1/-1;font-size:var(--t-xs);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.gsrc-map{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.gsrc-skip{margin:0;padding-left:18px;font-size:var(--t-sm)}

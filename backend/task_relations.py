@@ -12,7 +12,8 @@ A row says `from_task` stands in `kind` to `to_task`:
   not queued until `to` has merged (backend/merge_order.py). A loop, or an order on a task that has ended, is refused;
   the writer must be able to change `from` and read `to`.
 - `depends_on`: from cannot go on until to ends ("Blocked by #304"; to reads it as "Blocks #307"), in any pipeline and
-  stage, with no end date (backend/task_depends.py). The same write rules as `after`.
+  stage, with no end date (backend/task_depends.py). The same write rules as `after`. With `until` `released` it holds
+  past to's end, until production runs a release that holds to's merged PRs.
 
 `relate` is the only writer of the other three (the task page, `tico task relate` and the MCP tool all come here),
 so the rules live in one place: who may change which end, and a history row on both tasks. A task does not wait on a
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS task_relations(
   from_task TEXT NOT NULL REFERENCES tasks(id), to_task TEXT NOT NULL REFERENCES tasks(id),
   kind TEXT NOT NULL CHECK (kind IN ('parent','related','duplicate_of','follow_up','after','depends_on')),
   created_by TEXT, created_at TEXT NOT NULL,
+  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),
   PRIMARY KEY(from_task, to_task, kind),
   CHECK (from_task <> to_task), CHECK (kind <> 'related' OR from_task < to_task));
 CREATE INDEX IF NOT EXISTS task_relations_to ON task_relations(to_task, kind);
@@ -182,11 +184,11 @@ def grouped(conn, task_ids, visible_sql="1"):
         # probe every page/visible-task pair through the composite relationship key.
         rows = conn.execute(
             "SELECT * FROM (SELECT r.from_task AS here, CASE WHEN r.kind='related' THEN 'both' ELSE 'out' END "
-            "AS direction, r.kind, r.created_at AS at, r.rowid AS rid, t.id, t.title, t.status, t.owner_id "
+            "AS direction, r.kind, r.created_at AS at, r.rowid AS rid, r.until, t.id, t.title, t.status, t.owner_id "
             "FROM task_relations r INDEXED BY task_relations_from CROSS JOIN tasks t ON t.id=r.to_task "
             f"WHERE r.from_task IN ({marks}) "
             "UNION ALL SELECT r.to_task, CASE WHEN r.kind='related' THEN 'both' ELSE 'in' END, r.kind, r.created_at, "
-            "r.rowid, t.id, t.title, t.status, t.owner_id "
+            "r.rowid, r.until, t.id, t.title, t.status, t.owner_id "
             "FROM task_relations r INDEXED BY task_relations_to CROSS JOIN tasks t ON t.id=r.from_task "
             f"WHERE r.to_task IN ({marks}) AND r.kind<>'parent') x "
             # The other end's visibility by primary key, not a list of every visible task.
@@ -205,6 +207,10 @@ def grouped(conn, task_ids, visible_sql="1"):
                 # An order reads "After #40 · Merge", a dependency "Blocked by #304 · Build": the other task's number
                 # and the stage it is in.
                 entry.update(_place(conn, row["id"]))
+            if row["kind"] == "depends_on":
+                entry["since"] = row["at"]  # "Blocked since Nov 13"
+            if row["until"]:
+                entry["until"] = row["until"]  # a dependency held until the other task is released
             out[row["here"]].setdefault(row["kind"], []).append(entry)
         if visible_sql == "1":
             continue
@@ -276,13 +282,23 @@ def normalize(task_id, other_id, kind):
     return task_id, other_id, kind
 
 
-def _insert(conn, actor, from_id, to_id, kind, at):
+def _insert(conn, actor, from_id, to_id, kind, at, until=None):
     if kind == "related":
         from_id, to_id = sorted((from_id, to_id))
     conn.execute(
-        "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
-        (from_id, to_id, kind, actor, at),
+        "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at,until) VALUES(?,?,?,?,?,?)",
+        (from_id, to_id, kind, actor, at, until),
     )
+
+
+UNTIL = ("released",)  # what a dependency may hold until past its task's end (task_depends.UNTIL)
+
+
+def until_of(conn, from_id, to_id, kind):
+    found = conn.execute(
+        "SELECT until FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (from_id, to_id, kind)
+    ).fetchone()
+    return found[0] if found else None
 
 
 def _exists(conn, from_id, to_id, kind):
@@ -346,9 +362,11 @@ def _task(conn, actor, task_id):
     return row
 
 
-def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=None, note=""):
+def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=None, note="", until=None):
     """Add (or with `remove`, take off) one relation between two tasks. Returns True when it changed
-    something; adding what is already there changes nothing."""
+    something; adding what is already there changes nothing. `until` (`released`, a `depends_on` only) holds the
+    dependency past the other task's end, until production runs its release; writing an existing dependency again with
+    another `until` changes only that."""
     H = _H()
     H._writer(conn, actor, task_id=task_id)
     H._writer(conn, actor, task_id=other_id)
@@ -365,6 +383,9 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
         H.refuse(conn, actor, "kind", f"a relation is {'|'.join(RELATED)}, not {kind}")
     if from_id == to_id:
         H.refuse(conn, actor, "kind", "a task cannot be related to itself")
+    until = str(until).strip().lower() if until else None
+    if until and (kind != "depends_on" or until not in UNTIL):
+        H.refuse(conn, actor, "kind", f"Only a depends_on holds until {' or '.join(UNTIL)}, not {kind} until {until}")
     one_sided = kind in ("after", "depends_on")
     mover = _mover(conn, actor, mover)
     rows = [_task(conn, actor, tid) for tid in (from_id, to_id)]
@@ -376,21 +397,31 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
         from . import merge_order
 
         merge_order.check(conn, actor, rows[0], rows[1])
-    if kind == "depends_on" and not remove and not _exists(conn, from_id, to_id, kind):
+    if (
+        kind == "depends_on"
+        and not remove
+        and (not _exists(conn, from_id, to_id, kind) or until != until_of(conn, from_id, to_id, kind))
+    ):
         from . import task_depends
 
-        task_depends.check(conn, actor, rows[0], rows[1])
+        task_depends.check(conn, actor, rows[0], rows[1], until)
     if remove:
         if not _delete(conn, from_id, to_id, kind):
             H.refuse(conn, actor, "not-found", f"{to_id} is not {kind.replace('_', ' ')} of {from_id}")
-    else:
-        if _exists(conn, from_id, to_id, kind):
+    elif _exists(conn, from_id, to_id, kind):
+        if kind != "depends_on" or until == until_of(conn, from_id, to_id, kind):
             return False
+        conn.execute(
+            "UPDATE task_relations SET until=? WHERE from_task=? AND to_task=? AND kind=?",
+            (until, from_id, to_id, kind),
+        )
+    else:
         if kind != "related" and _exists(conn, to_id, from_id, kind):
             H.refuse(conn, actor, "kind", f"{to_id} is already {kind.replace('_', ' ')} {from_id}")
-        _insert(conn, actor, from_id, to_id, kind, H.now())
+        _insert(conn, actor, from_id, to_id, kind, H.now(), until)
     _history(conn, actor, from_id, to_id, kind, not remove, note)
-    H.event(conn, actor, "task.unrelate" if remove else "task.relate", from_id, {"task": to_id, "kind": kind})
+    said = {"task": to_id, "kind": kind, **({"until": until} if until and not remove else {})}
+    H.event(conn, actor, "task.unrelate" if remove else "task.relate", from_id, said)
     if kind == "after" and remove:
         # Taking an order off may end a hold in Merge: the later task is queued now (merge_order.release).
         from . import merge_order
@@ -426,16 +457,18 @@ def _name(conn, task_id):
 
 def readback(conn, task_id, other_id, kind="related", remove=False, changed=True):
     """The relation a write stored, in words from both ends, after normalizing. Each line names the direction so a
-    reversed write is visible in the reply."""
+    reversed write is visible in the reply, and a dependency held until a release says so."""
     from_id, to_id, kind = normalize(str(task_id or "").strip(), str(other_id or "").strip(), kind)
     if kind not in SAYS:
         return []
+    until = None if remove or kind != "depends_on" else until_of(conn, from_id, to_id, kind)
+    held = " until it is released" if until == "released" else ""
     if kind == "related":
         lines = [f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}"]
     else:
         lines = [
-            f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}",
-            f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}",
+            f"{_name(conn, from_id)} {SAYS[kind][0]} {_name(conn, to_id)}{held}",
+            f"{_name(conn, to_id)} {SAYS[kind][1]} {_name(conn, from_id)}{held}",
         ]
     prefix = "Removed: " if remove else "Already: " if not changed else ""
     return [prefix + line for line in lines]
@@ -460,8 +493,8 @@ def restore_row(conn, row):
     try:
         conn.execute("SAVEPOINT relation_row")
         conn.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,?,?)",
-            (row["from_task"], row["to_task"], row["kind"], row.get("created_by"), row["created_at"]),
+            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at,until) VALUES(?,?,?,?,?,?)",
+            (row["from_task"], row["to_task"], row["kind"], row.get("created_by"), row["created_at"], row.get("until")),
         )
         conn.execute("RELEASE relation_row")
         return True

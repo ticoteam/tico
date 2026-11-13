@@ -95,6 +95,9 @@ SLOT_LABEL = {
     "customer_ids": "Customer IDs",
     "access_token": "Access token",
 }
+# Called as hook(store, at) after each good run, outside its transaction: Growth's Finance ad spend source refreshes
+# there (backend/growth_finance.py). Finance never imports Growth; a hook that raises is logged and never fails the run.
+AFTER_RUN: list[Callable[[Any, str], None]] = []
 # Contacts the platforms' spend books under: a line or hold filed under either is the platform's (budgeting.py).
 VENDOR = SA.VENDOR
 
@@ -764,7 +767,16 @@ def run(store: Any, vault: object, import_id: str, *, now: str | None = None, ht
         full_again = current.history_from < imp.history_from
         note = "; ".join(t.text for t in sorted(taken.values(), key=lambda t: t.external_id))
         SA.finish(c, imp.id, "ok", note, at, imported=not full_again)
+    _after_run(store, at)
     return Outcome("ok", accounts=len(mine), rows=stored)
+
+
+def _after_run(store: Any, at: str) -> None:
+    for hook in list(AFTER_RUN):
+        try:
+            hook(store, at)
+        except Exception:  # a reader's failure never fails the import
+            log.exception("A hook after the Finance ad spend import failed")
 
 
 def pass_once(store: Any, vault: object, *, now: str | None = None, http_: Http | None = None) -> dict[str, Outcome]:

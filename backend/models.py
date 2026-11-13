@@ -316,6 +316,9 @@ class TaskMove(Contract):
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
+    # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
+    # next. Refused when the task now waits on someone else (H.task_let_see).
+    let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
 
 
 class TaskQueue(Contract):
@@ -368,6 +371,14 @@ class TaskAsk(Contract):
         default=None, min_length=2, max_length=6
     )
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
+    # A bot's question to a person (backend/ask_shape.py): why it matters, a line per choice on what happens on it (in
+    # the choices' order) and the choice it recommends. Required there; anyone else may send them too.
+    why: Annotated[str, Field(max_length=200)] | None = None
+    details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
+    recommend: Annotated[str, Field(max_length=60)] | None = None
+    # A short title the decision view shows as the ask's heading, with `line` once under it. Optional: an ask without
+    # one is headed by its line.
+    title: Annotated[str, Field(max_length=60)] | None = None
     version: Version | None = None
 
 
@@ -584,11 +595,15 @@ class TaskLink(Contract):
 class TaskRelation(Contract):
     """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
     merges after task: in Merge its PRs are not queued until task has merged), depends_on (it is blocked until task
-    ends). The others are notes."""
+    ends; with until released, until production runs the release that holds task's merged PRs). The others are
+    notes."""
 
     task: ID
     kind: RelationKind = "related"
     remove: bool = False
+    # depends_on only: it stays blocked after task is Done, until production runs a release that holds task's merged
+    # PRs (backend/task_depends.py).
+    until: Literal["released"] | None = None
 
 
 class TaskMerge(Contract):
@@ -1530,7 +1545,9 @@ class Heartbeat(Contract):
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
-    # Nightly memory tidy pilot; a runner still sends them.
+    # Nightly memory tidy pilot's packet path: today's runner no longer sends it, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so it is accepted and ignored until 0.6.0 leaves the supported window
+    # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
             "assignment_instances_v1",
@@ -1547,6 +1564,8 @@ class Heartbeat(Contract):
             "model_switch_to_key_v1",
             "computer_logins_v1",
             "capacity_continue_v1",
+            "fork_session_v1",
+            "fresh_session_v1",
             "source_continue_v1",
             "turns_at_once_v1",
             "private_lanes_v1",
@@ -2175,13 +2194,9 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: CompactAt
-    expected_revision: int = Field(ge=1)
-
-
-class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"] = Field(
-        description="Token saver or Performance; legacy current is accepted as an alias for Performance."
+    # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
+    compact_at: CompactAt | None = Field(
+        description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
     )
     expected_revision: int = Field(ge=1)
 
@@ -2455,6 +2470,30 @@ class PageOwnerSet(Contract):
     """A page's owner (backend/page_owners.py): a bot's id or slug, or null for no owner (the page has no Chat)."""
 
     bot: str | None = None
+
+
+class KeyGrantRow(Contract):
+    """One row of the Tools owner's proposal (backend/key_grants.py): a key saved in the Tools chat, by name; a tool,
+    by id or name; read or read_write; the bots, by slug or id."""
+
+    key: str = Field(min_length=1, max_length=150)
+    tool: str = Field(min_length=1, max_length=200)
+    level: Literal["read", "read_write"] = "read"
+    bots: list[str] = Field(min_length=1, max_length=10)
+
+
+class KeyGrantProposal(Contract):
+    """The Tools owner's proposal in its chat with a person (`thread_id`); the server builds the card from it."""
+
+    thread_id: str = Field(min_length=1, max_length=200)
+    rows: list[KeyGrantRow] = Field(min_length=1, max_length=20)
+    note: str = Field(default="", max_length=500)
+
+
+class KeyGrantGrant(Contract):
+    """Grant on the card: the positions of the rows kept (null: all)."""
+
+    keep: list[int] | None = Field(default=None, max_length=20)
 
 
 class AccessRules(Contract):
@@ -3467,20 +3506,26 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py): file import and database query; Finance ad spend and bot cost follow
-# in later parts.
-GrowthSyncKind = Literal["file", "db_query"]
+# A synced source's kind (backend/growth_sync.py): file import, database query and Finance ad spend
+# (backend/growth_finance.py); bot cost follows in a later part.
+GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
 
 
 class GrowthSyncMap(Contract):
+    # "customers": each run posts customer rows (backend/growth_customers.py) and maps no numbers.
+    shape: Literal["numbers", "customers"] | None = None
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
-    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]] | None = None
     # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
     # that database, which runs it daily.
     database: str | None = Field(default=None, min_length=1, max_length=80)
     query: str | None = Field(default=None, min_length=1, max_length=120)
     bot: str | None = Field(default=None, min_length=1, max_length=200)
+    # Finance ad spend: campaign key (platform:account:campaign) -> channel slug; "unknown" or "" is Unknown.
+    campaigns: dict[Annotated[str, Field(max_length=200)], Annotated[str, Field(max_length=80)]] | None = Field(
+        default=None, max_length=2000
+    )
 
 
 class GrowthSourceCreate(Contract):

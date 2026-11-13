@@ -4,7 +4,7 @@
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
-    doer       people, hand-offs, asks, results        batched 15 min       yes               yes     any
+    doer       people, hand-offs, asks, results        batched 5 min        yes               yes     any
     reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
@@ -14,20 +14,16 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
     monitor    its watcher, people                     note                 yes               no      its watcher's tasks
     custom     as set: the rows are in the rules table
 
-The numbers are the batch window and scope, the sweep gap (least time between two runs of the same sweep) and, for a
-lead, the hour of the digest. They are the profile's own and a bot may carry its own values (`profile_options`): the
-one a former Token saver bot keeps is a 30-minute window. Every profile wakes on its task roundup, the one grouped wake per
+A profile has no wake numbers of its own (spec v4, Product #248): every bot's notices wait the one built-in wait and
+its routines keep the one repeat guard (backend/wake_presets.py). The one number left is a lead's digest hour, which a
+Lead or Custom bot may set (`profile_options`). Every profile wakes on its task roundup, the one grouped wake per
 bot per run; `sweeps` says whether the roundup also lists it its late, exception, backlog, assigned, restate, missed and quiet
 tasks (a profile with sweeps off gets its questions and its own follow-ups on it). `pulls`, `sweeps` and `takes` are fixed by the profile
 except on `custom`, which reads them from its options. `pulls` limits only what Tico starts by itself when nothing woke
 the bot; a task a wake rule woke it for (a lead's assignment) always runs. Nothing here grants a right: a profile
 only decides what wakes a bot and which tasks it is given.
 
-`wake_preset` is read from the profile: setting a profile writes the matching `token_saver` or `performance` into
-`config.wake_preset` (30 minutes or more is Token saver), which is what the job queue's hold trigger and every
-older client reads, and the old `POST /bots/{bot}/wake-preset` keeps working by changing only the profile's numbers.
-A bot with no profile (a database from before profiles) runs as a doer on its old preset until `migrate` gives it
-one. `custom` is the way out of a profile's fixed rows: its rows are copied into the rules table, marked
+A bot with no profile (a database from before profiles) runs as a doer until `migrate` gives it one. `custom` is the way out of a profile's fixed rows: its rows are copied into the rules table, marked
 `created_by = 'profile'`, where they are edited like any bot rule; a named profile again drops them (after a confirm).
 """
 
@@ -51,8 +47,6 @@ DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
     "custom",
 )
 NAMES = (DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM)
-MAX_SECONDS = 7 * 86400
-TOKEN_SAVER_SECONDS = 30 * 60  # a window this long or longer is what older clients call Token saver
 DIGEST_HOUR = 9  # a lead's digest, in the team's time zone
 MATERIALISED = "profile"  # `created_by` of the rows a custom profile copied into the rules table
 # Traditional gate requests require a parent; explicit release QA can cover an entire release.
@@ -93,13 +87,7 @@ REVIEW_LABEL = "review"
 # Legacy filing: a subtask titled for one of the old board's check steps (Review 1/2, QA, Security) gets the label when
 # it is created (review_labels, H.task_create). After that only the label counts, and the title is for people.
 CHECK_TITLE = re.compile(r"^(?:Review(?:\s+[12])?|QA|Security)\s*:", re.I)
-# The numbers a former Token saver bot keeps.
-TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
-
 BASE = {
-    "batch_seconds": 15 * 60,
-    "batch_scope": "conversation",
-    "sweep_seconds": 15 * 60,
     "digest_hour": None,
     "pulls": "all",
     "sweeps": True,
@@ -126,7 +114,6 @@ SPEC = {
         "pulls": "none",
         "sweeps": False,
         "digest_hour": DIGEST_HOUR,
-        "batch_scope": "bot",
         "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day.",
     },
     # A manager that works by exception: task news is a note for its next run.
@@ -135,7 +122,6 @@ SPEC = {
         "label": "Manager",
         "pulls": "none",
         "sweeps": True,
-        "batch_scope": "bot",
         "description": "Works by exception from its task roundup: late tickets, exceptions and backlogs. Wakes for people, "
         "work given to it, its roundup and its own timers; ticket news, verdicts and subtask results "
         "wait for its next run.",
@@ -162,12 +148,11 @@ SPEC = {
         "sweeps and takes.",
     },
 }
-NUMBER_KEYS = ("batch_seconds", "batch_scope", "sweep_seconds", "digest_hour")
+NUMBER_KEYS = ("digest_hour",)
 FLAG_KEYS = ("pulls", "sweeps", "takes")
 CHOICES = {
     "pulls": ("all", "review", "none"),
     "takes": ("all", "review", "watcher", "none"),
-    "batch_scope": ("bot", "conversation"),
 }
 
 
@@ -186,8 +171,6 @@ def name_of(config):
 
 
 def _valid(key, value):
-    if key in ("batch_seconds", "sweep_seconds"):
-        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_SECONDS
     if key == "digest_hour":
         return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 23
     if key == "sweeps":
@@ -213,35 +196,18 @@ def spec_of(config):
     return {**SPEC[name], **options_of(config)}
 
 
-def numbers(config):
-    """{batch_seconds, batch_scope, sweep_seconds, digest_hour} for a bot with a profile, else None (the old preset's
-    values then stand: backend/wake_presets.py)."""
+def digest_hour(config):
+    """The hour of the bot's daily digest (a Lead's, or a Custom bot's that set one), else None."""
     spec = spec_of(config)
-    return {k: spec[k] for k in NUMBER_KEYS} if spec else None
-
-
-def legacy_preset(config):
-    """The `token_saver` or `performance` an older client sees for this config."""
-    spec = spec_of(config)
-    if spec is None:
-        return None
-    return "token_saver" if spec["batch_seconds"] >= TOKEN_SAVER_SECONDS else "performance"
+    return spec["digest_hour"] if spec else None
 
 
 def effective(config):
     """What the bot's settings and the API show: the profile, its words and the values it runs on."""
-    from . import wake_presets
-
     name, spec = name_of(config), spec_of(config)
     chosen = name is not None
     if not chosen:
-        old = wake_presets.values()[wake_presets.preset_of(config)]
-        spec = {
-            **SPEC[DOER],
-            "batch_seconds": old["batch_seconds"],
-            "batch_scope": old["batch_scope"],
-            "sweep_seconds": old["sweep_seconds"],
-        }
+        spec = dict(SPEC[DOER])
     shown = name or DOER
     out = {
         "name": shown,
@@ -259,14 +225,14 @@ def effective(config):
 
 def summary(name, spec):
     """One line saying what the numbers mean for this profile."""
-    from .wake_presets import _duration
+    from .wake_presets import NOTICE_SECONDS, REPEAT_SECONDS, _duration
 
-    sweep = f"; a routine runs at most every {_duration(spec['sweep_seconds'])}" if spec["sweeps"] else ""
-    if name == DOER or (name == CUSTOM and spec["sweeps"]):
-        return f"News about its tasks waits up to {_duration(spec['batch_seconds'])}{sweep}."
-    if name == CUSTOM and spec["digest_hour"] is not None:  # a Lead's description and hour picker say it already
+    sweep = f"; a routine runs at least {_duration(REPEAT_SECONDS)} after its last run" if spec["sweeps"] else ""
+    if name == CUSTOM and spec["digest_hour"] is not None:  # checked first: a digest is what its news waits for
         hour = spec["digest_hour"]
         return f"The rest of the news arrives once a day, at {hour:02d}:00 team time."
+    if name in (DOER, CUSTOM):
+        return f"News about its tasks waits {_duration(NOTICE_SECONDS)}{sweep}."
     return ""
 
 
@@ -390,9 +356,6 @@ class BotProfile(Contract):
 
     profile: Literal["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"]
     expected_revision: int = Field(ge=1)
-    batch_seconds: int | None = Field(default=None, ge=0, le=MAX_SECONDS)
-    batch_scope: Literal["bot", "conversation"] | None = None
-    sweep_seconds: int | None = Field(default=None, ge=0, le=MAX_SECONDS)
     digest_hour: int | None = Field(default=None, ge=0, le=23)
     pulls: Literal["all", "review", "none"] | None = None
     sweeps: bool | None = None
@@ -405,22 +368,14 @@ def _given(body):
 
 
 def apply(declared, name, options):
-    """Write the profile and its options into a config dict, with the `wake_preset` older readers use."""
+    """Write the profile and its options into a config dict. No wake preset: the presets are retired."""
     declared["profile"] = name
     if options:
         declared["profile_options"] = options
     else:
         declared.pop("profile_options", None)
-    declared["wake_preset"] = legacy_preset(declared)
+    declared.pop("wake_preset", None)
     return declared
-
-
-def apply_preset(declared, preset):
-    """The old wake-preset setting, on a bot with a profile: only its numbers change, never the profile."""
-    options = {k: v for k, v in (declared.get("profile_options") or {}).items() if k not in TOKEN_SAVER_OPTIONS}
-    if preset == "token_saver":
-        options.update(TOKEN_SAVER_OPTIONS)
-    return apply(declared, name_of(declared), options)
 
 
 def snapshot(config):
@@ -536,7 +491,7 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
     c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
     from . import wake_presets
 
-    wake_presets.replan(c, bot)
+    wake_presets.replan(c, bot)  # a Lead's digest hour plans its notices
     admin.record(c, who.actor, bot, "profile", before, after)
     if undo_change_id:
         c.execute(
@@ -561,7 +516,7 @@ def view(c, bot, config):
 def _wake(declared):
     from . import wake_presets
 
-    return wake_presets.effective(declared)
+    return wake_presets.waits(declared)
 
 
 # ---------------------------------------------------------------------------------------------------- the upgrade
@@ -592,7 +547,6 @@ def default_for(c, slug, declared):
     """The profile the upgrade gives a bot, by what it is called and what it is: (profile, options, copied-from)."""
     from .harnesses import SYNCED_HARNESSES, resolve_harness
 
-    preset = TOKEN_SAVER_OPTIONS if declared.get("wake_preset") == "token_saver" else {}
     if slug in CUSTOM_SLUGS:
         return CUSTOM, {}, DOER
     if slug == LIBRARIAN:
@@ -605,7 +559,7 @@ def default_for(c, slug, declared):
         return REVIEWER, {}, None
     if any(fnmatchcase(slug, p) for p in LEAD_SLUGS):
         return LEAD, {}, None
-    return DOER, preset, None
+    return DOER, {}, None
 
 
 def migrate(c, tell=True):

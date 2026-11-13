@@ -15,7 +15,17 @@ from typing import Annotated, Literal
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import delivery, org_rule_check, page_owners, reach, teammate_access, thread_rail, thread_search, threads
+from . import (
+    delivery,
+    org_rule_check,
+    page_owners,
+    reach,
+    secret_drop,
+    teammate_access,
+    thread_rail,
+    thread_search,
+    threads,
+)
 from .store import H, Problem
 
 # How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
@@ -57,6 +67,8 @@ class ThreadPost(BaseModel):
     in_reply_to: str | None = None  # the message this one replies to, in the same root (flat replies)
     delivery: Way | None = None  # only in a bot's Home or a DM with one bot
     defer_for: str | None = None  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
+    # Digests of suspect keys the person un-marked in the Tools chat (backend/secret_drop.py); never stored.
+    unmarked: list[str] = Field(default_factory=list, max_length=50)
 
 
 class MessagePatch(BaseModel):
@@ -104,6 +116,12 @@ class ThreadUpload(BaseModel):
     titles: list[str] = Field(default_factory=list, max_length=10)
     delivery: Way | None = None
     defer_for: str | None = None
+
+
+def _unmarked(who, body):
+    """The suspects a person un-marked in the Tools chat (backend/secret_drop.py), which the backstop lets through only
+    from the web chat: a post made with a personal access token is an API client, whose suspects are refused (AC-15)."""
+    return [] if getattr(who, "via_token", False) else list(getattr(body, "unmarked", None) or [])
 
 
 def _delivery_words(body):
@@ -437,7 +455,18 @@ def install(app, store, auth, mutate, rule_check):
     def check(who, thread_id, body):
         """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
         bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment; so is a
-        reply to a message the poster can't reply to."""
+        reply to a message the poster can't reply to. A key in a message to the Tools owner is refused before anything
+        reads the text (backend/secret_drop.py)."""
+        with store.read() as c:
+            secret_drop.refuse(
+                c,
+                threads.thread_row(c, thread_id),
+                who.actor,
+                body.text,
+                None,
+                _unmarked(who, body),
+                audit=False,
+            )
         if getattr(body, "in_reply_to", None):
             with store.read() as c:
                 _reply_check(c, auth, who, thread_id, body)
@@ -754,6 +783,7 @@ def install(app, store, auth, mutate, rule_check):
                 checked=rc,
                 reach=True,
                 in_reply_to=replying,
+                unmarked=_unmarked(who, body),
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
@@ -777,6 +807,9 @@ def install(app, store, auth, mutate, rule_check):
                 threads._own_say(c, *threads._actor_of(viewer), message_id, check_writer=False).get("conversation_id")
                 or ""
             )
+        if thread_id:  # a key in an edit to the Tools owner is refused before the rule check reads it
+            with store.read() as c:
+                secret_drop.refuse(c, threads.thread_row(c, thread_id), who.actor, body.text, audit=False)
         # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
         reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = (
@@ -895,6 +928,9 @@ def install(app, store, auth, mutate, rule_check):
             raise Problem("delivery", "delivery goes with a first message (body)", 422)
         _delivery_words(body)
         start = {"dm": body.members, "title": body.title}
+        if body.body:  # a first message to the Tools owner holding a key makes no DM and reaches no check
+            with store.read() as c:
+                secret_drop.refuse_start(c, who.actor, body.members, body.body)
         rc = (
             rule_check(
                 who,
