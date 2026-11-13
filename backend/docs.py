@@ -847,13 +847,12 @@ class Docs:
         always is, to the doc or to a section (a missing heading is still refused when it applies); a section is when its text is the same in the version read and the latest."""
         if body.append or body.section is None:
             return True
+        now = section_text(row["body"], body.section)  # a missing or repeated heading is refused with its own error
         then = c.execute(
             "SELECT body FROM doc_versions WHERE doc_id=? AND version=?", (row["id"], body.version)
         ).fetchone()
         try:
-            return then is not None and section_text(then["body"], body.section) == section_text(
-                row["body"], body.section
-            )
+            return then is not None and section_text(then["body"], body.section) == now
         except Problem:
             return False
 

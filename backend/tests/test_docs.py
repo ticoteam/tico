@@ -375,6 +375,14 @@ def test_a_section_write_lands_on_a_newer_version_only_if_its_section_is_unchang
     assert err and refused["error"] == "version_conflict" and refused["version"] == 4
     assert f"{usage['updated_by_name']} saved version 4 after you read version 3" in refused["detail"]
     assert call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == usage["body"]
+    # A stale section write whose heading is gone or repeated now keeps its own refusal and the heading list.
+    gone = {"path": "ops/guide.md", "section": "Nowhere", "body": "x", "base_version": 3}
+    err, missing = tool(api, "tico_doc_write", gone, token=token)
+    assert err and missing["error"] == "section_not_found" and "Usage" in missing["detail"]
+    twice = edit(api, usage, who=CARA, body=usage["body"] + "\n# Usage\nagain\n")["doc"]
+    err, dup = tool(api, "tico_doc_write", {**write, "body": "x", "base_version": 4}, token=token)
+    assert err and dup["error"] == "section_ambiguous"
+    usage = edit(api, twice, who=CARA, body=usage["body"])["doc"]
     # A section append lands on the newer version even though that section changed.
     err, inside = tool(
         api,
@@ -382,7 +390,7 @@ def test_a_section_write_lands_on_a_newer_version_only_if_its_section_is_unchang
         {"path": "ops/guide.md", "append": True, "section": "Usage", "body": "Also this.", "base_version": 3},
         token=token,
     )
-    assert not err and inside["doc"]["version"] == 5
+    assert not err and inside["doc"]["version"] == 7
     assert "three times" in inside["doc"]["body"] and "Also this." in inside["doc"]["body"]
     usage = inside["doc"]
     # Append always lands on the newer version.
