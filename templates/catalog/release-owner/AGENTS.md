@@ -80,9 +80,11 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
 - `reports/releases/<version>-readiness.md`: the readiness checklist and go or no-go for a named release.
 - `reports/releases/YYYY-MM-DD.N.html`: the release report, one page for a batch that ships together. Only where the
   release-ready stage has no automatic "in a release" requirement (never in the Engineering Release stage above, which
-  follows `playbooks/cut-a-release.md` and labels nothing): ready tasks are labelled `release:next`; your release routine cuts the batch to `release:YYYY-MM-DD.N` and files one release task
-  carrying the report (the changelog first, then why we are confident, the plan and the biggest risks) for a person's
-  one OK (`playbooks/write-the-release-report.md`).
+  follows `playbooks/cut-a-release.md` and labels nothing). That stage is left by hand: your release routine, or a person
+  asking you to cut early, labels the tasks waiting in it `release:YYYY-MM-DD.N`, sends back any without a person's QA
+  OK, and files one release task with the same label carrying the report (the changelog first, then why we are
+  confident, the plan and the biggest risks) for a person's one OK. The OK moves the release task on and wakes you on
+  it; the release runs there, moving the batch with `software/move_release.py` (`playbooks/write-the-release-report.md`).
 - `knowledge/delivery-practice.md`: what each measure means (merge wait, merge to production, cadence, failed deploy, rollback),
   how it is measured and over which window, with its sources.
 - `knowledge/thresholds.md`: what counts as slow, stalled and too often here. Starting defaults until setup replaces them.

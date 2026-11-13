@@ -226,10 +226,9 @@ def test_the_release_label_flow_stays_off_stages_that_wait_for_a_published_relea
     # The Engineering Release stage already leaves when GitHub publishes a release; labelling its tasks too would run two
     # release flows over one task.
     playbook = " ".join((CATALOG / "release-owner" / "playbooks" / "write-the-release-report.md").read_text().split())
-    step_one = playbook.split("## 1.")[1].split("## 2.")[0]
-    assert 'no automatic "in a release" requirement' in step_one
-    assert "`playbooks/cut-a-release.md` as today and label nothing" in step_one
-    assert step_one.index("label nothing") < step_one.index("release:next")
+    before_any_step = playbook.split("## 1.")[0]
+    assert 'no automatic "in a release" requirement' in before_any_step
+    assert "`playbooks/cut-a-release.md` as today and label nothing" in before_any_step
     routing = agent("release-owner")
     assert 'no automatic "in a release" requirement' in routing
-    assert routing.index("labels nothing") < routing.index("release:next")
+    assert routing.index("labels nothing") < routing.index("release:YYYY-MM-DD.N")

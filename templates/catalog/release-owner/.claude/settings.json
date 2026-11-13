@@ -19,7 +19,8 @@
       "Bash(gh issue list *)",
       "Bash(git push --force-with-lease *)",
       "Bash(git push --force-with-lease)",
-      "Bash(python3 software/rollout.py *)"
+      "Bash(python3 software/rollout.py *)",
+      "Bash(python3 software/move_release.py *)"
     ],
     "deny": [
       "Bash(gh run rerun *)",
