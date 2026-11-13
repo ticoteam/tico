@@ -270,7 +270,7 @@ function usePaint(): void {
   if (!rows.length) { body.innerHTML = '<div class="empty">No usage yet.</div>'; return; }
   const t = data.totals;
   const top = Math.max(...rows.map(useSpend), 0);
-  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note">API-equivalent</span> · ${useRuns(t.runs)}
+  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note">API-equivalent · ${useRuns(t.runs)}</span>
       ${t.low_estimate_runs > 0 ? `<div class="use-sub use-low">Estimate, may be low: ${esc(useLowWhy(t.low_estimate_runs))}.</div>` : ''}</div>
     <ul class="use-list">${rows.map(r => `<li class="use-row" data-bot="${esc(r.bot)}">
       ${state.group === 'bot' ? useLimitButton(r.bot, r.name, r.limit) : '<span class="use-limit"></span>'}

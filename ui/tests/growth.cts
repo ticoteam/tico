@@ -198,6 +198,17 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.match(await stages.nth(1).innerText(), /New bookings[\s\S]*97/, `${tag}: Acquire's KPI`);
   assert.match(await stages.nth(2).innerText(), /No KPI/, `${tag}: Activate has none`);
   assert.match(await stages.nth(4).innerText(), /↺ loops back to Reach/, `${tag}: the loop`);
+  // No boxes in the card (#355): no fill, border or dividing lines; names in sentence case, 12px/600 ink; each % right
+  // after its own name, left of the next stage; the tiles' figures 16px/600.
+  const look = (sel: string) => page.locator(sel).first().evaluate(el => { const c = getComputedStyle(el); return [c.backgroundColor, c.borderTopWidth]; });
+  assert.deepEqual(await look('#dash-grid .grc-funnel'), ['rgba(0, 0, 0, 0)', '0px'], `${tag}: the funnel draws no grid of lines`);
+  assert.deepEqual(await look('#dash-grid .grc-st'), ['rgba(0, 0, 0, 0)', '0px'], `${tag}: a stage is no box`);
+  const name = stages.nth(1).locator('.grc-st-k');
+  assert.deepEqual(await name.evaluate(el => { const c = getComputedStyle(el); return [c.textTransform, c.fontSize, c.fontWeight]; }), ['none', '12px', '600'], `${tag}: stage names`);
+  assert.equal(await name.evaluate(el => getComputedStyle(el).color === getComputedStyle(document.body).color), true, `${tag}: stage names in ink`);
+  const [k, c, next] = await Promise.all([name.boundingBox(), stages.nth(1).locator('.grc-st-h .grc-st-c').boundingBox(), stages.nth(2).boundingBox()]);
+  assert.ok(k && c && next && c.x >= k.x + k.width && c.x - (k.x + k.width) < 12 && (c.x + c.width < next.x || next.y >= k.y + k.height), `${tag}: Acquire's % follows its name, before Activate`);
+  assert.deepEqual(await num('New customers').evaluate(el => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight]), ['16px', '600'], `${tag}: tile figures`);
   // Numbers: a value, a change with an arrow, a trend; 30 days has no reading for this month's cohort yet, so last
   // month's shows, saying which.
   assert.match(await num('New customers').innerText(), /^\d[\d,]*$/, `${tag}: New customers`);
