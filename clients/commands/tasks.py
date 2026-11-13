@@ -501,53 +501,46 @@ def _own_ask(api, task_id, requirement=None):
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task, in one sentence: a question (with choices, or a typed answer) or an OK. The task "
-    "stays in its stage until they answer, it is one line in their Needs you, and their answer wakes you once. "
-    "Asking again in this stage replaces your earlier ask. A rule they set may refuse it with the rule's words: act on "
-    "the rule instead. A bot asking a person a question says why it matters (`why`) and, with choices, gives 2 to 4 "
-    "each with what happens (`choice`) and names one (`recommend`); what it shows is a page, file, task or link. "
-    "`withdraw` takes your open ask back.",
+    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
+    "wakes you once; asking again replaces your ask. A rule may refuse it: act on the rule. `withdraw` takes it back.",
     {
         "id": TASK_ID,
-        "to": _s("The person you ask: their id"),
-        "line": _s("The one sentence they are asked, readable on its own", maxLength=300),
+        "to": _s("The person's id"),
+        "line": _s("The one sentence asked, readable alone", maxLength=300),
         "kind": {
             "type": "string",
             "enum": ["answer", "ok"],
-            "description": "answer (the default): a question; ok: they approve it or send it back with a note",
+            "description": "answer (default): a question; ok: approve or send back",
         },
         "choices": {
             "type": "array",
             "items": {"type": "string", "maxLength": 60},
             "minItems": 2,
             "maxItems": 6,
-            "description": "The answers to pick from; they may also type their own",
+            "description": "Answers to pick; they may type their own",
         },
         "choice": {
             "type": "array",
-            "items": _s("One answer and what happens on it: Label|what happens", maxLength=221),
+            "items": _s("Label|what happens", maxLength=221),
             "minItems": 2,
             "maxItems": 4,
-            "description": "A bot asking a person: 2 to 4 answers, each with what happens on it (instead of choices)",
+            "description": "Instead of choices",
         },
-        "recommend": _s("The choice you recommend: a bot asking a person with choices names one", maxLength=60),
+        "recommend": _s("The choice you recommend", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at to answer, shown with the ask",
+            "description": "What they look at, shown with the ask",
         },
         "subject": _s(
-            "An OK bound to what you will do, as <kind>:<id> (budget_raise:launch-video): the OK covers exactly "
-            "`content`, and you use it once with tico_ok_use just before you act"
+            "An OK bound to what you will do, <kind>:<id> (budget_raise:launch-video), covering exactly `content`; "
+            "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
-        "why": _s(
-            "Why it matters to them, in one line: a bot asking a person a question needs it. With withdraw: why you "
-            "take it back"
-        ),
+        "requirement": _s("With withdraw: the ask's requirement id, if several"),
+        "why": _s("Why it matters (with withdraw: why)"),
         "version": VERSION,
     },
     required=("id",),
