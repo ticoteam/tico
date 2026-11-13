@@ -124,6 +124,7 @@
  "tico_growth_cohort_set": "422 validation",
  "tico_growth_customers_load": "422 customer_facts",
  "tico_growth_source_add": "422 validation",
+ "tico_growth_source_campaigns": "409 conflict",
  "tico_growth_source_push": "404 not_found",
  "tico_growth_source_retire": "404 not_found",
  "tico_growth_source_sync": "404 not_found",

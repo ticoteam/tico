@@ -79,13 +79,17 @@ def test_a_restated_day_changes_growth_spend_after_the_next_import_and_the_impor
     iid, net, insights = meta(books)
     october(insights)
     calls: list[str] = []
-    AI.AFTER_RUN.append(lambda _store, at: calls.append(at))
+
+    def heard(_store: Any, at: str) -> None:
+        calls.append(at)
+
+    AI.AFTER_RUN.append(heard)
     try:
         assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
         insights["111"][0] = {"campaign_id": "brand", "spend": "4500", "date_start": "2026-10-02"}
         assert AI.run(books, Vault(books), iid, now=LATER, http_=http(net)).status == "ok"
     finally:
-        AI.AFTER_RUN.clear()
+        AI.AFTER_RUN.remove(heard)
     assert calls == [AT, LATER]
     with books.read() as c:
         assert GF.rows(c, MAPPING, *OCT)[1] == GF.SpendRow("2026-10", "search-ads", 6590.5)
@@ -99,13 +103,17 @@ def test_a_failing_hook_never_fails_the_import_and_a_failed_import_rings_nothing
     def broken(_store: Any, _at: str) -> None:
         raise RuntimeError("growth is down")
 
-    AI.AFTER_RUN.extend([broken, lambda _store, at: calls.append(at)])
+    def heard(_store: Any, at: str) -> None:
+        calls.append(at)
+
+    AI.AFTER_RUN.extend([broken, heard])
     try:
         assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
         net.on("GET", AI.GRAPH + "/act_", lambda *_: (500, {"error": {"message": "down"}}))
         assert AI.run(books, Vault(books), iid, now=LATER, http_=http(net, slept=[])).status == "failed"
     finally:
-        AI.AFTER_RUN.clear()
+        AI.AFTER_RUN.remove(broken)
+        AI.AFTER_RUN.remove(heard)
     assert calls == [AT]
 
 
@@ -175,7 +183,6 @@ def test_an_import_switched_off_stops_its_accounts_counting(books: Store):
         c.execute("UPDATE fin_ad_imports SET enabled=0")
     with books.read() as c:
         assert GF.rows(c, MAPPING, *OCT) == []
-        assert GF.held(c) is None
 
 
 def test_window_counts_back_whole_months():
@@ -205,3 +212,114 @@ def test_the_mapping_step_route_is_for_an_admin_who_sees_every_ad_account(api: A
     assert [(x["key"], x["last_month_spend"]) for x in answer.json()["campaigns"]] == [("meta_ads:111:brand", 42.1)]
     assert api.get(url, headers=headers("cara-test")).status_code == 403
     assert api.get(url, params={"months": 13}, headers=headers()).status_code == 422
+
+
+# ------------------------------------------------------------------------------------------------ into Growth
+def _finance_with_spend(store: Store, days: list[tuple[str, str, int]]) -> str:
+    """Finance set up with one Meta Ads account (act_111) holding these (day, campaign, cents); its ad account id."""
+    from backend.finance import actions as FA
+    from backend.tests.helpers.finance_ad_spend import setup_import, tool
+
+    with store.transaction() as c:
+        assert FA.ensure_setup(c, store.settings.owner_email)
+    tool(store, "meta-ads", "meta-ads")
+    setup_import(store, "meta-ads", "meta_ads", {})
+    with store.transaction() as c:
+        aid = SA.upsert_account(c, "meta-ads", "meta_ads", "111", "Paid rental", "USD", AT)
+        _restate(c, aid, days)
+    return aid
+
+
+def _restate(c: Any, aid: str, days: list[tuple[str, str, int]]) -> None:
+    first, last = min(d for d, _, _ in days), max(d for d, _, _ in days)
+    SA.replace_spend(c, aid, first, last, [SA.SpendRow(d, k, k.title(), cents, "USD") for d, k, cents in days], AT)
+
+
+def test_a_connected_source_fills_spend_per_channel_follows_a_restated_day_and_refuses_typing(api: Any):
+    """AC-1, AC-2 and AC-11 through the engine: connect with 2 campaigns mapped to search-ads and 1 left out; sync
+    fills search-ads and Unknown with Finance's month total between them; a restated day reaches Growth on the refresh
+    after Finance's import; typing that spend is refused naming the source."""
+    from datetime import datetime, timezone
+
+    from backend import growth_sync as GS
+    from backend.tests.helpers.api import get, post, put
+
+    store: Store = api.app.state.store
+    month = GS.this_month()
+    day = f"{month}-01"
+    aid = _finance_with_spend(store, [(day, "brand", 421000), (day, "retarget", 188000), (day, "podcast", 31000)])
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
+    mapping = {"campaigns": {"meta_ads:111:brand": "search-ads", "meta_ads:111:retarget": "Search-Ads"}}
+    src = post(
+        api,
+        "growth/sources",
+        {
+            "truth_for": "spend",
+            "system": "Finance ad spend",
+            "reach_kind": "url",
+            "sync_kind": GF.KIND,
+            "sync_map": mapping,
+        },
+    )
+    assert (src["kind"], src["fills"]) == (GF.KIND, ["spend"])
+    result = post(api, f"growth/sources/{src['id']}/sync", {})
+    assert result["ok"] and result["written"] == 2, result
+
+    def spend(slug: str) -> float | None:
+        rows = get(api, f"growth/cohorts?channel={slug}&month={month}")["cohorts"]
+        return rows[0]["spend"] if rows else None
+
+    assert (spend("search-ads"), spend("unknown")) == (6090.0, 310.0)
+    first = get(api, f"growth/cohorts?channel=search-ads&month={month}")["cohorts"][0]["origins"]["spend"]
+    assert (first["source"], first["quality"]) == ("Finance ad spend", "actual")
+
+    with store.transaction() as c:
+        _restate(c, aid, [(day, "brand", 450000), (day, "retarget", 188000), (day, "podcast", 31000)])
+    GF.refresh(store, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+    assert spend("search-ads") == 6380.0
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": month, "spend": 1}, expected=409)
+    assert spend("search-ads") == 6380.0
+
+
+def test_an_account_in_another_currency_makes_the_source_failing_and_nothing_changes(api: Any):
+    from backend import growth_sync as GS
+    from backend.tests.helpers.api import get, post
+
+    store: Store = api.app.state.store
+    month = GS.this_month()
+    _finance_with_spend(store, [(f"{month}-01", "brand", 1000)])
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
+    body = {
+        "truth_for": "spend",
+        "system": "Finance ad spend",
+        "reach_kind": "url",
+        "sync_kind": GF.KIND,
+        "sync_map": {"campaigns": {"meta_ads:111:brand": "search-ads"}},
+    }
+    src = post(api, "growth/sources", body)
+    assert post(api, f"growth/sources/{src['id']}/sync", {})["ok"]
+    with store.transaction() as c:
+        c.execute("UPDATE fin_ad_accounts SET currency='EUR'")
+    result = post(api, f"growth/sources/{src['id']}/sync", {})
+    assert not result["ok"] and result["error"] == "Meta Ads act_111 spends in EUR; Finance's books are in USD"
+    listed = next(s for s in get(api, "growth/sources")["sources"] if s["id"] == src["id"])
+    assert listed["health"] == "failing" and listed["last_error"] == result["error"]
+    assert get(api, f"growth/cohorts?channel=search-ads&month={month}")["cohorts"][0]["spend"] == 10.0
+
+
+def test_finance_ad_spend_fills_spend_only_and_keeps_its_campaign_map(api: Any):
+    from backend.tests.helpers.api import get, post
+
+    _finance_with_spend(api.app.state.store, [(AT[:10], "brand", 1000)])
+    base = {"truth_for": "spend", "system": "Finance ad spend", "sync_kind": GF.KIND}  # reach defaults
+    post(api, "growth/sources", {**base, "sync_map": {"fields": {"new_customers": "x"}}}, expected=422)
+    src = post(api, "growth/sources", {**base, "sync_map": {"campaigns": {"meta_ads:111:brand": "search-ads"}}})
+    row = get(api, "growth/sources")["sources"][0]
+    assert row["id"] == src["id"] and row["fills"] == ["spend"] and row["reach_kind"] == "credential"
+    with api.app.state.store.read() as c:
+        saved = c.execute("SELECT sync_map FROM gtm_sources WHERE id=?", (src["id"],)).fetchone()[0]
+    assert '"campaigns": {"meta_ads:111:brand": "search-ads"}' in saved
+    # Every Growth reader reads the source list: it says how many campaigns are mapped, never which (AC-15).
+    assert row["map"]["campaigns_mapped"] == 1 and "meta_ads:111" not in str(
+        get(api, "growth/sources", token="cara-test")
+    )

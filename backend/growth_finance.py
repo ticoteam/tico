@@ -13,13 +13,16 @@ health; this module only answers what a run of kind `finance_ad_spend` writes.
 - Totals only. A run's rows hold a channel, a month and the spend: never a campaign's name, id or line. The campaign
   list is for the mapping step alone, and it and connecting are for someone who sees every connected ad account in
   Finance (a finance admin, or a reader with everything in view); anyone else is refused, naming what is missing.
-- Refresh. Finance's import calls each of its AFTER_RUN hooks after a good run; the engine hangs the run of every
-  source of this kind there, so a restated day reaches Growth within one refresh.
+- Runs. `sync` reads the months the engine's window asks for (the first good run 12 months back, later ones the
+  current month and the two before) and hands the rows, or the reason it failed, to growth_sync.run. "Sync now" runs
+  it, and so does `refresh`, which the app hangs on Finance's import (ad_import.AFTER_RUN): a restated day reaches
+  Growth within one refresh.
 """
 
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from .finance.context import load as finance_load
@@ -110,7 +113,12 @@ def campaigns(c: sqlite3.Connection, actor: str, start: str, end: str) -> dict[s
             row["last_month_spend"] = round(row["last_month_spend"] + r.amount / 100, 2)
     return {
         "accounts": [
-            {"platform": a.platform, "account": SA.account_label(a.platform, a.external_id), "name": a.name}
+            {
+                "platform": a.platform,
+                "account": SA.account_label(a.platform, a.external_id),
+                "label": _label(a.platform, a.external_id),
+                "name": a.name,
+            }
             for a in sorted(accounts, key=lambda a: (a.platform, a.external_id))
         ],
         "campaigns": sorted(totals.values(), key=lambda x: (-x["last_month_spend"], x["name"], x["key"])),
@@ -148,16 +156,6 @@ def rows(c: sqlite3.Connection, mapping: Mapping[str, Any], start: str, end: str
     ]
 
 
-def held(c: sqlite3.Connection) -> tuple[str, str] | None:
-    """(first day, last day) of the spend Finance holds on counting accounts; None when it holds none."""
-    ids = [a.id for a in SA.counting_accounts(c)]
-    if not ids:
-        return None
-    marks = ",".join("?" * len(ids))
-    row = c.execute(f"SELECT MIN(day), MAX(day) FROM fin_ad_spends WHERE ad_account_id IN ({marks})", ids).fetchone()
-    return (str(row[0]), str(row[1])) if row and row[0] else None
-
-
 def window(today: str, months: int) -> tuple[str, str]:
     """The days from the first of the month `months - 1` months before `today`'s, to `today` (YYYY-MM-DD)."""
     year, month = int(today[:4]), int(today[5:7]) - (months - 1)
@@ -167,6 +165,67 @@ def window(today: str, months: int) -> tuple[str, str]:
 
 
 MONTHS_MAX = 12
+CAMPAIGNS_MAX = 2000
+SYSTEM = "system"  # who a refresh after Finance's import runs as, in the run log and events
+
+
+def check_map(given: Mapping[str, Any]) -> dict[str, Any]:
+    """A Finance ad spend mapping, before the engine's own check: it fills spend only (the default), and `campaigns`
+    maps campaign keys to channel slugs ("unknown" or blank: Unknown)."""
+    raw: Any = given.get("fields") or {"spend": "spend"}
+    if not isinstance(raw, dict) or set(cast(dict[str, Any], raw)) != set(FILLS):
+        raise Problem("validation", "Finance ad spend fills spend only", 422)
+    named: Any = given.get("campaigns") or {}
+    if not isinstance(named, dict):
+        raise Problem("validation", "campaigns maps a campaign key to a channel slug", 422)
+    pairs = cast(dict[Any, Any], named)
+    if len(pairs) > CAMPAIGNS_MAX:
+        raise Problem("validation", f"At most {CAMPAIGNS_MAX} campaigns are mapped", 422)
+    campaigns_map = {str(k).strip(): str(v or "").strip().lower() for k, v in pairs.items() if str(k).strip()}
+    return {**given, "fields": {"spend": "spend"}, "campaigns": campaigns_map}
+
+
+def public_map(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """The mapping as every Growth reader sees it: how many campaigns are mapped, never their keys (totals only)."""
+    named: Any = mapping.get("campaigns") or {}
+    kept = {k: v for k, v in mapping.items() if k != "campaigns"}
+    return {**kept, "campaigns_mapped": len(cast(dict[str, Any], named)) if isinstance(named, dict) else 0}
+
+
+def sync(c: sqlite3.Connection, actor: str, source: dict[str, Any], at: datetime | None = None) -> dict[str, Any]:
+    """One run of a Finance ad spend source: the months the engine's window takes, from Finance, into growth_sync.run.
+    A read that fails is a failed run with its reason; nothing already written changes."""
+    from . import growth_sync as GS
+
+    at = at or datetime.now(timezone.utc)
+    oldest, _ = GS.window(not source.get("last_good_run_at"), at)
+    start, end = f"{oldest}-01", at.strftime("%Y-%m-%d")
+    mapping = GS.sync_map(source)
+    try:
+        found = rows(c, mapping, start, end)
+    except Failing as failed:
+        return GS.run(c, actor, source, error=str(failed), at=at)
+    return GS.run(
+        c, actor, source, rows=[{"month": r.month, "channel": r.channel or "", "spend": r.spend} for r in found], at=at
+    )
+
+
+def refresh(store: Any, at: str) -> None:
+    """After a good Finance ad import: run every live Finance ad spend source, each in its own transaction so one
+    failing never holds back another."""
+    with store.read() as c:
+        ids = [
+            str(r[0])
+            for r in c.execute(
+                "SELECT id FROM gtm_sources WHERE sync_kind=? AND retired_at IS NULL ORDER BY created_at, id", (KIND,)
+            )
+        ]
+    when = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    for sid in ids:
+        with store.transaction() as c:
+            row = c.execute("SELECT * FROM gtm_sources WHERE id=? AND retired_at IS NULL", (sid,)).fetchone()
+            if row is not None and row["sync_kind"] == KIND:
+                sync(c, SYSTEM, dict(row), at=when)
 
 
 def install(app: Any, store: Any, auth: Any) -> None:
@@ -176,6 +235,10 @@ def install(app: Any, store: Any, auth: Any) -> None:
     from . import hubdb as H
 
     brand: Any = _brand_mod
+    from .finance import ad_import
+
+    if refresh not in ad_import.AFTER_RUN:
+        ad_import.AFTER_RUN.append(refresh)
 
     @app.get("/api/v2/growth/finance-campaigns")
     def growth_finance_campaigns(request: Request, months: int = MONTHS_MAX) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]

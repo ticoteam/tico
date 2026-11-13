@@ -21,6 +21,7 @@ import math
 
 from fastapi import Request
 
+from . import growth_finance as GF
 from . import growth_sync as GS
 from . import hubdb as H
 from . import models as M
@@ -745,7 +746,8 @@ def _schedule(c, actor, sid, had=None, who=None):
 
 def source_create(c, actor, body, catalog=None, who=None):
     H._writer(c, actor)
-    reach = body.reach_kind or ("person" if body.sync_kind == "file" else None)
+    # A file comes from a person; Finance ad spend through Finance's own import and its stored keys.
+    reach = body.reach_kind or {"file": "person", GF.KIND: "credential"}.get(body.sync_kind or "")
     if not reach:
         raise Problem("validation", "reach_kind is mcp, credential, url or person", 422)
     sid = H.new_id()
@@ -759,6 +761,8 @@ def source_create(c, actor, body, catalog=None, who=None):
         "owner_ref": _owner_ref(c, body.owner_ref),
         "created_at": H.now(),
     }
+    if body.sync_kind == GF.KIND:
+        GF.may_connect(c, actor)
     if body.sync_kind:
         row.update(
             sync_kind=body.sync_kind,
@@ -789,6 +793,8 @@ def source_update(c, actor, sid, fields, retire=False, catalog=None, who=None):
             raise Problem("validation", f"{required} cannot be cleared", 422)
     if "sync_map" in fields or "sync_kind" in fields:
         kind = fields.get("sync_kind", row.get("sync_kind"))
+        if kind == GF.KIND:
+            GF.may_connect(c, actor)
         mapping = fields.get("sync_map") if "sync_map" in fields else json.loads(row.get("sync_map") or "{}")
         before = json.loads(row.get("sync_map") or "{}")
         fields["sync_map"] = _sync_fields(c, {"sync_map": mapping}, sid, kind, catalog, before) if kind else "{}"
@@ -1090,6 +1096,8 @@ def install(app, store, auth, mutate):
                 return GS.run(c, who.actor, row, csv_text=row["last_payload"])
             if row["sync_kind"] == "db_query":
                 return _start_db_run(c, who, row)
+            if row["sync_kind"] == GF.KIND:
+                return GF.sync(c, who.actor, row)
             raise Problem("conflict", f"{row['system']} cannot be run from here yet", 409)
 
         return mutate(request, body, work)

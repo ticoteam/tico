@@ -36,6 +36,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from . import growth_finance as GF
 from .store import H as _H
 from .store import Problem
 
@@ -132,7 +133,7 @@ def view(row: dict[str, Any]) -> dict[str, Any]:
         "name": row.get("system"),
         "kind": kind,
         "fills": fills(row),
-        "map": sync_map(row) if kind else {},
+        "map": (GF.public_map(sync_map(row)) if kind == GF.KIND else sync_map(row)) if kind else {},
         "refresh_hours": (row.get("refresh_hours") or REFRESH_HOURS.get(str(kind))) if kind else None,
         "health": state["health"],
         "health_since": state["since"],
@@ -150,6 +151,8 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
     if not kind:
         return {}
     given: dict[str, Any] = dict(mapping or {})
+    if kind == GF.KIND:
+        given = GF.check_map(given)
     raw: Any = given.get("fields") or {}
     if not isinstance(raw, dict) or not raw:
         raise Problem("validation", "A synced source fills at least one number: map FIELD=COLUMN", 422)
@@ -170,6 +173,8 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
                     "validation", "A database query source names its database, query and bot (the one granted it)", 422
                 )
             out[key] = value.removeprefix("bot:") if key == "bot" else value
+    if kind == GF.KIND:
+        out["campaigns"] = given["campaigns"]
     for live in H._rows(
         c.execute(
             "SELECT id, system, sync_map, sync_kind FROM gtm_sources WHERE sync_kind IS NOT NULL "
