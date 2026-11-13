@@ -12,11 +12,34 @@ Steps:
 2. Read `gh pr checks <n> -R <repo>`. For each failing check, open its log (`gh run view <run id> -R <repo> --log-failed`)
    and find the first real error, not the last line.
 3. Decide whose it is. Your change: fix it with a test, as in `playbooks/build-a-dev-task.md`. The base branch is red too
-   (the same check fails on the base's newest commit): say so on the task, for the Engineering Manager; do not
-   paper over it. A check that fails one run and passes the next on the same commit is flaky: name it on the task with
-   both run links.
+   (the same check fails on the base's newest commit): follow "When main is red" below; do not paper over it. A check
+   that fails one run and passes the next on the same commit is flaky: name it on the task with both run links.
 4. Never skip, disable or loosen a test or a check to make it pass. Never rerun to green and call it fixed.
 5. Push the fix and record on the task the new head and the checks that ran on it.
+
+## When main is red
+
+A check that failed only because the base branch was broken is not yours to fix on your branch, and not fixed by a
+re-run.
+
+1. **One task for the break.** Before you file anything, look for an open one, snoozed ones included (a plain list
+   hides a snoozed task, and the bot fixing main may have snoozed its own while the fix waits to merge):
+   `tico task list --q "Main red" --status open --snoozed all`. When one names the same failing test or check, do
+   not file another and do not open a second fix pull request: relate your task to it (`tico task relate <your task> <main-red task>`)
+   and add what you saw there (the failing test, your run link) as a comment. Only when none is open, file one
+   titled `Main red: <the failing test or check> since <the pull request that broke it>`, so the next bot finds it.
+2. **Wait on that task, not on a date.** Leave your task open and comment
+   `Blocked on <main-red task>: main is red in <test>`. Never snooze "waiting for main" to a guessed date: a task snoozed
+   for days sleeps on after main is fixed. Where {{app_name}} can mark a task blocked by another, mark it blocked by the
+   main-red task instead.
+3. **After main is fixed: rebase and push, never re-run.** A re-run of the failed job tests the same merge with the
+   old main and fails again on the same break. Rebase your branch on the fixed main and push, so the checks run on a
+   new head:
+
+       git fetch origin && git rebase origin/<base branch>
+       git push --force-with-lease origin HEAD:<branch>
+
+   Then record the new head on the task. A re-run is only for a flaky check, on a head whose base is already green.
 
 {{app_name}} reads the checks itself and moves the task when they pass. You never merge: Merge is the Release
 Manager's stage.

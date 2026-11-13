@@ -4,7 +4,8 @@
 //! (between START and END), so a turn's prompt carries only that turn's facts.
 //!
 //! Before each turn the runner brings the turn's checkout up to date (`ensure`): an `AGENT.md` becomes `AGENTS.md`,
-//! a root `state.md` (the retired status note) moves to `memory/archive/state.md` so nothing is lost, and the Tico
+//! a root `state.md` (the retired status note) moves to `memory/archive/state.md` so nothing is lost, the old
+//! template's steps that read and rewrite state.md become the new template's (`retire_state_steps`), and the Tico
 //! section is written when it is missing or differs. What changed is one commit, which the turn's own push sends
 //! (sessions::finish). Two checkouts of one bot that make the same change make the same patch, which the rebase drops.
 //!
@@ -97,6 +98,74 @@ pub fn with_section(text: &str, section: &str) -> String {
         "\n\n"
     };
     format!("{text}{sep}{section}")
+}
+
+/// The old templates' state.md steps, each with the new template's step for it (templates/catalog, after state.md was
+/// retired). Each pattern is one old template phrase, wrapped lines included; a phrase a bot or a person wrote
+/// otherwise matches none, so their lines stay as they are.
+const STATE_STEPS: &[(&str, &str)] = &[
+    (
+        r"If\s+`state\.md`\s+says\s+(setup|onboarding)\s+has\s+not\s+finished",
+        "If ${1} has not finished (Tico marks you Needs setup)",
+    ),
+    (
+        r"(\b[Rr]ecord\s+(?:each|every)\s+answer)\s+in\s+`state\.md`",
+        "${1} in `knowledge/`",
+    ),
+    (
+        r"(Record the bet's id and statement)\s+in\s+`state\.md`\s+under\s+Answers",
+        "${1} in `knowledge/`",
+    ),
+    (r"(?m)^[ \t]*\d+\.\s+Read\s+`state\.md`\.[ \t]*\r?\n", ""),
+    (
+        r"\b([Rr])ead\s+`state\.md`(?:,\s+then|,|\s+and)\s+",
+        "${1}ead ",
+    ),
+    (r"\bRewrite\s+`state\.md`", "Note progress on the task"),
+    (r"\brewrite\s+`state\.md`", "note progress on the task"),
+    (
+        r"Update\s+`state\.md`:\s+current\s+focus,\s+open\s+threads,\s+next\s+step\.",
+        "Note progress and the next step on the task.",
+    ),
+    (r"\b(Never\s+(?:mention|name)\s+)`?state\.md`?,\s+", "${1}"),
+    (r"\bKeep\s+state\.md,\s+", "Keep "),
+    (
+        r"(?m)^[ \t]*-\s+`state\.md`:\s+where\s+things\s+stand[^\n]*\n",
+        "",
+    ),
+    (
+        r"\s*`state\.md`:\s+where\s+things\s+stand,\s+rewritten\s+at\s+the\s+end\s+of\s+every\s+run\.",
+        "",
+    ),
+    (
+        r"(If\s+the\s+owner\s+pauses,)\s+`state\.md`\s+says",
+        "${1} the task says",
+    ),
+    // Setup answers (who to hand a case to, a bet's id) were kept in state.md, which the move archives.
+    (
+        r"\b((?:named\s+(?:human|person)|broker|person|owners|approvers|readers\s+named|relations\s+owner|the\s+id))\s+in\s+`state\.md`",
+        "${1} in `memory/archive/`",
+    ),
+];
+
+/// `text` with the old templates' state.md steps rewritten to the new template's (STATE_STEPS), so a moved bot stops
+/// re-creating the state.md the move archived.
+pub fn retire_state_steps(text: &str) -> String {
+    static RULES: std::sync::LazyLock<Vec<(regex::Regex, &'static str)>> =
+        std::sync::LazyLock::new(|| {
+            STATE_STEPS
+                .iter()
+                .map(|(p, r)| (regex::Regex::new(p).expect("state step pattern"), *r))
+                .collect()
+        });
+    if !text.contains(STATE) {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for (re, with) in RULES.iter() {
+        out = re.replace_all(&out, *with).into_owned();
+    }
+    out
 }
 
 async fn g(path: &Path, env: &Env, args: &[&str]) -> Result<Out, Fault> {
@@ -235,7 +304,8 @@ pub async fn ensure(
         paths.push(STATE_ARCHIVE);
     }
     let current = text.unwrap_or_default();
-    let wanted = with_section(&current, &section(app, stateless));
+    // The old template's state.md steps go in the same commit, on the move and on any checkout moved before them.
+    let wanted = with_section(&retire_state_steps(&current), &section(app, stateless));
     if wanted != current {
         bot_write(&new, &wanted).map_err(io)?;
     }
@@ -290,6 +360,79 @@ mod tests {
             "{replaced}"
         );
         assert_eq!(with_section("", &s1), s1);
+    }
+
+    /// Each old template's state.md step comes out as the new template's step; lines the bot or a person wrote stay.
+    #[test]
+    fn the_old_templates_state_md_steps_are_rewritten_and_own_lines_kept() {
+        for (old, new) in [
+            (
+                "If `state.md` says setup has not finished, do this before any other work:\n",
+                "If setup has not finished (Tico marks you Needs setup), do this before any other work:\n",
+            ),
+            (
+                "If `state.md` says onboarding has not finished, do this before any other work:\n",
+                "If onboarding has not finished (Tico marks you Needs setup), do this before any other work:\n",
+            ),
+            (
+                "3. Record each answer in `state.md`, dated, and write `knowledge/mandatory.md`.\n",
+                "3. Record each answer in `knowledge/`, dated, and write `knowledge/mandatory.md`.\n",
+            ),
+            (
+                "1. Read `state.md`, then the task and its conversation with `tico task show <id>`.\n",
+                "1. Read the task and its conversation with `tico task show <id>`.\n",
+            ),
+            (
+                "1. Read `state.md`, `knowledge/pipeline.md`, `memory/learnings.md`, then the task.\n",
+                "1. Read `knowledge/pipeline.md`, `memory/learnings.md`, then the task.\n",
+            ),
+            (
+                "3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit.\n",
+                "3. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit.\n",
+            ),
+            (
+                "1. Update the change log; rewrite\n   `state.md`; record decisions.\n",
+                "1. Update the change log; note progress on the task; record decisions.\n",
+            ),
+            (
+                "1. Start.\n2. Read `state.md`.\n3. Read the task.\n",
+                "1. Start.\n3. Read the task.\n",
+            ),
+            (
+                "1. Start.\r\n2. Read `state.md`.\r\n3. Read the task.\r\n",
+                "1. Start.\r\n3. Read the task.\r\n",
+            ),
+            (
+                "3. Update `state.md`: current focus, open threads, next step.\n",
+                "3. Note progress and the next step on the task.\n",
+            ),
+            (
+                "- Never mention state.md, memory, commits or ids unless a person asks.\n",
+                "- Never mention memory, commits or ids unless a person asks.\n",
+            ),
+            (
+                "- `knowledge/`: what you know.\n- `state.md`: where things stand right now, rewritten at the end of every run.\n",
+                "- `knowledge/`: what you know.\n",
+            ),
+            (
+                "It goes to the named human in `state.md` the same day.\n",
+                "It goes to the named human in `memory/archive/` the same day.\n",
+            ),
+            (
+                "If the owner pauses, `state.md` says where you stopped.\n",
+                "If the owner pauses, the task says where you stopped.\n",
+            ),
+        ] {
+            assert_eq!(retire_state_steps(old), new, "{old}");
+            assert_eq!(retire_state_steps(new), new, "{new}");
+        }
+        for own in [
+            "Our own rule: the owner keeps a copy of state.md in the wiki.\n",
+            "- Look in `state.md` of the old export when asked.\n",
+            "- Compare the answers in `state.md` of the old export.\n",
+        ] {
+            assert_eq!(retire_state_steps(own), own);
+        }
     }
 
     #[test]

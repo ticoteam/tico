@@ -208,6 +208,20 @@ class Ctx:
             self._memo[key] = make()
         return self._memo[key]
 
+    def growth_sources(self):
+        """Every Growth source by id, as its list row shows it (backend/growth_sync.py view): name, health, owner."""
+
+        def make():
+            from . import growth_sync as GS
+
+            rows = H._rows(self.c.execute(f"SELECT {GS.listed(self.c)} FROM gtm_sources"))  # never the stored files
+            return {
+                r["id"]: {**GS.view(r), "owner_ref": r.get("owner_ref"), "retired": bool(r.get("retired_at"))}
+                for r in rows
+            }
+
+        return self.memo("growth_sources", make)
+
     @property
     def roster(self):
         return self.memo("roster", lambda: G._roster(self.c))
@@ -405,7 +419,9 @@ def needs_act(it):
         return "fix"
     if kind == "mention":
         return "reply"
-    stuck = (task.get("turn") or {}).get("state") == "paused" or (task.get("late") or {}).get("level") == "person"
+    turn = task.get("turn") or {}
+    late = (task.get("late") or {}).get("level") == "person"
+    stuck = turn.get("state") == "paused" or late or bool(task.get("stuck")) or bool(turn.get("share"))
     return "fix" if stuck else "done"
 
 
@@ -743,6 +759,97 @@ def kpi_reading(view):
     return value, points[-1]["value"] if points else None
 
 
+# A figure's origin line names where its numbers came from. A number a person types or a source syncs is its own; a
+# worked-out figure (backend/growth.py economics_row) names the numbers it is worked out from.
+METRIC_INPUTS = {
+    "cac": ("spend", "bot_cost", "new_customers"),
+    "ltv": ("revenue_month", "margin_pct", "kept_d30", "kept_d90", "kept_d180"),
+    "ltv_cac": (
+        "spend",
+        "bot_cost",
+        "new_customers",
+        "revenue_month",
+        "margin_pct",
+        "kept_d30",
+        "kept_d90",
+        "kept_d180",
+    ),
+    "payback_months": ("spend", "bot_cost", "new_customers", "revenue_month", "margin_pct"),
+}
+ORIGIN_CONFLICTS = 5  # conflicts a card lists; `conflict_count` has them all
+
+
+def growth_origin(ctx, metric, month, channel=""):
+    """Where one figure's numbers in `month` came from, over one channel or all of them: each synced source with its
+    newest sync and health, the typed numbers (newest typer, estimate when any is), and the numbers a source disagrees
+    with (spec AC-10, AC-12). A number typed before origins were kept counts as typed by nobody named (revenue and margin
+    aside: those may be Settings' figure). None with none."""
+    from .brand import admin
+
+    fields = METRIC_INPUTS.get(metric, (metric,))
+    known = ctx.growth_sources()
+    synced, typed, conflicts = {}, [], []
+    for ch in ctx.growth()["channels"]:
+        if channel and ch["slug"] != channel:
+            continue
+        point = next((p for p in ch["series"] if p["month"] == month), None) or {}
+        for field in fields:
+            o = (point.get("origins") or {}).get(field)
+            if not o:
+                # Revenue and margin with no origin may be Settings' figure for every channel, typed nowhere.
+                if point.get(field) is not None and field not in ("revenue_month", "margin_pct"):
+                    typed.append({"by": None, "at": "", "quality": point.get("quality") or "actual"})
+                continue
+            if o["origin"] == "synced" and o.get("source_id"):
+                synced[o["source_id"]] = max(synced.get(o["source_id"], ""), o.get("at") or "")
+            else:
+                typed.append({"by": o.get("by"), "at": o.get("at") or "", "quality": o.get("quality") or "actual"})
+            held = o.get("conflict")
+            if held:
+                src = known.get(held.get("source_id") or "") or {}
+                conflicts.append(
+                    {
+                        "channel": ch["slug"],
+                        "channel_name": ch["name"],
+                        "month": month,
+                        "field": field,
+                        "typed": point.get(field),
+                        "value": held.get("value"),
+                        "source": held.get("source"),
+                        "may": admin(ctx.auth, ctx.who) or src.get("owner_ref") == ctx.who.actor,
+                    }
+                )
+    if not synced and not typed and not conflicts:
+        return None
+    sources = []
+    for sid, at in synced.items():
+        src = known.get(sid) or {}
+        sources.append(
+            {
+                "source_id": sid,
+                "source": src.get("name") or "",
+                "at": at,
+                "health": None if src.get("retired") else src.get("health"),
+                "since": src.get("health_since"),
+            }
+        )
+    newest = max(typed, key=lambda t: t["at"]) if typed else None
+    return {
+        "fields": list(fields) if metric in METRIC_INPUTS else [],
+        "synced": sorted(sources, key=lambda x: x["source"].lower()),
+        "typed": {
+            "count": len(typed),
+            "by": newest["by"],
+            "at": newest["at"] or None,
+            "quality": "estimate" if any(t["quality"] == "estimate" for t in typed) else "actual",
+        }
+        if newest
+        else None,
+        "conflicts": conflicts[:ORIGIN_CONFLICTS],
+        "conflict_count": len(conflicts),
+    }
+
+
 def growth_number(ctx, s):
     """One metric for the picked month, over the months up to it: the company's, or one channel's when `channel` is set."""
     nums = ctx.growth()
@@ -754,6 +861,7 @@ def growth_number(ctx, s):
     if s.get("channel"):
         rows = next((ch["series"] for ch in nums["channels"] if ch["slug"] == s["channel"]), [])
     by = {r["month"]: r.get(metric) for r in rows}
+    origin = {r["month"]: (r.get("origin") or {}).get(metric) for r in rows}
     cal = months_between(nums["months"][0], ctx.month)
     values = [by.get(m) for m in cal]
     fig = figure(values, cal, ctx.month, carry)
@@ -769,7 +877,10 @@ def growth_number(ctx, s):
         "value": fig["value"],
         "prev": fig["prev"],
         "from": fig["from"],
+        # computed (from customer facts), typed, or mixed (every channel together, some of each)
+        "basis": origin.get(fig["from"] or ctx.month) if fig["value"] is not None else None,
         "series": [{"month": m, "value": v} for m, v in zip(cal, values, strict=True)],
+        "origin": growth_origin(ctx, metric, fig["from"] or ctx.month, s.get("channel") or ""),
     }
 
 
@@ -896,6 +1007,7 @@ def growth_channels(ctx, s):
         here = by.get(month, {})
         ltv = figure([by.get(m, {}).get("ltv_cac") for m in cal], cal, month, True)
         mine = tasks.get(ch["slug"], [])
+        origin = here.get("origin") or {}
         rows.append(
             {
                 "slug": ch["slug"],
@@ -904,6 +1016,12 @@ def growth_channels(ctx, s):
                 "cac": here.get("cac"),
                 "ltv_cac": ltv["value"],
                 "ltv_from": ltv["from"],
+                # each figure computed from customer facts or typed (growth_numbers.origins)
+                "origin": {
+                    "new_customers": origin.get("new_customers"),
+                    "cac": origin.get("cac"),
+                    "ltv_cac": (by.get(ltv["from"] or month, {}).get("origin") or {}).get("ltv_cac"),
+                },
                 "series": [by.get(m, {}).get("new_customers") for m in cal[-6:]],
                 "tasks": mine[:3],
                 "more": max(0, len(mine) - 3),
@@ -913,15 +1031,46 @@ def growth_channels(ctx, s):
 
 
 def growth_retention(ctx, s):
-    """Each of the newest cohort months' share kept at 30, 90 and 180 days, the newest last."""
+    """Each of the newest cohort months' share kept at 30, 90 and 180 days, the newest last. With customer facts, also
+    `computed`: the picked month's cohorts by channel, monthly (growth_computed.computed, no keys), which the web's Cut
+    by and Weekly / Monthly switches read again from GET /api/v2/growth/computed."""
+    from . import growth_computed as GX
+
     nums = ctx.growth(s["months"])
     kept = ("kept_d30", "kept_d90", "kept_d180")
     rows = [
         {"month": r["month"], "new_customers": r["new_customers"], "kept": [r[k] for k in kept]} for r in nums["series"]
     ]
-    if not any(v is not None for row in rows for v in row["kept"]):
+    computed = GX.computed(ctx.c, ctx.auth, ctx.who, month=ctx.month) if GX.has_facts(ctx.c) else None
+    if computed is not None and not computed["cohorts"]:
+        computed = None  # a month with no customer facts reads its typed rows, as before facts were loaded
+    if computed is None and not any(v is not None for row in rows for v in row["kept"]):
         return None
-    return {"columns": ["30 days", "90 days", "180 days"], "rows": rows}
+    out = {"columns": ["30 days", "90 days", "180 days"], "rows": rows}
+    if computed is not None:
+        computed["typed"] = typed_retention(ctx, kept)
+        out["computed"] = computed
+    return out
+
+
+def typed_retention(ctx, kept):
+    """The picked month's channels with typed retention and no customer facts, which the web lists beside the computed
+    cohorts, each marked typed."""
+    from . import growth as G
+
+    out = []
+    for r in G.cohorts(ctx.c, month=ctx.month, limit=G.COHORTS_MAX):
+        if "computed_from" in r or all(r.get(k) is None for k in ("new_customers", *kept)):
+            continue
+        out.append(
+            {
+                "value": r["channel"] or G.UNKNOWN,
+                "new_customers": r.get("new_customers"),
+                "kept": [r.get(k) for k in kept],
+                "origin": "typed",
+            }
+        )
+    return out
 
 
 def growth_board(ctx, s):

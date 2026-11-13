@@ -316,6 +316,9 @@ class TaskMove(Contract):
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
+    # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
+    # next. Refused when the task now waits on someone else (H.task_let_see).
+    let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
 
 
 class TaskQueue(Contract):
@@ -2182,7 +2185,10 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: CompactAt
+    # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
+    compact_at: CompactAt | None = Field(
+        description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
+    )
     expected_revision: int = Field(ge=1)
 
 
@@ -2455,6 +2461,30 @@ class PageOwnerSet(Contract):
     """A page's owner (backend/page_owners.py): a bot's id or slug, or null for no owner (the page has no Chat)."""
 
     bot: str | None = None
+
+
+class KeyGrantRow(Contract):
+    """One row of the Tools owner's proposal (backend/key_grants.py): a key saved in the Tools chat, by name; a tool,
+    by id or name; read or read_write; the bots, by slug or id."""
+
+    key: str = Field(min_length=1, max_length=150)
+    tool: str = Field(min_length=1, max_length=200)
+    level: Literal["read", "read_write"] = "read"
+    bots: list[str] = Field(min_length=1, max_length=10)
+
+
+class KeyGrantProposal(Contract):
+    """The Tools owner's proposal in its chat with a person (`thread_id`); the server builds the card from it."""
+
+    thread_id: str = Field(min_length=1, max_length=200)
+    rows: list[KeyGrantRow] = Field(min_length=1, max_length=20)
+    note: str = Field(default="", max_length=500)
+
+
+class KeyGrantGrant(Contract):
+    """Grant on the card: the positions of the rows kept (null: all)."""
+
+    keep: list[int] | None = Field(default=None, max_length=20)
 
 
 class AccessRules(Contract):
@@ -3467,20 +3497,26 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py): file import and database query; Finance ad spend and bot cost follow
-# in later parts.
-GrowthSyncKind = Literal["file", "db_query"]
+# A synced source's kind (backend/growth_sync.py): file import, database query and Finance ad spend
+# (backend/growth_finance.py); bot cost follows in a later part.
+GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
 
 
 class GrowthSyncMap(Contract):
+    # "customers": each run posts customer rows (backend/growth_customers.py) and maps no numbers.
+    shape: Literal["numbers", "customers"] | None = None
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
-    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]] | None = None
     # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
     # that database, which runs it daily.
     database: str | None = Field(default=None, min_length=1, max_length=80)
     query: str | None = Field(default=None, min_length=1, max_length=120)
     bot: str | None = Field(default=None, min_length=1, max_length=200)
+    # Finance ad spend: campaign key (platform:account:campaign) -> channel slug; "unknown" or "" is Unknown.
+    campaigns: dict[Annotated[str, Field(max_length=200)], Annotated[str, Field(max_length=80)]] | None = Field(
+        default=None, max_length=2000
+    )
 
 
 class GrowthSourceCreate(Contract):

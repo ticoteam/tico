@@ -132,6 +132,14 @@ ANSWERS = {
         "not_written": [{"row": 4, "channel": "podcast", "month": "2026-10", "reason": "no such channel"}],
         "not_written_count": 1,
     },
+    "GET growth/finance-campaigns": {
+        "accounts": [
+            {"platform": "meta_ads", "account": "act_111", "label": "Meta Ads act_111", "name": "Paid rental"}
+        ],
+        "campaigns": [
+            {"key": "meta_ads:111:brand", "name": "Brand search", "last_month": "2026-10", "last_month_spend": 4210.5}
+        ],
+    },
     "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},
     "GET growth/economics": {
         "month": "2026-10",

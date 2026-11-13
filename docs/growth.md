@@ -88,8 +88,8 @@ A team that knows its customers can load them instead of typing retention. Growt
 retention, LTV, CAC and payback itself, cut by channel, segment or plan, monthly or weekly, and each figure opens to the
 customers behind it.
 
-**Customer facts.** One row per customer, as a CSV (`tico growth customers load customers.csv`). Growth keeps only these
-columns:
+**Customer facts.** One row per customer, as a CSV: **Upload customers** in Growth's Settings or on the Retention card,
+or `tico growth customers load customers.csv`. Growth keeps only these columns:
 
 | Column | Required | What it holds |
 | --- | --- | --- |
@@ -107,6 +107,12 @@ forgotten. A customer who left and came back is a second row with the same key a
 the first row's churned date. A customer counts where they were when they became a customer; a later load that moves
 them to another channel, segment or plan does not move them between cohorts. Only the owner and admins load or delete
 customer facts (`tico growth customers delete` deletes them all; the figures go back to typed values).
+
+**From a synced source.** A source connected with `--sync file --map customers` takes the same columns: each file you
+push (`tico growth source push ID --file customers.csv`) is a load of that source's customers only, so an upload in
+Growth and two sources never replace each other's. A file the rules refuse fails the run, with the rule, and leaves its
+last customers as they were. Retiring the source, stopping its sync or mapping it to numbers deletes its customers and
+its stored file at once.
 
 **What is refused.** Nothing loads when any of these hold, and the message names the rule and the column, never a value:
 a column outside the list; a customer key that looks like an email address or a phone number; a segment or plan longer
@@ -133,11 +139,19 @@ Figures are worked out when they are read, so a load shows at once and day 90 an
 nobody typing. A two-week test shows its new customers and CAC by week; its day-30 retention appears 30 days after its
 last week ends.
 
+**On the Growth page.** With customer facts, the Retention card shows the picked month's cohorts. **Cut by** chooses
+channel, segment or plan, and **Weekly / Monthly** the grain; a month shows every whole week that touches it. Each row has
+its new customers, day 30, 90 and 180, LTV and CAC; the foot says how many customers the figures come from and when and
+where they were loaded. The month picker lists the months with customer facts too. Each Number card says whether its
+figure is computed, typed, or both (every channel together, some of each), and the Channels table dots its computed
+figures.
+
 **Computed beside typed.** A channel's month with customer facts shows the computed figures, each marked computed and
 with the number of customers it comes from. A typed estimate for the same month is replaced. A typed actual that differs
 is kept beside it. Channels and months with no customer facts read exactly as before. Every figure says which it is.
 
-**The customers behind a figure.** `--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
+**The customers behind a figure.** On the Retention card, a day's figure opens to its customers. In the CLI,
+`--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
 search-ads, still paying on day 30") and the customer keys, split into still customers and churned with the date. Anyone
 who reads Growth sees the counts and the rule; the keys and churn dates show only to the owner, admins and the people or
 bots they name (`--set key_readers=growth-product-owner`).
@@ -190,8 +204,24 @@ tico growth source sync <id>      # starts the bot's run now
 - **Health.** `tico growth source list` shows each synced source as fresh, waiting (never run), stale (no good run in
   twice its refresh time, `--refresh-hours`; a file's is a week) or failing, with the reason. A failed run changes
   nothing already written. The source's owner gets one notice when it starts failing and one when it recovers.
-- **Run again.** `tico growth source sync <id>` runs a file source's last file again, after a remap say, and starts a
-  database query source's run on its bot's computer.
+- **Run again.** `tico growth source sync <id>` runs a source now: a file source's last file again (after a remap,
+  say), a Finance ad spend source from Finance's latest import, a database query source on its bot's computer.
+
+
+**Finance ad spend.** Spend can come from Finance's Google Ads and Meta import. Growth reads its daily spend per
+campaign in the book's currency and adds it up per channel and month. A day counts in the month the ad platform reports
+it. Map each campaign to a channel once. A campaign left out, or mapped to `unknown`, counts on Unknown. Growth shows
+only the channel-month totals, never a campaign. The source runs after each Finance import, so a day the platform
+restates reaches Growth on the next import. An ad account in another currency than the books makes the source failing,
+naming the account; nothing is converted. Connecting or remapping it also needs someone who sees every connected ad
+account in Finance (a finance admin). The `--campaign` flags of an update replace the whole map, so a remap lists
+every campaign to keep:
+
+```
+tico growth source campaigns
+tico growth source add --truth-for spend --system "Finance ad spend" --sync finance_ad_spend \
+  --campaign meta_ads:111:brand=search-ads --campaign meta_ads:111:retarget=social-ads
+```
 
 The owner and admins connect, remap and retire a synced source; retiring a database query source removes its daily
 run. The daily run is an automation owned by the query's bot, so naming or changing that bot also needs the right to
@@ -199,6 +229,16 @@ make automations for it (its owner, or someone above it), and so does starting i
 may always start its own run). Retiring the source, or switching it to another kind, removes its daily run whoever
 does it: that run exists only for the source, and the owner and admins must be able to stop a source. `tico growth source update <id> --bot BOT` moves the run to
 another bot and keeps the columns it maps. The owner, an admin, the source's own owner or its query's bot sends it rows.
+
+**On the web.** Sources shows each synced source's numbers and health (Fresh, Stale or Failing, and since when), and a
+source typed by hand as "not synced". **Connect a source** takes a name, a CSV and the column for each number (a picked
+file's columns that match a number's name are filled in), and runs the file at once, saying what it wrote, held and
+could not write. Opening a synced source changes its columns, takes a new file or runs its last one again. On Growth, a
+banner over the cards names each Stale or Failing source and the numbers it fills; each Number card has a line saying
+where its figure came from (the source and how long ago it synced, marked stale or failing, or who typed it, actual or
+estimate; CAC, LTV and payback name the sources of the numbers they are worked out from). A number a source disagrees
+with shows both values, and the source's owner or an admin picks **Keep** or **Use**, on the card or in a month's
+numbers under Settings, where a synced number is locked.
 
 ## Marketing tasks
 
@@ -277,6 +317,10 @@ tico growth source list | add | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
 tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN
 tico growth source push ID --file FILE.csv | sync ID | run ID
+tico growth source push ID --file FILE.csv | sync ID
+tico growth source campaigns [--months N]  Finance's ad campaigns and their keys, to map
+tico growth source add --truth-for spend --system NAME --sync finance_ad_spend --campaign KEY=CHANNEL
+tico growth source add --truth-for customers --system NAME --sync file --map customers
 tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]

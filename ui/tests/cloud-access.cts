@@ -78,7 +78,7 @@ declare function get(path: string): Promise<unknown>;
     assert.ok(bar.height <= 32 && bar.y === 0, 'a slim strip at the top');
     assert.ok(side.y >= bar.height - 1, 'the sidebar starts below the strip');
     assert.equal(await shown('#cloud-lock'), false);
-    await page.locator('#side a[data-nav="docs"]').click();
+    await page.locator('#side a[data-nav="library"]').click();   // Library's own row opens Docs (its pages start folded)
     assert.equal(await shown('#cloud-banner'), true, 'on every page');
     if (shots) await page.screenshot({path: path.join(shots, 'cloud-frozen-desktop.png')});
     await page.setViewportSize({width: 390, height: 780});

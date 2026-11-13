@@ -252,8 +252,8 @@ PRESETS["engineering"] = {
             "QA",
             "Build the QA page: what changed, before and after screenshots of the running app (or the output that "
             "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
-            "person approves it to ship. To change it, attach the new version; Tico asks the person. Never ask your "
-            "own OK of it.",
+            "person approves it to ship. To change it, attach the new version; Tico asks the person again when there "
+            "are new commits or it is another page. Never ask your own OK of it.",
             240,
             [
                 github("checks_pass"),

@@ -254,6 +254,16 @@ const go = async (page: Page, hash: string) => {
   await page.evaluate(h => { location.hash = h; }, hash);
   await settle(page);
 };
+// Settings > Computers draws its External agents table only when the settings read answers, which can take longer
+// than settle's fixed wait on a loaded computer: wait for the agent row the hub seeded, or the audit misses it.
+const computers = async (page: Page, hub: Hub) => {
+  await go(page, '#/settings/computers');
+  if (!hub.facts.agent) return;
+  const row = `[data-agent-row="${hub.facts.agent}"]`;
+  await page.locator(row).first().waitFor({state: 'attached', timeout: t(20000)}).catch(() => {
+    throw new Error(`Settings > Computers never drew ${row} for the agent the hub seeded`);
+  });
+};
 const openDialogs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('dialog[open]')].map(d => d.id || d.className));
 
 interface Screen { name: string; open: (page: Page, hub: Hub) => Promise<boolean | void>; modalFrom?: string }
@@ -303,8 +313,8 @@ const SCREENS: Screen[] = [
   {name: 'One bot', open: page => go(page, '#/bot/builder')},
   {name: 'Tools', open: page => go(page, '#/tools')},
   {name: 'Tools > GitHub', open: page => go(page, '#/tools/github')},
-  {name: 'Settings > Computers', open: page => go(page, '#/settings/computers')},
-  {name: 'Add computer', open: async page => { await go(page, '#/settings/computers'); return tapFirst(page, ['button:has-text("Add computer")', '[data-machine-add]']); }},
+  {name: 'Settings > Computers', open: computers},
+  {name: 'Add computer', open: async (page, hub) => { await computers(page, hub); return tapFirst(page, ['button:has-text("Add computer")', '[data-machine-add]']); }},
   {name: 'Settings > Models', open: page => go(page, '#/settings/models')},
   {name: 'Settings > Billing', open: page => go(page, '#/settings/billing')},
   {name: 'Finance', open: page => go(page, '#/finance')},

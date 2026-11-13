@@ -101,11 +101,14 @@ const HISTORY_KIND_LABEL: Record<string, string> = {run: 'Run', task: 'Task', 'a
   'permission.changed': 'Permission change', decision: 'Decision'};
 let SETTINGS_HISTORY_VIEW = 'log';
 let SETTINGS_LOG: {scope: string; kind: string} = {scope: '', kind: ''};
+// Runs showing only the day's failed runs (?view=runs&failed=1): where Health's Failed runs opens (backend/health.py).
+let SETTINGS_RUNS_FAILED = false;
 // The router hands over the query of #/settings/history?..; settingsAddress writes it back with settingsHistoryQuery.
 function settingsHistoryAddress(query?: string | null) {
   const q = new URLSearchParams(query || '');
   const view = q.get('view');
   SETTINGS_HISTORY_VIEW = view === 'runs' || view === 'changes' ? view : 'log';
+  SETTINGS_RUNS_FAILED = SETTINGS_HISTORY_VIEW === 'runs' && q.get('failed') === '1';
   const scope = ['bot', 'person', 'team'].map(k => q.get(k) ? `${k === 'person' ? 'human' : k}:${q.get(k)}` : '').find(Boolean) || '';
   const kind = q.get('kind') ?? '';
   SETTINGS_LOG = {scope, kind: HISTORY_KINDS.some(([k]) => k === kind) ? kind : ''};
@@ -120,6 +123,7 @@ function settingsLogFilters() {
 function settingsHistoryQuery() {
   const q = SETTINGS_HISTORY_VIEW === 'log' ? settingsLogFilters() : new URLSearchParams();
   if (SETTINGS_HISTORY_VIEW !== 'log') q.set('view', SETTINGS_HISTORY_VIEW);
+  if (SETTINGS_HISTORY_VIEW === 'runs' && SETTINGS_RUNS_FAILED) q.set('failed', '1');
   return q.toString() ? '?' + q : '';
 }
 function settingsLogWho(actor: string, names: Record<string, string>, item: Partial<HistoryLogItem> = {}) {
@@ -230,9 +234,11 @@ function settingsHistoryShow(view = SETTINGS_HISTORY_VIEW) {
 // "18K out", so a run with no price fits its column on a phone; the exact count is in the CSV and the log.
 const settingsRunTokens = new Intl.NumberFormat(undefined, {notation: 'compact', maximumFractionDigits: 1});
 const settingsRunTook = (s?: number | null) => s == null ? '' : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
-function settingsRunsHTML(list: HistoryRun[]) {
-  if (!list.length) return `<div class="empty">No runs yet.</div>`;
-  return `<div class="runs-list"><div class="run-row run-head"><span>Bot</span><span>Result</span><span>Model</span><span>Took</span><span>Cost</span><span>Finished</span><span></span></div>
+function settingsRunsHTML(list: HistoryRun[], failed = false) {
+  // Each job that failed in the last day, by the try that failed it; retries that went back in the queue are not here.
+  const head = failed ? `<p class="runs-filter">Failed runs in the last day · <a href="#/settings/history?view=runs">Show all runs</a></p>` : '';
+  if (!list.length) return head + `<div class="empty">${failed ? 'No failed runs in the last day.' : 'No runs yet.'}</div>`;
+  return `${head}<div class="runs-list"><div class="run-row run-head"><span>Bot</span><span>Result</span><span>Model</span><span>Took</span><span>Cost</span><span>Finished</span><span></span></div>
     ${list.map(r => {
       const live = runLive(r), unfinished = runUnfinished(r), ok = !unfinished && r.exit === 0;
       // A failed or expired run reads its outcome alone; its id is in the pill's tooltip.
@@ -252,7 +258,8 @@ function settingsRunsHTML(list: HistoryRun[]) {
 }
 async function renderSettingsRuns() {
   const el = $('#set-runs'); if (!el) return;
-  try { el.innerHTML = settingsRunsHTML(await get<HistoryRun[]>('/runs')); } catch (e) { el.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; }
+  const failed = SETTINGS_RUNS_FAILED;
+  try { el.innerHTML = settingsRunsHTML(await get<HistoryRun[]>(failed ? '/runs?failed=true' : '/runs'), failed); } catch (e) { el.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; }
 }
 
 // ----------------------------------------------------------------- Changes

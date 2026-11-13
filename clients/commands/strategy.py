@@ -424,15 +424,24 @@ SOURCE_PROPS = {
     "owner": _s("Who answers for it: me, a bot slug or a person id"),
     "sync_kind": {
         "type": "string",
-        "enum": ["file", "db_query", "none"],
+        "enum": ["file", "db_query", "finance_ad_spend", "none"],
         "description": "Make it fill numbers itself: file (a CSV sent with tico growth source push), db_query (a named "
-        "query a bot runs daily; give database, query and bot); none stops it",
+        "query a bot runs daily; give database, query and bot), finance_ad_spend (spend from Finance's Google Ads and "
+        "Meta import; map campaigns with campaign); none stops it",
+    },
+    "campaign": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "With finance_ad_spend: KEY=CHANNEL for each campaign (keys from tico growth source campaigns); "
+        "a campaign left out, or mapped to unknown, counts on Unknown. On update the campaigns sent replace the whole "
+        "map, so send every campaign you want kept",
     },
     "map": {
         "type": "array",
         "items": {"type": "string"},
         "description": "With sync_kind: NUMBER=COLUMN for each number it fills (new_customers=signups), and "
-        "month=COLUMN or channel=COLUMN when those columns have other names",
+        "month=COLUMN or channel=COLUMN when those columns have other names; or the one word customers for a source "
+        "whose rows are customers (customer key, became customer, channel...), which computes retention",
     },
     "database": _s("With sync_kind db_query: the database, as tico db names it"),
     "query": _s(
@@ -450,18 +459,20 @@ SOURCE_PROPS = {
 
 def _source_body(api, args):
     db_keys = ("database", "query", "bot")
-    skip = ("owner", "map", "sync_kind", *db_keys)
+    skip = ("owner", "map", "sync_kind", "campaign", *db_keys)
     body = {k: args[k] for k in SOURCE_PROPS if k not in skip and args.get(k) is not None}
     if args.get("owner") is not None:
         body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
     if args.get("sync_kind") is not None:
         body["sync_kind"] = None if args["sync_kind"] == "none" else args["sync_kind"]
-    if args.get("map"):
+    if args.get("map") == ["customers"]:
+        body["sync_map"] = {"shape": "customers"}
+    elif args.get("map"):
         mapping = {"fields": {}}
         for pair in args["map"]:
             name, sep, column = pair.partition("=")
             if not sep or not name.strip() or not column.strip():
-                raise APIError("map", "--map is NUMBER=COLUMN, month=COLUMN or channel=COLUMN")
+                raise APIError("map", "--map is NUMBER=COLUMN, month=COLUMN, channel=COLUMN or customers")
             if name.strip() in ("month", "channel"):
                 mapping[name.strip()] = column.strip()
             else:
@@ -479,12 +490,20 @@ def _source_body(api, args):
                 None,
             )
             kept = (current or {}).get("map") or {}
-            if not kept.get("fields"):
+            if not kept.get("fields") and kept.get("shape") != "customers":
                 raise APIError(
                     "map", "--database, --query and --bot go with --map NUMBER=COLUMN for each number it fills"
                 )
-            body["sync_map"] = {k: kept[k] for k in ("month", "channel", "fields") if kept.get(k)}
+            body["sync_map"] = {k: kept[k] for k in ("shape", "month", "channel", "fields") if kept.get(k)}
         body["sync_map"].update({k: args[k] for k in db_keys if args.get(k)})
+    if args.get("campaign"):
+        campaigns = {}
+        for pair in args["campaign"]:
+            key, sep, channel = pair.rpartition("=")
+            if not sep or not key.strip():
+                raise APIError("campaign", "--campaign is KEY=CHANNEL")
+            campaigns[key.strip()] = channel.strip()
+        body.setdefault("sync_map", {})["campaigns"] = campaigns
     return body
 
 
@@ -530,6 +549,16 @@ def growth_source_update(api, args):
 )
 def growth_source_retire(api, args):
     return _as_person(api).post(f"growth/sources/{args['id']}/retire", {}, key=_key(args))
+
+
+@tool(
+    "tico_growth_source_campaigns",
+    "Connecting Finance ad spend: Finance's connected ad accounts and each campaign with spend in the newest months, "
+    "with the key to map it by. Owner or admin, who must see every connected ad account in Finance.",
+    {"months": {"type": "integer", "minimum": 1, "maximum": 12, "default": 12, "description": "Newest months (1-12)"}},
+)
+def growth_source_campaigns(api, args):
+    return _as_person(api).get("growth/finance-campaigns", months=args.get("months"))
 
 
 @tool(
@@ -873,6 +902,7 @@ _SOURCE = (
     Arg("database", "--database", metavar="NAME"),
     Arg("query", "--query", metavar="ID"),
     Arg("bot", "--bot", metavar="BOT"),
+    Arg("campaign", "--campaign", metavar="KEY=CHANNEL"),
 )
 _COMPUTED = (
     Arg("by", metavar="CUT"),
@@ -953,6 +983,12 @@ CLI = (
         "retire a source (owner or admin)",
         render=_growth_text,
         example="tico growth source retire src_1",
+    ),
+    Command(
+        "growth source campaigns",
+        "Finance's ad campaigns to map when connecting Finance ad spend (owner or admin who sees every ad account)",
+        render=_growth_text,
+        example="tico growth source campaigns --months 3",
     ),
     Command(
         "growth source push",

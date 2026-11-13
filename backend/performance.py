@@ -480,7 +480,7 @@ def _update(c, oid, runner_id, started, last, why):
         "AND span=? AND created_at>=? AND created_at<=?",
         (runner_id, MINUTE, started, last),
     ).fetchone()
-    bots = ran(c, runner_id, started, last + MINUTE)[:8]
+    bots = at_once(c, runner_id, started, last + MINUTE)[:8]
     procs = c.execute(
         "SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
         "span=? AND created_at>=? AND created_at<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
@@ -528,6 +528,32 @@ def ran(c, runner_id, start, end):
         key = (r["bot_id"].removeprefix("bot:"), r["model"] or "")
         counts[key] = counts.get(key, 0) + 1
     return [{"bot": b, "model": m, "runs": n} for (b, m), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def at_once(c, runner_id, start, end):
+    """Who ran during [start, end): each bot once, with the most of its turns that ran at the same moment, most first.
+    `ran` counts every turn of the window and splits a bot by model (a turn still running has none yet), so a bot
+    limited to 3 turns at once read "x4, x4"."""
+    edges = {}
+    lo = _iso(start)
+    for r in _runs(c, runner_id, start, end):
+        # `_runs` reads finished_at>=start: a turn that ended exactly at the start ran before the window, not in it.
+        if r["finished_at"] and r["finished_at"] <= lo:
+            continue
+        bot = edges.setdefault(r["bot_id"].removeprefix("bot:"), [])
+        bot.append((max(r["started_at"], lo), 1))
+        # A turn with no end runs to the window's end, even a lease that lapsed and is not yet swept, which
+        # start_places.bot_held no longer counts: the alert may read one turn high for a sweep interval at most.
+        if r["finished_at"]:
+            bot.append((r["finished_at"], -1))
+    peaks = {}
+    for bot, marks in edges.items():
+        now = peak = 0
+        for _, step in sorted(marks):  # an end (-1) sorts before a start at the same instant: never side by side
+            now += step
+            peak = max(peak, now)
+        peaks[bot] = peak
+    return [{"bot": b, "runs": n} for b, n in sorted(peaks.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def overload_view(row):
@@ -662,7 +688,8 @@ COLUMNS = ["ts", "cpu", "cpu_max", "mem", "mem_max", "load1", "swap", "disk_free
 
 def _shown(bots, access, limit=None):
     """`bots` with those the reader may not see folded into one unnamed row ("another bot"), which `limit` (how many
-    named bots to keep) never cuts."""
+    named bots to keep) never cuts. The row adds up their counts: their turns in all for Busiest bots, and for an
+    overload the sum of each bot's own peak, which is at most that many at once since the peaks may not coincide."""
     out, hidden = [], 0
     for b in bots:
         if access is None or (access.get(b["bot"]) or {}).get("see"):

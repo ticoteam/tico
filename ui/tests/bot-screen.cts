@@ -91,6 +91,9 @@ declare function setDrawer(open: boolean): void;
     const admin = await visit({id: 'ana', name: 'Ana', role: 'owner'});
     await admin.open('ready');
     assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 1);
+    // Screen stays a word in the top line (#282): a rare action with no icon people know.
+    assert.equal((await admin.page.locator('#bot-top #bot-screen').innerText()).trim(), 'Screen');
+    assert.equal(await admin.page.locator('#bot-top #bot-screen .nav-icon').isVisible(), false, 'no monitor glyph');
     assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Rules', 'Instructions', 'History', 'Settings']);
     assert.equal(await admin.page.locator('#sess-card').count(), 0);
     await admin.page.locator('[data-bot-detail-tab=settings]').click();

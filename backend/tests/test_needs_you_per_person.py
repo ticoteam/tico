@@ -145,7 +145,7 @@ def test_two_people_reading_together_each_get_their_own_list(c):
     alone = {person: W.needs(c, person) for person in PEOPLE}
     together = [(person, W.needs(c, person)) for person in (CARA, ANA, BEN, CARA, ANA)]
     assert all(found == alone[person] for person, found in together)
-    assert [(n["task_id"], n["line"]) for n in alone[ANA]] == [(secret["id"], "Add Cara under Who can see")]
+    assert [(n["task_id"], n["line"]) for n in alone[ANA]] == [(secret["id"], "Cara can't see this task")]
     assert alone[CARA] == [] and alone[BEN] == []
     _same_for_everyone(c)
 

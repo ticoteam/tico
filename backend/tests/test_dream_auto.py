@@ -48,9 +48,9 @@ def diff(lines, path=LEARNINGS):
     return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{lines} @@\n{body}"
 
 
-def remember(api, bot, commits, lines=30, path=LEARNINGS, subject="Remember the release check", when=None, attempt=""):
-    """`commits` shared memory commits of `lines` changed lines each, as memory_history.record stores them; `attempt` is
-    the run that made them (a dream's run, for the exclusion)."""
+def remember(api, bot, commits, path=LEARNINGS, when=None, attempt=""):
+    """`commits` shared commits to `path`, as memory_history.record stores them; `attempt` is the run that made them ('' for
+    a person's edit outside any run, which is a correction)."""
     when = when or now() - timedelta(hours=2)
     with api.app.state.store.transaction() as c:
         for _ in range(commits):
@@ -60,14 +60,37 @@ def remember(api, bot, commits, lines=30, path=LEARNINGS, subject="Remember the 
                 (
                     bot,
                     secrets.token_hex(20),
-                    subject,
+                    "Edit",
                     bot,
                     DA.stamp(when),
                     json.dumps([path]),
-                    diff(lines, path),
+                    diff(3, path),
                     attempt,
                     H.now(),
                 ),
+            )
+
+
+def worked(api, bot, turns, when=None, task=None):
+    """`turns` finished runs of the bot, at `when` (two hours ago by default), on `task` when given."""
+    when = DA.stamp(when or now() - timedelta(hours=2))
+    with api.app.state.store.transaction() as c:
+        for _ in range(turns):
+            c.execute(
+                "INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
+                (secrets.token_hex(8), bot, when, when, task),
+            )
+
+
+def thumbs_down(api, bot, count=1):
+    """`count` thumbs-down by a person on the bot's work, an hour ago."""
+    at = DA.stamp(now() - timedelta(hours=1))
+    with api.app.state.store.transaction() as c:
+        for _ in range(count):
+            c.execute(
+                "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,rating,created_at,updated_at) "
+                "VALUES(?,'ana','message',?,?,'down',?,?)",
+                (secrets.token_hex(8), secrets.token_hex(8), bot, at, at),
             )
 
 
@@ -102,11 +125,11 @@ def close(api, bot):
 
 
 def five_due(api):
-    """Five bots due at once: finance, product-design, cpo, ops and assistant, with 500 to 900 changed lines in 10 turns. Ops
-    reports to Ben."""
+    """Five bots in need at once: finance, product-design, cpo, ops and assistant, with 10 to 14 turns. Ops reports to
+    Ben."""
     aged(api)
-    for bot, lines in (("finance", 50), ("product-design", 60), ("cpo", 70), ("ops", 80), ("assistant", 90)):
-        remember(api, bot, 10, lines=lines)  # 500, 600, 700, 800, 900 lines in 10 turns
+    for bot, turns in (("finance", 10), ("product-design", 11), ("cpo", 12), ("ops", 13), ("assistant", 14)):
+        worked(api, bot, turns)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
 
@@ -126,23 +149,8 @@ def step_result(store, auth, max_bots=3):
         return dream_step.run(c, ctx)
 
 
-def test_what_counts_as_memory():
-    assert DA.counted(LEARNINGS) and DA.counted("AGENTS.md") and DA.counted("CLAUDE.md")
-    assert DA.counted("AGENTS.md"), "a repository not moved to AGENTS.md yet"
-    assert not DA.counted("knowledge/notes.md") and not DA.counted("secrets/x")
-
-
-def test_changed_lines_are_the_hunk_lines_not_the_file_headers():
-    text = (
-        "diff --git a/memory/learnings.md b/memory/learnings.md\n--- a/memory/learnings.md\n+++ b/memory/learnings.md\n"
-        "@@ -1,2 +1,2 @@\n-old\n+new\n keep\n+++ not a header\n"
-        "diff --git a/memory/decisions.md b/memory/decisions.md\n--- a/memory/decisions.md\n+++ b/memory/decisions.md\n@@ -1 +1 @@\n-a\n+b\n"
-    )
-    assert DA.changed_lines(text) == {"memory/learnings.md": 3, "memory/decisions.md": 2}
-
-
 def test_a_bot_that_never_dreamed_must_be_48_hours_old_and_an_inactive_one_is_not_due(api):
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     assert verdict(api, "ops", now()).status == "new"
     assert verdict(api, "ops", now() + timedelta(days=3)).status == "due"
     with api.app.state.store.transaction() as c:
@@ -150,27 +158,7 @@ def test_a_bot_that_never_dreamed_must_be_48_hours_old_and_an_inactive_one_is_no
     assert verdict(api, "ops", now() + timedelta(days=3)).status == "inactive"
 
 
-def test_the_thresholds_are_200_changed_lines_and_10_memory_turns(api):
-    aged(api)
-    remember(api, "ops", 10, lines=19)  # 190 lines in 10 turns
-    remember(api, "assistant", 9, lines=30)  # 270 lines in 9 turns
-    remember(api, "cpo", 10, lines=20)  # exactly 200 lines in 10 turns
-    at = now()
-    assert verdict(api, "ops", at).status == "quiet"
-    assert verdict(api, "assistant", at).status == "quiet"
-    cpo = verdict(api, "cpo", at)
-    assert (cpo.status, cpo.lines, cpo.turns) == ("due", 200, 10)
-
-
-def test_knowledge_churn_and_the_dreams_own_commits_are_not_memory(api):
-    aged(api)
-    remember(api, "ops", 20, lines=50, path="knowledge/notes.md")  # 1000 lines outside memory
-    remember(api, "ops", 1, lines=500, subject="Dream: merged report rules")  # the dream's own commit
-    v = verdict(api, "ops", now())
-    assert (v.status, v.lines, v.turns) == ("quiet", 0, 0)
-
-
-def test_memory_reported_by_the_bots_computer_counts_and_its_dream_is_for_the_manager(api):
+def test_memory_commits_reported_with_no_run_are_not_corrections_and_the_dream_is_for_the_manager(api):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -178,26 +166,29 @@ def test_memory_reported_by_the_bots_computer_counts_and_its_dream_is_for_the_ma
     commits = [
         {
             "sha": f"{n:040x}",
-            "subject": "Remember the release check",
-            "author": "ops",
+            "subject": "Fix the release rule",
+            "author": "ben",
             "committed": committed,
             "files": [LEARNINGS],
             "diff": diff(30),
             "shared": True,
         }
-        for n in range(1, 11)
+        for n in range(1, 3)
     ]
-    assert post(api, "bots/ops/memory/report", {"commits": commits}, machine["token"])["recorded"] == 10
+    # Reported with no run: a person's edit or Tico's own (a migration) alike, so neither counts.
+    assert post(api, "bots/ops/memory/report", {"commits": commits}, machine["token"])["recorded"] == 2
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
     aged(api)
+    assert verdict(api, "ops", now()).corrections == 0
+    thumbs_down(api, "ops", 2)  # two corrections, which weigh 10
 
     started = run(api)
     assert started == [verdict(api, "ops", now()).name]
     [row] = dream_rows(api, "ops")
     assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"] and row["title"] == "Dream"
     first_line, _, _ = row["body"].partition("\n")
-    assert first_line.startswith("Auto dream: 300 memory lines changed in 10 turns since ")
+    assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
     with api.app.state.store.read() as c:
         assert dream.auto_event(c, row)["reason"] == first_line
     view = get(api, "bots/ops/dream", token="ben-test")["dream"]
@@ -207,11 +198,15 @@ def test_memory_reported_by_the_bots_computer_counts_and_its_dream_is_for_the_ma
 
 def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     aged(api)
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     assert len(run(api)) == 1
     [first] = dream_rows(api, "ops")
-    remember(api, "ops", 10, when=now() + timedelta(seconds=1))  # new memory after the start
-    assert verdict(api, "ops", now() + timedelta(days=2)).status == "busy", "an open dream blocks a new one"
+    worked(api, "ops", 10, when=now() + timedelta(seconds=1))  # new work after the start
+    worked(api, "ops", 1, task=first["id"])  # the dream ran
+    # Busy on its own, waiting once the release hold holds the dream's job: either way not picked again.
+    assert verdict(api, "ops", now() + timedelta(days=2)).status in ("busy", "waiting"), (
+        "an open dream blocks a new one"
+    )
     close(api, "ops")
     assert verdict(api, "ops", now() + timedelta(hours=1)).status == "paced", "48 hours since the last dream's start"
     # The wake limiter's ledger is real time, so the first start's wake is 49 hours old by the second start.
@@ -231,13 +226,13 @@ def test_the_cap_starts_three_most_changed_first_and_says_what_it_held(api):
     five_due(api)
     r = {}
     started = run(api, report=r)
-    assert started == [verdict(api, b, now()).name for b in ("assistant", "ops", "cpo")], "most changed lines first"
+    assert started == [verdict(api, b, now()).name for b in ("assistant", "ops", "cpo")], "most need first"
     assert [b for b in ("assistant", "ops", "cpo") if dream_rows(api, b)] == ["assistant", "ops", "cpo"]
     assert not dream_rows(api, "product-design") and not dream_rows(api, "finance")
     assert dream_rows(api, "assistant")[0]["requester_id"] == "human:ana", "no manager: the company owner"
     assert dream_rows(api, "ops")[0]["requester_id"] == "human:ben", "the nearest human manager"
     assert (r["started"], r["due"], r["over"], r["held"]) == (started, 5, 2, []), "two due bots over the cap, none held"
-    assert "Started 3 dreams" in r["reason"] and "2 due past the 3 this run" in r["reason"], r
+    assert "Queued 3 dreams" in r["reason"] and "2 due past the 3 this run" in r["reason"], r
     assert "2 not due" in r["reason"], r
 
 
@@ -254,7 +249,7 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
     aged(api)
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     plate(api, 15)  # a plate full enough that ingest would send a question back
     assert len(run(api)) == 1
     [row] = dream_rows(api, "ops")
@@ -281,7 +276,7 @@ def test_the_schedule_runs_the_dream_step_once_per_bucket(api, monkeypatch):
     are skipped here: they are not under test."""
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     quiet = {"status": "skipped", "reason": "not under test"}
     monkeypatch.setitem(M.LIVE, "collect", lambda c, ctx: quiet)
     monkeypatch.setitem(M.LIVE, "clean_up", lambda c, ctx: quiet)
@@ -300,7 +295,7 @@ def test_the_dream_step_runs_once_a_day_on_its_own_clock(api):
     day's 05:00 company start leaves it alone. The 05:00 boundary itself is test_maintenance's."""
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     with settings(store, test_identities={}):
         first, _ = M.run_now(store, auth, "human:ana", step="dream", wait=True)
         # A plain Run now keeps the due rule. A step-only one runs the step whether or not it is due.
@@ -314,7 +309,7 @@ def test_the_dream_step_runs_once_a_day_on_its_own_clock(api):
 def test_switched_off_the_dream_step_logs_off_and_starts_nothing(api):
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     with store.transaction() as c:
         M.save_step(c, "human:ana", {"key": "dream", "enabled": False})
     assert [s for s in get(api, "maintenance")["steps"] if s["key"] == "dream"][0]["enabled"] is False
@@ -332,14 +327,14 @@ def test_switched_off_the_dream_step_logs_off_and_starts_nothing(api):
 def test_run_now_runs_the_dream_step_without_the_schedule_but_keeps_the_gates(api):
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
-    remember(api, "ops", 10)  # due
-    remember(api, "assistant", 10, lines=19)  # 190 lines: not due
+    worked(api, "ops", 10)  # in need
+    worked(api, "assistant", 9)  # 9 turns: not in need
     with settings(store, test_identities={}):
         run_dict, started = M.run_now(store, auth, "human:ana", step="dream", wait=True)
     assert started and run_dict["trigger"] == "run_now" and run_dict["occurrence_key"].startswith("run_now:")
     row = steps_by_key(run_dict)["dream"]
     assert row["status"] == "ran" and row["details"]["started"] == [verdict(api, "ops", now()).name]
-    assert dream_rows(api, "assistant") == [] and len(dream_rows(api, "ops")) == 1, "190 lines is not due"
+    assert dream_rows(api, "assistant") == [] and len(dream_rows(api, "ops")) == 1, "9 turns is not in need"
 
 
 def test_the_scheduler_tick_hands_its_time_to_the_maintenance_run(api, monkeypatch):
@@ -366,7 +361,7 @@ def test_a_store_with_no_app_skips_the_dream_step_quietly(tmp_path):
 
 def test_most_bots_per_run_of_zero_skips_the_dream_step(api):
     aged(api)
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     store = api.app.state.store
     with settings(store, test_identities={}):
         out = step_result(store, api.app.state.auth, max_bots=0)
@@ -394,7 +389,7 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
     first_at = clock[0]
     monkeypatch.setattr(H, "now", lambda: clock[0])
     aged(api)
-    remember(api, "ops", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+    worked(api, "ops", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
     previous = H.shift(first_at, days=-1)
     with store.transaction() as c:
         c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','dream')")
@@ -423,7 +418,7 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
         clock[0] = H.shift(first_at, hours=2)  # a later run, past the fleet's rolling hour
         second, _ = M.run_now(store, auth, "human:ana", wait=True)
         assert steps_by_key(second)["dream"]["woke"] == 1 and len(dream_rows(api, "ops")) == 1
-        remember(api, "assistant", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+        worked(api, "assistant", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
         clock[0] = H.shift(first_at, hours=4)
         third, _ = M.run_now(store, auth, "human:ana", wait=True)
     assert steps_by_key(third)["dream"]["reason"] == "not due", "a real start still uses the daily attempt"
@@ -437,8 +432,8 @@ def test_a_limiter_refusal_beside_another_dream_attempt_still_counts_for_the_day
     first_at = clock[0]
     monkeypatch.setattr(H, "now", lambda: clock[0])
     aged(api)
-    for bot, lines in (("ops", 80), ("assistant", 30)):
-        remember(api, bot, 10, lines=lines, when=H.parse_ts(first_at) - timedelta(hours=1))
+    for bot, turns in (("ops", 18), ("assistant", 13)):
+        worked(api, bot, turns, when=H.parse_ts(first_at) - timedelta(hours=1))
     with store.transaction() as c:
         c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key<>'dream'")
         M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
@@ -462,7 +457,7 @@ def test_a_limiter_refusal_beside_another_dream_attempt_still_counts_for_the_day
 
 def test_rehearsal_and_test_servers_skip_the_dream_step(api):
     aged(api)
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     store, auth = api.app.state.store, api.app.state.auth
     with settings(store, rehearsal=True, test_identities={}):
         assert step_result(store, auth)["reason"] == "rehearsal and test servers start no auto dreams"
@@ -478,8 +473,8 @@ def test_a_bot_no_longer_due_at_its_start_does_not_use_up_a_slot(api, monkeypatc
     """A run judges every bot, then judges each due one again inside its own start's write transaction. A bot that is no
     longer due by then (a dream landed on it meanwhile) is passed over, and the next due bot takes its slot."""
     aged(api)
-    for bot, lines in (("assistant", 900), ("ops", 800), ("cpo", 700)):
-        remember(api, bot, 10, lines=lines // 10)
+    for bot, turns in (("assistant", 30), ("ops", 20), ("cpo", 15)):
+        worked(api, bot, turns)
     real = DA.verdict
 
     def busy_at_its_start(c, bot, at, owner=None):
@@ -503,7 +498,7 @@ def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:cara' WHERE bot='cpo'")
     aged(api)
-    remember(api, "cpo", 10)
+    worked(api, "cpo", 10)
     r = api.post("/api/v2/bots/cpo/dream", json={}, headers=headers("cara-test"))
     assert r.status_code == 200, r.text
     assert len(dream_rows(api, "cpo-cara")) == 1 and dream_rows(api, "cpo") == [], r.json()
@@ -516,27 +511,27 @@ def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
 )
 def test_one_bot_refused_or_failing_holds_only_itself_and_the_night_goes_on(api, monkeypatch, failure):
     aged(api)
-    for bot, lines in (("assistant", 900), ("ops", 800), ("cpo", 700)):
-        remember(api, bot, 10, lines=lines // 10)
+    for bot, turns in (("assistant", 30), ("ops", 20), ("cpo", 15)):
+        worked(api, bot, turns)
     real = dream.start
 
-    def flaky(c, who, owner, create, reason=None):
+    def flaky(c, who, owner, create, reason=None, wake_refs=None):
         if owner == "bot:assistant":
             raise failure
-        return real(c, who, owner, create, reason=reason)
+        return real(c, who, owner, create, reason=reason, wake_refs=wake_refs)
 
     monkeypatch.setattr(dream, "start", flaky)
     r = {}
     assert run(api, report=r) == [verdict(api, "ops", now()).name, verdict(api, "cpo", now()).name]
     assert dream_rows(api, "assistant") == [] and len(dream_rows(api, "ops")) == 1 and len(dream_rows(api, "cpo")) == 1
-    assert r["held"] == [verdict(api, "assistant", now()).name] and "1 not started" in r["reason"], r
+    assert r["held"] == [verdict(api, "assistant", now()).name] and "1 not queued" in r["reason"], r
 
 
 def test_a_switch_turned_off_while_a_run_waits_stops_its_dream_step(api, monkeypatch):
     """A run's steps are planned when it executes, not when it is claimed: a switch turned off after the claim counts."""
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
-    remember(api, "ops", 10)
+    worked(api, "ops", 10)
     monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)  # the run waits, unstarted
     waiting, started = M.run_now(store, auth, "human:ana", step="dream")
     assert started
@@ -547,37 +542,139 @@ def test_a_switch_turned_off_while_a_run_waits_stops_its_dream_step(api, monkeyp
     assert dream_rows(api, "ops") == []
 
 
-def test_a_bot_with_no_memory_since_is_judged_without_any_run_lookup(api, monkeypatch):
-    def looked_up(*args):
-        raise AssertionError("no commit since: nothing to look up")
-
-    monkeypatch.setattr(DA, "_own_runs", looked_up)
-    monkeypatch.setattr(DA, "_tidy_runs", looked_up)
+def test_need_is_turns_plus_corrections_weighed_five_and_memory_diffs_do_not_count(api):
     aged(api)
-    assert verdict(api, "ops", now()).status == "quiet"
+    worked(api, "ops", 9)  # 9: quiet
+    worked(api, "assistant", 5)
+    thumbs_down(api, "assistant")  # 5 + 5
+    worked(api, "cpo", 2)
+    remember(api, "cpo", 30, attempt="a-run")  # memory written in a run: not counted
+    remember(api, "cpo", 3, path="AGENTS.md")  # commits with no known run: not counted either
+    at = now()
+    assert verdict(api, "ops", at).status == "quiet"
+    helper = verdict(api, "assistant", at)
+    assert (helper.status, helper.turns, helper.corrections, helper.need) == ("due", 5, 1, 10)
+    cpo = verdict(api, "cpo", at)
+    assert (cpo.status, cpo.turns, cpo.corrections) == ("quiet", 2, 0)
 
 
-def test_a_dreams_own_run_is_not_memory_through_the_one_query(api):
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
+def test_a_dreams_own_turns_and_work_before_the_last_dream_do_not_count(api):
     aged(api)
-    api.post("/api/v2/bots/ops/dream", json={}, headers=headers("ben-test"))
-    first = claim(api, machine, "ops")
-    remember(api, "ops", 1, lines=500, attempt=first["id"])  # the dream's own run: not memory
-    remember(api, "ops", 1, lines=7)  # an ordinary commit: counted
+    worked(api, "ops", 10)
+    assert len(run(api)) == 1
+    [first] = dream_rows(api, "ops")
+    worked(api, "ops", 20, task=first["id"])  # the dream's own runs
+    close(api, "ops")
+    v = verdict(api, "ops", now() + timedelta(days=3))
+    assert (v.status, v.turns) == ("quiet", 0), "the 10 turns came before the dream, the 20 were the dream"
+
+
+def test_a_person_changing_a_rule_for_the_bot_is_a_correction(api):
+    aged(api)
+    worked(api, "ops", 5)
+    at = DA.stamp(now() - timedelta(hours=1))
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO org_rules(id,kind,text,who,status,suggested_by,decided_by,created_at,updated_at) "
+            "VALUES('r1','internal','Cite the invoice number',?,'active','human:ana','human:ana',?,?)",
+            (json.dumps({"bots": ["ops"]}), at, at),
+        )
+        c.execute(
+            "INSERT INTO org_rules(id,kind,text,who,status,suggested_by,created_at,updated_at) "
+            "VALUES('r2','internal','A bot suggested this',?,'suggested','bot:ops',?,?)",
+            (json.dumps({"bots": ["ops"]}), at, at),
+        )
+    v = verdict(api, "ops", now())
+    assert (v.corrections, v.status) == (1, "due"), "a person's active rule counts; a bot's suggestion does not"
+
+
+def test_five_in_need_two_waiting_queues_three_others_by_need_warm_on_a_fork(api):
+    """Spec acceptance 20: N = 3, five bots in need, two with a dream job waiting."""
+    five_due(api)  # assistant 14, ops 13, cpo 12, product-design 11, finance 10
+    worked(api, "finance", 5)  # finance 15: first among the three
+    _waiting(api, "assistant")
+    _waiting(api, "ops")
+    assert verdict(api, "assistant", now()).status == "waiting"
+    r = {}
+    queued = run(api, report=r)
+    assert queued == [verdict(api, b, now()).name for b in ("finance", "cpo", "product-design")], "most need first"
+    assert r["due"] == 3 and r["over"] == 0, r
+    assert not dream_rows(api, "assistant") and not dream_rows(api, "ops"), "a waiting bot gets no second dream"
     with api.app.state.store.read() as c:
-        assert first["id"] in DA._own_runs(c, "bot:ops")
-        assert DA.change(c, "ops", DA.stamp(now() - timedelta(days=1))) == (7, 1)
+        for bot in ("finance", "cpo", "product-design"):
+            job = c.execute(
+                "SELECT j.held,j.state,j.wake_class,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+                "WHERE j.bot_id=? ORDER BY j.created_at DESC LIMIT 1",
+                (bot,),
+            ).fetchone()
+            refs = json.loads(job["refs"])
+            assert refs["release"] == {
+                "due": None,
+                "wait": 48 * 3600,
+                "warm": True,
+                "deadline": "skip",
+                "session": "fork",
+            }, refs
+            assert refs["release_kind"] == "dream" and job["state"] == "queued", dict(job)
 
 
-def test_paths_with_spaces_and_deletions_are_read_whole():
-    text = (
-        "diff --git a/memory/meeting notes.md b/memory/meeting notes.md\nindex 1..2 100644\n"
-        "--- a/memory/meeting notes.md\t\n+++ b/memory/meeting notes.md\t\n@@ -1,2 +1,2 @@\n-old\n+new\n keep\n"
-        "diff --git a/memory/gone file.md b/memory/gone file.md\ndeleted file mode 100644\n"
-        "--- a/memory/gone file.md\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n"
-    )
-    counts = DA.changed_lines(text)
-    assert counts == {"memory/meeting notes.md": 2, "memory/gone file.md": 2}
-    assert all(DA.counted(path) for path in counts)
+def _waiting(api, bot):
+    """A dream job of the bot, held and queued: what an earlier pass left waiting for a warm window."""
+    with api.app.state.store.transaction() as c:
+        mid, jid = secrets.token_hex(8), secrets.token_hex(8)
+        conv = H._pair_conversation(c, "human:ana", "bot:" + bot, "chat")["id"]
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+            "VALUES(?,?,?,?,'say','Dream',?,?)",
+            (mid, conv, H.KEEPER, "bot:" + bot, json.dumps({"release_kind": "dream"}), H.now()),
+        )
+        c.execute(
+            "INSERT INTO jobs(id,message_id,bot_id,state,created_at,held,wake_class) VALUES(?,?,?,'queued',?,1,'dream')",
+            (jid, mid, bot, H.now()),
+        )
+
+
+def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
+    """A dream the release hold skips at its deadline is closed without a run: the work it was queued for still counts,
+    and the next dream reads from the last dream that ran."""
+    aged(api)
+    worked(api, "ops", 12, when=now() - timedelta(days=3))
+    assert len(run(api)) == 1
+    [first] = dream_rows(api, "ops")
+    worked(api, "ops", 1, task=first["id"])  # it ran
+    close(api, "ops")
+    with api.app.state.store.transaction() as c:  # 49 hours on: the limiter's ledger and the first dream are that old
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-49), first["id"]))
+        # Finished 48 hours ago, so its end is a different minute from the skip's close below.
+        c.execute("UPDATE tasks SET done_at=? WHERE id=?", (H.shift(H.now(), hours=-48), first["id"]))
+        c.execute(
+            "UPDATE events SET created_at=? WHERE actor=? AND action=?",
+            (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
+        )
+    with api.app.state.store.read() as c:
+        read_from = dream.since(c, owner_of(c, "ops"))
+    worked(api, "ops", 12)
+    assert len(run(api)) == 1
+    with api.app.state.store.transaction() as c:  # skipped at the deadline, as the hold closes it: no run on it
+        owner = owner_of(c, "ops")
+        row = dream._open(c, [owner])
+        H.task_close(c, H.KEEPER, row["id"], "Skipped: no warm window in 48 hours.")
+    v = verdict(api, "ops", now())
+    assert (v.status, v.turns) == ("due", 12), "the skipped dream's work still counts"
+    with api.app.state.store.read() as c:
+        assert dream.since(c, owner_of(c, "ops")) == read_from, "reading starts at the last dream that ran"
+
+
+def test_a_thumbs_down_given_before_the_last_dream_does_not_count_again_when_edited(api):
+    aged(api)
+    old = DA.stamp(now() - timedelta(days=5))
+    edited = DA.stamp(now() - timedelta(hours=1))
+    with api.app.state.store.transaction() as c:  # given 5 days ago, its reason edited an hour ago
+        c.execute(
+            "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,rating,created_at,updated_at) "
+            "VALUES('f-old','ana','message','m-old','ops','down',?,?)",
+            (old, edited),
+        )
+    with api.app.state.store.read() as c:
+        assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=2))) == (0, 0), "given before: not a new correction"
+        assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=6))) == (0, 1), "given after: one correction"

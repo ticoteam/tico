@@ -67,9 +67,45 @@ SERIES_KEYS = (
 )
 
 
-def _month(row, month):
-    """A channel's or the total's figures for one month."""
-    return {"month": month, **{key: row.get(key) for key in SERIES_KEYS}}
+# A figure worked out from others is computed when any of them came from customer facts (growth.beside), else typed.
+KEPT = ("kept_d30", "kept_d90", "kept_d180")
+MADE_FROM = {
+    "cac": ("new_customers",),
+    "expected_months": KEPT,
+    "ltv": KEPT,
+    "ltv_cac": ("new_customers", *KEPT),
+    "payback_months": ("new_customers",),
+}
+
+
+def origins(row):
+    """{figure: computed or typed} for each figure a channel's month has."""
+    given = row.get("computed_or_typed") or {}
+    out = {}
+    for key in SERIES_KEYS:
+        if key == "quality" or row.get(key) is None:
+            continue
+        made = [given.get(k) for k in MADE_FROM.get(key, (key,))]
+        out[key] = "computed" if "computed" in made else "typed"
+    return out
+
+
+def total_origins(rows):
+    """Every channel together: computed or typed when every channel's figure is, else mixed."""
+    found = {}
+    for row in rows:
+        for key, origin in origins(row).items():
+            found.setdefault(key, set()).add(origin)
+    return {key: origin.pop() if len(origin) == 1 else "mixed" for key, origin in found.items()}
+
+
+def _month(row, month, origin=None):
+    """A channel's or the total's figures for one month, and whether each is computed or typed."""
+    return {
+        "month": month,
+        **{key: row.get(key) for key in SERIES_KEYS},
+        "origin": origins(row) if origin is None else origin,
+    }
 
 
 def _window(c, months, until=None):
@@ -214,15 +250,16 @@ def numbers(c, auth, who, months, hidden, until=None):
     """The numbers for the newest `months` months with rows up to `until` (default: all of them)."""
     window = _window(c, months, until)
     conf = G.settings(c)
-    totals, by_month = {}, {}
+    totals, by_month, total_origin = {}, {}, {}
     for m in window:
         econ = G.economics(c, m)
         per, total = _money(c, m, conf)
         totals[m] = _with_money(econ["total"], total)
         by_month[m] = {row["channel"]: _with_money(row, per[row["channel"]]) for row in econ["rows"]}
+        total_origin[m] = total_origins(econ["rows"])
     return {
         "months": window,
-        "series": [_month(totals[m], m) for m in window],
+        "series": [_month(totals[m], m, total_origin[m]) for m in window],
         "channels": _channels(c, window, by_month),
         "kpis": _kpis(c, hidden),
         "markers": _markers(c, auth, who, _since(window)),

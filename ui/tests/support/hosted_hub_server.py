@@ -154,6 +154,7 @@ def build(hub, state):
                 "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('botops','hermes','x-botops',?,?)",
                 (H.now(), "human:owner"),
             )
+        facts["agent"] = "botops"  # the walk waits for its row on Settings > Computers before auditing
         ask = (
             {"to": "owner", "kind": "ok", "line": "OK to give the Builder write access to the app repository?"}
             if state == "sign-off"

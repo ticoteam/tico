@@ -656,7 +656,8 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Compact at**: how full the bot's conversation gets before it is compacted: 100k, 150k, 200k, 250k, 300k, 400k,
   500k, 600k, 700k, 800k, 900k or 1M tokens. With none chosen it follows the model: 400k on Opus, 150k on Haiku and
   250k on any other, never more than the model's own window. Agents set it with `tico bot model <bot> --compact-at
-  <tokens>`. Claude Code and Codex follow it. pi follows it only on a Tico AI Gateway model, and there 250k or more
+  <tokens>`, and `--compact-at default` (`{"compact_at": null}` on `POST /api/v2/bots/{bot}/compact-at`) takes a saved
+  size away, so the bot follows its model's default again and moves with the model. Claude Code and Codex follow it. pi follows it only on a Tico AI Gateway model, and there 250k or more
   compacts at about 184k, the Gateway's 200,000-token window less the 16,384 pi keeps. pi's other models keep pi's own
   compaction ([pi](harnesses.md#why-pi-is-the-catch-all)). Changing it keeps the session. A bot's tasks can use another
   length (**Task model**, **Task context length**).

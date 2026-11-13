@@ -1147,6 +1147,8 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
     if not row or row["tool_id"] or str(row["source"] or "").startswith("tool:"):
         return None
+    if row["source"] == "tools-chat":
+        return None  # a key dropped in the Tools chat goes to the tool the person grants it to (backend/key_grants.py)
     on_computers = c.execute(
         "SELECT 1 FROM computer_keys WHERE credential_id=? UNION SELECT 1 FROM credential_grants WHERE credential_id=?"
         " AND (subject='computers' OR subject LIKE 'computer:%')",

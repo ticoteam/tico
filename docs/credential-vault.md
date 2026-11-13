@@ -238,6 +238,24 @@ never on the command line) as that human, and the server takes the pasted words 
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
 what it posts and logs. `tico message redact <id>` does the same for one message.
 
+## Keys dropped in the Tools chat
+
+Tools has its owner's chat at the right (the Tools Product Owner by default; Settings > General > Page owners). In that
+chat's composer, and no other, a paste, dropped text or typed words are scanned in the browser before they reach the
+text box, with the rules in `backend/secret_rules.json` (vendor prefixes, PEM blocks, logins in addresses, values after
+words like password or token, `.env`, JSON and YAML lines, Bearer and Basic headers, JWTs, and long random strings as a
+"looks like a key" suspect). Each one becomes a locked item showing its kind, a variable name you can change and a
+preview (first 3 and last 3 of a key, dots for a password); the words go in as text and nothing is kept as a draft. On
+Send each value goes straight to this vault (`POST /api/v2/credentials`, source `tools-chat`), and only then does the
+message go, with `[saved NAME]` in each value's place: the bot reads names, never values. Only a credential admin can
+send keys there; a name already in the vault waits for Replace or a new name.
+
+The server runs the same rules on every message a person puts into that conversation, from any client, and refuses one
+that still holds a key before it is stored or reaches a model ("This looks like a key. Save it instead?"). The owner
+then proposes which tool, level and bots each key is for with `tico_tools_propose_grant`; the server builds the card's
+rows itself (never the owner, every bot or every computer), and only your Grant attaches each key to its tool and grants
+the bots. The tool's check runs on the server and the card says Connected or Didn't work, with Paste a new key.
+
 ## Credential files on the computer
 
 Bots receive only their granted Credentials. A run does not inherit the runner's process credentials, `_shared.env`,

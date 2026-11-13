@@ -450,7 +450,9 @@ async function owner(browser: Browser) {
   assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, 'nor are their mailboxes in the sidebar');
 
   // Add a group even when Team is collapsed and showing history.
-  await page.locator('#org-history').click();
+  await page.locator('#org-more').click();
+  await page.locator('#team-more-menu [data-org-more="history"]').click();
+  await page.keyboard.press('Escape');
   await page.locator('[data-section-toggle=organisation]').click();
   await page.locator('#org-add-group').click();
   await page.getByRole('menuitem', {name: 'Add section', exact: true}).click();
@@ -945,7 +947,7 @@ async function personalBranches(browser: Browser) {
   for (const [id, role] of [['ana', 'owner'], ['ben', 'viewer'], ['cara', 'viewer']]) {
     const {page, errors} = await open(browser, {id, role, cloud: true}, true);
     for (const history of [false, true]) {
-      if (history) await page.locator('#org-history').click();
+      if (history) { await page.locator('#org-more').click(); await page.locator('#team-more-menu [data-org-more="history"]').click(); await page.keyboard.press('Escape'); }
       assert.equal(await node(page, 'b:cmo').count(), 1, 'the canonical bot stays on the chart');
       for (const person of ['ana', 'ben', 'unknown', 'limited']) {
         const branch = node(page, 'b:cmo-' + person);
@@ -953,7 +955,9 @@ async function personalBranches(browser: Browser) {
         if (person === id) assert.equal(await branch.locator('.org-branch').textContent(), 'Your branch');
       }
     }
-    await page.locator('#org-mine').click();
+    await page.locator('#org-more').click();
+    await page.locator('#team-more-menu [data-org-more="mine"]').click();
+    await page.keyboard.press('Escape');
     assert.equal(await node(page, 'b:cmo-unknown').count(), 0);
     const recent = await page.evaluate(() => {
       orgHistoryStore(['b:cmo-ben', 'b:cmo-ana', 'b:cmo-unknown', 'b:cmo'], Date.now());
