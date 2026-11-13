@@ -156,6 +156,7 @@ def test_a_person_whose_sign_in_is_off_shares_nothing_more(api):
     get(api, "assistant/shared/human:cara", finance)
     post(api, "access/people/cara", {"sign_in": False})
     get(api, "assistant/shared/human:cara", finance, expected=403)
+    assert get(api, "assistant/shared", finance)["people"] == []
 
 
 def test_removing_the_last_bot_turns_learned_sharing_back_off(api):
@@ -166,3 +167,21 @@ def test_removing_the_last_bot_turns_learned_sharing_back_off(api):
     post(api, "assistant/learned", {"text": "Launches first"}, token="ben-test")
     post(api, "assistant/viewers", {"bot": "finance"}, token="ben-test")
     assert get(api, "assistant/shared/human:ben", finance)["learned"] is None
+
+
+def test_nobody_acting_for_a_person_or_a_bot_chooses_or_reads(api):
+    """BotOps acting for a person, or for a bot, borrows rights (`via`); neither is the person's own choice nor the
+    chosen bot reading in its own run."""
+    from backend import assistant_share
+    from backend.auth import Identity
+    from backend.store import Problem
+    import pytest
+
+    post(api, "assistant/viewers", {"bot": "finance"}, token="ben-test")
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem):
+            assistant_share.add(c, Identity("human:ben", "human", via="botops"), "ops", settings)
+        with pytest.raises(Problem):
+            assistant_share.read(c, Identity("bot:finance", "bot", via="botops"), "human:ben", settings)
+        assert assistant_share.read(c, Identity("bot:finance", "bot"), "human:ben", settings)["person"] == "human:ben"

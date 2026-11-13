@@ -132,10 +132,17 @@ def set_learned(c: "sqlite3.Connection", who: "Identity", on: bool, settings: "S
 
 def shared_with(c: "sqlite3.Connection", who: "Identity", settings: "Settings") -> dict[str, Any]:
     """The people who chose this bot: what it may read, and nothing about anyone else."""
+    from . import auth as A
+
+    standing: Any = A.standing  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     bot = _reader_bot(c, who, settings)
-    rows = c.execute(
-        "SELECT owner, created_at, last_read_at FROM assistant_shares WHERE bot=? ORDER BY created_at", (bot,)
-    ).fetchall()
+    rows = [
+        r
+        for r in c.execute(
+            "SELECT owner, created_at, last_read_at FROM assistant_shares WHERE bot=? ORDER BY created_at", (bot,)
+        ).fetchall()
+        if not standing(c, H.actor_id(r["owner"]))  # a person who left or is off shares nothing, as `read` refuses
+    ]
     return {
         "people": [
             {
