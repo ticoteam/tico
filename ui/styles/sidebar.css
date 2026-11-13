@@ -209,7 +209,6 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 .tree .node.seat .seat-text{display:flex;flex-direction:column;flex:1 1 auto;min-width:0}
 .tree .node.seat .seat-line{display:flex;align-items:center;gap:6px;min-width:0}
 .tree .node.seat .seat-word{min-width:0;color:var(--muted);font-size:var(--t-xs);font-weight:400;line-height:1.25;overflow-wrap:break-word}
-.tree .node.seat .seat-word .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
 .tree .nm{display:block;min-width:0;white-space:normal;overflow-wrap:break-word;line-height:1.25}
@@ -219,7 +218,7 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
    thread-rail.css's global .nm is a flex column, which would stack the name's words one per line. */
 .tree .nm-end{white-space:nowrap}
 /* overflow:hidden puts an inline-block's baseline at its bottom edge, so the icon font's tall line box never makes the
-   name's line taller than the clamp allows (the onboarding gear did: 35px in a 33px name). */
+   name's line taller than its 1.25 line-height (the onboarding gear made a line 2px taller). */
 .tree a.node .nm .tree-goal,.tree a.node .nm .tree-setup{display:inline-block;vertical-align:-2px;margin-left:4px;width:13px;height:13px;font-size:13px;line-height:13px;overflow:hidden}
 .tree a.node .nm .tree-setup .nav-icon{display:block;width:13px;height:13px;font-size:13px;line-height:13px}
 .tree a.node .nm .org-branch{white-space:normal;margin-left:4px}

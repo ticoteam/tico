@@ -20,7 +20,6 @@ const t = (ms: number) => ms * (Number(process.env.TICO_TEST_TIMEOUT_SCALE) || 1
 declare function renderTree(): void;
 declare const THREADS: {dms: Record<string, number> | null};
 declare const RECRUIT: {counts: Record<string, number>};
-declare function renderTree(): void;
 
 const ORIGIN = 'https://tico-ui.test';
 const FULL = {see: true, read: true, write: true};
@@ -218,6 +217,7 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
       assert.equal((await seat.locator('.seat-word').innerText()).replace(/\s+/g, ' ').trim(), '· Recruiting', 'read as "· Recruiting"');
       // At the 200px minimum, three levels down: every seat's name and its state word whole, the word under the name.
       await page.evaluate(() => { document.documentElement.style.setProperty('--rail-left', '200px'); });
+      await page.waitForFunction(() => Math.round(document.querySelector('#side')!.getBoundingClientRect().width) === 200, null, {timeout: t(5000)});
       for (const id of ['s-ops', 's-cro', 's-leads', 's-cro-deep', 's-cloud']) {
         const box = await page.locator(`#tree [data-seat="${id}"]`).evaluate(a => {
           const nm = a.querySelector<HTMLElement>('.nm')!, word = a.querySelector<HTMLElement>('.seat-word')!;
