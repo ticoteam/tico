@@ -1036,13 +1036,13 @@ def run_pass(store, at=None, primary=None):
 
 def prune(c, now=None):
     """Maintenance: sent items go after KEEP_SENT_DAYS, the rest after KEEP_DAYS (the copy check's window), and a
-    removed source once nothing of its is left."""
+    removed source once nothing of its is left. An item a run still holds (`sending`) stays until the run settles it."""
     if not H._has_table(c, "listening_items"):
         return 0
     now = now or H.now()
     gone = c.execute(
         "DELETE FROM listening_items WHERE (status='sent' AND coalesce(sent_at,created_at)<?) "
-        "OR (status<>'sent' AND created_at<?)",
+        "OR (status NOT IN ('sent','sending') AND created_at<?)",
         (H.shift(now, days=-KEEP_SENT_DAYS), H.shift(now, days=-KEEP_DAYS)),
     ).rowcount
     c.execute(

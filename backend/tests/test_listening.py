@@ -829,3 +829,27 @@ def test_an_item_back_in_waiting_still_expires_a_week_after_it_arrived(api):
     assert statuses(api, aid) == {"kept": 1}
     run(api, at(1, days=7))
     assert statuses(api, aid) == {"expired": 1}
+
+
+def test_a_choose_step_the_cap_stopped_did_not_deliver_its_items():
+    from backend import automation_engine as E
+
+    sent = {"items": [{"id": "a"}, {"id": "b"}], "text": ""}
+    capped = {"id": "pick", "type": "llm", "status": "ok", "outputs": {"skipped": "spend_cap", "to": "dflt"}, "cost": 0}
+    state = {"status": "ok", "payload": {"listening": sent}, "steps": [capped], "threads": [], "empty": False}
+    assert E.outcome(state, "ok") == "failed"
+    E.conclude({**state, "status": "failed"})
+    assert E.delivery(state)["missed"] == {"a": "spend cap", "b": "spend cap"}
+    assert capped["missed"] == 2
+
+
+def test_maintenance_keeps_what_a_long_running_send_still_holds(api):
+    brief = {"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "{{listening.text}}"}
+    post_it = {"id": "post", "type": "action", "do": "note", "args": {"text": "{{brief.text}}"}}
+    aid, source = started(api, steps=[brief, post_it])
+    saved(api, source, [item(1, story(1))])
+    run(api, at(1))
+    assert statuses(api, aid) == {"sending": 1}
+    with api.app.state.store.transaction() as c:
+        L.prune(c, H.shift(H.now(), days=L.KEEP_DAYS + 1))
+    assert statuses(api, aid) == {"sending": 1}

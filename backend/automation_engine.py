@@ -236,6 +236,16 @@ class _Delivered:
         return getattr(self._services, name)
 
 
+def _why(record):
+    """Why a record missed the items it carried (MISSED), or None when it did not: a step stopped by the spend cap,
+    held or failed, or a choose step whose turn the cap or a hold stopped (it records ok and runs its default
+    destination, but no turn got the items)."""
+    skipped = (record.get("outputs") or {}).get("skipped")
+    if record["status"] == "ok" and record["type"] == "llm" and skipped in ("spend_cap", "held"):
+        return MISSED[skipped]
+    return MISSED.get(record["status"])
+
+
 def delivery(state):
     """A listening run's items as its steps left them: `sent` (delivered), `missed` (id -> why: spend cap, held,
     failed) and `got` (id -> the steps that delivered it in this run). None for a run that is not a listening's."""
@@ -246,7 +256,7 @@ def delivery(state):
     got, missed = {i: [] for i in every}, {}
     for record in state["steps"]:
         ids = record.get("ids", every)
-        why = MISSED.get(record["status"])
+        why = _why(record)
         if why:
             for i in ids:
                 missed.setdefault(i, why)
@@ -280,7 +290,7 @@ def outcome(state, status):
 def _missed_why(record):
     """Why a record missed its items, in a few words: the spend cap, a hold, or the step's own error."""
     if record["status"] != "failed":
-        return MISSED[record["status"]]
+        return _why(record) or "failed"
     outputs = record.get("outputs") or {}
     bad = next((a for a in outputs.get("actions") or [] if isinstance(a, dict) and not a.get("ok")), {})
     return str(outputs.get("error") or outputs.get("detail") or bad.get("detail") or "failed")[:200]
@@ -298,9 +308,9 @@ def conclude(state):
     state["delivery"] = found
     every = _all_ids(_sent(state))
     for record in state["steps"]:
-        if record["status"] in MISSED:
+        if _why(record):
             record["missed"] = len(record.get("ids", every))
-    first = next((r for r in state["steps"] if r["status"] in MISSED), None)
+    first = next((r for r in state["steps"] if _why(r)), None)
     if state["status"] == "failed" and first is not None and not found["sent"]:
         state.setdefault("error", "nothing delivered: " + _missed_why(first))
     return state
