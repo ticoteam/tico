@@ -125,8 +125,9 @@ section.card.tt-soon>header .pill{margin-left:auto}
 @media (max-width:760px){
   .tt-head:not(.ph){min-height:0}
   .tt-q{flex:1 1 100%;margin-left:0}
-  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. */
-  .tt-filters button{min-height:40px}
+  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. .ph-seg in the
+     selector outranks the shared filter look (page-head.css), which loads later and zeroes min-height. */
+  .tt-filters.ph-seg>button{min-height:40px}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */
   .tt-list thead,.tt-log thead,.tt-limits thead{display:none}
