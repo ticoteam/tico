@@ -171,7 +171,7 @@ const mapText = (page: Page, under = '.rr-map') => page.evaluate((sel: string) =
     // AC-4: a search with one match: the rest muted at 4.5:1, the match ringed.
     {
       const {page, errors} = await openReach(browser);
-      await page.locator('.ru-acts .rr-q').fill('build');
+      await page.locator('.ru-ph .rr-q').fill('build');
       await settle(page);
       assert.deepEqual(await page.locator('.rr-map .hit').evaluateAll((els: HTMLElement[]) => els.map(e => e.dataset.rrParty)), ['bot:builder']);
       for (const t of (await mapText(page)).filter(x => x.party !== 'bot:builder')) {
