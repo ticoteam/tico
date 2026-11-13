@@ -90,6 +90,7 @@ EMPTY = (
     "rule_events_seen",
     "rule_task_runs",
     "rule_task_state",
+    "stage_rule_marks",  # a stage rule timer's ledger: a pending row is a manager's wake the copy would send
     "trigger_relays",
     "hook_relay_state",
     "sleep_idle_state",
