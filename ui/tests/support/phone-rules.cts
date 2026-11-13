@@ -17,6 +17,9 @@
 //   PHONE_REPORT=1 node ...     print every break and exit 0 (for hunting)
 //   PHONE_SHOTS=<folder> ...    also save a screenshot of every screen
 import type {Browser, Page} from 'playwright';
+// The page parts being fetched and those that have run (ui/app/parts.ts).
+declare const UI_PART_SCRIPTS: Map<string, Promise<void>>;
+declare const UI_PART_LOADED: Set<string>;
 const {chromium} = require('playwright') as typeof import('playwright');
 const {spawn} = require('node:child_process') as typeof import('node:child_process');
 const path: typeof import('node:path') = require('node:path');
@@ -248,6 +251,9 @@ function keyboardAudit(): {rule: number; element: string; why: string}[] {
 // ------------------------------------------------------------------------------------------------ the walk
 const settle = async (page: Page) => {
   await page.waitForFunction(() => (document.querySelector('#main')?.children.length ?? 0) > 0, null, {timeout: t(20000)}).catch(() => {});
+  // A page's own code may still be on its way (a page part, ui/app/parts.ts): the page is drawn once it has run.
+  await page.waitForFunction(() => typeof UI_PART_SCRIPTS === 'undefined' || [...UI_PART_SCRIPTS.keys()].every(n => UI_PART_LOADED.has(n)),
+    null, {timeout: t(20000)}).catch(() => {});
   await page.waitForTimeout(t(450));
 };
 const go = async (page: Page, hash: string) => {
