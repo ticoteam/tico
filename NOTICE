@@ -17,6 +17,15 @@ It includes third-party software, kept under its own license:
       js-yaml 4.1.0, MIT License. Copyright (C) 2011-2015 Vitaly Puzrin.
       License text: ui/vendor/LICENSE-js-yaml and templates/employee-repo/ui/vendor/LICENSE-js-yaml
 
+  ui/vendor/docx-preview.min.js
+      docx-preview 0.3.7 (unmodified dist build), Apache License 2.0. Copyright (c) 2016-2023
+      Volodymyr Baydalka. License text: ui/vendor/LICENSE-docx-preview
+
+  ui/vendor/jszip.min.js
+      JSZip 3.10.1 (unmodified dist build), used under the MIT License (dual MIT or GPLv3).
+      Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, Antonio Afonso.
+      Includes pako, MIT License. License text: ui/vendor/LICENSE-jszip.md
+
   ui/vendor/novnc/
       noVNC 1.7.0 (@novnc/novnc, the core/ modules RFB needs, unmodified), Mozilla Public License 2.0.
       Copyright (C) 2022 The noVNC authors (ui/vendor/novnc/AUTHORS). core/crypto/des.js keeps its own

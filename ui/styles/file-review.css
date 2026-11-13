@@ -1,0 +1,70 @@
+/* ui/styles/file-review.css — The file review view (ui/app/file-review.ts): the file full screen, its chat at the right;
+   on a phone the two take turns. The cascade runs in the order index.html links these files; keep rules in order. */
+dialog.frv{box-sizing:border-box;width:100vw;max-width:none;height:100dvh;max-height:none;margin:0;padding:0;border:0;border-radius:0;background:var(--bg);color:var(--ink);overflow:hidden}
+dialog.frv[open]{display:flex;flex-direction:column}
+dialog.frv::backdrop{background:rgba(0,0,0,.5)}
+.frv-head{position:relative;display:flex;align-items:center;gap:6px;min-height:52px;padding:0 10px 0 18px;border-bottom:1px solid var(--line);background:var(--surface)}
+.frv-title{min-width:0;margin:0;font-size:var(--t-lg);font-weight:600;letter-spacing:var(--track-tight);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frv-spacer{flex:1}
+.frv-head .frv-icon{display:inline-grid;place-items:center;flex:none;width:34px;height:34px;padding:0;border-color:transparent;border-radius:8px;background:transparent;color:var(--muted);text-decoration:none}
+.frv-head .frv-icon:hover,.frv-head .frv-icon[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
+.frv-head .frv-icon[hidden],.frv-ver[hidden]{display:none}
+.frv-icon .nav-icon{font-size:20px}
+.frv-ver{display:inline-flex;align-items:center;gap:2px;flex:none;height:24px;padding:0 4px 0 8px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.frv-ver .nav-icon{font-size:14px;color:var(--muted)}
+.frv-ver:hover .nav-icon{color:var(--ink)}
+/* the versions: a small list under the clock */
+.frv-hist{position:absolute;z-index:3;top:50px;right:52px;display:flex;flex-direction:column;min-width:240px;max-height:min(420px,70dvh);overflow:auto;padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 12px 32px rgba(0,0,0,.18)}
+.frv-hist[hidden]{display:none}
+.frv-hist button{display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:10px;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.frv-hist button:hover,.frv-hist button:focus-visible{background:var(--surface2)}
+.frv-hist button[aria-checked="true"]{background:var(--surface2);font-weight:600}
+.frv-who{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;justify-self:end;color:var(--muted)}
+.frv-hist .frv-cmp{display:block;margin-top:4px;border-top:1px solid var(--line);border-radius:0 0 7px 7px;color:var(--muted)}
+.frv-hist .frv-cmp[aria-checked="true"]{color:var(--ink)}
+.frv-tabs{display:none}
+/* the file and the chat */
+.frv-main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) clamp(320px,30vw,440px)}
+.frv-solo .frv-main{grid-template-columns:minmax(0,1fr)}
+.frv-solo .frv-chat,.frv-solo .frv-tabs{display:none}
+.frv-preview{position:relative;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain}
+.frv-chat{min-width:0;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface)}
+.frv-chat > .thv{flex:1 1 auto;min-height:0}
+.frv-chat > .thv-card{border:0;border-radius:0;box-shadow:none;background:transparent}
+.frv-chat > .thv-card .thv-scroll{max-height:none}
+.frv-chat > .thv-card .thv-composer{padding:0 10px 10px}
+.frv-skel{height:100%;min-height:240px;margin:24px;border-radius:10px;background:var(--surface2)}
+.frv-err{margin:24px}
+.frv-doc .md{max-width:var(--read-width);margin:0 auto;padding:32px 28px 64px;font-size:var(--read-size);line-height:var(--read-leading)}
+.frv-doc pre.plain{max-width:1100px;margin:0 auto;padding:24px 28px}
+.frv-csv{padding:16px 20px}
+.frv-csv .csv-scroll{max-height:calc(100dvh - 120px)}
+.frv-frame{overflow:hidden}
+.frv-frame iframe,.frv-is-frame iframe{display:block;width:100%;height:100%;border:0;background:#fff;color-scheme:light}
+.frv-is-frame{overflow:hidden}
+.frv-image,.frv-video,.frv-audio{display:flex;align-items:center;justify-content:center;padding:20px;background:#0c0f13}
+.frv-img,.frv-video video{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px}
+.frv-audio audio{width:min(560px,100%)}
+.frv-other{display:grid;place-items:center;padding:24px}
+.frv-card{display:flex;align-items:center;flex-wrap:wrap;gap:12px;max-width:min(560px,100%);padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.frv-card-mark{flex:none;min-width:44px;padding:10px 6px;border-radius:8px;text-align:center;font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);background:var(--surface2);color:var(--muted)}
+.frv-card-t{display:flex;flex-direction:column;flex:1;min-width:0}
+.frv-card-t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frv-card .btnlike{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;text-decoration:none}
+.frv-card .nav-icon{font-size:18px}
+.frv-diff{padding:16px 20px}
+.frv-diff-head{margin:0 0 8px;color:var(--muted);font-size:var(--t-sm)}
+.frv-diff .tf-diff-lines{max-height:none}
+@media (max-width:760px){
+  .frv-head{padding:env(safe-area-inset-top) 4px 0 14px}
+  .frv-title{font-size:var(--t-base)}
+  .frv-hist{right:8px;left:8px;min-width:0}
+  .frv-tabs{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .frv-tabs button{flex:1;display:inline-grid;place-items:center;height:32px;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
+  .frv-tabs button[aria-selected="true"]{background:var(--surface2);color:var(--ink)}
+  .frv-main{grid-template-columns:minmax(0,1fr)}
+  .frv-chat{border-left:0;padding-bottom:env(safe-area-inset-bottom)}
+  dialog.frv:not(.frv-on-chat) .frv-chat,dialog.frv.frv-on-chat .frv-preview{display:none}
+  .frv-doc .md{padding:20px 16px 48px}
+  .frv-csv{padding:10px}
+}
