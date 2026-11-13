@@ -238,7 +238,7 @@ function srFormHTML(r: StageRule | null): string {
         <input name="owner_team" maxlength="200" placeholder="A team's id; empty: the manager's team" aria-label="Team" value="${esc(team)}"></span>
         <input name="label" maxlength="200" placeholder="Has label" aria-label="Has label" value="${esc(str(cond['label']))}">
         <textarea name="jev" rows="2" maxlength="1000" placeholder="A question Jev answers" aria-label="A question Jev answers">${esc(r?.jev ?? '')}</textarea></div>
-      <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then">${srOptions(SR_THENS, r?.then ?? 'tell_manager')}</select></label>
+      <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then" required>${srOptions(SR_THENS, r?.then ?? 'block')}</select></label>
       <p class="sr-idle" data-sr-thenline hidden></p>
       <label class="ru-fl"><span class="ru-lbl">Says</span><input name="reason" maxlength="1000" value="${esc(r?.reason ?? '')}" placeholder="What the Block or Tell says"></label>
       <p class="sr-costline muted" data-sr-costline></p>
@@ -255,9 +255,14 @@ function srFormSync(form: HTMLFormElement | null): void {
   const box = form.querySelector<HTMLElement>('[data-sr-timer]');
   if (box) box.hidden = !timer;
   // An action When offers Block alone: Tell and Move back need a timer in step 1.
-  const thens = timer ? SR_THENS : SR_ACTION_THENS, picked = f.then.value;
-  if (f.then.options.length !== thens.length) {
-    f.then.innerHTML = srOptions(thens, thens.some(([k]) => k === picked) ? picked : thens[0]![0]);
+  // A Then the When no longer offers (an old rule that never acted) is never swapped for another in silence: the
+  // choice is left empty, and the required select stops Save until the person picks.
+  const thens = timer ? SR_THENS : SR_ACTION_THENS, picked = f.then.value, offered = thens.some(([k]) => k === picked);
+  const shown = `${offered ? '' : '-,'}${thens.map(([k]) => k).join(',')}`;
+  if (f.then.dataset['srThens'] !== shown) {
+    f.then.dataset['srThens'] = shown;
+    f.then.innerHTML = (offered ? '' : `<option value="" selected disabled>${esc(timer ? 'Pick a Then' : 'Pick Block, or a timer for Tell')}</option>`)
+      + srOptions(thens, offered ? picked : '');
   }
   const thenLine = form.querySelector<HTMLElement>('[data-sr-thenline]');
   if (thenLine) {

@@ -200,6 +200,23 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await desk.locator('#sr-panel [data-sr-close]').click();
     assert.equal(await desk.locator('#sr-panel').isVisible(), false);
 
+    // Edit on an old rule that never acts (A task enters → Tell the manager) keeps no Then picked: Save sends nothing
+    // until the person picks, so a rename never turns it into a Block that clears every entering task's owner.
+    await desk.locator('[data-sr-open="spec"]').first().click();
+    await desk.locator('#sr-panel [data-sr-rule="sr_spec"] [data-sr-edit]').click();
+    assert.equal(await form.locator('[name=then]').inputValue(), '', 'no Then is picked for the person');
+    assert.deepEqual(await form.locator('[name=then] option:not([disabled])').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['block']);
+    const writes = served.writes.length;
+    await form.locator('[name=name]').fill('Spec has a page (renamed)');
+    await form.locator('[type=submit]').click();
+    assert.equal(await form.isVisible(), true, 'the form stays open');
+    assert.equal(served.writes.length, writes, 'Save sent nothing');
+    // A timer offers all four again, still with none picked.
+    await form.locator('[name=event]').selectOption('timer');
+    assert.equal(await form.locator('[name=then]').inputValue(), '');
+    assert.equal(await form.locator('[name=then] option:not([disabled])').count(), 4);
+    await desk.locator('#sr-panel [data-sr-close]').click();
+
     // Rules › Pipelines and stages: a rule saved before Tell needed a timer is listed as not acting, with why.
     await desk.goto('http://tico-ui.test/#/rules/stages');
     await desk.locator('[data-stage-rule="sr_spec"]').waitFor();
@@ -213,6 +230,8 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     const row = (id: string) => sg.locator(`[data-stage-rule="${id}"]`);
     assert.deepEqual(await sg.locator('.sr-name').allTextContents(), ['New: Ask before Move back', 'Change to Owner on the team', 'Retire: Quiet bot tasks']);
     assert.equal(await row('sr_sg_new').locator('[data-sr-decide="accept"]').innerText(), 'Accept');
+    // A suggestion of a shape that would never act says so before Accept is pressed.
+    assert.equal(await row('sr_sg_new').locator('[data-sr-idle]').innerText(), `Not acting: ${NEEDS_TIMER}`);
     // A change lists what differs from the rule as it is now, and only that.
     assert.deepEqual(await row('sr_sg_change').locator('[data-sr-diff] li').allTextContents(), ['Then Block → Tell the manager']);
     assert.equal(await row('sr_sg_change').locator('[data-sr-decide="accept"]').innerText(), 'Accept change');

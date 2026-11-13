@@ -1083,7 +1083,7 @@ function ruStageSuggestedHTML(rows: StageRule[]): string {
     } else if (kind !== 'new') more = '<div class="sr-says muted">The rule it changes is gone; skip it.</div>';
     return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"><div class="sr-line"><span class="sr-name">${esc(title)}</span>`
       + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
-      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}</div>`;
+      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}${kind === 'retire' ? '' : srIdleHTML(r)}</div>`;
   }).join('')}</section>`;
 }
 // By pipeline, then stage: Company first, then each pipeline's whole-pipeline rules and its stages' rules.
