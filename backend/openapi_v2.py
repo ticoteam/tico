@@ -2120,7 +2120,7 @@ STABLE = [
         "getUsage",
         "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
         "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
-        "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
+        "or own. ?bot=<bot id or slug> is that bot's daily series, top routines, top 10 tasks (the rest summed) and models instead",
         "Usage",
     ),
     (
@@ -4732,6 +4732,27 @@ SCHEMAS = {
             "name": "s",
             "daily": items({"type": "object", "additionalProperties": True}),
             "routines": items({"type": "object", "additionalProperties": True}),
+            "tasks": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: its top 10 tasks by spend, as group=task names them (value and name), plus runs with no task, "
+                    "each with the usage figures and `share`, its part of the bot's spend",
+                    "additionalProperties": True,
+                }
+            ),
+            "tasks_more": {
+                "type": "object",
+                "description": "?bot only: `count`, the tasks past the top 10, and their usage figures summed",
+                "additionalProperties": True,
+            },
+            "models": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: every model it used, value (null when not recorded) and name, with "
+                    "the usage figures and `share`",
+                    "additionalProperties": True,
+                }
+            ),
         },
         required=["from", "to", "prices_as_of", "totals"],
     ),
