@@ -430,7 +430,7 @@ async function desktop(browser: Browser) {
   assert.equal(await form.locator('select').count(), 0);
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'eng');
   await form.locator('[data-sub-owner]').click();
-  await modal.locator('.prop-pop [data-prop-pick="api"]').click();
+  await modal.locator('.gt-pop [data-give-pick="api"]').last().click();
   await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#task-modal [data-sub-add] input[name=owner]')?.value === 'api');
   assert.match((await form.locator('[data-sub-owner]').getAttribute('aria-label'))!, /^For API Engineer/);
   const add = form.locator('input[name=title]');

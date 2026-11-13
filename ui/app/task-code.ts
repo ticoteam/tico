@@ -266,12 +266,9 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
     if (!st) return;
     const who = eventElement(ev)?.closest<HTMLElement>('[data-sub-owner]');
     if (who) {
-      const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll<HTMLOptionElement>('option[value]:not([value=""])');
+      // Give to… (give-to.ts): a subtask's suggestions come from its parent, this task.
       const current = $('[data-sub-add]', rail)?.elements.owner.value;
-      propMenu(d, who, {label: 'For', find: 'Find a person or bot', items: [...opts].map(o => {
-        const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-        return {value: o.value, text: String(o.textContent), html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: o.value === current};
-      }), onPick: it => {
+      if (!giveToJustClosed(who)) giveToOpen(who, {label: 'For', task: t, selected: current, onPick: it => {
         const form = $('[data-sub-add]', rail); if (form) form.elements.owner.value = it.value;
         st.owner = it.value; taskRailPaint(d, t); $('[data-sub-owner]', rail)?.focus();
       }});

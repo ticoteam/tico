@@ -250,7 +250,7 @@ function decideDialog(): HTMLDialogElement {
 /** A button that needs words (Send back, Something else, Add rule) is on once there are some. */
 function decideNeedsText(root: HTMLElement) {
   for (const b of root.querySelectorAll<HTMLButtonElement>('[data-dc-needs]')) {
-    const box = root.querySelector<HTMLTextAreaElement | HTMLInputElement | HTMLSelectElement>(b.dataset.dcNeeds!);
+    const box = root.querySelector<HTMLTextAreaElement | HTMLInputElement>(b.dataset.dcNeeds!);
     b.disabled = !box?.value.trim() || !!DEC?.busy;
   }
 }
@@ -786,7 +786,7 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   if (st.more === 'snooze')
     return `<div class="dc-more">${decideBtn('snooze-1', 'Tomorrow', false, busy)}${decideBtn('snooze-7', 'Next week', false, busy)}</div>`;
   if (st.more === 'give')
-    return `<div class="dc-more"><select id="dc-to" aria-label="Give to">${taskOwnerOptions('', 'Give to…')}</select>${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
+    return `<div class="dc-more">${giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task, current: it.task?.owner_id})}${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
   if (st.more === 'back') {
     const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.id === it.task?.pipeline_id);
     const at = p ? p.stages.findIndex(s => s.id === it.task?.stage_id) : -1;
@@ -807,7 +807,7 @@ function decideSheetHTML(st: DecState, it: NeedsEntry): string {
   const chips = DEC_CHIPS.map(([k, label]) => `<button type="button" class="dc-chip" data-dc-chip="${k}" aria-pressed="${sh.chip === k}"${busy}>${esc(label)}</button>`).join('');
   const give = sh.chip === 'person';
   return `<div class="dc-chips">${chips}</div><textarea id="dc-why" data-dc-note rows="3" maxlength="4000" aria-label="What was wrong">${esc(sh.note)}</textarea>
-    ${give ? `<select id="dc-to" aria-label="Give to">${taskOwnerOptions('', 'Give to…')}</select>` : ''}
+    ${give ? giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task, current: it.task?.owner_id}) : ''}
     <div class="dc-acts">${give ? decideBtn('why-give', 'Give to…', true, ' data-dc-needs="#dc-to" disabled')
       : decideBtn('why-back', 'Send back', true, busy)}${feedbackRuleOn(it) ? decideBtn('why-rule', 'Make a rule', false, busy) : ''}</div>`;
 }
@@ -1021,7 +1021,7 @@ async function decideShowsRead(v: AskOkView, shows: string[], before: string[] |
 
 // ---- acting
 const decideNote = (sel: string) => ($(sel) as HTMLTextAreaElement | null)?.value.trim() || '';
-const decideTo = () => ($('#dc-to') as HTMLSelectElement | null)?.value || '';
+const decideTo = () => ($('#dc-to') as HTMLInputElement | null)?.value || '';
 /** Runs one answer for the item on screen: busy while it is on its way, then the bar and the next item. A failure stays
     on the item with its words. */
 async function decideDo(st: DecState, it: NeedsEntry, label: string, run: () => Promise<unknown>, undo: ((r: unknown) => (() => Promise<unknown>) | null) | null = null) {

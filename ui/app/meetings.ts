@@ -979,7 +979,7 @@ function meetItemsRender(state: MeetState, rec: MeetRec): void {
   if (state.itemAdd === 'task' && !form) {
     slot.innerHTML = `<form class="mp-form" data-new="task">
         <textarea data-text aria-label="What to add" placeholder="Add a task" rows="2"></textarea>
-        <div class="mp-form-row"><select data-field="owner" aria-label="Owner">${taskOwnerOptions('')}</select><span class="grow"></span>
+        <div class="mp-form-row">${giveToFieldHTML({attrs: 'data-field="owner"', label: 'Owner', placeholder: 'Who is this for?'})}<span class="grow"></span>
           <button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Add</button></div></form>`;
   } else if (state.itemAdd !== 'task' && form) slot.innerHTML = '';
   const linkSlot = box.querySelector('[data-link-slot]'), linkForm = linkSlot.querySelector('form[data-link-form]');

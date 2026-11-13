@@ -41,7 +41,7 @@ const ctx = vm.createContext({
   skelRows: () => '<i class="skel"></i>',
   errorMessage: (_e: unknown, fallback: string) => fallback,
   TL_ICON: {plus: '+'},
-  taskOwnerOptions: () => '',
+  giveToFieldHTML: () => '',
   stageRulesButtonHTML: () => '',   // stage-rules.cts draws a stage's Rules button
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
