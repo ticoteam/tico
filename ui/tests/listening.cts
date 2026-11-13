@@ -222,8 +222,8 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await page.close();
     }
 
-    // None yet: one line on what Listening does and one green New listening; the + hides until one exists. A double
-    // press makes one listening.
+    // None yet: one line on what Listening does and one green New listening: the header's, which never moves (the shared
+    // page header, task 338); the empty state offers the same action as a plain button. A double press makes one listening.
     {
       const tag = 'none';
       let posts = 0;
@@ -240,15 +240,15 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal((await empty.locator('p').innerText()).trim(), 'Watches the sites and searches you pick, and posts what matters to Updates.', tag + ': what it does');
       assert.equal(await empty.locator('.ea-art').count(), 1, tag + ': its little picture');
       assert.deepEqual(await page.locator('.au-lst :is(button,a).primary:visible').allInnerTexts(), ['New listening'], tag + ': one green action');
-      assert.equal(await page.locator('.au-lst .au-new').count(), 1, tag + ': the + stays in the page');
-      assert.equal(await page.locator('.au-lst .au-new').isVisible(), false, tag + ': but hides');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the header\'s New listening stays in place');
+      assert.equal(await empty.locator('[data-lst-new]:not(.primary)').count(), 1, tag + ': the empty state\'s is a plain button');
       await empty.locator('[data-lst-new]').dblclick();
       await page.waitForFunction(() => /^#\/listening\/au_\d+$/.test(location.hash));
       await page.waitForSelector('.lst-blk');
       assert.equal(posts, 1, tag + ': a double press makes one listening');
       await page.locator('.au-crumb a').click();
       await page.waitForSelector('.lst-row');
-      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the + is back once one exists');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': New listening is still in the header once one exists');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
