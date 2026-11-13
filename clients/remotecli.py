@@ -1510,9 +1510,57 @@ def _table(rows, cols):
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip() for row in cells)
 
 
+GROWTH_STEPS = {"settings": "Settings", "channel": "First channel", "source": "Its source", "month": "First month"}
+
+
+def growth_next(setup):
+    """The next Growth setup step under a command's output (backend/growth_setup.py): what it is and its command, or
+    who may do it when the caller may not. Nothing once setup is done."""
+    nxt = (setup or {}).get("next") if not (setup or {}).get("done", True) else None
+    if not nxt:
+        return ""
+    lines = [f"Next (step {nxt.get('number')} of {len(GROWTH_STEPS)}): {nxt.get('says')}"]
+    if nxt.get("you_may"):
+        lines.append("  " + str(nxt.get("command")))
+        if nxt.get("then"):
+            lines.append("  then: " + str(nxt["then"]))
+    else:
+        names = ", ".join(str(p.get("name")) for p in nxt.get("who_may") or [])
+        who = "the owner, an admin or a bot" if nxt.get("bots_may") else "the owner or an admin"
+        lines.append(f"  Only {who} can" + (f": {names}." if names else "."))
+    return "\n".join(lines)
+
+
+def _growth_setup_text(result):
+    """`tico growth setup`: each step done or not, with when it was first done, then the next step and the dates."""
+    steps = result.get("steps") or []
+    done = sum(1 for s in steps if s.get("done"))
+    nxt = (result.get("next") or {}).get("step")
+    lines = ["Set up: done." if result.get("done") else f"Set up: {done} of {len(steps)} steps done."]
+    for i, s in enumerate(steps, 1):
+        mark = "done" if s.get("done") else "next" if s.get("step") == nxt else ""
+        when = f"  {str(s['at'])[:10]}" if s.get("at") else ""
+        lines.append(f"  {mark:<4}  {i}. {GROWTH_STEPS.get(s.get('step'), s.get('step'))}{when}")
+    for key, label in (("first_opened_at", "First opened"), ("numbers_seen_at", "Numbers first seen")):
+        if result.get(key):
+            lines.append(f"{label}: {str(result[key])[:10]}")
+    after = growth_next(result)
+    return "\n".join(lines) + ("\n" + after if after else "")
+
+
 def growth_text(fn, result):
-    """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
-    `--json` prints the API response instead."""
+    """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines, and
+    under a Growth read the next setup step while Growth is not set up. `--json` prints the API response instead."""
+    if not isinstance(result, dict) or not fn.startswith("growth "):
+        return _growth_body(fn, result)
+    if fn == "growth setup":
+        return _growth_setup_text(result)
+    body = _growth_body(fn, {k: v for k, v in result.items() if k not in ("setup", "you_may")})
+    after = growth_next(result.get("setup"))
+    return body + ("\n" + after if after else "")
+
+
+def _growth_body(fn, result):
     if not isinstance(result, dict):
         return "\n".join(_plain(result))
     if fn == "brand summary":
@@ -1525,6 +1573,12 @@ def growth_text(fn, result):
             f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
             for h in hits
         )
+    if fn == "growth channel list" and not result.get("channels"):
+        return "No channels yet."
+    if fn == "growth source list" and not result.get("sources"):
+        return "No sources yet."
+    if fn == "growth cohort list" and not result.get("cohorts"):
+        return "No months yet."
     if fn in ("growth channel list",):
         return _table(
             result.get("channels") or [],

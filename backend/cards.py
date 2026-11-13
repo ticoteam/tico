@@ -1741,6 +1741,10 @@ def install(app, store, auth, mutate, settings, task_view):
         with store.read_transaction() as c:
             out = place_view(context(c, request, month_of(month)), place, timings)
         request.state.server_timing = place_timing(timings)
+        if place == "growth":  # opening the Growth page: its first open, and its numbers seen once set up
+            from .growth_setup import attach
+
+            return attach(store, auth, request.state.identity, out, seen=True)
         return out
 
     @app.put("/api/v2/places/{place}")

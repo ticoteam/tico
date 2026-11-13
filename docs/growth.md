@@ -113,10 +113,33 @@ Marketing Owners still file ideas that way.
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.
 
+## First run
+
+An empty Growth needs four things, in this order, before it shows a team's first numbers:
+
+1. **Settings**: revenue per customer per month and the margin (the unit has a default).
+2. **A channel**: at least one active channel. Unknown is not a channel.
+3. **Its source**: an active channel names a live source.
+4. **Its first month**: an active channel has a month with spend and new customers.
+
+Every Growth read (`channel list` and `show`, `source list`, `cohort list`, `economics`, `numbers`, `kpis`, `settings`)
+carries `setup` while any step is not done: each step and whether it is done, and the next one with its CLI command, its
+MCP tool, whether the caller may do it and, if not, who may (the owner and admins by name). The CLI prints that next step
+under its normal output. Once all four have been done, `setup` is only `{"done": true}` and stays so, even if a channel is
+retired later. `tico growth setup` shows each step with the date it was first done.
+
+Growth records once per team when it was first opened (any Growth read, by a person or a bot), when each step was first
+done, and when its numbers were first seen (the Growth page, `economics`, `numbers` or a channel read after all four
+steps are done). The Growth activation rate is read from these dates.
+
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
+
+Every Growth read carries `you_may`: per action (`settings`, `channels`, `sources`, `months`), what this caller may do.
+`may_edit` stays as it was: in `channel list`, `source list` and `settings` it is "may change channels, sources and
+settings"; in `numbers` it is "may record months".
 
 Everyone signed in reads the Growth page. The owner and admins arrange it, and so does a bot acting as itself, which
 pins only the cards it made there (a bot pins no pages to it). Its audience is everyone; it has no audience to change.
@@ -125,6 +148,7 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 
 ```
 tico growth numbers                       the page: each month's rows, Unknown and the totals
+tico growth setup                         the four first-run steps, each done or not, and the next one
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
 tico growth source list | add | update ID | retire ID
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]

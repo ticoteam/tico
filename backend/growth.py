@@ -622,7 +622,17 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
+    from . import growth_setup as GS
     from .goal_routes import _hidden_owners, kpi_editable
+
+    def answer(who, out, seen=False):
+        """A read's answer with what the caller may do and Growth's setup (backend/growth_setup.py)."""
+        return GS.attach(store, auth, who, out, seen=seen)
+
+    def wrote(c, who, result):
+        """After a write: the setup steps it finished get their first done date."""
+        GS.record(c, who.actor)
+        return result
 
     def reader(who):
         auth.domain(who)
@@ -634,23 +644,26 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/growth/channels")
     def growth_channels(request: Request, include_retired: bool = False):
-        """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin)."""
+        """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin);
+        `you_may` says what the caller may do per action and `setup` what is left to set up (backend/growth_setup.py)."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
+            out = {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
+        return answer(who, out)
 
     @app.get("/api/v2/growth/channels/{slug}")
     def growth_channel(request: Request, slug: str):
         """One channel, retired or not, with its open marketing tasks (`tasks`: labelled channel:<slug>, the ones the
-        reader may see)."""
+        reader may see), what the caller may do and what is left to set up."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
             row = channel(c, slug)
             if not row:
                 raise Problem("not_found", f"No channel {slug}", 404)
-            return {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+            out = {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+        return answer(who, out, seen=True)
 
     @app.post("/api/v2/growth/channels")
     def growth_channel_add(request: Request, body: M.GrowthChannelCreate):
@@ -659,7 +672,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "adds a channel")
-            return channel_create(c, who.actor, body)
+            return wrote(c, who, channel_create(c, who.actor, body))
 
         return mutate(request, body, work)
 
@@ -686,7 +699,7 @@ def install(app, store, auth, mutate):
                         "an admin changes the rest",
                         403,
                     )
-            return channel_update(c, who.actor, slug, fields)
+            return wrote(c, who, channel_update(c, who.actor, slug, fields))
 
         return mutate(request, body, work)
 
@@ -704,11 +717,12 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/growth/sources")
     def growth_sources(request: Request, include_retired: bool = False):
         """Where each number's truth lives, and the things two live sources both claim. `may_edit`: the caller
-        changes sources (owner or admin)."""
+        changes sources (owner or admin); `you_may` per action, `setup` what is left to set up."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {**sources(c, include_retired), "may_edit": admin(auth, who)}
+            out = {**sources(c, include_retired), "may_edit": admin(auth, who)}
+        return answer(who, out)
 
     @app.post("/api/v2/growth/sources")
     def growth_source_add(request: Request, body: M.GrowthSourceCreate):
@@ -717,7 +731,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "adds a source")
-            return source_create(c, who.actor, body)
+            return wrote(c, who, source_create(c, who.actor, body))
 
         return mutate(request, body, work)
 
@@ -728,7 +742,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "changes a source")
-            return source_update(c, who.actor, sid, {k: getattr(body, k) for k in body.model_fields_set})
+            return wrote(c, who, source_update(c, who.actor, sid, {k: getattr(body, k) for k in body.model_fields_set}))
 
         return mutate(request, body, work)
 
@@ -747,10 +761,13 @@ def install(app, store, auth, mutate):
     def growth_cohorts(
         request: Request, channel: str | None = None, month: str | None = None, limit: int = COHORTS_PAGE
     ):
-        """Monthly cohorts, newest month first; `channel=unknown` is the Unknown row."""
-        reader(request.state.identity)
+        """Monthly cohorts, newest month first; `channel=unknown` is the Unknown row. `you_may` and `setup` as the other
+        Growth reads."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return {"cohorts": cohorts(c, channel, month, limit)}
+            out = {"cohorts": cohorts(c, channel, month, limit)}
+        return answer(who, out)
 
     @app.put("/api/v2/growth/cohorts")
     def growth_cohort_set(request: Request, body: M.GrowthCohortSet):
@@ -761,25 +778,29 @@ def install(app, store, auth, mutate):
             auth.domain(who)
             if who.role != "bot" and not admin(auth, who):
                 raise Problem("forbidden", "The owner, an admin or a bot records a cohort", 403)
-            return cohort_set(c, who.actor, body)
+            return wrote(c, who, cohort_set(c, who.actor, body))
 
         return mutate(request, body, work)
 
     @app.get("/api/v2/growth/economics")
     def growth_economics(request: Request, month: str | None = None):
-        """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails."""
+        """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails;
+        `you_may` and `setup` as the other Growth reads."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return economics(c, month, _hidden_owners(c, auth, who))
+            out = economics(c, month, _hidden_owners(c, auth, who))
+        return answer(who, out, seen=True)
 
     @app.get("/api/v2/growth/settings")
     def growth_settings(request: Request):
-        """The unit counted, the default revenue and margin. `may_edit`: the caller changes them (owner or admin)."""
+        """The unit counted, the default revenue and margin. `may_edit`: the caller changes them (owner or admin);
+        `you_may` per action, `setup` what is left to set up."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {**settings(c), "may_edit": admin(auth, who)}
+            out = {**settings(c), "may_edit": admin(auth, who)}
+        return answer(who, out)
 
     @app.put("/api/v2/growth/settings")
     def growth_settings_update(request: Request, body: M.GrowthSettingsUpdate):
@@ -788,14 +809,27 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "changes the growth settings")
-            return settings_update(c, who.actor, {k: getattr(body, k) for k in body.model_fields_set})
+            return wrote(c, who, settings_update(c, who.actor, {k: getattr(body, k) for k in body.model_fields_set}))
 
         return mutate(request, body, work)
 
     @app.get("/api/v2/growth/kpis")
     def growth_kpis(request: Request):
-        """Every KPI the caller may read with its latest value, target and place in the KPI tree."""
+        """Every KPI the caller may read with its latest value, target and place in the KPI tree; `you_may` and `setup`
+        as the other Growth reads."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return kpis(c, _hidden_owners(c, auth, who), lambda record: kpi_editable(c, who, record))
+            out = kpis(c, _hidden_owners(c, auth, who), lambda record: kpi_editable(c, who, record))
+        return answer(who, out)
+
+    @app.get("/api/v2/growth/setup")
+    def growth_setup(request: Request):
+        """Growth's first run: the four steps (settings, a channel, its source, its first month), when each was first
+        done, the next one with its CLI command and MCP tool and whether the caller may do it (else who may), what the
+        caller may do per action, and when the team first opened Growth and first saw its numbers."""
+        who = request.state.identity
+        reader(who)
+        answer(who, {})  # the first open, when it is one
+        with store.read() as c:
+            return GS.show(c, auth, who)
