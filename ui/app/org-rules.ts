@@ -273,13 +273,6 @@ const ruScopeIds = (scope: RuleScope | ScopeIds | null | undefined): Required<Sc
   people: (scope?.people || []).map(x => typeof x === 'string' ? x : x.id)});
 const ruSameScope = (a: RuleScope | ScopeIds | null | undefined, b: RuleScope | ScopeIds | null | undefined) => JSON.stringify(ruScopeIds(a)) === JSON.stringify(ruScopeIds(b));
 
-// An inline chip opens its teammate, not the row around it.
-document.addEventListener('click', ev => {
-  const at = eventElement(ev)?.closest<HTMLElement>('.ru-at[data-href]');
-  if (!at) return;
-  ev.preventDefault(); ev.stopPropagation();
-  location.hash = at.dataset.href ?? '';
-}, true);
 
 // "Jan 31", or "Jan 31, 2027" outside this year.
 function ruDay(iso: string | null | undefined, year = false) {

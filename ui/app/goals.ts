@@ -34,40 +34,6 @@ interface GoalPatch { title?: string; owner?: string; parent_id?: string; bet_id
 type GoalSheetState = GkState<GkPanel | null> | Pick<GkState<GkPanel | null>, 'goals'>;
 let GOALS_ST: GoalsState | null = null;
 const goalBuiltInOwner = (actor: string | undefined) => String(actor || '').startsWith('bot:') && isBuiltInBot(actor!.slice(4));
-const GOAL_COMPANY = 'company';
-function goalOwnerInfo(actor: string | undefined) {
-  if (actor === GOAL_COMPANY) return {kind: 'company', id: GOAL_COMPANY, name: S.config?.company_name || 'Team', avatar: '', href: ''};
-  const [kind, id] = String(actor || '').split(':');
-  if (kind === 'bot') {
-    const e = botRow(id);
-    return {kind, id, name: e?.display_name || e?.slug || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(String(id))}`};
-  }
-  const p = (S.people || []).find(x => x.id === id);
-  return {kind: 'person', id, name: p?.name || id, avatar: personAvatar(p || {id, name: id}, 20), href: `#/person/${encodeURIComponent(String(id))}`};
-}
-// The options of a "Supports" select: Nothing first (a goal needs no parent), then team goals,
-// goals above the owner on the org chart, and goals alongside it. Never the goal itself or anything
-// under it (that would loop).
-function goalSupportOptions(g: GoalRef, owner: string | null | undefined, goals: GkGoal[]) {
-  const below = new Set(g.id ? [g.id] : []);
-  for (let grew = Boolean(g.id); grew;) {
-    grew = false;
-    for (const x of goals) if (x.parent_id && below.has(x.parent_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
-  }
-  const me = goalOrgPlace(owner);
-  const rows: {company: GkGoal[]; above: GkGoal[]; alongside: GkGoal[]} = {company: [], above: [], alongside: []};
-  for (const x of goals) {
-    if (!goalLive(x) || below.has(x.id)) continue;
-    const them = goalOrgPlace(x.owner_id);
-    const where = x.owner_id === GOAL_COMPANY ? 'company' : me.above.has(them.key) ? 'above'
-      : them.key && (them.key === me.key || (them.parent && them.parent === me.parent)) ? 'alongside' : '';
-    if (where || x.id === g.parent_id) rows[where || 'above'].push(x);
-  }
-  const option = (x: GkGoal) => `<option value="${esc(x.id)}"${x.id === g.parent_id ? ' selected' : ''}>${esc(x.title)}${x.owner_id === GOAL_COMPANY ? '' : ' · ' + esc(goalOwnerInfo(x.owner_id).name)}</option>`;
-  const group = (label: string, list: GkGoal[]) => list.length ? `<optgroup label="${label}">${list.sort(goalRank).map(option).join('')}</optgroup>` : '';
-  return `<option value=""${g.parent_id ? '' : ' selected'}>Nothing</option>`
-    + group('Team', rows.company) + group('Above on the team chart', rows.above) + group('Alongside', rows.alongside);
-}
 // Enter or leaving the field saves; Escape puts the words back. An emptied goal is removed.
 function bindGoalEditor(el: HTMLElement, g: GkGoal, done?: (removed: boolean) => void) {
   const input = el.querySelector<HTMLInputElement>('.goal-ed-text')!, pick = el.querySelector<HTMLSelectElement>('.goal-ed-pick')!;

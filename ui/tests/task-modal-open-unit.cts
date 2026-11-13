@@ -18,7 +18,7 @@ const reads: string[] = [];
 let answer: () => Promise<unknown> = () => Promise.resolve(null);
 const noop = () => {};
 const ctx = vm.createContext({
-  window: {addEventListener: noop},
+  window: {addEventListener: noop, matchMedia: () => ({matches: false, addEventListener: noop})},
   document: {addEventListener: noop, activeElement: null, body: {classList: {add: noop, remove: noop}}, createElement: () => ({})},
   localStorage: {getItem: () => null, setItem: noop, removeItem: noop},
   location: {hash: '#/tasks'},
@@ -32,6 +32,8 @@ const ctx = vm.createContext({
   v2Get: (p: string) => { reads.push(p); return answer().catch(() => null); },
   toast: (msg: string, isErr?: boolean, action?: Toast['action'], opts?: Toast['opts']) => { toasts.push({msg, isErr, action, opts}); },
 });
+// The names the shell keeps for every page (ui/app/pages-shell.ts, the page parts' ui/parts.json) load first, as in the app.
+vm.runInContext(transformSync(fs.readFileSync(path.join(__dirname, '..', 'app', 'pages-shell.ts'), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: 'pages-shell.ts'});
 for (const file of ['errors.ts', 'task-modal.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
 }

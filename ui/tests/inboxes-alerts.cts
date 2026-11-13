@@ -10,6 +10,7 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 interface AlertCtx {admin: boolean; me: {id: string} | null; live: () => boolean}
 interface Write {path: string; body: Record<string, unknown>; operation: string | undefined}
 declare const S: {me: {id: string} | null};
+declare function uiPartLoad(part: string): Promise<void>;
 declare function inboxesAlerts(host: HTMLElement, ctx: AlertCtx): void | Promise<void>;
 interface PageWin {
     ALERT_CTX: AlertCtx;
@@ -65,6 +66,9 @@ interface PageWin {
     // #/settings/company-inbox is an old address: route() sends it on to Tools (location.replace) and the new page draws
     // in a view transition (ui/app/router.ts routeChanged), a frame or more later, replacing #main. Draw the card after
     // that page is on the screen, or it overwrites the card and [data-alert-send-code] never appears.
+    // The alerts card is Settings' code (ui/parts.json): a page part, loaded here as a visit to Settings would.
+    await page.waitForFunction(() => typeof uiPartLoad === 'function');
+    await page.evaluate(() => uiPartLoad('settings'));
     await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id && location.hash.startsWith('#/tools') && document.querySelector('#main #tools-root'));
     const draw = (admin: boolean) => page.evaluate(async (admin: boolean) => {
       let host = document.querySelector<HTMLElement>('#alerts-test-host');

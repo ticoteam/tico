@@ -10,7 +10,7 @@
    separate files (TICO_UI_BUNDLE=off) the page has no list: every file is already loaded and nothing here runs. */
 'use strict';
 
-interface UiPartsTable { build: string; parts: Record<string, {url: string; load: string[]}>; }
+interface UiPartsTable { build: string; parts: Record<string, {url: string; load: string[]; events?: string[]}>; }
 const UI_PARTS: UiPartsTable = (() => {
   try {
     const text = document.getElementById('ui-parts')?.textContent;
@@ -19,6 +19,8 @@ const UI_PARTS: UiPartsTable = (() => {
   return {build: '', parts: {}};
 })();
 const UI_PART_SCRIPTS = new Map<string, Promise<void>>();
+// The parts whose scripts have run.
+const UI_PART_LOADED = new Set<string>();
 // The build a failed part reloaded the page for: once per build, so a part that never loads cannot loop.
 const UI_PART_RELOAD_KEY = 'tico.parts.reloaded';
 
@@ -34,7 +36,7 @@ function uiPartScript(name: string): Promise<void> {
     script.src = part.url;
     script.async = false;
     script.dataset.part = name;
-    script.onload = () => { resolve(); };
+    script.onload = () => { UI_PART_LOADED.add(name); resolve(); };
     script.onerror = () => { script.remove(); reject(new Error(`Tico's ${name} code did not load`)); };
     document.head.appendChild(script);
   });
@@ -86,6 +88,26 @@ async function uiPartFailed(part: string, page: boolean, route: string, error: u
   // The page's empty state (ui/styles/components.css), in the main area only: the sidebar keeps working.
   main.innerHTML = `<section class="empty-state part-error" role="alert"><b>Couldn't load this page.</b>`
     + `<span>Check your connection and try again.</span><button class="primary" type="button" data-part-retry>Retry</button></section>`;
+}
+
+// A control the shell draws (a computer's screen switch, a model's Sign in) whose click or change a part's own document
+// listener handles (ui/parts.json `events`): before that part is loaded, the first one loads it and is then sent again,
+// so the part's listener answers it. A click on a form control is left to its change.
+for (const type of ['click', 'change'] as const) {
+  document.addEventListener(type, ev => {
+    const el = eventElement(ev);
+    if (!el || !ev.isTrusted) return;
+    if (type === 'click' && el.closest('input, select, textarea, label')) return;
+    for (const [name, part] of Object.entries(UI_PARTS.parts)) {
+      if (!part.events?.length || UI_PART_LOADED.has(name) || !el.closest(part.events.join(', '))) continue;
+      if (type === 'click') ev.preventDefault();
+      ev.stopImmediatePropagation();
+      uiPartLoad(name).then(() => {
+        if (el.isConnected) el.dispatchEvent(type === 'click' ? new MouseEvent('click', {bubbles: true, cancelable: true, composed: true}) : new Event('change', {bubbles: true}));
+      }, (error: unknown) => uiPartFailed(name, false, '', error));
+      return;
+    }
+  }, true);
 }
 
 document.addEventListener('click', ev => {

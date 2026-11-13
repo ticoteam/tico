@@ -99,7 +99,8 @@ def page_part_path(name):
 
 def read_parts(ui_dir, js_names):
     """ui/parts.json, checked against the files index.html bundles: {part: {"files", "deps", "pages", "calls",
-    "idle", "load"}}, empty when there is no such file."""
+    "idle", "events", "load"}}, empty when there is no such file. `events` are the CSS selectors of controls the shell
+    draws whose click or change the part's own document listeners handle: the shell loads the part on the first one."""
     import json
 
     path = Path(ui_dir) / "parts.json"
@@ -115,7 +116,9 @@ def read_parts(ui_dir, js_names):
             continue  # a comment
         if not PART_NAME.fullmatch(name) or name.isdigit():
             raise BundleError(f"ui/parts.json: {name!r} is not a part name (a-z, 0-9, -)")
-        part = {k: list(spec.get(k, [])) for k in ("files", "deps", *ENTRY_KINDS)}
+        part = {k: list(spec.get(k, [])) for k in ("files", "deps", "events", *ENTRY_KINDS)}
+        if not all(isinstance(e, str) and e.strip() for e in part["events"]):
+            raise BundleError(f"ui/parts.json: {name}: events are CSS selectors")
         for f in part["files"]:
             if f not in js_names:
                 raise BundleError(f"ui/parts.json: {f} is not a script index.html bundles")
@@ -373,6 +376,7 @@ def build(ui_dir):
                     part: {
                         "url": f"{page_part_path(part)}?v={whole.part_version[page_part_path(part)]}",
                         "load": spec["load"],
+                        **({"events": spec["events"]} if spec["events"] else {}),
                     }
                     for part, spec in parts.items()
                 },

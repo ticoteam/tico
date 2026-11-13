@@ -10,6 +10,7 @@ const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 // Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare function uiPartLoad(part: string): Promise<void>;
 declare const window: Window & typeof globalThis & {
   ticoTheme: {set(theme: string): void};
 };
@@ -163,6 +164,8 @@ async function open(browser: import('playwright').Browser, {role = 'owner', name
     {
       // Undo on an entry past the first page asks, and confirms, where it is: the older page stays loaded.
       const {page, errors, posted} = await open(browser);
+      // The log is Settings' code, a page part (ui/parts.json): loaded as opening Settings would.
+      await page.evaluate(() => uiPartLoad('settings'));
       await page.evaluate(() => { const host = document.createElement('div'); host.id = 'log-under-test'; host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto'; document.body.append(host); void renderStrategyBotLog(host); });
       const log = page.locator('#log-under-test');
       await log.locator('[data-strategy-log-more]').click();

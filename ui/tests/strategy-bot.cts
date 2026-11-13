@@ -140,7 +140,8 @@ async function check(page: import('playwright').Page, name = 'Strategy Owner') {
       assert.equal(await page.evaluate(() => strategyBotName()), 'Atlas', 'it keeps its name');
       await page.evaluate(() => { location.hash = '#/settings'; });
       // The page change draws a frame later (its fade); Settings' data can already be loaded before it does.
-      await page.waitForFunction(() => S.route === '#/settings' && typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
+      // Settings' own code is a page part (ui/parts.json), loaded once the route asks for it.
+      await page.waitForFunction(() => S.route === '#/settings' && typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models && typeof settingsShow === 'function');
       await page.evaluate(() => settingsShow('bots'));
       const row = page.locator('[data-settings-bot="strategy-owner"]');
       await row.waitFor();

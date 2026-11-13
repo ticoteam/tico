@@ -21,11 +21,13 @@ interface Machine {
     for (const width of [1440, 390]) {
       const page = await browser.newPage({viewport: {width, height: 900}});
       await page.setContent('<div id="status"></div>');
-      await page.addScriptTag({content: `const SETTINGS_PRESENCE = {at: Date.now()}; const esc = value => String(value);`});
-      // cloud-machines is TypeScript: uiFile serves its compiled file (npm run build:ui).
-      for (const script of ['app/computer-detail.ts', 'app/settings-devices.ts', 'app/cloud-machines.ts']) {
+      await page.addScriptTag({content: `const esc = value => String(value);`});
+      // cloud-machines is TypeScript: uiFile serves its compiled file (npm run build:ui). The shell's names
+      // (pages-shell.ts, SETTINGS_PRESENCE among them) load first, as in the app.
+      for (const script of ['app/pages-shell.ts', 'app/computer-detail.ts', 'app/settings-devices.ts', 'app/cloud-machines.ts']) {
         await page.addScriptTag({path: uiFile(script)});
       }
+      await page.addScriptTag({content: `SETTINGS_PRESENCE.at = Date.now();`});
       const status = await page.evaluate(() => {
         const machine: Machine = {last_seen_at: new Date().toISOString(), cloud_machine: {state: 'stopped'}};
         const live = machineNowWords(machine);

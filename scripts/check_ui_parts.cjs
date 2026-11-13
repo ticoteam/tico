@@ -7,7 +7,8 @@
 // The files are the scripts index.html bundles, which share their top-level names. For every name a page part declares
 // at its top level, each use from a file outside that part (the shell, or a part that does not list it in its deps)
 // (its deps, theirs and so on, which load with it) must be one of the part's entries:
-//   pages, calls   a call whose answer is not used (a statement, `void`, `await` as a statement, an arrow's body) or
+//   pages, calls   a call whose answer is not used (a statement, `void`, `await` as a statement, the body of an arrow
+//                  passed to a listener, a timer, forEach or a promise's then) or
 //                  the function passed on as a value: the shell's stand-in loads the part and answers with a promise.
 //                  An async function's answer may be used: it is a promise of the same answer either way;
 //   idle           a call whose answer is not used: it does nothing until the part is loaded.
@@ -15,7 +16,8 @@
 // nothing at all, so it needs an entry too.
 // Each entry must be a function declaration (or `window.NAME = function`) in its part: a stand-in is a function, and
 // a `const` of the same name would refuse to load. A name a part uses as it runs (outside any function) must come from
-// a part listed before it, since parts that load together run in ui/parts.json's order. It prints each use that breaks a rule, as file:line, and exits 1.
+// a part listed before it, since parts that load together run in ui/parts.json's order; and, for the files served
+// separately, from a file index.html lists before it. It prints each use that breaks a rule, as file:line, and exits 1.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -61,6 +63,22 @@ function main() {
     const sf = ts.createSourceFile(file, fs.readFileSync(path.join(ui, file), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     sources.set(file, sf);
     const add = (name, how) => { if (!owner.has(name) || how !== 'other') { owner.set(name, file); declared.set(name, how); } };
+    // `window.NAME = ...` at the top level, or at the top of a function the file calls at once ((() => { ... })()).
+    const windowed = st => {
+      if (!ts.isExpressionStatement(st)) return;
+      let e = st.expression;
+      if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(e.left)
+        && e.left.expression.getText() === 'window') {
+        const right = e.right, isAsync = !!right?.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword);
+        add(e.left.name.text, isAsync ? 'async' : ts.isFunctionExpression(right) || ts.isArrowFunction(right) ? 'window' : 'other');
+        return;
+      }
+      while (ts.isParenthesizedExpression(e) || ts.isVoidExpression(e)) e = e.expression;
+      if (!ts.isCallExpression(e)) return;
+      let fn = e.expression;
+      while (ts.isParenthesizedExpression(fn)) fn = fn.expression;
+      if ((ts.isFunctionExpression(fn) || ts.isArrowFunction(fn)) && fn.body && ts.isBlock(fn.body)) for (const inner of fn.body.statements) windowed(inner);
+    };
     for (const st of sf.statements) {
       const isAsync = n => !!n?.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) || /^Promise</.test(n?.type?.getText() || '');
       if (ts.isFunctionDeclaration(st) && st.name && st.body) add(st.name.text, isAsync(st) ? 'async' : 'function');
@@ -68,10 +86,7 @@ function main() {
       else if (ts.isEnumDeclaration(st)) add(st.name.text, 'other');
       else if (ts.isVariableStatement(st) && !st.modifiers?.some(m => m.kind === ts.SyntaxKind.DeclareKeyword)) {
         for (const d of st.declarationList.declarations) { const names = []; bind(d.name, names); for (const n of names) add(n, 'other'); }
-      } else if (ts.isExpressionStatement(st) && ts.isBinaryExpression(st.expression) && st.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
-        && ts.isPropertyAccessExpression(st.expression.left) && st.expression.left.expression.getText() === 'window') {
-        add(st.expression.left.name.text, isAsync(st.expression.right) ? 'async' : 'window');
-      }
+      } else windowed(st);
     }
   }
 
@@ -93,6 +108,13 @@ function main() {
     if (ts.isBindingElement(p) && p.propertyName === n) return true;
     return ts.isQualifiedName(p) || ts.isTypeReferenceNode(p) || ts.isTypeQueryNode(p) || ts.isLabeledStatement(p) || ts.isBreakOrContinueStatement(p)
       || ts.isImportTypeNode(p) || ts.isExpressionWithTypeArguments(p) && ts.isHeritageClause(p.parent) && false;
+  };
+  // An arrow whose answer its caller drops: a listener, a timer, forEach, a promise's callback.
+  const dropped = arrow => {
+    const call = arrow.parent;
+    if (!call || !ts.isCallExpression(call) || !call.arguments.includes(arrow)) return false;
+    const callee = ts.isPropertyAccessExpression(call.expression) ? call.expression.name.text : call.expression.getText();
+    return /^(addEventListener|setTimeout|setInterval|requestAnimationFrame|requestIdleCallback|queueMicrotask|forEach|then|catch|finally)$/.test(callee);
   };
   for (const [file, sf] of sources) {
     const mine = partOf.get(file);
@@ -123,6 +145,12 @@ function main() {
       const name = n.text, home = owner.get(name);
       const theirs = home && partOf.get(home);
       const at = `ui/${file}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
+      // Served as separate files (TICO_UI_BUNDLE=off), every file runs in index.html's order, page parts included: a
+      // name used as a file runs must come from a file listed before it. `typeof NAME` only asks whether it is there.
+      if (!inFn && home && home !== file && order.indexOf(home) > order.indexOf(file)) {
+        const around = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;
+        if (!ts.isTypeOfExpression(around.parent)) problems.push(`${at}: ${name} is used as ${file} runs, but ui/${home} declares it and index.html lists it later`);
+      }
       if (!theirs || theirs === mine) return;
       if (mine && depsOf.get(mine).has(theirs)) {
         // Loaded with this part, but a name used as the part runs must come from a part that runs before it.
@@ -140,7 +168,7 @@ function main() {
         if (ts.isCallExpression(u.parent) && u.parent.expression === u) {
           let a = u.parent;
           while (ts.isAwaitExpression(a.parent) || ts.isVoidExpression(a.parent) || ts.isParenthesizedExpression(a.parent)) a = a.parent;
-          how = ts.isExpressionStatement(a.parent) || (ts.isArrowFunction(a.parent) && a.parent.body === a) ? 'call' : 'call-used';
+          how = ts.isExpressionStatement(a.parent) || (ts.isArrowFunction(a.parent) && a.parent.body === a && dropped(a.parent)) ? 'call' : 'call-used';
         }
         uses.push({file, line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1, name, part: theirs, decl: declared.get(name), how, entry: e?.kind || ''});
       }
@@ -151,7 +179,7 @@ function main() {
       if (ts.isCallExpression(call) && call.expression === used) {
         let answer = call;
         while (ts.isAwaitExpression(answer.parent) || ts.isVoidExpression(answer.parent) || ts.isParenthesizedExpression(answer.parent)) answer = answer.parent;
-        const unused = ts.isExpressionStatement(answer.parent) || (ts.isArrowFunction(answer.parent) && answer.parent.body === answer && e.kind !== 'idle');
+        const unused = ts.isExpressionStatement(answer.parent) || (ts.isArrowFunction(answer.parent) && answer.parent.body === answer && dropped(answer.parent) && e.kind !== 'idle');
         // An async function answers with a promise anyway: its stand-in's promise of the same answer is used alike.
         if (!unused && declared.get(name) !== 'async') problems.push(`${at}: ${name} (${theirs} part) answers with a promise until its part is loaded: its answer cannot be used here`);
         return;
@@ -159,6 +187,33 @@ function main() {
       if (e.kind === 'idle') problems.push(`${at}: ${name} (${theirs} part) is idle until its part is loaded: only call it`);
     };
     visit(sf, new Set(), false);
+  }
+  // A part's own document (or window) listener for a click, change, input, submit or key answers only controls drawn
+  // while the part is loaded: a `[data-NAME]` it matches that a file outside the part (and outside the parts that load
+  // it as a dep) also draws must be one of the part's `events`, so the shell loads the part on its first use.
+  // Only data attributes are checked, not classes.
+  const texts = new Map([...sources].map(([file, sf]) => [file, sf.text]));
+  const loaders = name => Object.keys(parts).filter(p => p === name || depsOf.get(p).has(name));
+  for (const [file, sf] of sources) {
+    const mine = partOf.get(file);
+    if (!mine) continue;
+    const covered = (parts[mine].events || []).join(' ');
+    const inside = new Set(loaders(mine));
+    const walk = n => {
+      if (ts.isCallExpression(n) && n.arguments.length >= 2 && /^((document|window)\.)?addEventListener$/.test(n.expression.getText())
+        && ts.isStringLiteral(n.arguments[0]) && /^(click|change|input|submit|keydown|keyup)$/.test(n.arguments[0].text)) {
+        // A selector scoped to one of the part's own elements ('#cal-card [data-cal-join]') is left alone.
+        const attrs = new Set([...n.arguments[1].getText().matchAll(/(?:['"`]|,\s*)\[(data-[a-z0-9-]+)/g)].map(m => m[1]));
+        for (const a of attrs) {
+          if (covered.includes(`[${a}`)) continue;
+          const drawn = new RegExp(a.replace(/-/g, '\\-') + '(?=[=\\s>"\'`$])');
+          const elsewhere = [...texts].find(([f, t]) => f !== file && !inside.has(partOf.get(f)) && drawn.test(t.replace(/\[data-[a-z0-9-]+/g, '')));
+          if (elsewhere) problems.push(`ui/${file}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}: its ${n.arguments[0].text} listener answers [${a}], which ui/${elsewhere[0]} draws outside the ${mine} part: list it in the part's events`);
+        }
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(sf);
   }
   if (uses) { console.log(JSON.stringify(uses)); return; }
   for (const p of problems) console.log(p);

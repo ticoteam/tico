@@ -254,6 +254,11 @@ function toolsRoute(r: string): boolean {
     return go(rest ? TOOLS_ROUTE + '/' + rest : TOOLS_ROUTE);
   }
   if (rdUnder(path, CREDENTIALS)) return go(TOOLS_KEYS + '?show=credentials');
+  // The kinds and views of inbox register themselves as Tools' inbox code runs (ui/app/inboxes*.ts, the connect page
+  // part), and Tools' pages and its Add tool menu read them: an address there waits for it, then routes again (or shows
+  // Retry where the page would be).
+  const inboxed = rdUnder(path, '#/settings/inboxes') || rdUnder(path, TOOLS_ROUTE);
+  if (inboxed && !Object.keys(INBOX_KINDS).length && UI_PARTS.parts.connect) { void uiPartCall('connect', 'route', [], true); return true; }
   // Settings › Inboxes and the tabs it replaced (Mailboxes, Email & Phone, Mail; Google's sign-in return).
   if (rdUnder(path, '#/settings/inboxes')) return go(toolsFromInboxes(path.slice('#/settings/inboxes'.length).replace(/^\/+/, '')));
   const oldTab = path.match(/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(?:\/([^/]+))?\/?$/);
@@ -350,6 +355,14 @@ function ruTextHTML(text: string, as: 'link' | 'inline' | 'plain' = 'link') {
     return pre + (tail ? `<span class="ru-at-w">${chip}${tail}</span>` : chip);
   });
 }
+
+// An inline rule chip (drawn above, in a thread or on the Rules page) opens its teammate, not the row around it.
+document.addEventListener('click', ev => {
+  const at = eventElement(ev)?.closest<HTMLElement>('.ru-at[data-href]');
+  if (!at) return;
+  ev.preventDefault(); ev.stopPropagation();
+  location.hash = at.dataset.href ?? '';
+}, true);
 
 // app/calendar.ts
 // ----------------------------------------------------------------- page and load
@@ -908,7 +921,7 @@ function screenControlHTML(machine: ScreenMachine | null | undefined, online = t
     ${on ? `<select class="settings-inline-select" data-screen-mode="${esc(id)}" aria-label="Screen access" ${SCREEN_SAVING.has(id) ? 'disabled' : ''}><option value="view" ${machine.screen === 'view' ? 'selected' : ''}>View</option><option value="control" ${machine.screen === 'control' ? 'selected' : ''}>Control</option></select>${online ? `<a class="bot-screen-open" href="${screenHref(id)}">Open screen</a>` : ''}` : ''}
     ${pending ? `<div class="bot-screen-steps"><p>Run this on ${esc(machine.label || 'the computer')}, in its runner folder (usually <code>/opt/tico-runner</code>):</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
       <details><summary>Running from a checkout?</summary>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}</details>
-      <p>The screen becomes available when the computer reports it is ready. <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">Setup help</a></p></div>` : ''}
+      <p>The screen becomes available when the computer reports it is ready. <a href="${GH}/blob/main/docs/install.md#screen" target="_blank" rel="noopener noreferrer">Setup help</a></p></div>` : ''}
   </div>`;
 }
 
@@ -981,7 +994,6 @@ function botScreenState(slug: string): ScreenRow {
   if (!machine.screen || machine.screen === 'off') return {...base, state: 'off'};
   return {...base, state: base.may ? 'ready' : 'not_allowed'};
 }
-const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
 // Docker: `screen on` inside the runner's container turns it on live and saves it in runner.json on the runner-home
 // volume, so it survives updates. Installation troubleshooting lives in the screen documentation.
 // A named or --server-network runner has runner.override.yaml beside the stock file, used on every compose call
@@ -1081,6 +1093,40 @@ function goalMayEdit(g: GoalRef, goals: GkGoal[] = []) {
   const parent = goals.find(x => x.id === g.parent_id);
   return g.owner_id === actor || parent?.owner_id === actor || goalOrgPlace(g.owner_id).above.has('p:' + me!.id);
 }
+const GOAL_COMPANY = 'company';
+function goalOwnerInfo(actor: string | undefined) {
+  if (actor === GOAL_COMPANY) return {kind: 'company', id: GOAL_COMPANY, name: S.config?.company_name || 'Team', avatar: '', href: ''};
+  const [kind, id] = String(actor || '').split(':');
+  if (kind === 'bot') {
+    const e = botRow(id);
+    return {kind, id, name: e?.display_name || e?.slug || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(String(id))}`};
+  }
+  const p = (S.people || []).find(x => x.id === id);
+  return {kind: 'person', id, name: p?.name || id, avatar: personAvatar(p || {id, name: id}, 20), href: `#/person/${encodeURIComponent(String(id))}`};
+}
+// The options of a "Supports" select: Nothing first (a goal needs no parent), then team goals,
+// goals above the owner on the org chart, and goals alongside it. Never the goal itself or anything
+// under it (that would loop).
+function goalSupportOptions(g: GoalRef, owner: string | null | undefined, goals: GkGoal[]) {
+  const below = new Set(g.id ? [g.id] : []);
+  for (let grew = Boolean(g.id); grew;) {
+    grew = false;
+    for (const x of goals) if (x.parent_id && below.has(x.parent_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
+  }
+  const me = goalOrgPlace(owner);
+  const rows: {company: GkGoal[]; above: GkGoal[]; alongside: GkGoal[]} = {company: [], above: [], alongside: []};
+  for (const x of goals) {
+    if (!goalLive(x) || below.has(x.id)) continue;
+    const them = goalOrgPlace(x.owner_id);
+    const where = x.owner_id === GOAL_COMPANY ? 'company' : me.above.has(them.key) ? 'above'
+      : them.key && (them.key === me.key || (them.parent && them.parent === me.parent)) ? 'alongside' : '';
+    if (where || x.id === g.parent_id) rows[where || 'above'].push(x);
+  }
+  const option = (x: GkGoal) => `<option value="${esc(x.id)}"${x.id === g.parent_id ? ' selected' : ''}>${esc(x.title)}${x.owner_id === GOAL_COMPANY ? '' : ' · ' + esc(goalOwnerInfo(x.owner_id).name)}</option>`;
+  const group = (label: string, list: GkGoal[]) => list.length ? `<optgroup label="${label}">${list.sort(goalRank).map(option).join('')}</optgroup>` : '';
+  return `<option value=""${g.parent_id ? '' : ' selected'}>Nothing</option>`
+    + group('Team', rows.company) + group('Above on the team chart', rows.above) + group('Alongside', rows.alongside);
+}
 const goalLinkOptions = (g: GkGoal, goals: GkGoal[]) => goalSupportOptions(g, g.owner_id, goals);
 
 // app/goals.ts
@@ -1119,3 +1165,15 @@ const BOT_SVG = {
   eye: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
   shut: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><path stroke="currentColor" stroke-width="1.6" d="M4 4l16 16"/></svg>',
 };
+
+// app/bot-tasks.ts (a bot's task row, also the Assistant page's)
+// Stage names by stage id, from the pipelines list: a list row names only its stage's id.
+const BOT_STAGE_NAMES = new Map<string, string>();
+function botTaskStage(t: TaskAny): string {
+  const stage = 'stage' in t ? t.stage as {name?: string} | null | undefined : null;
+  return stage?.name || BOT_STAGE_NAMES.get(t.stage_id || '') || '';
+}
+function botTaskRowHTML(t: TaskAny): string {
+  const stage = t.status === 'open' ? botTaskStage(t) : '';
+  return taskRowHTML(t, {after: stage ? `<span class="muted">${esc(stage)}</span>` : ''});
+}

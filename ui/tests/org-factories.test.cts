@@ -76,9 +76,11 @@ function context(read: () => Promise<unknown> = async () => { throw new Error('t
     orgChartShape: () => {},
     orgChartTop: () => ({id: 'ana'}),
     document: {addEventListener() {}},
+    window: {addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}})},
     get, pipelinesAll,
   });
-  for (const file of ['pipeline-api.ts', 'overview-factories.ts', 'org-factories.ts', 'redesign-org.ts']) {
+  // pages-shell.ts: the names the shell keeps for every page (the page parts' ui/parts.json) load first, as in the app.
+  for (const file of ['pages-shell.ts', 'pipeline-api.ts', 'overview-factories.ts', 'org-factories.ts', 'redesign-org.ts']) {
     const loader = file.endsWith('.ts') ? 'ts' : 'js';
     const js = transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader, target: 'es2022'}).code;
     vm.runInContext(js, ctx, {filename: file});

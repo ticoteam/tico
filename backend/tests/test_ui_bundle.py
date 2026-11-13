@@ -604,7 +604,7 @@ def test_a_page_part_is_left_out_of_the_shell_and_named_by_its_own_content(tmp_p
         tmp_path,
         {
             "pb": {"files": ["app/b.js"], "pages": ["pageB"], "idle": ["bStop"]},
-            "pc": {"files": ["app/c.js"], "deps": ["pb"], "calls": ["cHelp"]},
+            "pc": {"files": ["app/c.js"], "deps": ["pb"], "calls": ["cHelp"], "events": ["[data-c-toggle]"]},
         },
     )
     bundles = ui_bundle.UiBundle(ui)
@@ -620,6 +620,8 @@ def test_a_page_part_is_left_out_of_the_shell_and_named_by_its_own_content(tmp_p
         re.search(r'<script type="application/json" id="ui-parts">(.*?)</script>', first.page.decode()).group(1)
     )
     assert set(table["parts"]) == {"pb", "pc"} and table["parts"]["pc"]["load"] == ["pb", "pc"]
+    # A control the shell draws whose click the part handles: the page loads the part on its first click.
+    assert table["parts"]["pc"]["events"] == ["[data-c-toggle]"] and "events" not in table["parts"]["pb"]
     url = table["parts"]["pb"]["url"]
     path, v = url.split("?v=")
     assert path == "/tico/ui/app.bundle.pb.js" and ui_bundle.is_part(path)
@@ -657,6 +659,7 @@ def test_a_page_part_is_left_out_of_the_shell_and_named_by_its_own_content(tmp_p
         ({"pb": {"files": ["app/b.js"], "pages": ["page B"]}}, "page B"),
         ({"Bad": {"files": ["app/b.js"]}}, "Bad"),
         ({"pb": {"files": ["app/b.js"], "deps": ["px"]}}, "px"),
+        ({"pb": {"files": ["app/b.js"], "events": [""]}}, "CSS selectors"),
     ],
 )
 def test_a_wrong_parts_list_is_refused(tmp_path, parts, why):

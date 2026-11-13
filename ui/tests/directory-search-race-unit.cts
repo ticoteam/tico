@@ -17,6 +17,7 @@ const {transformSync} = require('esbuild') as typeof import('esbuild');
 interface Read { url: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }
 const reads: Read[] = [];
 const ctx = vm.createContext({
+  window: {addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}})},
   esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
   get: (url: string) => new Promise((resolve, reject) => { reads.push({url, resolve, reject}); }),
   actorLabel: (who: string) => who,
@@ -32,6 +33,8 @@ const ctx = vm.createContext({
   HTMLElement: class {}, HTMLButtonElement: class {}, HTMLDetailsElement: class {},
   URLSearchParams,
 });
+// The names the shell keeps for every page (ui/app/pages-shell.ts, the page parts' ui/parts.json) load first, as in the app.
+vm.runInContext(transformSync(fs.readFileSync(path.join(__dirname, '..', 'app', 'pages-shell.ts'), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: 'pages-shell.ts'});
 const file = path.join(__dirname, '..', 'app', 'directory.ts');
 vm.runInContext(transformSync(fs.readFileSync(file, 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: 'directory.ts'});
 
