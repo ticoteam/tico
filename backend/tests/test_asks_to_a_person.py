@@ -56,7 +56,6 @@ def refusals(api):
     [
         ({"why": None}, S.NO_WHY),
         ({"why": "   "}, S.NO_WHY),
-        ({"choices": ["Plain"], "details": ["Safe."]}, S.COUNT),
         ({"choices": list("ABCDE"), "details": list("abcde"), "recommend": "A"}, S.COUNT),
         ({"details": None}, S.NO_DETAIL),
         ({"details": ["Safe.", ""]}, S.NO_DETAIL),

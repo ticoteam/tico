@@ -138,7 +138,15 @@ def test_an_ask_reaches_only_a_reader_and_reassignment_keeps_the_readers(api):
     def ask(to):
         return api.post(
             f"/api/v2/tasks/{row['id']}/asks",
-            json={"to": to, "line": "Approve the plan?", "choices": ["Yes", "No"], "version": seen(api, row, attempt)},
+            json={
+                "to": to,
+                "line": "Approve the plan?",
+                "choices": ["Yes", "No"],
+                "why": "It decides what ships next.",
+                "details": ["It goes ahead.", "It waits."],
+                "recommend": "Yes",
+                "version": seen(api, row, attempt),
+            },
             headers=headers(attempt["token"]),
         )
 
@@ -208,7 +216,15 @@ def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
     assert r.status_code == 403, r.text
     r = api.post(
         f"/api/v2/tasks/{own['id']}/asks",
-        json={"to": "ben", "line": "Send the reply?", "choices": ["Yes", "No"], "version": seen(api, own, attempt)},
+        json={
+            "to": "ben",
+            "line": "Send the reply?",
+            "choices": ["Yes", "No"],
+            "why": "It decides what ships next.",
+            "details": ["It goes ahead.", "It waits."],
+            "recommend": "Yes",
+            "version": seen(api, own, attempt),
+        },
         headers=headers(attempt["token"]),
     )
     assert r.status_code == 422 and r.json()["error"]["code"] == "private", r.text
@@ -239,6 +255,9 @@ def test_a_question_reaches_one_reader(api):
                 "to": to,
                 "line": "Ship the zip fix in the next release?",
                 "choices": ["Yes", "No"],
+                "why": "It decides what ships next.",
+                "details": ["It goes ahead.", "It waits."],
+                "recommend": "Yes",
                 "version": seen(api, row, attempt),
             },
             headers=headers(attempt["token"]),

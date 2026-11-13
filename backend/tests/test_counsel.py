@@ -23,6 +23,7 @@ from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api
 from backend.tests.helpers.org_rules import as_bot, org
 from backend import bot_settings as BS
 from backend.tests.helpers.counsel import counsel_on, counsel_run, source, store_file
+from backend.tests.helpers.org_rules import builtin_off
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 CONTRACT = (
@@ -244,6 +245,7 @@ def test_counsel_is_stateless_by_its_template_and_an_explicit_flag_wins():
 
 
 def test_a_reader_without_the_file_sees_the_sentence_but_not_the_quote(api, monkeypatch):
+    builtin_off(api)
     org(api)
     counsel_on(api)
     file_id, _ = store_file(api, CONTRACT)
@@ -661,6 +663,7 @@ def test_counsel_attaches_no_file_and_is_given_no_visual_address(api, monkeypatc
 
 
 def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):
+    builtin_off(api)
     org(api)
     counsel_on(api)
     file_id, version = store_file(api, CONTRACT)

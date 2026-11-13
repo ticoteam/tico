@@ -8,6 +8,7 @@ Engineering is managed by Ben."""
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import as_member, get, post
 from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.org_rules import builtin_off
 
 BUILD, FIX = "eng-build", "eng-fixes-1"
 
@@ -152,6 +153,7 @@ def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
 
 
 def test_the_rules_page_lists_every_kind_of_rule_in_its_group_with_a_count(api):
+    builtin_off(api)
     engineering(api)
     before = {g["key"]: g["count"] for g in get(api, "rule-groups")["groups"]}
     add(api, OWNER_ON_TEAM)

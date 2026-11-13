@@ -324,7 +324,14 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
     err, shown = call(api, "tico_task_show", {"id": work["id"]}, token=attempt["token"])
     assert not err and "version" in shown["text"], shown
     version = shown["task"]["version"]
-    ask = {"id": work["id"], "to": "ana", "line": "Run the vendor trial once?", "choices": ["Yes", "No"]}
+    ask = {
+        "id": work["id"],
+        "to": "ana",
+        "line": "Run the vendor trial once?",
+        "choice": ["Yes|The trial runs once.", "No|Nothing runs."],
+        "recommend": "Yes",
+        "why": "It decides what ships next.",
+    }
     err, refused = call(api, "tico_task_ask", {**ask, "version": version - 1}, token=attempt["token"])
     assert err and refused["error"] == "task_changed" and refused["version"] == version, refused
     err, asked = call(api, "tico_task_ask", {**ask, "version": version}, token=attempt["token"])

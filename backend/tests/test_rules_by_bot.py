@@ -12,6 +12,13 @@ from backend.store import H, Problem, encode
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
 from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.org_rules import org, rule
+from backend.tests.helpers.org_rules import builtin_off
+
+
+@pytest.fixture(autouse=True)
+def _rules_made_here(api):
+    """Each test lists the rules it made: the built-in "Asks to a person" would be one more."""
+    builtin_off(api)
 
 
 def add_people(api, *people):
