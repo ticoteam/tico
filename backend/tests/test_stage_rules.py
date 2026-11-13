@@ -340,3 +340,24 @@ def test_a_suggestion_of_the_refused_shape_saved_before_is_not_accepted(c):
     assert SR.get(c, "sr_sg_old")["status"] == "suggested"
     # It can still be skipped.
     assert SR.skip(c, ANA, "sr_sg_old")["retired_at"]
+
+
+def test_a_start_never_sweeps_open_snoozes_with_the_depends_on_question(company, jev):
+    """No sweep at release (the spec): a company whose one-off sweep never ran (no bot snooze at its first start) keeps
+    a bot's 'waiting for rc.23' snooze across later starts, and Jev is not asked."""
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        SR.ensure_defaults(c)
+    SR.install(company)
+    with company.transaction() as c:
+        row = X.new_task(c, ANA, "One", assignee="bot:ops")
+        E.snooze(c, row["id"], "bot:ops", "waiting for rc.23", "2099-01-05T08:00:00.000000Z", row["version"])
+    SR.install(company)
+    import threading
+
+    for thread in threading.enumerate():
+        if thread.name == "stage-rules-sweep":
+            thread.join(10)
+    with company.read() as c:
+        assert E.task(c, row["id"]).get("snooze")
+    assert jev.calls == []

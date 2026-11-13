@@ -73,9 +73,9 @@ QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
 BLOCKED = "Blocked? tico task relate <id> depends_on #N. Waiting on a person or a decision? Ask them on the task."
 REAL_WAIT_JEV = (
     "The bot is setting the task aside for something other than looking again on a date. Its reason names a task, a "
-    "pull request, a merge, a release (such as rc.23), main or checks that it waits on, or a person, a reply or a "
-    "decision it waits for. It is false when the bot only means to try again later or on a date (\"couldn't "
-    "reproduce, try again Nov 16\")."
+    "pull request, a merge, a release (such as rc.23), main or checks that it waits on; a person, a reply or a "
+    "decision it waits for; or something it lacks that someone must give (access, a tool, a credential). It is false "
+    "when the bot only means to try again later or on a date (\"couldn't reproduce, try again Nov 16\")."
 )
 # The words a default rule shipped with before, by rule id and column: a stored default still holding one of them is
 # brought up to date at the next start (`ensure_defaults`); one a company edited keeps its own.
@@ -691,7 +691,8 @@ SWEPT = "stage_rules_snooze_sweep"
 
 
 def sweep_snoozes(store: Any) -> list[str]:
-    """Snooze only for a real wait over the open bot snoozes, once at release: each one its rules refuse ends now
+    """Snooze only for a real wait over the open bot snoozes, once (no start runs it since the depends_on question:
+    `install` only records it as done): each one its rules refuse ends now
     (the task is the bot's again), the history names the rule, and each pipeline manager gets ONE wake listing them.
     Jev is asked with no write open, one call per snooze. Returns the task ids unsnoozed; [] once it has run."""
     from . import task_engine as _E_mod
@@ -900,27 +901,14 @@ def skip(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
 
 
 def install(store: Any) -> None:
-    """The store Jev's calls are counted on (server start), and the release sweep of bot snoozes, once, in the
-    background: it asks Jev, so it never holds up the start."""
-    import threading
-
+    """The store Jev's calls are counted on (server start). The one-off release sweep of bot snoozes is not run at a
+    start any more: with the depends_on question it would end every open snooze that names a task or a release, and
+    the spec leaves those to their owners to re-file. A company where it never ran records it as done."""
     global _installed_store
     _installed_store = store
-
-    def sweep() -> None:
-        try:
-            sweep_snoozes(store)
-        except Exception:  # noqa: BLE001 - the sweep is a one-off tidy; a start never fails on it
-            log.warning("stage rules: the snooze sweep failed", exc_info=True)
-
     try:
-        with store.read() as c:
-            waiting = has_table(c) and not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (SWEPT,)).fetchone()
-            waiting = (
-                waiting
-                and c.execute("SELECT 1 FROM snoozes WHERE ended_at IS NULL AND by_id LIKE 'bot:%' LIMIT 1").fetchone()
-            )
-    except Exception:  # noqa: BLE001 - a store with no tables yet has nothing to sweep
-        waiting = None
-    if waiting:
-        threading.Thread(target=sweep, name="stage-rules-sweep", daemon=True).start()
+        with store.transaction() as c:
+            if has_table(c):
+                c.execute("INSERT OR IGNORE INTO registry_metadata (key, value) VALUES (?, ?)", (SWEPT, _h().now()))
+    except Exception:  # noqa: BLE001 - a store with no tables yet has nothing to record
+        log.debug("stage rules: no snooze sweep mark recorded", exc_info=True)

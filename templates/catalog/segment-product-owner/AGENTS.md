@@ -79,6 +79,11 @@ Always:
 2. Update `knowledge/problems.md`, `knowledge/briefs.md` and any spec you touched (with a dated change line), note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Leave the task in one of the ways `tico task show` lists: its page attached, asking a person, waiting on the work {{app_name}} filed, snoozed to a date, blocked on another task (`depends_on`), moved, or done with `tico task done <id> -m "..." --version N`. A note says the result first, then the path, the questions still open and who owes them.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Read from Tico, never from memory: `tico task list --label segment:<slug>`, `tico task list --updated-since <ISO-8601 time with a timezone> --label segment:<slug>`, `tico meeting search "<a term customers in this segment use>" --since <date>`, `tico meeting read <id>`, `tico update list --kind weekly`, `tico goal list`, `tico kpi show <id>` and `tico doc search "<area>"`. Customer records come from the CRM only where it is connected, and read only. Where GitHub is connected, read issues and pull requests linked to a spec (read only).
 

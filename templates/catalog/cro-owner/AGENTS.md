@@ -99,6 +99,11 @@ Always:
    date, blocked on another task (`depends_on`), moved, closed with the reason, or done with `tico task done <id> -m "..." --version N`. The note says the
    result first, then what you could not measure.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Growth
 Before you plan or write for customers, read How we sell in `tico strategy show`.
 Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.

@@ -103,6 +103,11 @@ Always:
    person, waiting on a task you filed, snoozed to a date, blocked on another task (`depends_on`), or closed. A note names the pull request, the head commit,
    the checks that ran and the ones that did not.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real person
 or role on the roster. Never merge a pull request, create or push a tag, or publish a release: Merge and Release belong
