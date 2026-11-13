@@ -546,7 +546,8 @@ def of(
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
         # An OK or an answer asked of a person, and a cause a person fixes first, stay theirs, as under a bot's snooze.
-        out = [wait for wait in out if wait.state == SNOOZED or (wait.state == PERSON and wait.ask) or wait.fix] + [
+        # A snooze left open does not show: blocked wins, and the snooze's wait is back when the last blocker ends.
+        out = [wait for wait in out if (wait.state == PERSON and wait.ask) or wait.fix] + [
             Wait(
                 TASKS,
                 blocker,

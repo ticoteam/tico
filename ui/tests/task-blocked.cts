@@ -1,8 +1,8 @@
 // Offline browser check of a dependency in the task window (task-modal.ts taskDependsHTML; spec "A blocked task shows as
 // Blocked, never Snoozed", part 3). A blocked task lists each task it waits for under "Blocked by": its number, title,
 // stage and since when, with × to take it off; Add another opens the task finder and relates the task picked with
-// depends_on. The task it waits for lists, under "Blocks 4 tasks", the tasks waiting for it. Escaped, and without
-// sideways scroll on a phone.
+// depends_on. The task it waits for lists, under "Blocks 4 tasks", the tasks waiting for it. A blocked task a bot also
+// snoozed shows no Snoozed chip. Escaped, and without sideways scroll on a phone.
 // Run: npm run build:ui && node ui/tests/task-blocked.cts
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -20,6 +20,8 @@ type Route = import('playwright').Route;
     by(304).title = 'Growth <b>synced</b> sources part 1';
     // #307 depends on #304; #304 blocks #307, #308, #310 and #311.
     by(307).relations = {depends_on: [dep(304, 'out')]};
+    // A bot snoozed #307 before (or after) the dependency was written: blocked wins, so the window shows no Snoozed chip.
+    Object.assign(by(307), {snooze: {by_id: 'bot:builder', why: 'Waiting for part 1 to merge', created_at: since, until: '2026-11-16T00:00:00Z'}});
     by(304).relations = {depends_on: [307, 308, 310, 311].map(n => dep(n, 'in', 'Review'))};
     const related: unknown[] = [];
     const {page, errors} = await open(browser, {hash: '#/tasks', tasks, needs: [], beforeGoto: (pg: import('playwright').Page) =>
@@ -38,6 +40,8 @@ type Route = import('playwright').Route;
       assert.deepEqual(await text('#task-modal[open] .task-depends'),
         ['Blocked by #304 Growth <b>synced</b> sources part 1 · Build · since Nov 13 × Add another'], `${width}px: the line, its stage and since when`);
       assert.equal(await page.locator('#task-modal[open] .task-blocks').count(), 0, 'it blocks nothing');
+      assert.equal(await page.locator('#task-modal[open] .tchip-snoozed').count(), 0, `${width}px: blocked, never Snoozed`);
+      assert.doesNotMatch(await page.locator('#task-modal[open]').innerText(), /Snoozed|Waiting for part 1 to merge/, `${width}px: no snooze words`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${width}px: no sideways scroll`);
     }
 

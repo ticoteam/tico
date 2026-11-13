@@ -152,6 +152,11 @@ def test_a_blocked_task_a_bot_snoozed_is_listed_as_blocked_never_snoozed(c):
     read = rows(c, blocked, asleep)
     assert read[blocked]["snoozed"] is False and read[blocked]["blocked_by"]
     assert read[asleep]["snoozed"] is True
+    # Its line is the dependency's, in the row and in the task's own read, never the snooze's why.
+    turn = read[blocked]["turn"]
+    assert (turn["state"], turn["line"]) == (W.TASKS, f"Blocked by {ref(c, blocker)} Part 1, in Build")
+    assert [w.state for w in W.waiting_on(c, blocked)] == [W.TASKS]
     # Once the blocker ends, the snooze that is still open sets it aside again.
     E.move(c, blocker, E.DONE, X.ANA, "Finished")
     assert blocked in listed("only") and rows(c, blocked)[blocked]["snoozed"] is True
+    assert W.waiting_on(c, blocked)[0].state == W.SNOOZED
