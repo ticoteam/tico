@@ -12,6 +12,10 @@ guessed into the report.
 
 ## 1. A task becomes ready to release
 
+Use this flow only where the release-ready stage has no automatic "in a release" requirement. Where it does (the
+Engineering pipeline's Release stage waits for a published GitHub release), follow `playbooks/cut-a-release.md` as today
+and label nothing.
+
 You are woken when a task enters the stage where work waits to be released. Read it (`tico task show <id>`): its QA
 page must carry a person's OK at the commit that ships. If it does, label it for the next batch:
 
