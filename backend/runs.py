@@ -47,6 +47,8 @@ def state(attempt_state):
 # its computer never started (a lease that lapsed before the start, or a hand-back) went back in the queue, so it is a
 # retry: its job counts once, by the try that failed it, if it fails in the end (Nov 12: Health said 352 failed runs,
 # about 310 of them retries of one job).
+# "The last day" of failed runs: Health counts over it and Runs lists over it, so the two never differ.
+FAILED_HOURS = 24
 FAILED = "(state='failed' OR (state='expired' AND started_at IS NOT NULL))"
 
 

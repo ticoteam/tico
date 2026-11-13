@@ -2294,7 +2294,7 @@ def _server_settings(c, settings):
 def _failed(c):
     """How many jobs failed in the last day and the newest five of them (runs.failed): a retry that went back in the
     queue is not one."""
-    total, rows = runs.failed(c, H.shift(H.now(), hours=-RECENT_HOURS), limit=5)
+    total, rows = runs.failed(c, H.shift(H.now(), hours=-runs.FAILED_HOURS), limit=5)
     return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 

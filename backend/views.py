@@ -3266,7 +3266,7 @@ def install_views(app, store, auth, mutate, task_view):
         newest 200 of the whole company left a quiet bot's failed starts off its Runs card (Nov 12). `failed`: only
         the day's failed runs, as Health counts them."""
         human_only(request.state.identity)
-        since = H.shift(H.now(), hours=-24) if failed else None
+        since = H.shift(H.now(), hours=-runs.FAILED_HOURS) if failed else None
         with store.read() as c:
             if bot:
                 bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
