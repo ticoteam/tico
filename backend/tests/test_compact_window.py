@@ -174,6 +174,7 @@ def test_tico_bot_model_takes_compact_at_default_on_the_command_line():
     args = hubcli.parser().parse_args(["bot", "model", "ops", "--compact-at", "default"])
     assert args.compact_at == "default"
 
+
 # Task #236: the shared model picker in Settings > Bots reads each model's default from the model list, a bot's chosen
 # window from its row in the bot list (none there: it follows the model), and saves a new bot's chosen window.
 
