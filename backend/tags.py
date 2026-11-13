@@ -1,6 +1,7 @@
 """Tags and template instances. Task visibility still governs every task on a tag page."""
 
 from fastapi import Request
+from pydantic import Field
 
 from .models import Contract, ID
 from .store import H, Problem
@@ -23,6 +24,8 @@ class TagUpdate(Contract):
     metadata: dict | None = None
     markdown: str | None = None
     owner: str | None = None
+    # Bots allowed to attach and remove this tag on any task they can read; a task mover sets it, [] revokes.
+    bot_writers: list[str] | None = Field(default=None, max_length=50)
 
 
 def install(app, store, auth, mutate, task_views):
