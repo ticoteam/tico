@@ -1,7 +1,8 @@
 //! The page as text for a bot (`read`): `outline.js` walks the DOM in the runner's isolated world and returns the
 //! page as items (text, headings, elements, frames); this file writes them as lines. An element line is
-//! `[e12] textbox "Email" (email, required) placeholder "you@example.com" = "ops@acme.example"`; the ref stays valid
-//! until the next read or navigation.
+//! `[e12] textbox "Email" (email, required) placeholder "you@example.com" = "ops@acme.example"`, a link's
+//! `[e3] link "2:54 PM" -> https://acme.slack.com/archives/C1/p1700000000` (no query or fragment); the ref stays
+//! valid until the next read or navigation.
 
 use serde_json::Value;
 
@@ -33,6 +34,10 @@ fn line(item: &Value) -> Option<String> {
             if !name.is_empty() {
                 out.push(' ');
                 out.push_str(&quoted(&name));
+            }
+            let to = text_of(&item["to"]);
+            if !to.is_empty() {
+                out.push_str(&format!(" -> {to}"));
             }
             let states: Vec<String> = item["st"]
                 .as_array()
@@ -128,7 +133,7 @@ mod tests {
             {"k": "e", "r": 4, "role": "select", "name": "State", "v": "CA", "opts": ["AL", "CA"], "more": 48},
             {"k": "e", "r": 5, "role": "button", "name": "Sign in", "st": ["disabled"]},
             {"k": "t", "s": "Welcome back."},
-            {"k": "e", "r": 6, "role": "link", "name": "Forgot \"password\"?"},
+            {"k": "e", "r": 6, "role": "link", "name": "Forgot \"password\"?", "to": "https://acme.example/reset"},
             {"k": "f", "host": "challenges.cloudflare.com"},
             {"k": "x", "s": "an item from a newer script"}
         ]})
@@ -149,7 +154,7 @@ mod tests {
                 "[e4] select \"State\" = \"CA\" options: \"AL\", \"CA\" (+48 more)",
                 "[e5] button \"Sign in\" (disabled)",
                 "Welcome back.",
-                "[e6] link \"Forgot \\\"password\\\"?\"",
+                "[e6] link \"Forgot \\\"password\\\"?\" -> https://acme.example/reset",
                 "[frame] challenges.cloudflare.com",
             ]
             .join("\n")
@@ -196,5 +201,7 @@ mod tests {
         }
         // A password field's value is never put in an item: only whether it holds one.
         assert!(SCRIPT.contains("if (c.value) st.push('filled')"));
+        // A link's address drops its query and fragment, which may carry a token.
+        assert!(SCRIPT.contains("clip(u.origin + u.pathname, 200)"));
     }
 }
