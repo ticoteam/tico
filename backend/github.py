@@ -1062,6 +1062,57 @@ def _overall(checks, suite_runs=None):
     )
 
 
+def _merge_gate(checks):
+    """Where Tico's own `tico/merge-ok` gate stands on a head, kept on the link (`merge_gate`) so the task's PR line can
+    show it on its own, never as a CI result (#426): "waiting" while it is red (the task has not reached Merge),
+    "signed_off" once the Merge stage queued the head, "none" when the head has no gate run."""
+    from .item_sources.github import MERGE_OK
+
+    state = checks.get(MERGE_OK)
+    return "signed_off" if state == "passing" else "waiting" if state in ("failing", "pending") else "none"
+
+
+RECOMPUTED_KEY = "github-checks-recomputed-v1"
+
+
+def recompute_stored_checks(c: Any) -> int | None:
+    """Once per install: each open pull request link's checks state rebuilt from its own stored copy, as `_overall`
+    reads it now. A link read "failing" before Tico's gate was left out of the state (#395) keeps it until GitHub
+    sends news of its head, and a failed link with no pending check is never read again (`refresh_pending_checks`),
+    so such a link stayed "failing" with every real check passed (#426). The company App's suites count as the gate's
+    (it posts only `tico/merge-ok`), as `pr_signal` keys them. Writes the state and the gate only: no wake, no event,
+    no "Checks finished". Returns how many links changed, or None when it had run already."""
+    from . import repositories as R
+    from .item_sources.github import MERGE_OK
+
+    if R.metadata(c, RECOMPUTED_KEY):
+        return None
+    app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
+    own = "suite:" + str(app["slug"]).lower() + "#" if app and app["slug"] else None
+    changed = 0
+    for link in H._rows(
+        c.execute("SELECT id,checks,detail FROM task_links WHERE kind='pr' AND state IN ('open','draft')")
+    ):
+        detail = H._json(link.get("detail"), {}) or {}
+        checks = detail.get("checks")
+        if not isinstance(checks, dict) or not checks:
+            continue
+        suite_runs = dict(detail.get(SUITE_RUNS) or {})
+        for key in checks:
+            if own and key.lower().startswith(own) and key not in suite_runs:
+                suite_runs[key] = [MERGE_OK]
+        state = _with_dropped(_overall(checks, suite_runs), detail.get("checks_dropped"))
+        gate = _merge_gate(checks)
+        if state == link.get("checks") and detail.get("merge_gate") == gate:
+            continue
+        detail["merge_gate"] = gate
+        _set_suite_runs(detail, suite_runs)
+        c.execute("UPDATE task_links SET checks=?,detail=? WHERE id=?", (state, json.dumps(detail), link["id"]))
+        changed += 1
+    R.save_metadata(c, RECOMPUTED_KEY, {"at": H.now(), "changed": changed})
+    return changed
+
+
 CHECKS_KEPT = 100
 
 
@@ -1340,10 +1391,12 @@ def apply_checks(c, link_id, head, checks, since=None):
         and detail.get("checks_dropped") == dropped
         and bool(detail.get(DROPPED_PENDING)) == dropped_pending
         and (detail.get(SUITE_RUNS) or {}) == suite_runs
+        and detail.get("merge_gate") == _merge_gate(checks)
         and not held
     ):
         return state
     detail["checks"] = kept
+    detail["merge_gate"] = _merge_gate(checks)
     _set_suite_runs(detail, suite_runs)
     _set_dropped(detail, dropped, dropped_pending)
     changed = state != link.get("checks")
@@ -1448,6 +1501,7 @@ def pr_signal(c, event, payload):
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
             pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
+            detail["merge_gate"] = _merge_gate(checks)
             _set_dropped(detail, dropped, pending)
             _set_suite_runs(detail, suite_runs)
             fields["checks"] = _with_dropped(_overall(checks, suite_runs), dropped)

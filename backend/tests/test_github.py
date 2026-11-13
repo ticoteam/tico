@@ -695,6 +695,65 @@ def test_ticos_own_merge_gate_is_not_a_ci_check(api):
         assert G.apply_checks(c, link['id'], 'a' * 40, read) == 'passing'
 
 
+def _detail(link):
+    return link['detail'] if isinstance(link['detail'], dict) else json.loads(link['detail'] or '{}')
+
+
+def test_the_merge_gate_is_kept_on_the_link_apart_from_the_checks(api):
+    """#426: the task's PR line shows Tico's gate as its own grey chip, so the link keeps where the gate stands:
+    waiting while it is red (not queued by Tico), signed off once the Merge stage passed it, none before it ran."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gate on the link', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _run(api, 'python', 1, 'completed', 'success', suite_status='completed')
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert _detail(link)['merge_gate'] == 'none'
+    _merge_ok(api, 'failure')
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert (link['checks'], _detail(link)['merge_gate']) == ('passing', 'waiting')
+    _merge_ok(api, 'success', suite=10)
+    assert _detail(get(api, 'tasks/' + task['id'] + '/links')['links'][0])['merge_gate'] == 'signed_off'
+
+
+def test_links_left_failing_only_for_the_gate_are_recomputed_once_and_wake_nobody(api):
+    """Nov 13 on rc.30: three open PRs still read "failing" after the gate was left out of the state: every real check
+    passed, only `tico/merge-ok` and the company App's suite were red, and a failed link with no pending check is never
+    read again. One pass rebuilds each open link's state from its stored copy, the App's suite counted as the gate's
+    even with no run names stored; a real failure stays failing; nothing is woken, and it runs once."""
+    _app(api)
+    gate_only = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gate only', 'body': 'x', 'links': [PR]})
+    real = post(
+        api, 'tasks', {'owner': 'cpo', 'title': 'Real failure', 'body': 'x', 'links': [PR.replace('412', '413')]}
+    )
+    stored = {
+        gate_only['id']: {
+            'python': 'passing',
+            'suite:github-actions#1': 'passing',
+            'tico/merge-ok': 'failing',
+            'suite:example-app#9': 'failing',
+        },
+        real['id']: {
+            'python': 'failing',
+            'suite:github-actions#1': 'failing',
+            'tico/merge-ok': 'failing',
+            'suite:example-app#9': 'failing',
+        },
+    }
+    with api.app.state.store.transaction() as c:
+        for task_id, checks in stored.items():
+            c.execute(
+                "UPDATE task_links SET state='open',checks='failing',detail=? WHERE task_id=? AND kind='pr'",
+                (json.dumps({'head_sha': 'a' * 40, 'checks': checks}), task_id),
+            )
+        assert G.recompute_stored_checks(c) == 2
+        assert G.recompute_stored_checks(c) is None
+    gate_link = get(api, 'tasks/' + gate_only['id'] + '/links')['links'][0]
+    real_link = get(api, 'tasks/' + real['id'] + '/links')['links'][0]
+    assert (gate_link['checks'], _detail(gate_link)['merge_gate']) == ('passing', 'waiting')
+    assert (real_link['checks'], _detail(real_link)['merge_gate']) == ('failing', 'waiting')
+    assert _burst(api, gate_only['id']) == [] and _burst(api, real['id']) == []
+
+
 def test_a_queued_gate_suite_does_not_hold_a_green_head_unfinished(api):
     """GitHub queues a suite of the company App on every head, and it never runs unless the Merge stage posts the
     gate. Left out of the state, it must be left out of "still going" too, or a green head reads passing but never

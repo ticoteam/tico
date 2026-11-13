@@ -160,6 +160,7 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     github_app = ctx.app.state.github_app
     from .github import (
         flush_wakes,
+        recompute_stored_checks,
         reconcile_worktree_prs,
         refresh_deployed_tasks,
         refresh_conflicts,
@@ -169,6 +170,9 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
 
     with ctx.store.transaction() as c:
         flush_wakes(c)
+    # Once: links that read "failing" only for Tico's own gate, from before it was left out, are read again (#426).
+    with ctx.store.transaction() as c:
+        recompute_stored_checks(c)
     refresh_deployed_tasks(github_app)
     # Checks pending with no word from GitHub are read afresh: a suite that never starts sends none (Dev 646).
     refresh_pending_checks(github_app)

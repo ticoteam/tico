@@ -100,6 +100,10 @@ function taskPRChips(l: CodeLink): string {
   if (l.checks === 'passing') out.push(chip('✓', 'ok', 'Checks passing'));
   else if (l.checks === 'failing') out.push(chip('✕', 'fail', 'Checks failing'));
   else if (l.checks === 'pending') out.push(chip('checks running'));
+  // Tico's own tico/merge-ok gate is not CI (backend/github.py `_merge_gate`): grey, never red, whatever its colour on GitHub.
+  const gate = taskLinkDetail(l).merge_gate;
+  if (gate === 'waiting') out.push(chip('merge gate: waits for Merge', '', 'Tico signs it off when the task reaches Merge'));
+  else if (gate === 'signed_off') out.push(chip('merge gate: signed off', '', 'Tico queued this pull request'));
   if (l.mergeable === 'conflict') out.push(chip('conflict', 'fail', 'Merge conflict'));
   if (l.review_state === 'changes_requested') out.push(chip('changes requested', 'waiting'));
   else if (l.review_state === 'approved') out.push(chip('approved', 'ok'));
