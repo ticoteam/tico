@@ -9,6 +9,7 @@ declare function giveToEntries(selected?: string): {value: string; actor: string
 declare function giveToMatch(q: string, entries: unknown[]): {name: {name: string}[]; role: {name: string}[]};
 declare function giveToSuggest(entries: unknown[], task: unknown, recent: string[]): {entry: {name: string}; why: string}[];
 declare function openTaskCreate(owner?: string, opts?: Record<string, unknown>): void;
+declare function decideOpen(id?: string, items?: unknown[]): boolean;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {open} = require('./task-code.cts') as {open: (browser: Browser, opts?: Record<string, unknown>) => Promise<{page: Page; errors: string[]; data: {tasks: Record<string, unknown>[]}}>};
@@ -164,8 +165,52 @@ async function phone(browser: Browser): Promise<void> {
   console.log('give-to: phone ok');
 }
 
+// Needs you (decide.ts): Give to… on a task of yours. Suggested is who asked and the bots the title names; the current
+// owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give sends the pick.
+async function needsYou(browser: Browser): Promise<void> {
+  const {page, errors} = await open(browser, {viewport: {width: 1440, height: 900}, at: '#/tasks'});
+  await roster(page);
+  await page.evaluate(() => localStorage.clear());
+  const now = new Date().toISOString();
+  const brief = {id: 't-ny', number: 7, title: 'Ask BotOps about the stuck run', status: 'open', owner_id: 'bot:eng', requester_id: 'human:sam',
+    assignee_id: null, due_at: null, late: null, on_person: false, pipeline_id: null, pushed_past: false, snoozed: false, stage_id: null,
+    stage_since: null, turn: null, version: 2};
+  const item = {id: 't-ny', kind: 'task', line: 'Ask BotOps about the stuck run', since: now, task: brief, task_id: 't-ny'};
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [item]}}));
+  const sent: unknown[] = [];
+  await page.route('**/api/v2/tasks/t-ny/owner', route => { sent.push(route.request().postDataJSON()); return route.fulfill({json: {task: {...brief, owner_id: 'bot:b-botops', version: 3}}}); });
+  assert.equal(await page.evaluate(i => decideOpen('t-ny', [i]), item), true);
+  await page.locator('.decide [data-dc="give"]').click();
+  const field = page.locator('.decide button[data-give-to]'), give = page.locator('.decide [data-dc="give-to"]');
+  assert.equal(await field.locator('.gt-name').textContent(), 'Give to…');
+  assert.equal(await give.isDisabled(), true, 'nothing chosen yet');
+  await field.click();
+  const pop = page.locator('.gt-pop:popover-open');
+  await pop.waitFor();
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gt-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gt-name')?.textContent}: ${r.querySelector('.gt-why')?.textContent}`)),
+    ['Sam: Asked for it', 'BotOps: Named in the task']);
+  assert.deepEqual(await pop.locator('[aria-checked=true] .gt-name').allTextContents(), ['Engineer'], 'the current owner shows ✓');
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
+  assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-give-to')), true, 'focus back on the field');
+  assert.equal(await page.locator('.decide').isVisible(), true, 'Esc closes only the picker');
+  assert.equal(await give.isDisabled(), true, 'the ✓ did not choose anyone');
+  await field.click();
+  await pop.waitFor();
+  await page.keyboard.type('ops');
+  await page.keyboard.press('Enter');
+  await pop.waitFor({state: 'detached'});
+  assert.equal(await give.isDisabled(), false);
+  await give.click();
+  for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(100);
+  assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['b-botops'], 'Give sends the value the old list sent');
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('give-to: needs you ok');
+}
+
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
-  try { await desktop(browser); await phone(browser); }
+  try { await desktop(browser); await phone(browser); await needsYou(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

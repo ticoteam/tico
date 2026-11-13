@@ -762,7 +762,7 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   if (st.more === 'snooze')
     return `<div class="dc-more">${decideBtn('snooze-1', 'Tomorrow', false, busy)}${decideBtn('snooze-7', 'Next week', false, busy)}</div>`;
   if (st.more === 'give')
-    return `<div class="dc-more">${giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task})}${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
+    return `<div class="dc-more">${giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task, current: it.task?.owner_id})}${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
   if (st.more === 'back') {
     const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.id === it.task?.pipeline_id);
     const at = p ? p.stages.findIndex(s => s.id === it.task?.stage_id) : -1;
@@ -783,7 +783,7 @@ function decideSheetHTML(st: DecState, it: NeedsEntry): string {
   const chips = DEC_CHIPS.map(([k, label]) => `<button type="button" class="dc-chip" data-dc-chip="${k}" aria-pressed="${sh.chip === k}"${busy}>${esc(label)}</button>`).join('');
   const give = sh.chip === 'person';
   return `<div class="dc-chips">${chips}</div><textarea id="dc-why" data-dc-note rows="3" maxlength="4000" aria-label="What was wrong">${esc(sh.note)}</textarea>
-    ${give ? giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task}) : ''}
+    ${give ? giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task, current: it.task?.owner_id}) : ''}
     <div class="dc-acts">${give ? decideBtn('why-give', 'Give to…', true, ' data-dc-needs="#dc-to" disabled')
       : decideBtn('why-back', 'Send back', true, busy)}${feedbackRuleOn(it) ? decideBtn('why-rule', 'Make a rule', false, busy) : ''}</div>`;
 }

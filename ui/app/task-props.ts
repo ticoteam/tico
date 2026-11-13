@@ -392,7 +392,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     } else if (key === 'people') {
       // First the role (one already on the task, or a new name), then the person or bot.
       const pick = (role: string): void => {
-        giveToOpen(b, {label: 'Add as ' + roleWord(role), task, exclude: (task.roles || {})[role] || [],
+        giveToOpen(b, {label: 'Add as ' + roleWord(role), task, exclude: (task.roles || {})[role] || [], none: 'Everyone is on it',
           onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.actor]}}))});
       };
       propMenu(d, b, {label: 'Role', entry: 'Role, like reviewer', none: 'Type a role, then Enter',

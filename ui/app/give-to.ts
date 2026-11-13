@@ -20,8 +20,12 @@ interface GiveToOptions {
   task?: GiveToTask | null;
   /** The one chosen now (a value or an actor): its row shows ✓. */
   selected?: string;
+  /** Who holds it now, when that is not the field's choice (Reassign in Needs you): its row shows ✓ too. */
+  current?: string | null | undefined;
   /** Actors not offered (already on the task in that role). */
   exclude?: Iterable<string>;
+  /** Shown when everyone is left out by `exclude`. */
+  none?: string;
   onPick: (entry: GiveToEntry) => unknown;
 }
 interface GiveToSuggestion { entry: GiveToEntry; why: string; }
@@ -34,6 +38,8 @@ interface GiveToFieldOptions {
   label?: string;
   placeholder?: string;
   selected?: string;
+  /** Who holds it now: ✓ in the list, without choosing them (Give stays off until a pick). */
+  current?: string | null | undefined;
   task?: GiveToTask | null | undefined;
 }
 
@@ -154,7 +160,7 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   const status = pop.querySelector<HTMLElement>('.gt-status')!;
   let rows: GiveToEntry[] = [], at = -1;
   const row = (e: GiveToEntry, why: string, byRole: boolean): string => {
-    const i = rows.push(e) - 1, on = giveToIs(e, opts.selected);
+    const i = rows.push(e) - 1, on = giveToIs(e, opts.selected) || giveToIs(e, opts.current);
     return `<div role="option" id="${listId}-${i}" class="gt-row${byRole ? ' by-role' : ''}" data-i="${i}" data-give-pick="${esc(e.value)}" aria-selected="false"${on ? ' aria-checked="true"' : ''}${e.role ? ` title="${esc(e.role)}"` : ''}>`
       + `<span class="gt-face" aria-hidden="true">${actorFace(e.actor, 20)}</span><span class="gt-name">${esc(e.name)}</span>`
       + `${e.role ? `<span class="gt-role">${esc(e.role)}</span>` : ''}${why ? `<span class="gt-why">${esc(why)}</span>` : ''}${on ? '<span class="gt-on" aria-hidden="true">✓</span>' : ''}</div>`;
@@ -175,7 +181,7 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
     if (!q) {
       const sug = giveToSuggest(all, opts.task, giveToRecent());
       list.innerHTML = group('suggested', sug.map(s => row(s.entry, s.why, false)).join('')) + group('everyone', all.map(e => row(e, '', false)).join(''));
-      status.textContent = '';
+      status.textContent = all.length ? '' : opts.none || 'Nobody to pick';
     } else {
       const found = giveToMatch(q, all);
       list.innerHTML = found.name.map(e => row(e, '', false)).join('') + found.role.map(e => row(e, '', true)).join('');
@@ -194,6 +200,8 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   pop.addEventListener('keydown', ev => {
     if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); light(at < 0 ? 0 : at + (ev.key === 'ArrowDown' ? 1 : -1)); }
     else if (ev.key === 'Enter' && ev.target === input) { ev.preventDefault(); pick(rows[at]); }
+    // popover="auto" closes on Esc by itself; closing here as well keeps it closing even if the stopPropagation below,
+    // which keeps Esc from also cancelling Needs you's dialog, is ever moved.
     else if (ev.key === 'Escape') { ev.preventDefault(); pop.hidePopover(); }
     ev.stopPropagation();   // the screen's own keys (← →, j k, Esc on the dialog) wait until the picker closes
   });
@@ -204,6 +212,13 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
     if (r) pick(rows[Number(r.dataset.i)]);
   });
   pop.addEventListener('mousedown', ev => { if (ev.target instanceof Element && ev.target.closest('.gt-row')) ev.preventDefault(); });   // the search box keeps focus
+  function place(): void {
+    if (matchMedia('(max-width:760px)').matches) { pop.style.top = pop.style.left = ''; return; }
+    const a = anchor.getBoundingClientRect();
+    const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
+    pop.style.top = `${Math.max(8, below ? a.bottom + 4 : a.top - pop.offsetHeight - 4)}px`;
+    pop.style.left = `${Math.max(8, Math.min(a.left, innerWidth - pop.offsetWidth - 8))}px`;
+  }
   // A press on the button while the picker is open closes it (light dismiss); the click that follows must not open it
   // again. Esc and a pick do not count.
   const press = () => { if (pop.matches(':popover-open')) anchor.dataset.gtClosed = String(Date.now()); };
@@ -211,18 +226,15 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   pop.addEventListener('toggle', ev => {
     if ((ev as ToggleEvent).newState !== 'closed') return;
     anchor.removeEventListener('pointerdown', press, {capture: true});
+    removeEventListener('resize', place);
     anchor.setAttribute('aria-expanded', 'false');
     if (anchor.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
     pop.remove();
   });
   paint();
   pop.showPopover();
-  if (!matchMedia('(max-width:760px)').matches) {
-    const a = anchor.getBoundingClientRect();
-    const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
-    pop.style.top = `${Math.max(8, below ? a.bottom + 4 : a.top - pop.offsetHeight - 4)}px`;
-    pop.style.left = `${Math.max(8, Math.min(a.left, innerWidth - pop.offsetWidth - 8))}px`;
-  }
+  place();
+  addEventListener('resize', place);   // under its button again when the window changes size (a phone width is the sheet)
   anchor.setAttribute('aria-expanded', 'true');
   input.focus();
   return pop;
@@ -237,13 +249,13 @@ function giveToButtonInner(e: GiveToEntry | undefined, placeholder: string): str
 }
 /** The field in place of a native list. Closed with nothing chosen it reads the placeholder in muted text (no ✓);
     after a pick, the name. A pick sets the hidden input and fires its input and change events. */
-function giveToFieldHTML({name = '', id = '', attrs = '', label = 'Give to', placeholder = 'Give to…', selected = '', task = null}: GiveToFieldOptions = {}): string {
+function giveToFieldHTML({name = '', id = '', attrs = '', label = 'Give to', placeholder = 'Give to…', selected = '', current = '', task = null}: GiveToFieldOptions = {}): string {
   const key = String(++GIVE_TO_SEQ);
   GIVE_TO_TASKS.set(key, task);
   if (GIVE_TO_TASKS.size > 50) GIVE_TO_TASKS.delete(GIVE_TO_TASKS.keys().next().value!);
   const cur = selected ? giveToEntries(selected).find(e => giveToIs(e, selected)) : undefined;
   return `<span class="gt-field"><input type="hidden"${name ? ` name="${esc(name)}"` : ''}${id ? ` id="${esc(id)}"` : ''}${attrs ? ' ' + attrs : ''} value="${esc(cur?.value || '')}">`
-    + `<button type="button" class="gt-btn${cur ? '' : ' empty'}" data-give-to="${key}" data-give-label="${esc(label)}" data-give-placeholder="${esc(placeholder)}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(label)}: ${esc(cur?.name || 'nobody chosen')}">${giveToButtonInner(cur, placeholder)}</button></span>`;
+    + `<button type="button" class="gt-btn${cur ? '' : ' empty'}" data-give-to="${key}" data-give-label="${esc(label)}" data-give-placeholder="${esc(placeholder)}"${current ? ` data-give-current="${esc(current)}"` : ''} aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(label)}: ${esc(cur?.name || 'nobody chosen')}">${giveToButtonInner(cur, placeholder)}</button></span>`;
 }
 function giveToFieldSet(btn: HTMLButtonElement, e: GiveToEntry): void {
   const input = giveToInput(btn);
@@ -258,7 +270,7 @@ function giveToFieldSet(btn: HTMLButtonElement, e: GiveToEntry): void {
 /** Opens a field's picker, as a click on it does (a form that is sent with nobody chosen). */
 function giveToFieldOpen(btn: HTMLButtonElement): void {
   const input = giveToInput(btn);
-  giveToOpen(btn, {label: btn.dataset.giveLabel || 'Give to', task: GIVE_TO_TASKS.get(btn.dataset.giveTo || '') || null, selected: input?.value || '', onPick: e => giveToFieldSet(btn, e)});
+  giveToOpen(btn, {label: btn.dataset.giveLabel || 'Give to', task: GIVE_TO_TASKS.get(btn.dataset.giveTo || '') || null, selected: input?.value || '', current: btn.dataset.giveCurrent, onPick: e => giveToFieldSet(btn, e)});
 }
 /** The click whose press closed the picker does not open it again (once, and only soon after that press). */
 function giveToJustClosed(anchor: HTMLElement): boolean {
