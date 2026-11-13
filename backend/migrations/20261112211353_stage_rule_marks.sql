@@ -1,7 +1,8 @@
 -- What a stage rule's timer (backend/stage_rule_timers.py) found for one task: one row per rule, task and mark (the
 -- visit and the moment its timer started from), so a timer is judged once per mark and acts once. `outcome` is
--- `no` (its If did not match), `late` (already listed as Late), `pending` (a Tell the manager not sent yet),
--- `told`, `moved` or `failed`. `manager_id` and `told_at` batch a manager's tells: one wake an hour at most.
+-- `no` (its If did not match), `late` (already listed as Late), `no_manager` (no manager to tell, or the manager owns
+-- it), `pending` (a Tell the manager not sent yet), `told`, `dropped` (the task ended before the wake) or `failed`
+-- (the manager could not be woken). `manager_id` and `told_at` batch a manager's tells: one wake an hour at most.
 CREATE TABLE IF NOT EXISTS stage_rule_marks (
   rule_id TEXT NOT NULL,
   task_id TEXT NOT NULL,

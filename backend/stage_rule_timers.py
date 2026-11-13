@@ -69,12 +69,14 @@ BATCH_HOURS = 1  # a manager's Stage rules wake: one an hour at most
 LISTED = 30  # tasks named in one wake; the rest are counted
 SYSTEM = "system"
 
-# Open work tasks the pass works on: not snoozed, not in a by-hand stage. `active_at` is the last activity.
+# Open work tasks the pass works on: not snoozed, not in a by-hand stage. `active_at` is the last activity; the end of a
+# snooze counts, so a task set aside is not quiet the moment its snooze ends and its owner is woken.
 _TASKS = (
     "SELECT t.id, t.title, t.number, t.owner_id, t.pipeline_id, t.stage_id, t.conversation_id, "
     "v.id AS visit_id, v.entered_at, v.late_told_at, s.name AS stage_name, "
     "MAX(v.entered_at, COALESCE(v.last_change_at, ''), COALESCE((SELECT MAX(m.created_at) FROM messages m "
-    "WHERE m.conversation_id = t.conversation_id AND m.sender_id <> 'keeper'), '')) AS active_at "
+    "WHERE m.conversation_id = t.conversation_id AND m.sender_id <> 'keeper'), ''), "
+    "COALESCE((SELECT MAX(z.ended_at) FROM snoozes z WHERE z.visit_id = v.id), '')) AS active_at "
     "FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status = 'open' AND s.kind = 'work' AND s.by_hand = 0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL)"
@@ -260,11 +262,14 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str) -> None:
 
 
 def _manager(conn: Any, task: Row) -> str | None:
-    """The pipeline's manager, when it may read the task."""
+    """The pipeline's manager, when it may read the task and is not its owner: a manager is not told about its own
+    task, as the engine's own tells to the manager skip it (task_engine._tell_manager)."""
     found = conn.execute("SELECT manager_id FROM pipelines WHERE id=?", (task["pipeline_id"],)).fetchone()
     manager: str | None = found[0] if found else None
+    if not manager or manager == task.get("owner_id"):
+        return None
     row = H.task(conn, task["id"])
-    return manager if manager and row and H.task_private_readable(conn, manager, row) else None
+    return manager if row and H.task_private_readable(conn, manager, row) else None
 
 
 # ----------------------------------------------------------------------------- the managers' wakes
@@ -304,10 +309,6 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
         "WHERE k.outcome='pending' AND k.manager_id=? ORDER BY k.matched_at, t.number, k.task_id",
         (manager,),
     ).fetchall()
-    conn.executemany(
-        "UPDATE stage_rule_marks SET outcome='told', told_at=? WHERE rule_id=? AND task_id=? AND mark=?",
-        [(at, rule_id, task_id, mark) for rule_id, task_id, mark in pending],
-    )
     listed: list[tuple[Row, Row]] = []
     for rule_id, task_id, _mark in pending:
         row: Row | None = H.task(conn, task_id)
@@ -322,6 +323,7 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
             continue
         listed.append((row, rule))
     if not listed:
+        _settle(conn, pending, "dropped", None)  # every task ended or can no longer be read by this manager
         return False
     n = len(listed)
     body = [f"Stage rules: {n} task{'' if n == 1 else 's'}."]
@@ -336,7 +338,19 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
     else:
         conv = H._pair_conversation(conn, H.KEEPER, manager, "notice", allow_held=True)
         ok = bool(H._write_message(conn, H.KEEPER, manager, text, conv, "notice", refs, None, None))
+    if not ok:
+        # The manager cannot be told (archived, gone): nothing says it was, and its next match tries again.
+        _settle(conn, pending, "failed", None)
+        return False
+    _settle(conn, pending, "told", at)
     name = str(H.actor_name(conn, manager))
     for row, rule in listed:
         SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.KEEPER, "told", {"to": manager})
-    return bool(ok)
+    return True
+
+
+def _settle(conn: Any, pending: list[Any], outcome: str, told_at: str | None) -> None:
+    conn.executemany(
+        "UPDATE stage_rule_marks SET outcome=?, told_at=? WHERE rule_id=? AND task_id=? AND mark=?",
+        [(outcome, told_at, rule_id, task_id, mark) for rule_id, task_id, mark in pending],
+    )

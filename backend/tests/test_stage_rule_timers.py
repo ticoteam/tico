@@ -212,3 +212,67 @@ def test_move_back_puts_the_task_in_on_deck_with_no_owner_tells_the_manager_and_
     assert who == "bot:lead" and _title(c, task_id) in body
     assert _ran(c, task_id) == 1  # and not on the rule's move
     assert c.execute("SELECT count(*) FROM events WHERE action='stage_rule.moved_back'").fetchone()[0] == 1
+
+
+def test_a_snooze_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machine):
+    task_id = _task(c, "eng", "Build", "bot:builder", "Snoozed one")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=1))
+    until = H.shift(H.now(), hours=24)
+    E.snooze(c, task_id, "bot:builder", "waiting for the v0.6.0 release", until, H.task(c, task_id)["version"])
+    time_machine.shift(timedelta(hours=24, minutes=1))
+    NS.check(c)  # the snooze's date came: it ends and the owner is woken
+    NS.check(c)
+    assert _told(c) == []  # the bot was just woken to pick it up: not quiet
+    time_machine.shift(timedelta(hours=6))
+    NS.check(c)
+    assert len(_told(c)) == 1
+
+
+def test_a_manager_who_cannot_be_woken_is_not_said_to_be_told(c, time_machine):
+    task_id = _task(c, "eng", "Build", "bot:builder", "Nobody hears")
+    c.execute("UPDATE bots SET state='archived' WHERE slug='lead'")
+    time_machine.shift(timedelta(hours=6))
+    T.sweep(c)
+    assert _told(c) == []
+    notes = [
+        r[0] for r in c.execute("SELECT note FROM history_events WHERE subject_id=? AND kind='stage_rule'", (task_id,))
+    ]
+    assert not any("was told" in n for n in notes)
+    assert c.execute("SELECT count(*) FROM events WHERE action='stage_rule.told'").fetchone()[0] == 0
+
+
+def test_a_quiet_task_the_manager_owns_is_not_reported_to_that_manager(c, time_machine):
+    _task(c, "eng", "Build", "bot:lead", "The manager's own")
+    time_machine.shift(timedelta(hours=6))
+    T.sweep(c)
+    assert _told(c) == []
+
+
+def test_waiting_on_a_person_tells_the_owner_once(c, time_machine):
+    c.execute("UPDATE stage_rules SET retired_at=? WHERE id=?", (H.now(), SR.QUIET_BOT_TASKS))  # this rule alone
+    _rule(
+        c,
+        name="Chase the OK",
+        pipeline_id="eng",
+        stages=["eng-review"],
+        timer={"kind": "waiting_person", "hours": 2},
+        then="tell_owner",
+    )
+    waiting = _task(c, "eng", "Review", "bot:builder", "Waits on Ana")
+    working = _task(c, "eng", "Build", "bot:builder", "Bot's own work")  # waits on no person: no timer
+    X.settled(c)
+    time_machine.shift(timedelta(hours=1, minutes=59))
+    assert T.sweep(c)["told"] == 0
+    time_machine.shift(timedelta(minutes=1))
+    assert T.sweep(c)["told"] == 1
+    told = c.execute(
+        "SELECT body FROM messages WHERE recipient_id='bot:builder' AND wake_key LIKE ?", (f"{waiting}:%:stage_rule:%",)
+    ).fetchall()
+    assert len(told) == 1 and "Rule Chase the OK" in told[0][0]
+    assert (
+        c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (f"{working}:%:stage_rule:%",)).fetchone()[0]
+        == 0
+    )
+    time_machine.shift(timedelta(hours=1))
+    assert T.sweep(c)["told"] == 0  # the same wait is told once
