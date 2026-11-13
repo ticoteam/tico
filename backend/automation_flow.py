@@ -10,6 +10,7 @@ import re._parser as _sre
 
 from clients import judge as J
 from backend import templating
+from backend.providers import COMPACT_SIZES
 
 TRIGGERS = {
     "message": ("inbox",),
@@ -480,6 +481,13 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
         for key in ("model", "effort", "harness"):
             if step.get(key) is not None:
                 _need(isinstance(step[key], str) and 0 < len(step[key]) <= 200, where, f"{key} is a name")
+        # Where its task's runs compact, from the twelve sizes (backend/providers.py COMPACT_SIZES); none is the bot's.
+        if step.get("compact_at") is not None:
+            _need(
+                type(step["compact_at"]) is int and step["compact_at"] in COMPACT_SIZES,
+                where,
+                "compact_at is one of " + ", ".join(str(size) for size in COMPACT_SIZES),
+            )
     elif kind == "action":
         check_action({"do": step.get("do"), "args": step.get("args", {})}, where)
     elif kind == "paths":

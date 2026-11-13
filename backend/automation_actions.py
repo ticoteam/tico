@@ -695,7 +695,12 @@ def start_turn(
             c,
             actor,
             task["id"],
-            task_run_models.stamped(run_model["model"], run_model.get("effort"), run_model.get("harness")),
+            task_run_models.stamped(
+                run_model.get("model") or "",
+                run_model.get("effort"),
+                run_model.get("harness"),
+                run_model.get("compact_at"),
+            ),
             note=f"Set by routine step {step_id}",
         )
     # The wake names its task; the turn's end finds the run by it (backend/automations.py `turn_done`).

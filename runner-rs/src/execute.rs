@@ -3017,7 +3017,7 @@ impl Runner {
                     effort: hop.reasoning_effort.clone(),
                     env: hop_env.clone(),
                     slug: bot.clone(),
-                    compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
+                    compact_at: crate::fallback::compact_at(&config, &hop),
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
                     company_skills: company_skills.as_ref().map(|d| d.display().to_string()),

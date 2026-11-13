@@ -180,6 +180,12 @@ Version = Annotated[int, Field(strict=True, ge=0)]
 Why = Annotated[str, Field(min_length=1, max_length=20_000)]
 
 
+# Where a bot's conversation compacts, in tokens: the twelve sizes offered (backend/providers.py COMPACT_SIZES).
+CompactAt = Literal[
+    100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
+]
+
+
 class TaskCreate(Contract):
     live_meeting_id: ID | None = None
     visibility: Literal['public', 'private'] | None = None
@@ -219,6 +225,8 @@ class TaskCreate(Contract):
     model: ID | None = None
     effort: ID | None = None
     harness: ID | None = None
+    # Where its runs compact; none is the bot's (backend/task_run_models.py). It needs no model: alone it keeps the bot's.
+    compact_at: CompactAt | None = None
     # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
     from_private: StrictBool = False
 
@@ -239,6 +247,9 @@ class TaskRunModel(Contract):
     model: ID | None = Field(None, description="The model the task's runs use; null clears the task's choice")
     effort: ID | None = None
     harness: ID | None = None
+    compact_at: CompactAt | None = Field(
+        None, description="Where its runs compact, in tokens (one of the twelve sizes); null is the bot's again"
+    )
 
 
 class NoteCreate(Contract):
@@ -2060,6 +2071,8 @@ class BotFallbackChoice(Contract):
     harness: ID
     model: ID
     effort: ID | None = None
+    # Where it compacts while on the fallback; none is "Same as bot", lowered to fit its model (providers.with_compact_default).
+    compact_at: CompactAt | None = None
 
 
 class BotFallback(Contract):
@@ -2085,12 +2098,6 @@ class BotManagesReports(Contract):
 
     manages_reports: StrictBool
     expected_revision: int = Field(ge=1)
-
-
-# Where a bot's conversation compacts, in tokens: the twelve sizes offered (backend/providers.py COMPACT_SIZES).
-CompactAt = Literal[
-    100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
-]
 
 
 class BotTaskChoice(Contract):

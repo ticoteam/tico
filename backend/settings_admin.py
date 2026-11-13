@@ -2014,9 +2014,11 @@ class SettingsAdmin:
             if isinstance(choice_body, dict):
                 model_id, harness_id = choice_body.get("model"), choice_body.get("harness")
                 effort_id = choice_body.get("effort") or choice_body.get("reasoning_effort")
+                compact = choice_body.get("compact_at")
             else:
                 model_id, harness_id = choice_body.model, choice_body.harness
                 effort_id = getattr(choice_body, "effort", None) or getattr(choice_body, "reasoning_effort", None)
+                compact = getattr(choice_body, "compact_at", None)
             if not HARNESS_BY_ID.get(harness_id):
                 raise Problem("harness", "Choose one of the supported harnesses", 422)
             choice = self.models.get(model_id)
@@ -2031,6 +2033,9 @@ class SettingsAdmin:
                 "reasoning_effort": effort,
                 "runtime": runtime_of(harness),
             }
+            if compact:
+                # Its own window while on the fallback; none is "Same as bot" (providers.with_compact_default).
+                target["compact_at"] = compact
         before = self.snapshot(c, bot, "fallback")
         if before == target:
             raise Problem("unchanged", "That fallback is already selected", 409)
@@ -2169,23 +2174,43 @@ class SettingsAdmin:
         bot = H.actor_id(row["owner_id"])
         what = f"change the model task {task_id} runs on"
         current = task_run_models.of(c, task_id)
-        if "model" in body.model_fields_set and body.model is None:
+        named = body.model_fields_set
+        # Its window: the one named (null is the bot's again), else the one it has.
+        compact = body.compact_at if "compact_at" in named else (current or {}).get("compact_at")
+        if "model" in named and body.model is None:
+            # Back to the bot's model: with a window named, the task keeps only that.
             self._task_run_rights(c, who, bot, what)
-            target = None
+            target = task_run_models.window(body.compact_at) if body.compact_at else None
         else:
-            model = body.model if "model" in body.model_fields_set else (current or {}).get("model")
-            if not model:
+            model = body.model if "model" in named else (current or {}).get("model")
+            if not model and (body.effort or body.harness):
                 raise Problem("model", "Choose a model for this task first", 422)
-            target = self.task_run_choice(c, who, bot, what, model, body.effort, body.harness, current)
+            if model:
+                target = self.task_run_choice(c, who, bot, what, model, body.effort, body.harness, current)
+                target["compact_at"] = compact
+            else:
+                # A window alone: the task's runs keep the bot's model and compact where it says.
+                self._task_run_rights(c, who, bot, what)
+                if not compact and "compact_at" not in named:
+                    raise Problem("model", "Choose a model for this task first", 422)
+                target = task_run_models.window(compact) if compact else None
+        keys = ("harness", "model", "reasoning_effort", "compact_at")
         if (target is None and current is None) or (
-            target and current and all(target[k] == current.get(k) for k in ("harness", "model", "reasoning_effort"))
+            target and current and all(target[k] == current.get(k) for k in keys)
         ):
             raise Problem("unchanged", "That task model is already selected", 409)
         saved = task_run_models.set_choice(c, who.actor, task_id, target)
         declared = shared_bots.follow(c, bot, _json(self._config(c, bot)["config"], {}) or {})
-        readiness = task_models.readiness(c, bot, target) if target else None
-        warning = task_models.warning(c, self.settings, bot, declared, target) if target else ""
+        on_model = target if target and target["model"] else None
+        readiness = task_models.readiness(c, bot, on_model) if on_model else None
+        warning = task_models.warning(c, self.settings, bot, declared, on_model) if on_model else ""
         return {"task": task_id, "run_model": saved, "readiness": readiness, "warning": warning}
+
+    def task_run_window(self, c, who, bot, what, compact_at):
+        """A task's own window with no model of its own, for `who` to set on a task `bot` runs: the same rights as its
+        model (_task_run_rights)."""
+        self._task_run_rights(c, who, bot, what)
+        return task_run_models.window(compact_at)
 
     def _task_run_rights(self, c, who, bot, what):
         """Who may set the model a task of `bot`'s runs on: whoever may change the bot's model (the same gate and check

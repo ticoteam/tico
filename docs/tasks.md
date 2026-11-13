@@ -207,6 +207,12 @@ the task window, `tico task create --model <id> --effort <effort> --harness <har
 or `tico task model <id> --clear`. `POST /api/v2/tasks/{id}/model` does the same (`{"model": null}` clears it). Whoever
 may change the bot's model may change a task's model; a bot never does. A task that changes owner loses its own model.
 
+A task can also keep its own **Compact** window, where its conversation compacts: one of the twelve sizes from 100K to
+1M, offered only up to what its model holds, or **Same as bot**. It goes with the model as `compact_at` (in
+`POST /api/v2/tasks` and `POST /api/v2/tasks/{id}/model`), or alone, which keeps the bot's model and resumes the task's
+session; `{"compact_at": null}` puts it back to the bot's. A bot's fallback keeps one the same way; on Same as bot it
+takes the bot's window, lowered to fit the fallback model.
+
 ## Changing many tasks at once
 
 Select tasks in a list to move, reassign, tag or close them at once. The change goes to the server once, as

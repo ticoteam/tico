@@ -51,7 +51,7 @@ Set `subtask_session: own` to give every subtask its own session instead.
 Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task.
 
 A bot's Home and a task each keep one session, however long it runs. The harness compacts it on its own when it nears
-the bot's `compact_at`, and that is the only size limit: Tico never starts a new session to save tokens. The next turn
+the bot's `compact_at` (or the task's own run window, or the fallback's when a fallback runs it), and that is the only size limit: Tico never starts a new session to save tokens. The next turn
 resumes the saved session. If the host refuses, Tico asks once more after a short pause.
 
 A new session starts only when the saved one is not on this computer (another computer ran the bot, or its
