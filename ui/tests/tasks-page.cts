@@ -78,6 +78,8 @@ export interface OpenOptions {
   needs?: Need[];
   /** A task's comments, by task id, as GET /api/v2/tasks/{id} sends them. */
   comments?: Record<string, unknown[]>;
+  /** A task's history events, by task id, as GET /api/v2/tasks/{id} sends them. */
+  events?: Record<string, unknown[]>;
   bots?: unknown[];
   beforeGoto?: ((page: Page) => unknown) | null;
 }
@@ -221,7 +223,7 @@ const BOTS = [['pm', 'PM'], ['eng', 'Engineer'], ['ops', 'Ops'], ['writer', 'Wri
 const CONFIG = {version: '0.6.0', app_name: 'Tico', local: true};
 
 async function open(browser: Browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/tasks', mover = true, tasks: given,
-  needs: givenNeeds, comments = {}, bots = BOTS, beforeGoto = null}: OpenOptions = {}) {
+  needs: givenNeeds, comments = {}, events = {}, bots = BOTS, beforeGoto = null}: OpenOptions = {}) {
   const tasks = given ?? fixtures();
   let needs = givenNeeds ?? needsOf(tasks);
   const posts: Posted[] = [], reads: URL[] = [];
@@ -330,7 +332,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
         return json(moved(t, fields));
       }
       // TaskDetail: the task with its history, comments and messages.
-      return json({task: t, children: [], comments: comments[t.id] || [], events: [], messages: [], has_more: false, mover});
+      return json({task: t, children: [], comments: comments[t.id] || [], events: events[t.id] || [], messages: [], has_more: false, mover});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/messages')) return json({messages: []});

@@ -73,14 +73,8 @@ def _month(row, month):
 
 
 def _window(c, months, until=None):
-    """The newest `months` months with cohort rows, oldest first; `until` (YYYY-MM) leaves out the months after it."""
-    where, args = ("WHERE month<=? ", [until]) if until else ("", [])
-    return sorted(
-        r[0]
-        for r in c.execute(
-            f"SELECT DISTINCT month FROM growth_cohorts {where}ORDER BY month DESC LIMIT ?", [*args, months]
-        )
-    )
+    """The newest `months` months with cohort rows or customer facts, oldest first; `until` (YYYY-MM) leaves out the months after it."""
+    return sorted(G.cohort_months(c, until)[:months])
 
 
 def _since(window):

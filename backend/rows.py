@@ -1835,3 +1835,26 @@ class ListeningItemRow(TypedDict):
     cost: float
     created_at: str
     updated_at: str
+
+
+# Customer facts Growth computes cohorts from (backend/growth_customers.py): dates are YYYY-MM-DD in the team's zone.
+class GrowthCustomerRow(TypedDict):
+    source: str
+    customer_key: str
+    became: str
+    signed_up: str | None
+    channel: str | None
+    segment: str | None
+    plan: str | None
+    churned: str | None
+    revenue_month: float | None
+    loaded_at: str
+
+
+class GrowthCustomerLoadRow(TypedDict):
+    id: str
+    source: str
+    customers: int
+    removed: int
+    loaded_by: str | None
+    loaded_at: str

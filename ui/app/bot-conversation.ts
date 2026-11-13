@@ -13,7 +13,7 @@ function botResumeCommand(runtime: string | null | undefined, sid: string, slug:
 async function fillBotRuns(slug: string) {
   if (!$('#bot-recent-runs[data-pending]')) return;
   let list: { employee: string }[] = [];
-  try { list = (await recentRuns()).filter((r: { employee: string }) => r.employee === slug).slice(0, 10); } catch { /* silent */ }
+  try { list = (await recentRuns(slug)).filter((r: { employee: string }) => r.employee === slug).slice(0, 10); } catch { /* silent */ }
   if (BOT?.slug !== slug) return;
   const el = $('#bot-recent-runs[data-pending]');
   if (el) { el.removeAttribute('data-pending'); el.innerHTML = runsTable(list, false); }

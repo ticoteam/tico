@@ -1078,6 +1078,7 @@ function goalPanelOpen(state: GkState<GkPanel | null>, owner: string, {goal = ''
   state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
     historyLoading: false, historyError: false, why: '', whyFrom: '', whyDraft: null, update: '', updateDraft: null, updateError: '', updateFocus: false, updatePending: null};
   history.replaceState(null, '', goal && goal !== 'new' ? goalsBase() + '/' + encodeURIComponent(goal) : goalsBase());
+  goalsPick(state, goal && goal !== 'new' ? goal : tapped);
   const dlg = goalPanelDialog(state);
   delete dlg.dataset.kpi;
   if (!dlg.open) dlg.showModal();

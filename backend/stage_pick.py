@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from . import task_depends
+
 if TYPE_CHECKING:
     import sqlite3
 
@@ -193,10 +195,12 @@ def waiting_line(conn: "sqlite3.Connection", stage: Row) -> str:
 
 
 def held(conn: "sqlite3.Connection", stage_id: str, bot: str) -> int:
-    """How many open tasks the bot has in the stage now: what its Limit each counts. A snoozed one is set aside."""
+    """How many open tasks the bot has in the stage now: what its Limit each counts. A snoozed one is set aside, and so is
+    one blocked by a task it depends on (task_depends)."""
     found = conn.execute(
         "SELECT COUNT(*) FROM tasks t WHERE t.stage_id=? AND t.owner_id=? AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL)",
+        "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+        f"AND NOT {task_depends.BLOCKED % 't'}",
         (stage_id, bot),
     ).fetchone()
     return int(found[0]) if found else 0

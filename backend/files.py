@@ -10,6 +10,7 @@ that question, so a private chat never leaks a name, a count, a version or a byt
 import asyncio
 import base64
 import binascii
+import functools
 import hashlib
 import json
 import logging
@@ -18,6 +19,7 @@ import secrets
 import sqlite3
 import tempfile
 from collections import namedtuple
+from collections.abc import Iterable
 from contextlib import ExitStack
 from urllib.parse import quote, unquote, urlsplit
 
@@ -533,6 +535,9 @@ def page_reference(value):
     """One file identity, versioned attachment, pin, page route or absolute app page URL."""
     if not isinstance(value, str):
         return None
+    # Every form holds "file-", or an escape that unquotes to it, or a tab, CR or LF that urlsplit drops from it.
+    if "file-" not in value and "%" not in value and "\t" not in value and "\r" not in value and "\n" not in value:
+        return None
     try:
         value = unquote(value)
         url = urlsplit(value)
@@ -548,46 +553,94 @@ def page_reference(value):
         return None
 
 
+def _plain_name(part):
+    """The candidate identity `_names` reads from `part` when it can be told without parsing (perf P08), else None.
+    Most text in an answer is an id, a time, an actor or a sentence: with no "/", escape, page id, JSON or web scheme
+    in it, unquote, urlsplit and the path prefixes change nothing, so the candidate is the text up to its first "?" or
+    "@", after a page:, file: or blob: prefix. Anything else takes the full parse."""
+    if "/" in part or "%" in part or "file-" in part or part.startswith(("{", "[")):
+        return None
+    if ":" in part:
+        # urlsplit strips leading controls and spaces and drops tabs and newlines before it reads a scheme.
+        if part[0] <= " " or "\t" in part or "\r" in part or "\n" in part:
+            return None
+        if part.partition(":")[0].lower() in ("http", "https"):
+            return None
+        if part.startswith(("page:", "file:", "blob:")):
+            part = part[5:]
+    return part.partition("?")[0].partition("@")[0]
+
+
+# A string's scan is a pure function of its text, so it is kept across reads: one read primes and checks the same
+# ids, actors and refs many times (a long task: about 9,000 strings, under 500 distinct). Long strings are scanned
+# each time, so the cache holds at most CACHED_SCANS short ones. Nothing about a reader or a snapshot belongs in it.
+CACHED_SCANS, CACHED_LENGTH = 8192, 512
+
+
+@functools.lru_cache(maxsize=CACHED_SCANS)
+def _cached_string_names(part):
+    return _string_names(part)
+
+
+def _string_names(part):
+    """(the file ids `part` names outright, ((candidate identity, file ids or None), ...)) for one string, JSON text
+    inside it included. None stands for the file ids of the structure around the string."""
+    plain = _plain_name(part)
+    if plain is not None:
+        return frozenset(), ((plain, None),)
+    found, names = set(), []
+    fid = page_reference(part)
+    if fid:
+        found.add(fid)
+    candidate = unquote(part)
+    try:
+        url = urlsplit(candidate)
+        if url.scheme in ("http", "https"):
+            candidate = url.path
+        candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
+        candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
+        names.append((re.split(r"[/?@]", candidate, maxsplit=1)[0], None))
+    except ValueError:
+        pass
+    if part.startswith(("{", "[")):
+        _collect(H._json(part, None), None, found, names)
+    return frozenset(found), tuple(names)
+
+
+def _collect(part, explicit, found, names):
+    if isinstance(part, str):
+        named, candidates = (_cached_string_names if len(part) <= CACHED_LENGTH else _string_names)(part)
+        if named:
+            found.update(named)
+        for candidate, ids in candidates:
+            names.append((candidate, explicit if ids is None else ids))
+    elif isinstance(part, dict):
+        ids = frozenset(fid for key in ("file", "file_id", "page", "page_id") if (fid := page_reference(part.get(key))))
+        for child in part.values():
+            _collect(child, ids or explicit, found, names)
+    elif isinstance(part, (list, tuple)):
+        for child in part:
+            _collect(child, explicit, found, names)
+
+
 def _names(value, file_ids=None):
     """The file ids `value` names outright, and every (candidate identity, the file ids its structure names) in it."""
     found, names = set(), []
-
-    def collect(part, explicit=None):
-        if isinstance(part, str):
-            fid = page_reference(part)
-            if fid:
-                found.add(fid)
-            candidate = unquote(part)
-            try:
-                url = urlsplit(candidate)
-                if url.scheme in ("http", "https"):
-                    candidate = url.path
-                candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
-                candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
-                names.append((re.split(r"[/?@]", candidate, maxsplit=1)[0], explicit))
-            except ValueError:
-                pass
-            if part.startswith(("{", "[")):
-                collect(H._json(part, None), explicit)
-        elif isinstance(part, dict):
-            ids = {fid for key in ("file", "file_id", "page", "page_id") if (fid := page_reference(part.get(key)))}
-            for child in part.values():
-                collect(child, ids or explicit)
-        elif isinstance(part, (list, tuple)):
-            for child in part:
-                collect(child, explicit)
-
-    collect(value, file_ids)
+    _collect(value, file_ids, found, names)
     return found, names
 
 
 def page_references(value, c=None, *, file_ids=None):
     """Resolve file, version, blob and digest identities through one recognizer on every transport. Every candidate in
     `value` is gathered first and looked up in one batch, so a response naming many pages costs no more statements."""
+    if c is not None and _primed_names_none(c, value):
+        return set()
     found, names = _names(value, file_ids)
     if c is None or not names:
         return found
     aliases = page_identities(c, {candidate for candidate, _ in names})
+    if not aliases:
+        return found
 
     # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
     def narrowed(candidate, explicit):
@@ -639,15 +692,55 @@ def prime_page_references(c, values):
     """Look up together every identity these values name, and the tombstones and audiences of the pages they find, so
     checking each value afterwards (page_references, page_ref_denials, readable_page_refs) reads nothing more: a list
     of messages, comments or events costs one lookup, not one per item."""
-    found, candidates = set(), set()
-    for value in values:
-        named, names = _names(value)
+    # Only the candidates and the ids named outright matter here, not which structure named them: each distinct
+    # string is scanned once, however many of these values repeat it.
+    found, candidates, strings = set(), set(), set()
+    stack: list[Iterable[object]] = [list(values)]
+    while stack:
+        for child in stack.pop():
+            if isinstance(child, str):
+                strings.add(child)
+            elif isinstance(child, dict):
+                stack.append(child.values())
+            elif isinstance(child, (list, tuple)):
+                stack.append(child)
+    # One read primes the same messages several times (task_privacy.prime_messages per page of a long task): a string
+    # this snapshot primed already is skipped, so each is scanned and looked up once per read. Each primed string
+    # records whether it names a page, which lets page_references answer a value naming none without its scan.
+    primed = _memo(c, "primed_page_strings")
+    fresh = {}
+    for text in strings - primed.keys():
+        named, names = (_cached_string_names if len(text) <= CACHED_LENGTH else _string_names)(text)
+        fresh[text] = (named, [candidate for candidate, _ in names])
         found.update(named)
-        candidates.update(candidate for candidate, _ in names)
-    found.update(fid for ids in page_identities(c, candidates).values() for fid in ids)
+        candidates.update(fresh[text][1])
+    if not fresh:
+        return
+    aliases = page_identities(c, candidates) if candidates else {}
+    found.update(fid for ids in aliases.values() for fid in ids)
+    for text, (named, names) in fresh.items():
+        primed[text] = bool(named) or any(candidate in aliases for candidate in names)
     if found:
         deleted_page_refs(c, found)
         restricted_page_rows(c, found)
+
+
+def _primed_names_none(c, value):
+    """Whether every string in `value` was primed in this snapshot and none of them names a page."""
+    primed = _memo(c, "primed_page_strings")
+    if not primed:
+        return False
+    stack: list[Iterable[object]] = [[value]]
+    while stack:
+        for child in stack.pop():
+            if isinstance(child, str):
+                if primed.get(child) is not False:
+                    return False
+            elif isinstance(child, dict):
+                stack.append(child.values())
+            elif isinstance(child, (list, tuple)):
+                stack.append(child)
+    return True
 
 
 def page_ref_denials(c, auth, who, refs):
@@ -672,6 +765,34 @@ def page_ref_denials(c, auth, who, refs):
     }
 
 
+REMOVED_LABELS = ("A page you can't open", "A deleted page")
+
+
+def _marked(value):
+    """Whether `value` holds a removed page's placeholder, or an ask's answers or options whose labels may name a page
+    (an option with no source or file): then readable_page_refs cleans it even when it names no denied page. One walk
+    without recursion, as most answers hold neither."""
+    stack = [value]
+    while stack:
+        part = stack.pop()
+        if isinstance(part, dict):
+            if (
+                part.get("removed") is True
+                and part.get("label") in REMOVED_LABELS
+                or isinstance(part.get("answers"), dict)
+                or any(
+                    not option.get("source") and not option.get("file")
+                    for option in part.get("options") or []
+                    if isinstance(option, dict)
+                )
+            ):
+                return True
+            stack.extend(part.values())
+        elif isinstance(part, list):
+            stack.extend(part)
+    return False
+
+
 def readable_page_refs(c, auth, who, refs, *, task_id=None):
     """Remove the entire metadata object of a denied page, even on undecorated message transports."""
     original = refs
@@ -682,25 +803,12 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         if isinstance(value, dict):
             return (
                 value.get("removed") is True
-                and value.get("label") in ("A page you can't open", "A deleted page")
+                and value.get("label") in REMOVED_LABELS
                 or any(removed_page(v) for v in value.values())
             )
         return isinstance(value, list) and any(removed_page(v) for v in value)
 
-    def legacy_labels(value):
-        if isinstance(value, dict):
-            return (
-                isinstance(value.get("answers"), dict)
-                or any(
-                    not option.get("source") and not option.get("file")
-                    for option in value.get("options") or []
-                    if isinstance(option, dict)
-                )
-                or any(legacy_labels(v) for v in value.values())
-            )
-        return isinstance(value, list) and any(legacy_labels(v) for v in value)
-
-    if not denied and not legacy_labels(refs) and not removed_page(refs):
+    if not denied and not _marked(refs):
         return original
 
     def hidden_titles(tid):

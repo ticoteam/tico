@@ -2730,7 +2730,7 @@ def never_stuck_reading(c):
     tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
     reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
     runs hourly (record_never_stuck), not on each page load."""
-    from . import never_stuck, waiting_on
+    from . import never_stuck, task_depends, waiting_on
 
     found = never_stuck.rules_hold(c)
     breaks = [line for line in found if not getattr(line, "held", False)]
@@ -2739,7 +2739,8 @@ def never_stuck_reading(c):
     for task_id, level in c.execute(
         "SELECT t.id, CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END "
         "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL)"
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL) "
+        f"AND NOT {task_depends.BLOCKED % 't'}"
     ):
         if level in ("retry", "manager", "person"):
             tasks[level].append(task_id)
