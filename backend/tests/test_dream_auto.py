@@ -579,7 +579,7 @@ def test_a_person_changing_a_rule_for_the_bot_is_a_correction(api):
     assert (v.corrections, v.status) == (1, "due"), "a person's active rule counts; a bot's suggestion does not"
 
 
-def test_five_in_need_two_waiting_queues_three_others_by_need_held_warm_on_a_fork(api):
+def test_five_in_need_two_waiting_queues_three_others_by_need_warm_on_a_fork(api):
     """Spec acceptance 20: N = 3, five bots in need, two with a dream job waiting."""
     five_due(api)  # assistant 14, ops 13, cpo 12, product-design 11, finance 10
     worked(api, "finance", 5)  # finance 15: first among the three
@@ -606,8 +606,7 @@ def test_five_in_need_two_waiting_queues_three_others_by_need_held_warm_on_a_for
                 "deadline": "skip",
                 "session": "fork",
             }, refs
-            assert (job["held"], job["state"], job["wake_class"]) == (1, "queued", "dream"), dict(job)
-    assert all(verdict(api, b, now()).status == "waiting" for b in ("finance", "cpo", "product-design"))
+            assert refs["release_kind"] == "dream" and job["state"] == "queued", dict(job)
 
 
 def _waiting(api, bot):

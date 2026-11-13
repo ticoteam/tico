@@ -1,9 +1,10 @@
 """Auto dream (docs/learnings.md, Dream): the Maintenance pass queues a dream for each bot most in need of one, on the
-release policy for runs that can wait (backend/wake_presets.py `policy`). Plain code end to end: no model call decides who
-is in need. The dream is the task a person starts from the panel (backend/dream.py `start`), with the auto variant of its
-instructions, a `dream.auto` event under the system actor, and the reason line at the top of its body. Its wake is held:
-it carries `release` (Prefers warm, wait 48 hours, Skip at the deadline, Fork), so it starts in a 45-55 minute warm
-window on a fork of the bot's latest session, or is dropped at the deadline. The original session is left alone.
+release policy for runs that can wait (the job hold in backend/wake_presets.py). Plain code end to end: no model call
+decides who is in need. The dream is the task a person starts from the panel (backend/dream.py `start`), with the auto
+variant of its instructions, a `dream.auto` event under the system actor, and the reason line at the top of its body.
+Its wake carries `release` (Prefers warm, wait 48 hours, Skip at the deadline, Fork), so the hold starts it in a 45-55
+minute warm window on a fork of the bot's latest session, or drops it at the deadline. The original session is left
+alone.
 
 A bot is in need when:
 - it is active, keeps memory, has no dream job waiting (held and queued) and no open dream;
@@ -30,7 +31,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from . import dream, wake_presets
+from . import dream
 from . import maintenance_limits as L
 from . import system_routines as SR
 from .shared_bots import route
@@ -79,8 +80,10 @@ def counted(path):
 
 
 def release():
-    """The release policy every auto dream's wake carries (spec: Dreaming, the first built-in user)."""
-    return wake_presets.policy(wait=WAIT_HOURS * 3600, warm=True, deadline="skip", session="fork")
+    """The release policy every auto dream's wake carries (spec: Dreaming, the first built-in user), in the shape the job
+    hold reads from `refs.release`: Due is the job's creation (None), then Prefers warm for up to WAIT_HOURS, Skip at the
+    deadline, on a fork of the bot's latest session. A server without the hold starts the dream at once, as before."""
+    return {"due": None, "wait": WAIT_HOURS * 3600, "warm": True, "deadline": "skip", "session": "fork"}
 
 
 def waiting(c, bot):
