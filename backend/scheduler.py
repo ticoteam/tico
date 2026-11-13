@@ -1,6 +1,7 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
 import logging
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -613,7 +614,7 @@ class Scheduler:
 
             app = getattr(ctx, "app", None)
             decision_todos.tick(self.store, getattr(getattr(app, "state", None), "judge", None))
-        except Exception as exc:
+        except sqlite3.Error as exc:
             failures.append({"decision_todos": type(exc).__name__})
         try:
             from . import automations

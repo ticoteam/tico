@@ -17,6 +17,7 @@ marked done in `registry_metadata` and never runs again.
 
 import json
 import logging
+import sqlite3
 import threading
 from typing import Any, cast
 
@@ -156,7 +157,7 @@ def tick(store: Any, primary: Any = None) -> bool:
         try:
             if sweep(store, primary)["done"]:
                 store.__dict__["decision_todos_done"] = True
-        except Exception as exc:  # the next pass tries again
+        except sqlite3.Error as exc:  # the next pass tries again; the ask check itself never raises (preflight)
             LOG.warning("Decision to-do sweep failed: %s", type(exc).__name__)
         finally:
             _RUNNING.release()
