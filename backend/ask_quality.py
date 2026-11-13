@@ -2,7 +2,7 @@
 """How well each bot asks people (Tasks spec "Bots ask people a question with choices", AC-12), for the Decide readout
 (backend/decide_readout.py): per bot, its asks to people in the window, how many a person sent back as "Badly written"
 (the decision view's chip, a 👎 on the ask), and the share (the target is under 1 in 20, read three weeks after the
-release: `tico decision readout --days 21`).
+release: `tico decision readout --days 21`). A 👎 counts on the day it was last set, as answers.thumbs_down_count reads it.
 
 The guard: refusing badly written asks must not stop a bot asking at all. Each refusal of a bot's ask to a person (its
 shape, `task_ask_shape`; a rule that covers it, `task_rule`; a decision filed as a to-do, ask ingest's `decision`) is
@@ -41,7 +41,7 @@ def per_bot(c: Any, start: str, end: str) -> list[dict[str, Any]]:
     badly: dict[str, int] = {}
     for bot, n in c.execute(
         "SELECT bot_id, COUNT(*) FROM feedbacks WHERE subject_type='ask' AND rating='down' AND reason LIKE ? "
-        "AND created_at>=? AND created_at<? GROUP BY bot_id",
+        "AND updated_at>=? AND updated_at<? GROUP BY bot_id",
         (BADLY_WRITTEN + "%", start, end),
     ):
         badly[str(bot)] = int(n)

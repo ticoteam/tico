@@ -1041,6 +1041,11 @@ def _owner_wrote(c, task_id, person):
     return "\n".join(_words(part) for part in said if part)
 
 
+# A vision the Strategy Owner saves is at least this many of the owner's words: a scrap of a question they asked back
+# ("a vision") is not one.
+VISION_MIN_WORDS = 3
+
+
 def save_asked_vision(c, actor, task_id, text):
     """The Strategy Owner saves the vision the owner sent on its vision question (backend/goal_asks.py), in their
     words, and says so on the task; saving it closes the question (settle_vision). Only the Strategy Owner, only while
@@ -1063,11 +1068,12 @@ def save_asked_vision(c, actor, task_id, text):
     if not row or not task or task["status"] != "open":
         raise Problem("not_found", f"No open vision question of the {name} on that task", 404)
     clean = " ".join(str(text or "").split())
-    if not clean or _words(clean) not in _owner_wrote(c, task_id, row["owner"]):
+    if len(clean.split()) < VISION_MIN_WORDS or _words(clean) not in _owner_wrote(c, task_id, row["owner"]):
         who = H.actor_name(c, row["owner"]) or "the owner"
         raise Problem(
             "invalid",
-            f"Save the vision in {who}'s own words: send text they wrote on this task, as they wrote it",
+            f"Save the vision in {who}'s own words: send text they wrote on this task, as they wrote it, at least "
+            f"{VISION_MIN_WORDS} words",
             422,
         )
     H.task_comment(

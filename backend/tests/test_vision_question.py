@@ -107,8 +107,9 @@ def test_a_question_back_leaves_the_question_open_and_nothing_is_saved(api):
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "open" and not S.vision(c, editor=True)
     assert open_asks(api, task["id"])
-    # The Strategy Owner may not save words the owner did not write there.
+    # The Strategy Owner may not save words the owner did not write there, nor a scrap of what they did write.
     post(api, "strategy/vision", {"task": task["id"], "vision": VISION}, token=BOT, expected=422)
+    post(api, "strategy/vision", {"task": task["id"], "vision": "a vision"}, token=BOT, expected=422)
     with api.app.state.store.read() as c:
         assert not S.vision(c, editor=True)
 

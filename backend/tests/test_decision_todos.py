@@ -3,6 +3,7 @@ with choices", AC-11): each open to-do a bot filed for a person before the relea
 decision is closed with a note and the bot that filed it is woken to ask it, so the person's list has no such to-do."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from backend import decision_todos as D
 from backend import hubdb as H
@@ -19,6 +20,10 @@ class ByText(FakeModel):
     def __call__(self, state, questions, label=None):
         self.kind = "decision" if DECISION in json.dumps(state) else "chore"
         return super().__call__(state, questions, label)
+
+
+def in_an_hour():
+    return (datetime.now(timezone.utc) + timedelta(hours=1, minutes=1)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def todo(api, title, owner="human:ben", by="bot:ops"):
@@ -79,20 +84,42 @@ def test_a_to_do_the_check_could_not_judge_waits_for_the_next_pass_and_nothing_i
     api, _, _ = gate
     model = ByText()
     api.app.state.judge = model
-    first = todo(api, DECISION)
+    first, second = todo(api, DECISION), todo(api, DECISION + " too")
     model.fail = RuntimeError("provider down")
     out = D.sweep(api.app.state.store, model)
     assert (out["judged"], out["closed"], out["done"]) == (0, [], False)
+    # The first failed call ends the pass: a model outage does not spend the day's ask checks every few seconds.
+    assert len(model.calls) == 1
     assert task(api, first["id"])["status"] == "open"
     model.fail = None
+    # Within the hour after a failure no pass asks anything.
+    assert D.sweep(api.app.state.store, model)["judged"] == 0 and len(model.calls) == 1
     # Filed after the sweep began: the ask check at the write sees it, so the sweep leaves it alone.
     later = todo(api, DECISION + " later")
-    out = D.sweep(api.app.state.store, model)
-    assert (out["closed"], out["done"]) == ([first["id"]], True)
+    out = D.sweep(api.app.state.store, model, now=in_an_hour())
+    assert (sorted(out["closed"]), out["done"]) == (sorted([first["id"], second["id"]]), True)
     assert task(api, later["id"])["status"] == "open"
     calls = len(model.calls)
     D.sweep(api.app.state.store, model)
     assert len(model.calls) == calls
+
+
+def test_with_no_decision_model_the_sweep_writes_nothing_and_waits_for_one(gate):  # noqa: F811
+    """Review 1: a pass with no model must not mark the sweep done, or a team that sets Decide up later never has its
+    decision to-dos closed."""
+    api, _, _ = gate
+    api.app.state.judge = None
+    decision = todo(api, DECISION)
+    out = D.sweep(api.app.state.store, None)
+    assert (out["judged"], out["closed"], out["done"]) == (0, [], False)
+    with api.app.state.store.read() as c:
+        assert D.state(c) == {}
+        assert not c.execute("SELECT 1 FROM events WHERE action=?", (D.JUDGED,)).fetchone()
+    model = ByText()
+    api.app.state.judge = model
+    out = D.sweep(api.app.state.store, model)
+    assert (out["closed"], out["done"]) == ([decision["id"]], True)
+    assert task(api, decision["id"])["status"] == "closed"
 
 
 def test_only_open_to_dos_a_bot_filed_for_a_person_are_judged(gate):  # noqa: F811
