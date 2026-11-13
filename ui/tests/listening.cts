@@ -198,7 +198,8 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await page.waitForFunction(() => document.querySelectorAll('.lst-run').length === 2);
       assert.deepEqual(await page.locator('.lst-run').nth(1).locator('.lst-cr').allInnerTexts().then(t => t.map(x => x.replace(/\s+/g, ' ').trim())),
         ['Read 212', 'Duplicates removed 41', 'Dropped by rules 136', 'Could not score 2', 'Kept 33', 'Sent 2', 'Back to waiting 1', 'Waiting 27']);
-      assert.ok((await page.locator('.au-rx').nth(1).innerText()).includes('spend cap · 1 not delivered, back to waiting'), tag + ': the stopped step names what it missed');
+      const missedLines = (await page.locator('.au-rx').nth(1).innerText()).split('spend cap · 1 not delivered, back to waiting').length - 1;
+      assert.equal(missedLines, 2, tag + ': each stopped step names what it missed, a capped choose step too');
 
       // +: a new one is the viewer's, off, 10 a day, with one step that posts what was sent.
       await page.locator('.au-crumb a').click();

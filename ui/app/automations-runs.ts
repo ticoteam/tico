@@ -143,6 +143,12 @@ function auRunStepText(rs: AuStepView): string {
     const missed = rs.missed ? ` · ${rs.missed} not delivered, back to waiting` : '';
     return (AU_STEP_STATUS[rs.status] || rs.status || '') + (reason ? ' · ' + auFirstLine(reason).slice(0, 80) : '') + missed;
   }
+  // A choose step the spend cap or a hold stopped records ok and runs its default destination, but its turn never got
+  // a listening's items: say so, as a stopped step does.
+  if (rs.missed) {
+    const why = typeof o.skipped === 'string' ? AU_STEP_STATUS[o.skipped] || o.skipped : '';
+    return [auRunStepDid(rs), why, `${rs.missed} not delivered, back to waiting`].filter(Boolean).join(' · ');
+  }
   return auRunStepDid(rs);
 }
 function auRunStepDid(rs: AuStepView): string {
