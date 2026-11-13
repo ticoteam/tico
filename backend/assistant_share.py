@@ -182,7 +182,7 @@ def read(
         )
     from . import auth as A
 
-    standing: Any = A.standing  # pyright: ignore[reportUnknownMemberType]
+    standing: Any = A.standing  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     if standing(c, H.actor_id(owner)):
         # A person who left or whose sign-in is off shares nothing more, as their own Assistant stops for them.
         raise Problem("not_shared", "This person's " + settings.assistant_name + " chat is not shared now", 403)
