@@ -1308,6 +1308,12 @@ let browser: import('playwright').Browser | null = null;
     await page.locator('#bot-dm-arch').click();
     assert.deepEqual(seen.patches.at(-1), {archived: false});
     await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    // The toast's Undo puts the row back too.
+    await page.locator('#bot-dm-arch').click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
+    await page.locator('.toast button', {hasText: 'Undo'}).last().click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    assert.deepEqual(seen.patches.slice(-2), [{archived: true}, {archived: false}], 'Undo sent one unarchive');
     await shot(page, 'bot-more-archive-private-chat');
     assert.deepEqual(seen.errors, []);
     await page.close();

@@ -54,6 +54,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
   const threads: Record<string, Msg[]> = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
                              {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
   const archivedIds = new Set<string>(), archiveRequests: Body[] = [];
+  let holdArchive: Promise<unknown> | null = null;
   let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, keepUnread: string | null = null;
   const isArchived = (u: Update) => archivedIds.has(u.id) || !!u.superseded;
   const feed = (kind: string | null, archive = false, includeArchive = false) => {
@@ -93,6 +94,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       if (p === '/api/v2/updates/unread') return json({unread: updates.filter(u => !isArchived(u) && !u.read).length});
       if (p === '/api/v2/updates/archive' && req.method() === 'POST') {
         const body = req.postDataJSON(); archiveRequests.push(body);
+        if (holdArchive) await holdArchive;
         if (archiveFails) return json({error: {code: 'storage_unavailable', detail: 'Synthetic archive failure'}}, 500);
         for (const id of body.ids) { if (body.archived) archivedIds.add(id); else archivedIds.delete(id); }
         return json({updated_at: body.ids.length, archived: body.archived, unread: updates.filter(u => !isArchived(u) && !u.read).length});
@@ -228,6 +230,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await more.click();
     assert.deepEqual(await menuItems(), ['Mark read', 'Archive'], 'Mark unread marked it unread');
     await page.keyboard.press('Escape');
+    // With a card selected (j/k), Enter on its ⋯ opens the menu, not the card: ⋯ is the keyboard's way to Archive.
+    await page.keyboard.press('j');
+    const selId = await page.evaluate(() => document.querySelector('#upd-feed .upd-card.sel')?.getAttribute('data-upd') ?? null);
+    assert.ok(selId, 'j selected a card');
+    await page.locator(`[data-upd="${selId}"] [data-upd-menu]`).focus(); await page.keyboard.press('Enter');
+    await menu.waitFor();
+    assert.equal(await page.locator(`[data-upd="${selId}"] .upd-thread`).count(), 0, 'Enter on ⋯ does not open the card');
+    await page.keyboard.press('Escape');
     assert.deepEqual(await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd)), ['u-seo', 'u-fin', 'u-cmo'],
       'nothing re-sorts while you are on the page');
     // Archive failure leaves the card and its unsent reply draft in place. A later successful
@@ -236,7 +246,13 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const archiveDraft = page.locator('[data-upd="u-cmo"] textarea');
     await archiveDraft.fill('Keep this reply draft');
     archiveFails = true;
+    let releaseArchive!: (value?: unknown) => void; holdArchive = new Promise(r => { releaseArchive = r; });
     await more.click(); await menu.locator('[role=menuitem]', {hasText: 'Archive'}).click();
+    await page.waitForFunction(() => UPD.archivePending.size === 1);
+    await more.click();
+    assert.deepEqual(await menuItems(), ['Mark read'], 'no Archive while one is in flight');
+    await page.keyboard.press('Escape');
+    holdArchive = null; releaseArchive();
     for (const end = Date.now() + t(10000); archiveRequests.length < 1 && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     await page.waitForFunction(() => !UPD.archivePending.size);
     assert.equal(await page.locator('[data-upd="u-cmo"] textarea').inputValue(), 'Keep this reply draft');

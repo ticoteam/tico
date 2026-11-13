@@ -891,6 +891,7 @@ function updBind(state: UpdState): void {
     if (UPD !== state || !$('#upd-feed')) return document.removeEventListener('keydown', state.keys!);
     if (eventElement(ev)?.closest('input, textarea, select, [contenteditable]') || ev.metaKey || ev.ctrlKey || ev.altKey) return;
     if (THV_MENU) return;                        // the ⋯ menu has the keys while it is open
+    if (ev.key === 'Enter' && eventElement(ev)?.closest('#upd-feed button')) return;   // Enter presses the focused button (⋯, Reply)
     const cur = (state.list || [])[state.sel];
     if (ev.key === 'j') { ev.preventDefault(); updSelect(state, state.sel + 1); }
     else if (ev.key === 'k') { ev.preventDefault(); updSelect(state, state.sel - 1); }

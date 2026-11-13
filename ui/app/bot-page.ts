@@ -535,7 +535,7 @@ async function botDmArchiveLoad(slug: string): Promise<void> {
   host.insertAdjacentHTML('beforeend', `<button type="button" class="bot-learn" id="bot-dm-arch"><span class="bl-label">${t.archived_at ? 'Unarchive private chat' : 'Archive private chat'}</span></button>`);
   const id = t.id, archived = !!t.archived_at;
   $('#bot-dm-arch').onclick = async () => {
-    try { if (archived) threadsUnarchived(await patch(thvPath(id), {archived: false})); else await threadsArchive(id); }
+    try { if (archived) threadsUnarchived(await patch(thvPath(id), {archived: false})); else await threadsArchive(id, () => void botDmArchiveLoad(slug)); }
     catch (e) { toast(errorMessage(e, ''), true); }
     void botDmArchiveLoad(slug);
   };
