@@ -213,18 +213,20 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await replaced.click();
   await page.waitForFunction((id: string) => location.hash === '#/page/' + id, weekly.file_id, {timeout: t(5000)});
 
-  // A page filed on the task is pinned to its top; the old weekly, filed there too, is left out as replaced. A card
-  // opens its page, which says where it is pinned.
+  // A page filed on the task is one row in its Pages (task #409), its icon and name; the old weekly, filed there too, is
+  // left out as replaced. The row opens its page, which says where it is pinned.
   await go(page, '#/task/' + launch.task_id);
-  const cards = page.locator('.task-pages .pg-card');
+  // A phone shows the pages in the Pages tab: wait for the window to draw before reading whether the tabs show.
+  const tab = page.locator('#task-modal[open] [data-task-tab="pages"]');
+  await tab.waitFor({state: 'attached', timeout: t(10000)});
+  if (await tab.isVisible()) await tab.click();
+  const cards = page.locator('.task-pages .tp-row');
   await cards.first().waitFor({timeout: t(10000)})
-    .catch(() => assert.fail(`${tag}: a page card on the task (${JSON.stringify(page.errors)})`));
-  assert.deepEqual(await cards.locator('.pg-open-title').allInnerTexts(), ['Launch plan']);
-  // Its status line is inside the card, under the page's title, not loose under the task's.
-  assert.match(await cards.locator('.pg-open .pg-status').innerText(), /^Updated .+ by Engineering Lead · v1$/, `${tag}: status in the card`);
-  assert.equal(await cards.locator(':scope > .pg-status').count(), 0, `${tag}: no loose status line`);
+    .catch(() => assert.fail(`${tag}: a page row on the task (${JSON.stringify(page.errors)})`));
+  assert.deepEqual(await cards.locator('.tp-name').allInnerTexts(), ['Launch plan']);
+  assert.equal(await page.locator('.task-pages .pg-status').count(), 0, `${tag}: no Updated … · v1 line on the row`);
   await shot(page, `${tag}-04-task`);
-  await cards.locator('a.pg-open', {hasText: 'Launch plan'}).click();
+  await cards.filter({hasText: 'Launch plan'}).click();
   await page.waitForFunction((id: string) => location.hash === '#/page/' + id, launch.file_id, {timeout: t(5000)});
   const pinned = page.locator('#pg-view .pg-pinned a');
   await pinned.waitFor({timeout: t(5000)});

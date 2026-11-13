@@ -1,6 +1,6 @@
 // The Files section of a bot's right rail (ui/bot-files.ts): a plain list of names, three rows and a small
 // "+N" / "Less" inline, no counts, subtitle or buttons. A linked document opens at its provider
-// (a new tab), a stored file in the app's viewer (a CSV as a table, a quoted comma kept in one cell),
+// (a new tab), a stored file in the review view (ui/app/file-review.ts; a CSV as a table, a quoted comma kept in one cell),
 // a file that did not sync is plain text, never a storage address; on a computer and on a phone.
 // Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -112,19 +112,19 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
         await page.emulateMedia({colorScheme: scheme});
         await card.screenshot({path: path.join(shots, `bot-files-${tag}-${scheme}.png`)});
       }
-      // A stored file opens in the app's viewer (the viewer asks the route for the bytes), not by navigating away.
+      // A stored file opens in the review view (it asks the route for the bytes), not by navigating away.
       await stored.locator('a.bf-name').click();
-      await page.waitForSelector('dialog#doc-viewer[open]');
+      await page.waitForSelector('dialog.frv[open]');
       await until(() => state.opened.includes('file-000000000000000000000002'));
       assert.equal(new URL(page.url()).pathname, '/', tag + ': still on the app');
       await page.keyboard.press('Escape');
-      await page.waitForSelector('dialog#doc-viewer:not([open])', {state: 'attached'});
+      await page.waitForSelector('dialog.frv', {state: 'detached'});
       // Show all opens the rest inline; Show less folds it back.
       await card.locator('[data-bf-all]').click();
       await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 5);
       // A CSV opens as a table: a quoted comma stays in one cell, a quoted line break too, 1,000 rows and a note.
       await card.locator('.bf-row', {hasText: 'Traffic export'}).locator('a.bf-name').click();
-      const table = page.locator('dialog#doc-viewer[open] table.csv');
+      const table = page.locator('dialog.frv[open] table.csv');
       await table.waitFor();
       assert.deepEqual(await table.locator('thead th').allTextContents(), ['page', 'note', 'visits'], tag + ': the header row');
       assert.equal(await table.locator('tbody tr').count(), 1000, tag + ': the first 1,000 rows');
@@ -136,10 +136,11 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
         await page.emulateMedia({colorScheme: scheme});
         await page.screenshot({path: path.join(shots, `bot-files-csv-${tag}-${scheme}.png`)});
       }
-      assert.equal(await page.locator('dialog#doc-viewer [data-doc-download]').count(), 1, tag + ': Download beside it');
+      assert.equal(await page.locator('dialog.frv [data-frv-dl]').isVisible(), true, tag + ': Download on top');
       assert.equal(await table.locator('thead th').first().evaluate(el => getComputedStyle(el).position), 'sticky', tag + ': the header stays put');
       await page.keyboard.press('Escape');
-      await page.waitForSelector('dialog#doc-viewer:not([open])', {state: 'attached'});
+      await page.waitForSelector('dialog.frv', {state: 'detached'});
+      assert.equal(new URL(page.url()).hash, url, tag + ': back on the bot\'s page');
       await card.locator('[data-bf-less]').click();
       await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 3);
       assert.doesNotMatch(await card.innerHTML(), /s3:\/\/|X-Amz|amazonaws/i, tag + ': no storage address');

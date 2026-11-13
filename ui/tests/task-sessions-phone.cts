@@ -59,6 +59,8 @@ async function run(viewport: Viewport, shot: string) {
     await page.goto('https://tico-ui.test/#/bot/botops');
     await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
     await page.evaluate(t => taskModalShow(t), task);
+    // A phone shows Sessions in the task window's Info tab (task #409).
+    if (viewport.width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();
     const rows = page.locator('#task-modal .task-sessions .tlink.session');
     await rows.first().waitFor();
     assert.equal(await rows.count(), 2);

@@ -162,9 +162,10 @@ Lane = Literal["company", "product"]
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
-# A relation is a note between two tasks. A task waits on no relation but `after`, and that only in Merge: it merges
-# after the other task (backend/merge_order.py). Otherwise it waits on the tasks it filed (`parent`).
-RelationKind = Literal["related", "duplicate_of", "follow_up", "after"]
+# A relation is a note between two tasks. A task waits on two relations: `after`, only in Merge, where it merges after
+# the other task (backend/merge_order.py), and `depends_on`, in any stage, where it is blocked until the other task ends
+# (backend/task_depends.py). Otherwise it waits on the tasks it filed (`parent`).
+RelationKind = Literal["related", "duplicate_of", "follow_up", "after", "depends_on"]
 
 
 class TaskRelationRef(Contract):
@@ -582,7 +583,8 @@ class TaskLink(Contract):
 
 class TaskRelation(Contract):
     """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
-    merges after task: in Merge its PRs are not queued until task has merged). The others are notes."""
+    merges after task: in Merge its PRs are not queued until task has merged), depends_on (it is blocked until task
+    ends). The others are notes."""
 
     task: ID
     kind: RelationKind = "related"
@@ -3465,15 +3467,20 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py). Part 1 brings file import; database query, Finance ad spend and bot
-# cost follow in later parts.
-GrowthSyncKind = Literal["file"]
+# A synced source's kind (backend/growth_sync.py): file import and database query; Finance ad spend and bot cost follow
+# in later parts.
+GrowthSyncKind = Literal["file", "db_query"]
 
 
 class GrowthSyncMap(Contract):
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
     fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
+    # that database, which runs it daily.
+    database: str | None = Field(default=None, min_length=1, max_length=80)
+    query: str | None = Field(default=None, min_length=1, max_length=120)
+    bot: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class GrowthSourceCreate(Contract):

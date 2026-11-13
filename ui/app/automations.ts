@@ -246,7 +246,6 @@ function auShell() {
           <button type="button" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><span class="au-sels"></span></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
-      ${lst ? '<aside class="au-pgc" hidden></aside>' : ''}
       <div class="au-scrim" hidden></div>
     </div>
   </div>`;
@@ -268,8 +267,8 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
-  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (listening.css).
-  if (lst) void pageChatMount({page: 'listening', label: 'Listening', root, button: root.querySelector('.au-chat'), panel: root.querySelector('.au-pgc'),
+  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (auEdDraw).
+  if (lst) void pageChatMount({page: 'listening', label: 'Listening', button: root.querySelector('.au-chat'), stays: r => auUnder(r, LISTENING),
     item: () => {
       const a = AU;
       if (!a || a.root !== root || !a.lst || !a.cur || !a.id) return null;
@@ -444,6 +443,7 @@ function auDrawSide() {
   const again = b && html ? ed.querySelector<HTMLInputElement>(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
+  if (AU.lst) pageChatHold(!!html);
   // The board's pop-ups float over it on a computer; a phone keeps the sheet.
   AU.root.classList.toggle('ed-pop', !!html && AU.ed?.kind === 'board');
   auEl(AU.root, '.au-scrim').hidden = !html;

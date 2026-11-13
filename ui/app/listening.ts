@@ -85,7 +85,10 @@ function lstListHTML(state: AutomationsState): string {
   const q = state.f.q, all = state.list || [];
   const rows = all.filter(a => !q || [a.name, lstLimitsWords(a.trigger?.limits), ...(a.trigger?.sources || []).flatMap(s => [s.site, s.target])]
     .join(' ').toLowerCase().includes(q));
-  if (!rows.length) return `<p class="muted au-pad">${all.length ? 'No matches' : 'No listening yet'}</p>`;
+  if (state.list === null) return '';
+  if (!all.length) return `<div class="empty-state lst-empty">${EMPTY_ART.listening}<p>Watches the sites and searches you pick, and posts what matters to Updates.</p>
+    <button type="button" class="primary" data-lst-new>New listening</button></div>`;
+  if (!rows.length) return `<p class="muted au-pad">No matches</p>`;
   return `<div class="lst-list" role="list">${rows.map(a => {
     const ok = lstOk(a), last = a.last_run?.started_at;
     return `<a class="lst-row${a.enabled === false ? ' off' : ''}" role="listitem" href="${auHref(a.id)}" data-lst="${esc(a.id)}">
@@ -95,11 +98,16 @@ function lstListHTML(state: AutomationsState): string {
   }).join('')}</div>`;
 }
 // +: the viewer's own, off, 10 a day, one step that posts what was sent; then open it.
-async function lstNew(): Promise<void> {
+// A create is running: a second press (the +, or the empty state's New listening) makes no second listening.
+let LST_CREATING = false;
+async function lstNew(pressed?: HTMLButtonElement): Promise<void> {
+  if (LST_CREATING) return;
   const state = AU;
   auDrawn(state);
   const button = auEl<HTMLButtonElement>(state.root, '.au-new');
+  LST_CREATING = true;
   button.disabled = true;
+  if (pressed) pressed.disabled = true;
   try {
     const out = auNormal(await post('/v2/automations', {name: 'New listening', owner: 'person:' + S.me!.id, enabled: false, builtin: false,
       trigger: {type: 'listening', sources: [], rules: [], limits: [{count: 10, per: 'day'}], at: '08:00', tz: auZone()},
@@ -108,7 +116,11 @@ async function lstNew(): Promise<void> {
     state.list = [...(state.list || []), out];
     location.hash = auHref(out.id);
   } catch (e) { toast(errorMessage(e, ''), true); }
-  finally { if (button.isConnected) button.disabled = false; }
+  finally {
+    LST_CREATING = false;
+    if (button.isConnected) button.disabled = false;
+    if (pressed?.isConnected) pressed.disabled = false;
+  }
 }
 
 // ----------------------------------------------------------------------------------------- the flow's block
@@ -149,6 +161,8 @@ function lstClick(t: Element): boolean {
     void copyText(m.dataset.lstCopy || '').then(() => toast('Copied'), () => toast('Could not copy', true));
     return true;
   }
+  const add = t.closest<HTMLButtonElement>('[data-lst-new]');
+  if (add) { void lstNew(add); return true; }
   m = t.closest<HTMLElement>('[data-lst-add]');
   if (m) { lstEdAdd(m.dataset.lstAdd || ''); return true; }
   return false;

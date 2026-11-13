@@ -38,6 +38,9 @@ const DASH_PLACES: Record<string, DashPlace> = {};
 // By template: the heading a card shows when it has no title of its own, and what it says when it shows nothing.
 const DASH_HEADING: Record<string, (card: DashCard) => string | undefined> = {};
 const DASH_EMPTY: Record<string, string> = {};
+// By template, HTML for a card that shows nothing, in place of DASH_EMPTY's words: Growth's empty cards name the setup
+// step that fills them, with a link (ui/app/growth-start.ts).
+const DASH_NONE: Record<string, (card: DashCard) => string> = {};
 
 // A place as GET /v2/places/<place> answers it (backend/cards.py), with who sees a team page.
 type DashCard = import('../types/api').Card;
@@ -204,7 +207,7 @@ const DASH_BODY: Record<string, DashBody> = {
 // What a built-in card shows (its template's fields).
 const dashData = (card: DashCard) => card.data as DashCardData;
 function dashCardBody(card: DashCard) {
-  if (card.hidden || !card.data) return `<p class="muted dash-none">${esc(DASH_EMPTY[card.template] || 'Not shown to you')}</p>`;
+  if (card.hidden || !card.data) return DASH_NONE[card.template]?.(card) ?? `<p class="muted dash-none">${esc(DASH_EMPTY[card.template] || 'Not shown to you')}</p>`;
   return (DASH_BODY[card.template] || (() => ''))(dashData(card), card);
 }
 // A page pin: the page itself through pageCard (ui/app/pages.ts) when this build has it, else a link to it.

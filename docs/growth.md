@@ -159,7 +159,7 @@ the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goal
 **Sources** lists the systems that hold each number (spend, customers, retention) and which number each one is the truth
 for. A source that only names a system is typed by hand: someone reads its numbers and enters them.
 
-**Synced sources.** A source can fill its numbers itself. Today that is a **file**: a CSV with a `month` column
+**Synced sources.** A source can fill its numbers itself, from a **file** or a **database query**. A file is a CSV with a `month` column
 (`YYYY-MM`), a `channel` column (a channel's slug or name; blank or `unknown` is Unknown) and one column per number. Map
 each number to its column once; the month and channel columns may have other names too:
 
@@ -167,6 +167,19 @@ each number to its column once; the month and channel columns may have other nam
 tico growth source add --truth-for "new customers" --system "Signups sheet" --sync file \
   --map new_customers=signups --map revenue_month=revenue --map channel=source
 tico growth source push <id> --file signups.csv
+```
+
+A **database query** source runs one named query (docs/databases.md, step 4) every day, on the computer of the bot
+granted that database. The query returns the same columns as the file, and needs no parameter without a default.
+Connecting it makes a daily automation (06:00 UTC) whose turn by that bot runs `tico growth source run <id>`: the query
+runs there through `tico db`, audited as any other, and its rows are posted to the source. When it fails (a column is
+missing, it times out, the database refuses the login) the reason is posted instead and the source shows Failing. The
+server never holds the connection string.
+
+```
+tico growth source add --truth-for "new customers" --system "Signups (warehouse)" --sync db_query \
+  --database warehouse --query signups-by-channel --bot data-bot --map new_customers=signups
+tico growth source sync <id>      # starts the bot's run now
 ```
 
 - **Months.** The first good run fills up to 12 months back. Later runs rewrite only the current month and the two
@@ -185,10 +198,15 @@ tico growth source push <id> --file signups.csv
 - **Health.** `tico growth source list` shows each synced source as fresh, waiting (never run), stale (no good run in
   twice its refresh time, `--refresh-hours`; a file's is a week) or failing, with the reason. A failed run changes
   nothing already written. The source's owner gets one notice when it starts failing and one when it recovers.
-- **Run again.** `tico growth source sync <id>` runs a file source's last file again, after a remap say.
+- **Run again.** `tico growth source sync <id>` runs a file source's last file again, after a remap say, and starts a
+  database query source's run on its bot's computer.
 
-The owner and admins connect, remap and retire a synced source. The owner, an admin or the source's own owner sends it
-rows.
+The owner and admins connect, remap and retire a synced source; retiring a database query source removes its daily
+run. The daily run is an automation owned by the query's bot, so naming or changing that bot also needs the right to
+make automations for it (its owner, or someone above it), and so does starting it early with `sync` (the bot itself
+may always start its own run). Retiring the source, or switching it to another kind, removes its daily run whoever
+does it: that run exists only for the source, and the owner and admins must be able to stop a source. `tico growth source update <id> --bot BOT` moves the run to
+another bot and keeps the columns it maps. The owner, an admin, the source's own owner or its query's bot sends it rows.
 
 ## Marketing tasks
 
@@ -234,6 +252,14 @@ steps are done). The Growth activation rate is read from these dates. A team who
 steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
 support session reading Growth records nothing.
 
+On the web, the Growth page shows a **Get started** panel over its cards while any step is not done: the four steps in
+order, each done step with what was set, and the next one with a button that opens its form (Settings, a new channel,
+the channel's source picker or Sources when there is no source yet, and the Months form on the channel and the last full
+month). Someone who may not do the next step sees who may, by name, instead of the button. A team that finishes the
+steps after first opening Growth is told once that it is set up, with a link to the channel's numbers
+(`POST /api/v2/growth/setup/shown`); after that the panel does not come back. Each empty card names the step that fills
+it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
+
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
@@ -257,7 +283,8 @@ tico growth setup                         the four first-run steps, each done or
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
 tico growth source list | add | update ID | retire ID
 tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
-tico growth source push ID --file FILE.csv | sync ID
+tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN
+tico growth source push ID --file FILE.csv | sync ID | run ID
 tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]

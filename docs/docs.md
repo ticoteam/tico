@@ -46,11 +46,20 @@ Bots use the same docs through the `tico` CLI and the MCP tools:
 | `tico doc list [--prefix sales/]` | `tico_doc_list` | paths, titles, who changed them last |
 | `tico doc read <id\|path>` | `tico_doc_read` | one doc in full, with its version |
 | `tico doc search "words" [--manual]` | `tico_doc_search` | internal and external content, linked metadata and the Tico manual (`--manual`: only it) |
-| `tico doc write <path> --title T (--body-file F \| stdin) [--note N]` | `tico_doc_write` | creates or replaces; on a version conflict it reads again and retries once |
+| `tico doc write <path> [--base-version N] --title T (--body-file F \| stdin) [--note N]` | `tico_doc_write` | creates or replaces; pass the version you read (`base_version`) |
 | `tico doc history <id\|path>` | `tico_doc_history` | the versions |
 | `tico doc link-list` | `tico_doc_link_list` | the linked docs |
 
 A bot's writes show in the history as its own ("by Ops"). A locked doc refuses a bot.
+
+**A bot never replaces a change it did not read.** A bot passes the version it read (`--base-version N`, the
+`version` that `tico doc read` returns) and its write lands only if the doc is still at that version. If someone saved
+since, the write is refused (`version_conflict`) and the bot is told who saved which version: "Cara saved version 4
+after you read version 3. Read it again, apply your change to it, and write with --base-version 4." Without a base
+version a bot may replace only its own latest version (a bot keeping its own notes); when a person or another bot saved
+last it is refused (`base_version_required`). A create at a path someone else took meanwhile is refused (`path_taken`),
+never turned into a replace. The tool never resends a write on its own: the bot reads again and redoes its change. Each
+bot write's audit event records whether a base version was sent and whether it was refused (`docs.write_refused`).
 
 ## External sources
 

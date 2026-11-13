@@ -1,7 +1,7 @@
 // Chat with a page's owner, from the page (ui/app/page-chat.ts, spec page-owner-chat), on Listening against the fake
 // hub in support/automations-fake.cts and the threads fake:
-//  - AC-1 desktop, 1280 px: Chat at the top right opens the Automations Owner's chat as a column at the right; the
-//    list stays where it was and usable beside it;
+//  - AC-1 desktop, 1440 px: Chat at the top right opens the Automations Owner's chat in the shared column, floating
+//    over the right of the window (spec chat-on-every-page AC-3); the list keeps its place and width and stays usable;
 //  - AC-2 a message sent with a listening open carries refs.from_page {page, label, item} and the chat shows
 //    "From Listening › <name>"; the chat is the direct one with the bot (GET /threads/dm?with=bot:...);
 //  - AC-3 the column's left edge drags it, 260-560 px; dragged to 400 px and reloaded it opens at 400 px; closed, it
@@ -10,7 +10,7 @@
 //  - AC-4 a page with no owner has no Chat;
 //  - AC-5 phone, 390 px: the owner's face opens the chat full screen, ‹ at left, the name in the middle, the composer
 //    at the bottom and no tab bar; ‹ or the phone's back returns to Listening where it was.
-// TICO_UI_SHOTS=<dir> keeps the screenshots (the 1280 px one is the spec's risk: what Listening keeps beside the chat).
+// TICO_UI_SHOTS=<dir> keeps the screenshots.
 // Run: node scripts/ui-tests.cts page-chat
 import type {Page} from 'playwright';
 import type * as AutomationsFakeSupport from './support/automations-fake.cts';
@@ -21,7 +21,7 @@ const {openAutomations, PHONE, sideways, shot} = require('./support/automations-
 const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFakeSupport.Api;
 
 const OWNER = 'automations-owner';
-const DESKTOP = {width: 1280, height: 800};
+const DESKTOP = {width: 1440, height: 900};
 type Sent = {text?: string; refs?: {from_page?: unknown}};
 
 const box = (page: Page, sel: string) => page.locator(sel).first().evaluate(el => {
@@ -65,64 +65,64 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       assert.equal(await chat.getAttribute('aria-label'), 'Chat with Automations Owner');
       const head = await box(page, '.au-ph'), btn = await box(page, '.au-ph [data-pgc-open]');
       assert.ok(btn.right >= head.right - 40 && btn.y < head.bottom, `Chat sits at the top right: ${JSON.stringify({btn, head})}`);
-      assert.equal(await page.locator('.au-pgc').isHidden(), true, 'closed at first');
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'closed at first');
       assert.deepEqual(dmReads, [], 'the chat loads only when opened');
       const listBefore = await box(page, '.au-c');
       await chat.click();
-      await page.locator('.au-pgc .pgc-head .pgc-name').waitFor();
-      await page.locator('.au-pgc .th-msg[data-mid="m-1"]').waitFor();
+      await page.locator('aside.pgc .pgc-head .pgc-name').waitFor();
+      await page.locator('aside.pgc .th-msg[data-mid="m-1"]').waitFor();
       assert.deepEqual(dmReads, ['bot:' + OWNER], 'the chat is the direct one with the page\'s owner');
-      assert.equal(await page.locator('.au-pgc .pgc-name').innerText(), 'Automations Owner');
-      const panel = await box(page, '.au-pgc'), list = await box(page, '.au-c');
+      assert.equal(await page.locator('aside.pgc .pgc-name').innerText(), 'Automations Owner');
+      const panel = await box(page, 'aside.pgc'), list = await box(page, '.au-c');
       assert.equal(panel.w, 340, 'the column opens 340 px wide');
-      assert.ok(panel.x >= list.right - 1, `the column is at the right of the list: ${JSON.stringify({panel, list})}`);
-      assert.equal(list.y, listBefore.y, 'the page stays where it was');
-      assert.ok(list.w >= 700, `Listening keeps about 720 px beside the chat at 1280: ${list.w}`);
+      assert.equal(panel.right, DESKTOP.width, `the column is at the right of the window: ${JSON.stringify(panel)}`);
+      assert.deepEqual(list, listBefore, 'below 1600 px it floats over the page: Listening keeps its place and width');
+      assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-docked')), false);
       assert.equal(await sideways(page), false, 'no sideways scroll with the chat open');
       // The page stays usable: a listening opens from its row with the chat open.
-      await shot(page, 'page-chat-1280-open');
+      await shot(page, 'page-chat-1440-open');
       await page.locator('.lst-row[data-lst="au_market"]').click();
       await page.waitForSelector('.lst-blk');
-      assert.equal(await page.locator('.au-pgc').isVisible(), true, 'the chat stays open beside the listening');
+      assert.equal(await page.locator('aside.pgc').isVisible(), true, 'the chat stays open beside the listening');
 
       // AC-2: a message sent with a listening open names the page and the listening.
-      await page.locator('.au-pgc .p-text').fill('Why did this one send nothing yesterday?');
-      await page.locator('.au-pgc .p-text').press('Enter');
-      await page.locator('.au-pgc .th-from').waitFor();
+      await page.locator('aside.pgc .p-text').fill('Why did this one send nothing yesterday?');
+      await page.locator('aside.pgc .p-text').press('Enter');
+      await page.locator('aside.pgc .th-from').waitFor();
       assert.deepEqual(sent.at(-1)?.refs?.from_page, {page: 'listening', label: 'Listening', item: {kind: 'automation', id: 'au_market', name: 'Market listening'}});
-      assert.equal(await page.locator('.au-pgc .th-from').innerText(), 'From Listening › Market listening');
-      assert.equal(await page.locator('.au-pgc .th-from a').getAttribute('href'), '#/listening/au_market');
-      await shot(page, 'page-chat-1280-sent');
+      assert.equal(await page.locator('aside.pgc .th-from').innerText(), 'From Listening › Market listening');
+      assert.equal(await page.locator('aside.pgc .th-from a').getAttribute('href'), '#/listening/au_market');
+      await shot(page, 'page-chat-1440-sent');
 
       // A listening's editor takes the column's place while open.
       await page.locator('.lst-blk').click();
       await page.waitForSelector('.au-ed [data-b="trigger.sources.0.site"]');
-      assert.equal(await page.locator('.au-pgc').isVisible(), false, 'the editor takes the chat\'s place');
+      assert.equal(await page.locator('aside.pgc').isVisible(), false, 'the editor takes the chat\'s place');
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.querySelector('#au-root')!.classList.contains('ed-open'));
-      assert.equal(await page.locator('.au-pgc').isVisible(), true, 'the chat is back once the editor closes');
+      assert.equal(await page.locator('aside.pgc').isVisible(), true, 'the chat is back once the editor closes');
 
       // AC-3: dragged to 400 px, kept; and it does not go past 260-560.
-      const grip = await box(page, '.au-pgc .pgc-grip');
-      const y = grip.y + 200, right = (await box(page, '.au-pgc')).right;
+      const grip = await box(page, 'aside.pgc .pgc-grip');
+      const y = grip.y + 200, right = (await box(page, 'aside.pgc')).right;
       await page.mouse.move(grip.x + 3, y);
       await page.mouse.down();
       await page.mouse.move(right - 900, y, {steps: 4});
-      assert.equal((await box(page, '.au-pgc')).w, 560, 'no wider than 560 px');
+      assert.equal((await box(page, 'aside.pgc')).w, 560, 'no wider than 560 px');
       await page.mouse.move(right - 100, y, {steps: 4});
-      assert.equal((await box(page, '.au-pgc')).w, 260, 'no narrower than 260 px');
+      assert.equal((await box(page, 'aside.pgc')).w, 260, 'no narrower than 260 px');
       await page.mouse.move(right - 400, y, {steps: 4});
       await page.mouse.up();
-      assert.equal((await box(page, '.au-pgc')).w, 400);
+      assert.equal((await box(page, 'aside.pgc')).w, 400);
       await page.reload();
-      await page.locator('.au-pgc .pgc-name').waitFor();
-      assert.equal((await box(page, '.au-pgc')).w, 400, 'reloaded, it opens at 400 px');
-      await page.locator('.au-pgc [data-pgc-close]').click();
-      assert.equal(await page.locator('.au-pgc').isHidden(), true, 'its close button closes it');
+      await page.locator('aside.pgc .pgc-name').waitFor();
+      assert.equal((await box(page, 'aside.pgc')).w, 400, 'reloaded, it opens at 400 px');
+      await page.locator('aside.pgc [data-pgc-close]').click();
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'its close button closes it');
       assert.equal(await page.locator('.au-ph [data-pgc-open]').getAttribute('aria-pressed'), 'false');
       await page.reload();
       await page.locator('.au-ph [data-pgc-open]').waitFor();
-      assert.equal(await page.locator('.au-pgc').isHidden(), true, 'closed, it stays closed after a reload');
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'closed, it stays closed after a reload');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -132,7 +132,7 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await page.waitForSelector('.lst-row');
       await page.waitForLoadState('networkidle');
       assert.equal(await page.locator('[data-pgc-open]').count(), 0, 'a page with no owner has no Chat');
-      assert.equal(await page.locator('.au-pgc').isHidden(), true);
+      assert.equal(await page.locator('aside.pgc').isHidden(), true);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -150,27 +150,27 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await shot(page, 'page-chat-phone-page');
       const hash = await page.evaluate(() => location.hash);
       await face.click();
-      await page.locator('.au-pgc.pgc-full .th-msg[data-mid="m-1"]').waitFor();
-      const full = await box(page, '.au-pgc');
+      await page.locator('aside.pgc.pgc-full .th-msg[data-mid="m-1"]').waitFor();
+      const full = await box(page, 'aside.pgc');
       assert.deepEqual([full.x, full.y, full.w, full.h], [0, 0, PHONE.width, PHONE.height], 'full screen');
       assert.equal(await page.locator('#mobile-nav').isVisible(), false, 'the chat hides the tab bar');
-      const back = await box(page, '.au-pgc [data-pgc-close]'), name = await box(page, '.au-pgc .pgc-who');
-      assert.equal(await page.locator('.au-pgc [data-pgc-close]').getAttribute('aria-label'), 'Back');
+      const back = await box(page, 'aside.pgc [data-pgc-close]'), name = await box(page, 'aside.pgc .pgc-who');
+      assert.equal(await page.locator('aside.pgc [data-pgc-close]').getAttribute('aria-label'), 'Back');
       assert.ok(back.x < 20, `‹ at the left: ${JSON.stringify(back)}`);
       assert.ok(Math.abs(name.x + name.w / 2 - PHONE.width / 2) < 4, `the name in the middle: ${JSON.stringify(name)}`);
-      const composer = await box(page, '.au-pgc .p-text');
+      const composer = await box(page, 'aside.pgc .p-text');
       assert.ok(composer.bottom > PHONE.height - 90, `the composer at the bottom: ${JSON.stringify(composer)}`);
       await shot(page, 'page-chat-phone-open');
-      await page.locator('.au-pgc [data-pgc-close]').click();
-      await page.waitForFunction(() => document.querySelector('.au-pgc')!.hasAttribute('hidden'));
+      await page.locator('aside.pgc [data-pgc-close]').click();
+      await page.waitForFunction(() => document.querySelector('aside.pgc')!.hasAttribute('hidden'));
       assert.equal(await page.evaluate(() => location.hash), hash, '‹ returns to Listening');
       assert.equal(await page.locator('#mobile-nav').isVisible(), true, 'the tab bar comes back');
       assert.equal(await page.locator('.lst-row').count(), 2, 'Listening as it was');
       // The phone's back closes it too, and stays on Listening.
       await face.click();
-      await page.locator('.au-pgc.pgc-full').waitFor();
+      await page.locator('aside.pgc.pgc-full').waitFor();
       await page.goBack();
-      await page.waitForFunction(() => document.querySelector('.au-pgc')!.hasAttribute('hidden'));
+      await page.waitForFunction(() => document.querySelector('aside.pgc')!.hasAttribute('hidden'));
       assert.equal(await page.evaluate(() => location.hash), hash, 'back returns to Listening');
       assert.equal(await page.locator('#mobile-nav').isVisible(), true);
       assert.equal(await page.locator('.lst-row').count(), 2);
@@ -183,13 +183,13 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       assert.ok(onItem.y >= crumb.y - 8 && onItem.bottom <= crumb.bottom + 8, `in the ‹ Listening row: ${JSON.stringify([onItem, crumb])}`);
       await shot(page, 'page-chat-phone-listening');
       await face.click();
-      await page.locator('.au-pgc.pgc-full .p-text').fill('Why did this one send nothing yesterday?');
-      await page.locator('.au-pgc .p-text').press('Enter');
-      await page.locator('.au-pgc .th-from').waitFor();
+      await page.locator('aside.pgc.pgc-full .p-text').fill('Why did this one send nothing yesterday?');
+      await page.locator('aside.pgc .p-text').press('Enter');
+      await page.locator('aside.pgc .th-from').waitFor();
       assert.deepEqual(sent.at(-1)?.refs?.from_page, {page: 'listening', label: 'Listening', item: {kind: 'automation', id: 'au_market', name: 'Market listening'}});
       // A link followed from the chat leaves through the chat's history entry: one back returns to the page before.
-      await page.locator('.au-pgc .th-from a').click();
-      await page.waitForFunction(() => document.querySelector('.au-pgc')!.hasAttribute('hidden'));
+      await page.locator('aside.pgc .th-from a').click();
+      await page.waitForFunction(() => document.querySelector('aside.pgc')!.hasAttribute('hidden'));
       assert.equal(await page.evaluate(() => location.hash), '#/listening/au_market');
       assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-phone-open')), false, 'the page is back');
       await page.goBack();
@@ -200,13 +200,13 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await page.waitForSelector('.lst-row');
       msgs.push({id: 'm-2', sender_id: 'human:dana', body: 'Why did this one send nothing yesterday?', refs: {from_page: sent.at(-1)?.refs?.from_page}});
       await face.click();
-      await page.locator('.au-pgc.pgc-full .th-from a[href="#/listening/au_market"]').first().click();
-      await page.waitForFunction(() => location.hash === '#/listening/au_market' && document.querySelector('.au-pgc')!.hasAttribute('hidden'));
+      await page.locator('aside.pgc.pgc-full .th-from a[href="#/listening/au_market"]').first().click();
+      await page.waitForFunction(() => location.hash === '#/listening/au_market' && document.querySelector('aside.pgc')!.hasAttribute('hidden'));
       await page.waitForSelector('.lst-blk');
       await page.goBack();
       await page.waitForFunction(h => location.hash === h, hash);
       await page.waitForSelector('.lst-row');
-      assert.equal(await page.locator('.au-pgc').isHidden(), true, 'back lands on the list, not on the chat');
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'back lands on the list, not on the chat');
       assert.deepEqual(errors, []);
       await page.close();
     }

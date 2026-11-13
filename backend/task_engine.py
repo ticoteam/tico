@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, idea_checks, stage_effects, stage_pick, task_effects
 from . import task_requirements as R
-from . import task_wakes, validate_gate
+from . import task_depends, task_wakes, validate_gate
 from .hubdb_core import KEEPER as SYSTEM
 
 if TYPE_CHECKING:
@@ -244,7 +244,7 @@ def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) ->
 
 def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
     """A stage has room when it has no limit, or fewer of its tasks hold a slot than its limit. A task holds a slot
-    while it is open and not snoozed, unless it waits only on a person's OK or answer (`waiting_on.slots`): bots keep
+    while it is open, not snoozed and not blocked by a task it depends on (task_depends), unless it waits only on a person's OK or answer (`waiting_on.slots`): bots keep
     working while people review. For `task_row`, it also has room when the task that filed it is there
     (`rides_with_filer`): the stage may then hold one over its limit, and takes no other task until it is under
     again."""
@@ -255,7 +255,8 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
         return True
     everyone = conn.execute(
         "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL)",
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) "
+        f"AND NOT {task_depends.BLOCKED % 't'}",
         (stage_row["id"],),
     ).fetchone()[0]
     if everyone + extra < limit:
@@ -1131,6 +1132,9 @@ def move(
         from . import merge_order
 
         merge_order.release(conn, task_id, SYSTEM)
+    if moved["status"] != "open":
+        # A task that depends on this one goes on, or its owner is woken once, when it was the last open one.
+        task_depends.release(conn, task_id, SYSTEM)
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, kind, by, why, revision)
@@ -1294,6 +1298,8 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     row = task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return None
+    if task_depends.blocked(conn, task_id):
+        return None  # a task it depends on is still open: it goes on when that ends (task_depends.release)
     target = next_stage(conn, row)
     if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
@@ -1402,7 +1408,8 @@ def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None 
         "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "JOIN stages s ON s.id = t.stage_id "
         "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL)"
+        "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+        f"AND NOT {task_depends.BLOCKED % 't'}"
     )
     args: tuple[str, ...] = ()
     if stage_ids:

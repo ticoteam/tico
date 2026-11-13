@@ -928,7 +928,7 @@ def run(args, who=None):
                 },
                 delegate=asked,
             )
-        if sub == "relate":
+        if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
             if getattr(args, "req", None):
@@ -1548,7 +1548,10 @@ def _source_health(row):
 
 
 def _source_run(result):
-    """One run's result: what it wrote and held, the rows it did not write, or why it failed."""
+    """One run's result: what it wrote and held, the rows it did not write, or why it failed. A database query source's
+    `sync` only starts its bot's run, and says so."""
+    if result.get("started"):
+        return str(result.get("text") or "Started.")
     if not result.get("ok"):
         return f"Failing: {result.get('error')}. Nothing changed; 0 numbers written."
     lines = [f"Synced: {result.get('written', 0)} numbers written, {result.get('held', 0)} held beside a typed number."]
@@ -1659,7 +1662,7 @@ def _growth_body(fn, result):
         )
         conflicts = result.get("conflicts") or []
         return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
-    if fn in ("growth source push", "growth source sync"):
+    if fn in ("growth source push", "growth source sync", "growth source run"):
         return _source_run(result)
     if fn in ("growth cohort list", "growth economics") and "by" in result and "cohorts" in result:
         return computed_text(result)

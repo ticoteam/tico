@@ -30,6 +30,7 @@ declare var callJoin: (threadId: string, call: {id: string}, title: string) => P
 declare var threadsSideRender: () => void;
 declare var THREADS: {on: unknown};
 declare var CU: {undo: {timer?: ReturnType<typeof setTimeout>} | null};
+declare var railRender: () => void;
 declare var CALL: {id: string} | null;
 declare var CALL_JOINS: number;
 declare var CALL_JOINING: Map<string, number>;
@@ -149,6 +150,8 @@ const homes: Record<string, string> = {'bot:ops': 'h-ops', 'human:bea': 'h-bea',
 
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
+// What the rail holds for Ana at open: her pins and the chats Catch up holds (a script changes them before open()).
+let pinsAtOpen = ['t-plan'], unreadAtOpen = ['t11', 't4', 't-gdm'];
 let dmRows: Thr[] | null = null, callsOff = false, railOff = false, threadsOff: boolean | 'odd' = false, threadsGate: Gate[] | null = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
 let callMade: {id: string; state: string; connector: string} | null = null, joinRefused = false, startWait = 150;
@@ -189,7 +192,7 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
   });
   const bob = who === 'bob';
   // The rail as the server keeps it for this page: Ana's pins, and threads she joined from Browse.
-  const pins = new Set(['t-plan']), joined: Thr[] = [];
+  const pins = new Set(pinsAtOpen), joined: Thr[] = [];
   const railRows = (): Thr[] => [plan, ...listed, groupDm, ...(dmRows ? [dmRows[1]!] : []), ...joined];
   const known = (id: string): Thr | undefined => [...railRows(), openHouse].find(t => t.id === id);
   await page.route('**/*', async route => {
@@ -235,7 +238,7 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
       if (railOff) return json({error: 'not_found'}, 404);
       const pin = (t: Thr) => ({...t, me: {...t.me, pinned: pins.has(t.id)}});
       return json(bob ? {pinned: [], threads: [], catch_up: 0, next_cursor: null, dms: {}} : {pinned: railRows().filter(t => pins.has(t.id)).map(pin),
-        threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: 3, catch_up_ids: ['t11', 't4', 't-gdm'], next_cursor: null,
+        threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: unreadAtOpen.length, catch_up_ids: unreadAtOpen, next_cursor: null,
         dms: {'bot:ops': 2, 'human:bea': 1}});
     }
     if (p === '/api/v2/threads/catch-up') return json(bob ? {items: [], count: 0, next_cursor: null} : {items: catchUp(), count: 3, next_cursor: null});
@@ -1235,6 +1238,37 @@ let browser: import('playwright').Browser | null = null;
       await page.close();
     }
     threadsOff = false;
+  }
+  // Nothing pinned or opened before, and three chats in Catch up: the pane says what waits and offers Catch up, never
+  // the empty picture; it marks nothing read, follows the count, and leaves the page behind Catch up alone.
+  {
+    pinsAtOpen = [];
+    const {page, seen} = await open(browser, 'ana');
+    await page.goto('https://tico-ui.test/#/threads');
+    const line = page.locator('.tr-pane [data-tr-unread-n]');
+    await line.waitFor();
+    assert.equal(await line.textContent(), '3 chats with new messages', 'what waits, in one line');
+    assert.equal(await page.locator('.tr-pane .empty-state .ea-art').count(), 1, 'its own little picture');
+    assert.equal(await page.locator('.tr-pane', {hasText: 'Talk with your team here'}).count(), 0, 'never the empty picture while chats wait');
+    assert.deepEqual(await page.locator('.tr-pane button.primary').allTextContents(), ['Catch up'], 'one worded action');
+    assert.equal(await page.evaluate(() => location.hash), '#/threads', 'no thread opened by itself');
+    assert.deepEqual([seen.reads, seen.readAll], [[], []], 'nothing marked read');
+    await page.evaluate(() => { (THREADS as unknown as {cu: Set<string>}).cu.delete('t4'); railRender(); });
+    assert.equal(await line.textContent(), '2 chats with new messages', 'the line follows the count');
+    await page.evaluate(() => { (THREADS as unknown as {cu: Set<string>}).cu.delete('t11'); railRender(); });
+    assert.equal(await line.textContent(), '1 chat with new messages', 'one chat, singular');
+    await page.locator('.tr-pane [data-tr-catchup]').click();
+    await page.locator('#catch-up[open]').waitFor();
+    assert.deepEqual(seen.readAll, [], 'opening Catch up marks nothing read');
+    await page.evaluate(() => { (THREADS as unknown as {cu: Set<string>}).cu.clear(); railRender(); });
+    assert.equal(await line.textContent(), '1 chat with new messages', 'nothing behind Catch up changes while it is open');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catch-up')?.open);
+    await page.locator('.tr-pane', {hasText: 'Talk with your team here'}).waitFor();
+    assert.equal(await line.count(), 0, 'at 0 the line is gone');
+    assert.deepEqual(seen.errors, [], 'no page errors');
+    await page.close();
+    pinsAtOpen = ['t-plan'];
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});

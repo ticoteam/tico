@@ -3253,10 +3253,14 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/runs")
-    def runs(request: Request):
+    def runs(request: Request, bot: str | None = None):
+        """The newest runs a person may read, or one bot's (`bot`, its id or slug). A bot page asks for its own: the
+        newest 200 of the whole company left a quiet bot's failed starts off its Runs card (Nov 12)."""
         human_only(request.state.identity)
         with store.read() as c:
-            rows = [turn for turn, _ in visible_turns(c, request.state.identity)]
+            if bot:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            rows = [turn for turn, _ in visible_turns(c, request.state.identity, bot)]
             made = ran_on(c, [turn["id"] for turn in rows])
             return [run_view(turn, c, made[turn["id"]]) for turn in rows]
 
