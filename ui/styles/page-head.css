@@ -18,9 +18,17 @@
 .ph>.ph-tools{flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:8px}
 .ph>.ph-tools:empty{display:none}
 .ph>.ph-tools input[type=search]{min-width:160px}
+/* a control's words never wrap: a narrow row folds the tools into ⋯ instead (page-head.ts pageHeadFit) */
+.ph>.ph-tools>:is(button,a){flex:none;white-space:nowrap}
+/* tools folded into ⋯: above the menu's own items, a hairline between */
+.ph-menu>.ph-tools{display:flex;flex-direction:column;align-items:stretch;gap:2px}
+.ph-menu>.ph-tools:not(:last-child){margin:0 0 4px;padding:0 0 4px;border-bottom:1px solid var(--line)}
+.ph-menu>.ph-tools input[type=search]{box-sizing:border-box;width:100%;min-width:240px}
 .ph>.ph-more{flex:none;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .ph>.ph-more:hover,.ph>.ph-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .ph>.ph-more .nav-icon{font-size:20px}
+.ph>.ph-more.ph-held{position:relative}
+.ph>.ph-more.ph-held::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
 .ph-menu[popover]{position:fixed;inset:auto;margin:0;width:max-content;min-width:160px;max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 12px 32px #0005;color:var(--ink)}
 .ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
 .ph-menu :is(button,a):hover{background:var(--surface2);text-decoration:none}
@@ -29,13 +37,16 @@
 .ph>.ph-act:empty{display:none}
 .ph>.ph-act .primary{box-sizing:border-box;height:var(--ctl);white-space:nowrap}
 .ph [hidden]{display:none!important}
-/* Too narrow for one row (page-head.ts pageHeadFit): tabs keep their width; the tools move to a row of their own under
-   the title's, then the tabs do too, wrapping inside it. The title, ⋯ and the filled button keep the first row. */
+/* Too narrow for one row (page-head.ts pageHeadFit): tabs keep their width; once the tools are in ⋯ (.ph-fold), the
+   tabs take a second row (.ph-wrap), wrapping inside it, with the tools at its right where they fit. The title, ⋯ and
+   the filled button keep the first row. Each row is a control high, so the title stays put whatever the row holds. */
 @media (min-width:761px){
   .ph>.ph-tabs{flex:none}
-  .ph.ph-wrap{flex-wrap:wrap;row-gap:6px}
-  .ph.ph-wrap>.ph-tools{order:9;flex:1 1 100%;flex-wrap:wrap;justify-content:flex-end}
-  .ph.ph-wrap2>.ph-tabs{order:8;flex:1 1 100%;flex-wrap:wrap;overflow:visible}
+  .ph>:is(.ph-t,.ph-back){line-height:var(--ctl)}
+  .ph.ph-wrap{flex-wrap:wrap;row-gap:0}
+  .ph.ph-wrap::after{content:"";order:7;flex:1 1 100%;height:0}
+  .ph.ph-wrap>.ph-tabs{order:8;flex:0 1 auto;min-width:0;flex-wrap:wrap;overflow:visible;margin-top:6px}
+  .ph.ph-wrap>.ph-tools{order:9;margin:6px 0 0 auto}
 }
 @media (max-width:760px){
   .ph{flex-wrap:wrap;row-gap:6px}
