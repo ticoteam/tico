@@ -255,8 +255,10 @@ def test_a_bot_create_never_turns_into_an_overwrite_of_a_doc_made_meanwhile(api)
     made, creates, edits = {}, [], counting(api, "edit")
 
     def racing(request, body, imported=None):  # AC-5: Cara creates the doc after the bot looked, before its create
-        creates.append(body.path)
-        made.setdefault("doc", make(api, "Runbook", "Cara's runbook", who=CARA, path="ops/runbook.md"))
+        creates.append(request.state.identity.actor)
+        if not made:  # Cara's own create comes through here too: race only once
+            made["doc"] = None
+            made["doc"] = make(api, "Runbook", "Cara's runbook", who=CARA, path="ops/runbook.md")
         return real(request, body, imported)
 
     api.app.state.docs.create = racing
@@ -264,7 +266,7 @@ def test_a_bot_create_never_turns_into_an_overwrite_of_a_doc_made_meanwhile(api)
     api.app.state.docs.create = real
     assert err and refused["error"] == "path_taken" and refused["version"] == 1
     assert "--base-version 1" in refused["detail"]
-    assert creates == ["ops/runbook.md"] and edits == []  # one write request, never a retry as an edit
+    assert creates.count("bot:ops") == 1 and edits == []  # one write request, never a retry as an edit
     assert call(api, "GET", "docs/" + made["doc"]["id"])["doc"]["body"] == "Cara's runbook"
     [(actor, _target, detail)] = doc_events(api, "docs.write_refused")
     assert actor == "bot:ops" and detail["code"] == "path_taken" and detail["path"] == "ops/runbook.md"
