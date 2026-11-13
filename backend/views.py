@@ -3261,7 +3261,7 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/runs")
-    def runs(request: Request, bot: str | None = None, failed: bool = False):
+    def runs_list(request: Request, bot: str | None = None, failed: bool = False):
         """The newest runs a person may read, or one bot's (`bot`, its id or slug). A bot page asks for its own: the
         newest 200 of the whole company left a quiet bot's failed starts off its Runs card (Nov 12). `failed`: only
         the day's failed runs, as Health counts them."""
