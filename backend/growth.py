@@ -1103,8 +1103,9 @@ def install(app, store, auth, mutate):
                 raise Problem("validation", "Only a file source has an address", 422)
             secret = secrets.token_urlsafe(32)
             c.execute(
-                "UPDATE gtm_sources SET signing_secret=? WHERE id=?",
-                (request.app.state.vault.cipher.seal(c, GS.sealed_as(sid), secret), sid),
+                "INSERT INTO growth_source_secrets (source_id, signing_secret) VALUES (?,?) "
+                "ON CONFLICT(source_id) DO UPDATE SET signing_secret=excluded.signing_secret",
+                (sid, request.app.state.vault.cipher.seal(c, GS.sealed_as(sid), secret)),
             )
             H.event(c, who.actor, "growth.source.address", sid, {})
             return {
@@ -1129,7 +1130,8 @@ def install(app, store, auth, mutate):
         def take():
             with store.transaction() as c:
                 row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
-                secret = vault.cipher.unseal(c, GS.sealed_as(sid), row.get("signing_secret")) if row else None
+                kept = H._one(c, "SELECT signing_secret FROM growth_source_secrets WHERE source_id=?", (sid,))
+                secret = vault.cipher.unseal(c, GS.sealed_as(sid), kept["signing_secret"]) if row and kept else None
                 if not row or not secret or row.get("sync_kind") != "file" or row.get("retired_at"):
                     raise Problem("not_found", "No such address", 404)
                 if not GS.signed(secret, raw, signature):

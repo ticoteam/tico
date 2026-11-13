@@ -1,8 +1,9 @@
-"""A file source can have a signed address (backend/growth.py): `gtm_sources.signing_secret` is its HMAC key, sealed with
-the credential vault (a signature check needs the secret itself). NULL: no address."""
+"""A file source can have a signed address (backend/growth.py): `growth_source_secrets` holds its HMAC key, sealed with
+the credential vault (a signature check needs the secret itself). No row: no address. A table of its own, so this
+migration does not depend on the order other migrations alter gtm_sources in."""
 
 
 def up(conn):
-    have = {row[1] for row in conn.execute("PRAGMA table_info(gtm_sources)")}
-    if have and "signing_secret" not in have:
-        conn.execute("ALTER TABLE gtm_sources ADD COLUMN signing_secret TEXT")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS growth_source_secrets (source_id TEXT PRIMARY KEY, signing_secret TEXT NOT NULL)"
+    )

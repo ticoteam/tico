@@ -146,7 +146,8 @@ def listed(c: Any, alias: str = "") -> str:
     `has_payload` saying whether one is kept."""
     p = f"{alias}." if alias else ""
     names = [str(r[1]) for r in c.execute("PRAGMA table_info(gtm_sources)") if r[1] != "last_payload"]
-    return ", ".join(p + n for n in names) + f", length({p}last_payload) > 0 AS has_payload"
+    return ", ".join(p + n for n in names) + f", length({p}last_payload) > 0 AS has_payload, "
+        f"EXISTS (SELECT 1 FROM growth_source_secrets WHERE source_id={p}id) AS has_address"
 
 
 def view(row: dict[str, Any]) -> dict[str, Any]:
@@ -164,7 +165,7 @@ def view(row: dict[str, Any]) -> dict[str, Any]:
         "last_run_at": row.get("last_run_at"),
         "last_good_run": row.get("last_good_run_at"),
         "last_error": row.get("last_error"),
-        "has_address": bool(row.get("signing_secret")),
+        "has_address": bool(row.get("has_address")),
         "has_file": bool(row.get("has_payload") or row.get("last_payload")),
     }
 
