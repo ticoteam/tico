@@ -36,7 +36,7 @@ const NON_RENDERING: string[] = [
 ];
 
 const SHARED: string[] = [
-  'ui/index.html', 'ui/theme.ts', 'ui/sw.ts', 'ui/manifest.webmanifest', 'ui/observability*.ts',
+  'ui/index.html', 'ui/parts.json', 'ui/theme.ts', 'ui/sw.ts', 'ui/manifest.webmanifest', 'ui/observability*.ts',
   'ui/styles/tokens.css', 'ui/styles/base.css', 'ui/styles/layout.css', 'ui/styles/components.css',
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
