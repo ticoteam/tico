@@ -1275,7 +1275,7 @@ def test_a_private_task_that_waits_on_someone_who_cannot_read_it_is_stuck_at_onc
     assert later(seconds=10) == {"to_person": 1}
     assert _visit(c, hers)["level"] == "person" and _visit(c, hers)["person_id"] == ANA
     line = next(n["line"] for n in W.needs(c, ANA) if n.get("task_id") == hers)
-    assert line == "Stuck in Draft: add Ben under Who can see"
+    assert line == "Stuck in Draft: Ben can't see this task"
     assert all(n.get("task_id") != hers for n in W.needs(c, ben))
     assert X.wakes(c, hers, ben) == [] and H.task_readers(H.task(c, hers)) == []
     assert later(minutes=10) == {}  # once
@@ -1293,7 +1293,7 @@ def test_a_private_task_that_waits_on_someone_who_cannot_read_it_is_stuck_at_onc
     assert all(n.get("task_id") != shared for n in W.needs(c, ben))
     assert later(seconds=10) == {"to_person": 1} and _visit(c, shared)["person_id"] == ANA
     line = next(n["line"] for n in W.needs(c, ANA) if n.get("task_id") == shared)
-    assert line == "Stuck in Check: add Ben under Who can see"
+    assert line == "Stuck in Check: Ben can't see this task"
     assert NS.rules_hold(c) == []
     H.set_task_readers(c, ANA, shared, add=[ben])  # Ana shares it again: Ben's OK is his
     assert any(n.get("task_id") == shared and n["kind"] == "ask" for n in W.needs(c, ben))

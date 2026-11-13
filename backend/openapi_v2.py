@@ -2613,6 +2613,10 @@ SCHEMAS = {
             "late": {
                 "oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}],
             },
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "lane": "s",
             "labels": items({"type": "string"}),
             "acceptance_criteria": items({"type": "string"}),
@@ -2769,6 +2773,12 @@ SCHEMAS = {
             "type": "boolean",
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
             "again",
+        },
+        share={
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "A private task waits on these actors being let in (the next stage's owner and those it "
+            "asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list",
         },
     ),
     "TaskRequirement": obj(
@@ -3678,6 +3688,10 @@ SCHEMAS = {
             "due_at": "n",
             "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "snoozed": "b",
             "pushed_past": "b",
             "stage_since": "n",

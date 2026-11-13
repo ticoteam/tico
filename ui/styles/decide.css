@@ -30,6 +30,7 @@
 /* a page fills the pane and scrolls inside itself; several pages each take the pane's height */
 .dc-page{display:block;flex:1 0 100%;width:100%;min-height:320px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .dc-said{margin:0;overflow-wrap:anywhere}
+.dc-gives{margin:0;font-size:13px;overflow-wrap:anywhere}
 .dc-proof{width:100%;height:min(70vh,900px);border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
 .dc-media{max-width:100%;height:auto}
 .dc-addr{margin:0}

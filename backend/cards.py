@@ -405,7 +405,9 @@ def needs_act(it):
         return "fix"
     if kind == "mention":
         return "reply"
-    stuck = (task.get("turn") or {}).get("state") == "paused" or (task.get("late") or {}).get("level") == "person"
+    turn = task.get("turn") or {}
+    late = (task.get("late") or {}).get("level") == "person"
+    stuck = turn.get("state") == "paused" or late or bool(task.get("stuck")) or bool(turn.get("share"))
     return "fix" if stuck else "done"
 
 
