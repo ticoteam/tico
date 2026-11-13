@@ -272,7 +272,7 @@ function updPrefetch(): void {
   getPrefetch(updFeedPath({...updPrefs(), kind: params.get('kind') === 'weekly' ? 'weekly' : 'daily', view: params.get('view') === 'archive' ? 'archive' : 'inbox'}));
 }
 async function updLoad(state: UpdState, more = false): Promise<void> {
-  const request = ++state.loadSeq;
+  const request = ++state.loadSeq, asked = Date.now();
   const mutation = state.mutationSeq;
   const r: UpdReply | null = await v2Get(updFeedPath(state, more));
   if (UPD !== state || request !== state.loadSeq || mutation !== state.mutationSeq) return;
@@ -287,9 +287,13 @@ async function updLoad(state: UpdState, more = false): Promise<void> {
     state.data = r; updCacheWrite(state, r); state.fromCache = false;
     for (const {update} of state.linked.values()) if (!r.updates.some(u => u.id === update.id)) r.updates.push(update);
   }
+  // Cards this page read whose read the server has not counted yet stay read, and off the count.
+  const unsent = updUnsent(asked);
+  let stale = 0;
+  for (const u of state.data?.updates || []) if (unsent.has(u.id) && !u.read) { u.read = true; if (!u.quiet) stale++; }
   updOrder(state, !more);
   updLinkedRank(state);
-  updBadge(r.unread);
+  updBadge(Math.max(0, r.unread - stale));
   updRender(state);
   if (state.target && !more) { const id = state.target; state.target = null; void updGoTo(state, id); }
 }
@@ -685,10 +689,16 @@ function updWatch(state: UpdState): void {
   }, {threshold: [0, 0.25, 0.5, 0.6, 0.75, 1]});
   for (const el of document.querySelectorAll('#upd-feed .upd-card.unread, #upd-feed .upd-card.upd-quiet')) state.io.observe(el);
 }
-// Reads the server may not count yet: seen cards waiting to be sent (UPD.pending) and requests in flight. An unread
-// count asked for before they settle is stale (it still counts them) and would put the badge back; updUnreadRefresh
-// drops it.
-const UPD_READS = {sending: 0, at: 0};
+// Reads the server may not count yet: seen cards waiting to be sent (UPD.pending) and those in flight. A count or a
+// list asked for before they settle still has them unread, and would put the badge (and the cards) back: updLoad keeps
+// them read and takes them off its count, and updUnreadRefresh drops a count asked for then.
+// `landed` keeps when each read was counted, so a reply asked for before then is caught too (kept a minute).
+const UPD_READS = {sending: new Set<string>(), landed: new Map<string, number>(), at: 0};
+function updUnsent(asked = Date.now()): Set<string> {
+  const now = Date.now();
+  for (const [id, at] of UPD_READS.landed) if (now - at > 60000) UPD_READS.landed.delete(id);
+  return new Set([...(UPD?.pending || []), ...UPD_READS.sending, ...[...UPD_READS.landed].filter(([, at]) => at >= asked).map(([id]) => id)]);
+}
 function updSeen(state: UpdState, id: string): void {
   const u = state.data?.updates?.find(x => x.id === id);
   if (!u || u.read || state.manualUnread.has(id) || UPD !== state) return;
@@ -703,9 +713,13 @@ function updSeen(state: UpdState, id: string): void {
 async function updFlush(state: UpdState): Promise<void> {
   const ids = [...state.pending]; state.pending.clear();
   if (!ids.length) return;
-  UPD_READS.sending++;
-  try { await post('/v2/updates/read', {ids}); if (UPD === state) updCacheWrite(state, state.data); } catch { ids.forEach(id => state.pending.add(id)); }
-  UPD_READS.sending--; UPD_READS.at = Date.now();
+  for (const id of ids) UPD_READS.sending.add(id);
+  try {
+    await post('/v2/updates/read', {ids}); if (UPD === state) updCacheWrite(state, state.data);
+    for (const id of ids) UPD_READS.landed.set(id, Date.now());
+  } catch { ids.forEach(id => state.pending.add(id)); }
+  for (const id of ids) UPD_READS.sending.delete(id);
+  UPD_READS.at = Date.now();
 }
 async function updOpen(state: UpdState, id: string, focusReply?: boolean): Promise<void> {
   const u = state.data!.updates.find(x => x.id === id); if (!u) return;
@@ -744,7 +758,7 @@ async function updToggle(state: UpdState, id: string): Promise<void> {
   const u = state.data!.updates.find(x => x.id === id); if (!u) return;
   u.read = !u.read;
   if (u.read) state.manualUnread.delete(id);
-  else { state.manualUnread.add(id); state.pending.delete(id); }
+  else { state.manualUnread.add(id); state.pending.delete(id); UPD_READS.landed.delete(id); UPD_READS.sending.delete(id); }
   updCacheWrite(state, state.data);
   if (!u.quiet) updBadge(Math.max(0, (S.updUnread || 0) + (u.read ? -1 : 1)));
   updRender(state);
@@ -919,7 +933,7 @@ async function updUnreadRefresh(): Promise<UpdData | null> {
   if (r) {
     // A count asked for while this page's reads were unsent, or before they settled, still counts them: the next
     // refresh brings the right number.
-    if (!UPD?.pending?.size && !UPD_READS.sending && asked > UPD_READS.at) updBadge(r.unread);
+    if (!updUnsent(asked).size && asked > UPD_READS.at) updBadge(r.unread);
     meetPendingBadge(r.meetings_pending || 0);
   }
   return r;

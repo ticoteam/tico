@@ -182,6 +182,10 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.hidden === true);
     await page.evaluate(() => updUnreadRefresh());
     assert.equal(await page.locator('.side-scroll [data-upd-badge]').evaluate(el => (el as HTMLElement).hidden), true, 'a count asked for before the reads landed leaves the badge alone');
+    // A reload of the list then (switching My bots, a new day) has them unread too: they stay read and off its count.
+    await page.evaluate(() => updLoad(UPD));
+    assert.equal(await page.locator('#upd-feed .upd-card.unread').count(), 0, 'a list asked for before the reads landed keeps them read');
+    assert.equal(await page.locator('.side-scroll [data-upd-badge]').evaluate(el => (el as HTMLElement).hidden), true, 'and off the badge');
     holdRead = null; releaseRead();
     for (const end = Date.now() + t(10000); !posted.some(x => x.path === '/api/v2/updates/read') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     const reads = posted.filter(x => x.path === '/api/v2/updates/read');
