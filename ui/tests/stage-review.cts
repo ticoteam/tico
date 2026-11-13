@@ -3,7 +3,8 @@
 //  - a pipeline shows "▶ n" on each stage with items waiting on the person, and no ▶ on a stage with none (columns, the
 //    list's group headers, and beside a phone's stage tabs);
 //  - nothing moves when Needs you arrives after the board draws: ▶ keeps its 40 px slot at the right of a stage's
-//    header (columns and list alike), and a phone's tabs keep their widths, a stage with items getting a dot;
+//    header (columns and list alike), and a phone's tabs and tab strip keep their widths as Needs you and the Rules
+//    counts arrive and across stages whose Rules counts differ in digits, a stage with items getting a dot;
 //  - ▶ opens the review screen full screen on a phone, "Spec · 1 of 3", with only Spec's items in the walk;
 //  - an answer, a send back with a note, or an OK is saved and the next item shows without leaving the screen;
 //  - a clear stage says "Spec is clear" and offers "▶ Review · 2", which walks Review's items;
@@ -109,12 +110,20 @@ async function nothingMoves(browser: Browser) {
     await page.close();
   }
   {
-    let release = () => {};
-    const {page, errors} = await opened(browser, {viewport: PHONE, hash: '#/tasks?pipeline=product', beforeGoto: async pg => { await noGrant(pg); release = await heldNeeds(pg); }});
+    // The stage's Rules count also arrives late, and differs in digits between stages (Spec 12, Review 1, Build 0).
+    let release = () => {}, rulesGo = () => {};
+    const rulesHeld = new Promise<void>(r => { rulesGo = r; });
+    const rule = (i: number, stages: string[]) => ({id: `r${i}`, scope: 'stage', stages});
+    const items = [...Array.from({length: 12}, (_, i) => rule(i, ['spec'])), rule(99, ['review'])];
+    const {page, errors} = await opened(browser, {viewport: PHONE, hash: '#/tasks?pipeline=product', beforeGoto: async pg => {
+      await noGrant(pg); release = await heldNeeds(pg);
+      await pg.route('**/api/v2/stage-rules**', async route => { await rulesHeld; await route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}); });
+    }});
     await page.locator('.pv-tab[data-pv-tab="build"]').click();
     const before = await layoutOf(page);
-    release();
+    release(); rulesGo();
     await page.locator('.pv-tab-dot').first().waitFor();
+    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-btn .tnum')?.textContent === '0');
     const after = await layoutOf(page);
     assert.deepEqual([after.tabs, after.strip], [before.tabs, before.strip], 'the tabs keep their widths when the dots arrive');
     assert.deepEqual(await page.locator('.pv-tab:has(.pv-tab-dot)').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.pvTab)), ['spec', 'review']);
@@ -123,6 +132,7 @@ async function nothingMoves(browser: Browser) {
       await page.locator(`.pv-tab[data-pv-tab="${id}"]`).click();
       const now = await layoutOf(page);
       assert.deepEqual([now.tabs, now.strip], [before.tabs, before.strip], `the tabs do not move on ${id}`);
+      if (id === 'spec') assert.equal((await page.locator('.pv-phone-head .sr-btn').textContent())?.trim(), 'Rules 12', 'a two-digit Rules count, same strip');
     }
     assert.deepEqual(errors, []);
     await page.close();
