@@ -174,6 +174,27 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       assert.equal(await page.evaluate(() => location.hash), hash, 'back returns to Listening');
       assert.equal(await page.locator('#mobile-nav').isVisible(), true);
       assert.equal(await page.locator('.lst-row').count(), 2);
+
+      // A listening open on a phone: the face stays at the right of the ‹ Listening row, and a question names it.
+      await page.locator('.lst-row[data-lst="au_market"]').click();
+      await page.waitForSelector('.lst-blk');
+      const crumb = await box(page, '.au-crumb'), onItem = await box(page, '.au-ph [data-pgc-open]');
+      assert.ok(onItem.w > 0 && onItem.x + onItem.w <= PHONE.width && onItem.x > PHONE.width / 2, `the face at the right: ${JSON.stringify(onItem)}`);
+      assert.ok(onItem.y >= crumb.y - 8 && onItem.bottom <= crumb.bottom + 8, `in the ‹ Listening row: ${JSON.stringify([onItem, crumb])}`);
+      await shot(page, 'page-chat-phone-listening');
+      await face.click();
+      await page.locator('.au-pgc.pgc-full .p-text').fill('Why did this one send nothing yesterday?');
+      await page.locator('.au-pgc .p-text').press('Enter');
+      await page.locator('.au-pgc .th-from').waitFor();
+      assert.deepEqual(sent.at(-1)?.refs?.from_page, {page: 'listening', label: 'Listening', item: {kind: 'automation', id: 'au_market', name: 'Market listening'}});
+      // A link followed from the chat leaves through the chat's history entry: one back returns to the page before.
+      await page.locator('.au-pgc .th-from a').click();
+      await page.waitForFunction(() => document.querySelector('.au-pgc')!.hasAttribute('hidden'));
+      assert.equal(await page.evaluate(() => location.hash), '#/listening/au_market');
+      assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-phone-open')), false, 'the page is back');
+      await page.goBack();
+      await page.waitForFunction(h => location.hash !== h, '#/listening/au_market');
+      assert.equal(await page.evaluate(() => location.hash), hash, 'one back leaves the linked page');
       assert.deepEqual(errors, []);
       await page.close();
     }

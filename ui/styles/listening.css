@@ -70,6 +70,12 @@
   .lst-row{grid-template-columns:10px minmax(0,1fr) 48px;min-height:48px}
   .lst-lim{display:none}
   .lst-run{grid-template-columns:minmax(0,1fr);gap:10px}
+  /* A listening open: the header hides, but the owner's face stays, at the right of the ‹ Listening row, so a
+     question can name the listening. */
+  .au-lst[data-screen="detail"]{position:relative}
+  .au.au-lst[data-screen="detail"] .au-ph{display:block;position:absolute;z-index:2;top:4px;right:12px;padding:0;min-height:0}
+  .au-lst[data-screen="detail"] .au-ph > :not(:has(.au-chat)),.au-lst[data-screen="detail"] .au-ph .au-hrow > :not(.au-chat){display:none}
+  .au-lst[data-screen="detail"] .au-crumb{min-height:44px;padding-right:60px}
 }
 /* The owner's chat (page-chat.css): the page's second column while open; a listening's editor takes its place. */
 .au-lst.pgc-open:not(.ed-open) .au-body{grid-template-columns:minmax(0,1fr) var(--pgc-w,340px)}

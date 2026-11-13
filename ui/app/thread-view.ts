@@ -753,7 +753,8 @@ const THV_FROM_PAGES: Record<string, (item?: PageChatItem) => string> = {
 function thvFromHTML(m: ThvMessage) {
   const f = m.refs?.from_page;
   if (!f || typeof f !== 'object' || !f.label) return '';
-  const href = THV_FROM_PAGES[f.page]?.(f.item);
+  // The page name comes from the message, so only the table's own keys count (not Object's, such as constructor).
+  const href = Object.hasOwn(THV_FROM_PAGES, f.page) ? THV_FROM_PAGES[f.page]?.(f.item) : undefined;
   const words = esc('From ' + f.label) + (f.item?.name ? ' › ' + esc(f.item.name) : '');
   return `<div class="th-from">${href ? `<a href="${esc(href)}">${words}</a>` : words}</div>`;
 }

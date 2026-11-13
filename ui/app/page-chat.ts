@@ -152,6 +152,15 @@ window.addEventListener('hashchange', () => {
 
 function pgcClick(ev: MouseEvent): void {
   const state = PGC, target = eventElement(ev);
+  const link = target?.closest<HTMLAnchorElement>('a[href^="#"]');
+  if (state?.full && link && history.state?.pageChat && !ev.defaultPrevented && ev.button === 0 && !ev.metaKey && !ev.ctrlKey) {
+    // Leave through the chat's history entry first, so back from the new page returns to the page, not to a copy.
+    ev.preventDefault();
+    const href = link.getAttribute('href') || '';
+    window.addEventListener('popstate', () => { location.hash = href; }, {once: true});
+    pgcFullClose(state);
+    return;
+  }
   if (!state || !target?.closest('[data-pgc-close]')) return;
   if (state.full) pgcFullClose(state); else pageChatToggle(false);
 }

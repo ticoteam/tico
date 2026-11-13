@@ -20,6 +20,8 @@
 /* The chat fills the column, its composer at the bottom (a card's chat is otherwise its own height, threads.css). */
 .pgc-chat > .thv{flex:1 1 auto;min-height:0}
 .pgc-chat > .thv-card .thv-scroll{max-height:none}
+/* The column has no padding of its own, so the composer keeps its rounded border clear of the edges. */
+.pgc-chat > .thv-card .thv-composer{padding:0 10px 10px}
 @media (max-width:760px){
   .pgc-word{display:none}
   .pgc-btn{width:36px;height:36px;padding:0;justify-content:center;border-radius:50%}
