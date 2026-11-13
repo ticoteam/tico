@@ -62,9 +62,11 @@ function settingsTaskParts(e: SettingsBot, row = false) {
     aria-label="Task effort for ${esc(name)}" ${manage && efforts.length > (own ? 0 : 1) ? '' : 'disabled'}>${settingsTaskEffortOptions(efforts, effort, own, option)}</select>`;
   const contextSelect = `<select ${cls} data-task-context="${esc(e.id)}" data-current="${context || ''}" aria-label="Task context length for ${esc(name)}" ${manage ? '' : 'disabled'}>
     ${option('', 'Same as bot', !context)}${sizes.map(([size, label]) => option(size, label, size === context)).join('')}</select>`;
-  return row ? `<label class="sb-task-part">Task effort${effortSelect}</label><label class="sb-task-part">Task context length${contextSelect}</label>`
+  // A task on a harness that compacts on its own default (Claude Code) has no context length to pick.
+  const ownCompaction = harnessCaps(task?.harness || e.harness || e.runtime || e.resolved_runtime || undefined).own_compaction;
+  return row ? `<label class="sb-task-part">Task effort${effortSelect}</label>${ownCompaction ? '' : `<label class="sb-task-part">Task context length${contextSelect}</label>`}`
     : `<div class="sb-row"><span>Task effort</span>${effortSelect}<span></span></div>
-    <div class="sb-row"><span>Task context length</span>${contextSelect}<span></span></div>`;
+    ${ownCompaction ? '' : `<div class="sb-row"><span>Task context length</span>${contextSelect}<span></span></div>`}`;
 }
 // The bots table's task indicator, beside the model: faint while tasks run as the bot does, marked when any task
 // setting differs ("Tasks · 600k" with a task context length). It opens the bot's task row under it

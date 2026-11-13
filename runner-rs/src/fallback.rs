@@ -496,6 +496,13 @@ pub fn server_takes_trust() -> bool {
     SERVER_TRUST.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the server takes the readiness document's `browser` (`readiness_browser`): an older one refuses it.
+static SERVER_BROWSER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_takes_browser() -> bool {
+    SERVER_BROWSER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether a config answer has been kept since start.
 pub fn config_seen() -> bool {
     CHOICES.lock().unwrap().is_some()
@@ -521,6 +528,10 @@ pub fn remember(config: &Value) {
     );
     SERVER_TRUST.store(
         config["readiness_trust"] == true,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    SERVER_BROWSER.store(
+        config["readiness_browser"] == true,
         std::sync::atomic::Ordering::Relaxed,
     );
     let rows = config["fallback_models"]

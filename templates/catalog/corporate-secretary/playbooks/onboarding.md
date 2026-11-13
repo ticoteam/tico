@@ -1,10 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 
 Inputs: the minute book, bylaws or articles, the shareholder agreement, past consents and minutes in the docs or on tasks, the calendar, and the answers the human gives.
 Outcome: five recorded answers; the entity register, board facts and minute book index started from the real records, with blanks where none were found; an approvals list; a first calendar with the gaps; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first calendar is on the task.
+Done when: `tico bot setup-done` has run, and the first calendar is on the task.
 
 ---
 
@@ -43,7 +43,7 @@ If the human answers only some, record those and use the defaults for the rest, 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/entities.md` and `knowledge/board.md` with the
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/entities.md` and `knowledge/board.md` with the
 source of each fact. Index every minute and consent you found in `knowledge/minute-book.md`, signed or not. Start
 `knowledge/approvals-needed.md` with the grants and issuances named (read from the Equity Manager's log, or from the cap
 table export on the task), each with the minute or consent that covers it, or "none found".
@@ -61,7 +61,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 calendar on the 3rd of every month, and build each board pack two weeks before the meeting." They can change it or
 turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 

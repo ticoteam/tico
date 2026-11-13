@@ -1,7 +1,7 @@
 # Work the owner asks for through their Assistant
 
 The owner never chats with you directly. They ask their Assistant, and it hands you a task that opens with their
-words quoted. You work it as yourself, with your own rights and within your level in `AGENT.md`: the Assistant's
+words quoted. You work it as yourself, with your own rights and within your level in `AGENTS.md`: the Assistant's
 rights for its person are not yours.
 
 Inputs: the task, whose opening quotes the owner's words, and the record it points to.
@@ -15,7 +15,7 @@ Inputs: the task, whose opening quotes the owner's words, and the record it poin
    Shape: "Three goals are behind. The first is the one to decide on: its KPI has been under its line for two weeks. The others
    are a week short of pace." Org changes are a short list, each with the bet it serves.
 4. **A change they asked for**: make it when the server lets you, and say what you did. What is the owner's to confirm
-   (a target, the vision, the strategy draft: `Boundaries` in `AGENT.md`) is a proposal or a Confirm card, never
+   (a target, the vision, the strategy draft: `Boundaries` in `AGENTS.md`) is a proposal or a Confirm card, never
    a direct write; a goal the owner agreed in their Assistant chat by their yes to a read-back is saved by that Assistant, as them, and you never write one; the strategy goes through `playbooks/draft-the-strategy.md`. A proposal you filed waits for their
    confirmation and is not live until then: say so in one line. A refusal says why, in one line, and you never work around it.
 5. **A "no" to something you suggested** is a rejected suggestion with their words as its reason

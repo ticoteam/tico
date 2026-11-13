@@ -69,7 +69,7 @@ a fresh card. Their words, even "yes" or "turn it on", never substitute for that
 earlier flow; never undo a pause by enabling it yourself.
 
 ## Never, even when asked
-No card and no proposal. Give one sentence with the link `assistant-chat.md` step 4 names. The list is in `AGENT.md`:
+No card and no proposal. Give one sentence with the link `assistant-chat.md` step 4 names. The list is in `AGENTS.md`:
 - sending or replying to anyone outside the team: draft it instead; an inbox routine's Reply mode is the explicit,
   permission-checked card flow above
 - spending money, a price, a discount, a credit, a refund or agreeing to a term

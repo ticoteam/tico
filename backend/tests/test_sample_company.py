@@ -147,8 +147,9 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
 
 
 def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
-    """The computer makes each bot's repository from its template (runner_support/catalog_job.py); a template's state.md
-    says setup has not started, and its AGENT.md asks the setup questions first until it does."""
+    """The computer makes each bot's repository from its template (runner_support/catalog_job.py); a template's AGENTS.md
+    asks the setup questions first while Tico marks the bot Needs setup, and a sample bot is not marked so: its
+    knowledge/company.md says the sample's answers stood in for them."""
     import io
     import json
     from runner_support import catalog_job
@@ -184,11 +185,13 @@ def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(enviro
     answer = json.loads(out.getvalue())
     for slug in ROLE_BOTS:
         assert answer[slug]["problem"] == "" and answer[slug]["materialized"], answer[slug]
-        state = (projects / ("bot-" + slug) / "state.md").read_text()
-        assert re.search(r"^## Setup\nDone \d{4}-\d\d-\d\d\. .*do not ask them\.$", state, re.M), state
-        assert "Not started" not in state and "start setup" not in state and "switched on when your setup" not in state
-        # The template's own instructions still gate on state.md, which now says setup is done.
-        assert "If `state.md` says setup has not finished" in (projects / ("bot-" + slug) / "AGENT.md").read_text()
+        repo = projects / ("bot-" + slug)
+        assert not (repo / "state.md").exists()
+        page = (repo / "knowledge" / "company.md").read_text()
+        assert re.search(r"^## Setup\nDone \d{4}-\d\d-\d\d\. .*do not ask them\.$", page, re.M), page
+        assert "## Routine\nYour first routine is off." in page
+        # The template's own instructions gate on the Needs setup mark, which a sample bot does not have.
+        assert "If setup has not finished (Tico marks you Needs setup)" in (repo / "AGENTS.md").read_text()
 
 
 # ---------------------------------------------------------------------------------------------- TICO_SAMPLE_COMPANY

@@ -302,6 +302,9 @@ AUDIENCE = {
         name: NOT_ASSISTANT
         for name in ("tico_sql", "tico_classify", "tico_decision_ask", "tico_decision_outcome", "tico_market_ask")
     },
+    # Website tools (clients/commands/browser.py, logins.py): a bot's own turn drives the browser as its account; a
+    # person opens the browser on the tool's page instead, and the Assistant never signs in anywhere.
+    **{t["name"]: BOTS for t in TOOLS if t["name"].startswith(("tico_browser_", "tico_login_"))},
 }
 
 

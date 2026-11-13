@@ -625,6 +625,18 @@ ENTRIES = TEAM_RULES + [
         card=_card("devices"),
     ),
     S(
+        "computer.browser_host",
+        "Browser host",
+        COMPUTERS,
+        "admin",
+        "confirm",
+        "POST",
+        "computers/{computer}/browser-host",
+        "on",
+        card=_card("devices"),
+        words="website browser chrome",
+    ),
+    S(
         "computer.label",
         "Rename a computer",
         COMPUTERS,

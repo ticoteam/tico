@@ -1,11 +1,11 @@
 # Setup
 
-Schedule: runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
+Schedule: runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
 Inputs: the task, the roster, the Librarian's answer on required training, and any completion export attached. Outcome: five
 recorded answers, the mandatory training list, a first tracker from real completion records or a first role plan, and the first
 routine checked.
 
-Done when the five answers are in `state.md`, `knowledge/mandatory.md` is written, the first result is attached to the task labelled
+Done when the five answers are in `knowledge/`, `knowledge/mandatory.md` is written, the first result is attached to the task labelled
 as a first draft, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
@@ -42,7 +42,7 @@ and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/mandatory.md` (course, audience by role, frequency,
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/mandatory.md` (course, audience by role, frequency,
 provider, due rule). Start `knowledge/new-manager.md` if there are first-year managers.
 
 ## 5. Produce the first result now
@@ -56,7 +56,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 --enable`) and tell the human in one line what it does: "I will write this tracker every Thursday at 09:00 for the HR owner." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it
 off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

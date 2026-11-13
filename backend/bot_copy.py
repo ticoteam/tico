@@ -371,7 +371,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         for file in body.files:
             if not (botcopy.safe_path(file.path) and botcopy.in_scope(file.path)):
                 raise Problem(
-                    "path", f"{file.path} is not part of a bot's instructions (AGENT.md, skills/, playbooks/)", 422
+                    "path", f"{file.path} is not part of a bot's instructions (AGENTS.md, skills/, playbooks/)", 422
                 )
         service = app.state.github_app
         with store.read() as c:

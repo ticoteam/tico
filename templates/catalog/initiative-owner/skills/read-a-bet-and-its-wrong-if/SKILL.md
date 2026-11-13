@@ -7,7 +7,7 @@ description: Read one strategy bet from the Strategy page and check its wrong-if
 When to use: at the start of a check-in, before any call on the bet, and whenever a task asks whether a bet still holds.
 
 Steps:
-1. Run `tico strategy show`. Find the bet by the id recorded in `state.md`. Record its statement, what it rules out, its why,
+1. Run `tico strategy show`. Find the bet by the id recorded in `knowledge/plan.md`. Record its statement, what it rules out, its why,
    its status and its wrong-if exactly as published, with the strategy version number.
 2. If the bet is not in the published strategy, or is not `active`, stop. Say so in one line. Do not infer a status.
 3. Read the goals under the bet in `goals_by_bet` and their colours in `health_by_bet`. A goal with no KPI is coloured by its

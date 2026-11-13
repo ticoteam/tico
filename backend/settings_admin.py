@@ -83,6 +83,9 @@ REPORT_UNDO = ("model", "task_model", "identity", report_managers.LIFECYCLE)
 # emoji is four bytes, not one character). A change past that starts the next page (`next_before`); one bigger than a
 # page on its own is sent without its values (`truncated`), so the page still moves on past it.
 HISTORY_PAGE_BYTES = 256 * 1024
+# The readiness problem a computer reports for a bot it has no checkout of yet (runner-rs/src/readiness.rs); older
+# runners name the instruction file AGENT.md.
+MISSING_REPOSITORY = ("Missing bot repository or AGENTS.md", "Missing bot repository or AGENT.md")
 
 
 def _lifecycle_state(c, bot):
@@ -1341,7 +1344,7 @@ class SettingsAdmin:
                 # makes its runner clone the repository. That is fine when GitHub holds the history, and a
                 # refusal that names the cause when it does not.
                 source = self.execution_assignment(c, bot)
-                other = [p for p in detail.get("problems") or [] if p != "Missing bot repository or AGENT.md"]
+                other = [p for p in detail.get("problems") or [] if p not in MISSING_REPOSITORY]
                 if source and detail.get("repository_present") is False and not other:
                     blocked = stranded(c, self.store.settings, bot, source, runner["id"])
                     if blocked:

@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes. The
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The
 outcome is four recorded answers, the deadlines written down, a first draft summary on the task, and the routine checked.
 
 ## 1. Read before you ask
@@ -21,8 +21,7 @@ and I never do a stage's work or change a stage's settings.
 
 ## 3. Ask, in one message
 
-The four questions in `card.yaml` under `onboarding`, numbered, each with its why. Record each answer in `state.md` the
-moment it arrives, dated.
+The four questions in `card.yaml` under `onboarding`, numbered, each with its why. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives.
 
 ## 4. Write and check
 

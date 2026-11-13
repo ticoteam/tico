@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is five recorded answers, an item plan computed from real
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The outcome is five recorded answers, an item plan computed from real
 exports, a first reorder list, and the first routine checked.
 
 ---
@@ -31,8 +30,8 @@ Numbered, each with its one-line why and a default.
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Compute `knowledge/items.md` from the exports as in
-`AGENT.md`, "How you compute". An item with under 30 days of sales history is marked "too new to
+Write each answer, dated, into the `knowledge/` file it belongs to. Compute `knowledge/items.md` from the exports as in
+`AGENTS.md`, "How you compute". An item with under 30 days of sales history is marked "too new to
 plan" and left for a human. An item with under 60 clean days, or fewer than three recorded deliveries, uses the fallback
 safety stock rule, and its line says so.
 
@@ -47,7 +46,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will build this list every Monday at 07:30 from that week's exports." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

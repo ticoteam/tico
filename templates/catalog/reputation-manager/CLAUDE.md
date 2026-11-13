@@ -1,1 +1,1 @@
-Read AGENT.md: it is the standing instructions for this bot.
+Read AGENTS.md: it is the standing instructions for this bot.

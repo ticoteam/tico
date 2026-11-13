@@ -156,3 +156,54 @@ section.card.tt-soon>header .pill{margin-left:auto}
 #tool-finance .taf-key select{max-width:100%;min-width:0}
 #tool-finance .taf-table{width:100%;font-size:var(--t-sm)}
 #tool-finance .taf-table td select{max-width:160px}
+/* A website tool's page (ui/app/tools-website.ts): accounts, the browser card and the Add website form. */
+.tw-more{display:inline-flex;align-items:center;justify-content:center;width:28px;min-width:28px;height:28px;padding:0}
+.tw-more .nav-icon{width:20px;height:20px;font-size:20px;color:inherit}
+.tw-accts{display:flex;flex-direction:column}
+.tw-acct{display:grid;grid-template-columns:72px minmax(0,1fr) auto 28px;align-items:center;gap:10px;min-height:44px;padding:6px 0;border-top:1px solid var(--line)}
+.tw-acct:first-child{border-top:0}
+.tw-kind{justify-self:start}
+.tw-acct-name{display:flex;align-items:center;gap:6px;min-width:0}
+.tw-acct-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.tw-acct-user{display:block;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
+.tw-acct-who{display:flex;align-items:center;gap:6px;min-width:0;justify-content:flex-end}
+.tw-2fa{flex:none;width:16px;height:16px;font-size:16px;color:var(--muted)}
+.tw-ses{flex:none;width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.tw-ses[data-state=signed_in]{background:var(--ok)}
+.tw-ses[data-state=needs_you]{background:var(--wait)}
+.tw-ses[data-state=signed_out]{background:var(--fail)}
+.tw-recent{list-style:none;margin:0;padding:0}
+.tw-rec{display:grid;grid-template-columns:60px 22px minmax(0,1fr);align-items:center;gap:8px;padding:6px 0;font-size:var(--t-sm)}
+.tw-rec>.tnum{white-space:nowrap}
+.tw-rec-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tw-rec-text .mono{font-size:var(--t-xs)}
+.tw-host{display:inline-flex;align-items:center;gap:6px}
+.tw-host-dot{width:8px;height:8px;border-radius:50%;background:var(--fail)}
+.tw-host[data-online=true] .tw-host-dot{background:var(--ok)}
+.tw-sites{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-width:0}
+.tw-sites .mono{overflow-wrap:anywhere}
+.tw-central{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:var(--t-sm);cursor:pointer}
+.wh-dialog .task-rule-form>label.tw-central{display:flex;margin-top:4px}
+.tw-who-field{display:grid;gap:6px}
+.tw-who-field label{display:grid;gap:4px}
+.tw-seg{align-self:flex-start;margin-bottom:4px}
+.tw-chips{display:flex;flex-wrap:wrap;gap:6px}
+.tw-chips:empty{display:none}
+.tw-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 2px 2px 4px;border:1px solid var(--line);border-radius:999px;font-size:var(--t-sm)}
+.tw-chip .tt-x{width:22px;height:22px;min-width:22px;padding:0;border:0;background:none}
+.tw-access{display:flex;flex-direction:column;margin-bottom:8px}
+.tw-access-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
+.tw-access-row:first-child{border-top:0}
+.tw-access-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tw-code{margin:4px 0 0;font-size:var(--t-xl);font-weight:600;letter-spacing:.08em;text-align:center}
+.tw-code-left{margin:0;text-align:center}
+.tw-log .tt-who-name{display:flex;align-items:center;gap:6px}
+@media (max-width:760px){
+  .tw-acct{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-rows:auto auto;gap:4px 8px}
+  .tw-acct .tw-kind{grid-row:1}
+  .tw-acct .tw-acct-name{grid-row:1}
+  .tw-acct .tw-more{grid-column:3;grid-row:1 / span 2;width:36px;height:36px}
+  .tw-acct .tw-acct-who{grid-column:2;grid-row:2;justify-content:flex-start}
+  .tw-acct .tw-acct-who:not(:has(*)){display:none}
+  .tw-acct-user{max-width:100%}
+}

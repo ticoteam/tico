@@ -63,7 +63,7 @@ def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
     assign(api, machine, "ops")
     post(api, "bots/ops/memory/report", {"commits": [commit()]}, other["token"], expected=403)
     post(api, "bots/ops/memory/report", {"commits": [commit()]}, "ben-test", expected=403)
-    post(api, "bots/ops/memory/report", {"commits": [commit(files=["AGENT.md"])]}, machine["token"])
+    post(api, "bots/ops/memory/report", {"commits": [commit(files=["AGENTS.md"])]}, machine["token"])
     post(api, "bots/ops/memory/report", {"commits": [commit("b" * 40, attempt="not-a-run")]}, machine["token"])
     rows = history(api, "ben-test")["updates"]
     assert [r["sha"] for r in rows] == ["b" * 40] and rows[0]["source"] is None

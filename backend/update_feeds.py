@@ -250,7 +250,7 @@ def tico_item(release):
 # A template file that is part of what the bot runs on, and what the reason calls it: Instructions, settings, tools
 # and playbooks. The reason names these kinds, never the file names, which are feed text (they are quoted under Files).
 _RUNS_ON = (
-    ("Instructions", re.compile(r"AGENT\.md")),
+    ("Instructions", re.compile(r"AGENTS?\.md")),
     ("settings", re.compile(r"bot\.yaml|card\.yaml|\.claude/.+")),
     ("skills", re.compile(r"skills/.+")),
     ("playbooks", re.compile(r"playbooks/.+")),

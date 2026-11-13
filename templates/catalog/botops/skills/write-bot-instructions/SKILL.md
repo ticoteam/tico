@@ -1,10 +1,10 @@
 ---
 name: write-bot-instructions
-description: "Write or repair a bot's AGENT.md so it names the team, what arrives where, the work the bot owns and the lines it never crosses, in a form the bot can follow with no other context."
+description: "Write or repair a bot's AGENTS.md so it names the team, what arrives where, the work the bot owns and the lines it never crosses, in a form the bot can follow with no other context."
 ---
 # Write a bot's instructions
 
-When to use: when you write a new bot's `AGENT.md` from a template or from the owner's reviewed text, or repair one after
+When to use: when you write a new bot's `AGENTS.md` from a template or from the owner's reviewed text, or repair one after
 a failed run or a wrong answer.
 
 Skills propose changes to systems only when the task asks for them and a granted Tool allows it.
@@ -21,7 +21,7 @@ Steps:
    only as granted, and the rules for tasks filed for humans. Copy them from the template. Do not soften one.
 6. Method: the steps the job takes, in order, with the point where a person must act and the shape of the output.
    One outcome per run.
-7. Put rare rules in a playbook that `AGENT.md` names, with the moment to read it. The file should stay short enough to
+7. Put rare rules in a playbook that `AGENTS.md` names, with the moment to read it. The file should stay short enough to
    read in one sitting.
 8. Read the whole file as the bot would, with no other context. Mark each sentence it could act on wrongly, and fix or
    cut it.

@@ -194,7 +194,7 @@ class GitHub:
             answer.body = {"default_branch": "main"}
         elif path.endswith("/git/ref/heads/main"):
             answer.body = {"object": {"sha": "f" * 40}}
-        elif method == "GET" and path.endswith("/contents/AGENT.md"):
+        elif method == "GET" and path.endswith("/contents/AGENTS.md"):
             answer.body = {"sha": "old-sha"}
         elif method == "GET":
             answer.status_code = 404
@@ -248,7 +248,7 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
     original.mkdir(parents=True)
     git(original, "init", "-q", "-b", "main")
     files = {
-        "AGENT.md": "# Scribe\n\n## Owns\n- Notes\n\nOne.\nTwo.\nThree.\nFour.\nFive.\n",
+        "AGENTS.md": "# Scribe\n\n## Owns\n- Notes\n\nOne.\nTwo.\nThree.\nFour.\nFive.\n",
         "state.md": "# State\nprivate\n",
         "bot.yaml": "name: scribe\ndisplay_name: Scribe\nlabels: [owner:scribe]\ntools:\n  - service: jira\n    can: [read]\n    env: JIRA_BASIC_AUTH\n",
         "skills/triage/SKILL.md": "Triage.\n",
@@ -284,17 +284,17 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
     assert mine["published"] is False and placed_on(api, "cara-mine") == botops["runner_id"], mine
     copy_dir = workspace / "bot-cara-scribe"
     assert git(copy_dir, "log", "--format=%s") == f"Copied from scribe at {made['from_sha'][:12]}"
-    assert not (copy_dir / ".env").exists() and "private" not in (copy_dir / "state.md").read_text()
+    assert not (copy_dir / ".env").exists() and not (copy_dir / "state.md").exists()
     assert config_of(api, "cara-scribe")[0]["created_by"] == "human:cara"
 
     # The original moves on; bringing the copy up to date is its own request, and the server remembers where it is now.
-    (original / "AGENT.md").write_text(files["AGENT.md"].replace("Two.", "Two, better."))
+    (original / "AGENTS.md").write_text(files["AGENTS.md"].replace("Two.", "Two, better."))
     git(original, "commit", "-qam", "Better")
-    (copy_dir / "AGENT.md").write_text(files["AGENT.md"].replace("Five.", "Five, mine."))
+    (copy_dir / "AGENTS.md").write_text(files["AGENTS.md"].replace("Five.", "Five, mine."))
     git(copy_dir, "commit", "-qam", "Mine")
     updated = tool("tico_bot_update_from_original", bot="cara-scribe")
-    assert updated["status"] == "updated" and updated["updated"] == ["AGENT.md"]
-    merged = (copy_dir / "AGENT.md").read_text()
+    assert updated["status"] == "updated" and updated["updated"] == ["AGENTS.md"]
+    merged = (copy_dir / "AGENTS.md").read_text()
     assert "Two, better." in merged and "Five, mine." in merged
     assert config_of(api, "cara-scribe")[1]["copied_from"]["sha"] == git(original, "rev-parse", "HEAD")
     assert tool("tico_bot_update_from_original", bot="cara-scribe")["status"] == "current"
@@ -304,7 +304,7 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
     with api.app.state.store.transaction() as c:
         restrict(c, scribe_id, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
     suggested = tool("tico_bot_suggest_to_original", bot="cara-scribe")
-    assert suggested["how"] == "task" and suggested["files"] == ["AGENT.md"]
+    assert suggested["how"] == "task" and suggested["files"] == ["AGENTS.md"]
     assert tool("tico_bot_suggest_to_original", bot="cara-scribe", paths=["skills"])["suggested"] is False
 
     # A skill goes to a bot she manages; one she does not is refused before any file moves.
@@ -343,7 +343,7 @@ def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, 
     original = workspace / "bot-scribe"
     original.mkdir(parents=True)
     git(original, "init", "-q", "-b", "main")
-    for rel, text in {"AGENT.md": "# Scribe\n\nOne.\nTwo.\n", "bot.yaml": "name: scribe\n"}.items():
+    for rel, text in {"AGENTS.md": "# Scribe\n\nOne.\nTwo.\n", "bot.yaml": "name: scribe\n"}.items():
         (original / rel).parent.mkdir(parents=True, exist_ok=True)
         (original / rel).write_text(text)
     git(original, "add", "-A")
@@ -356,7 +356,7 @@ def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, 
 
     rename(api, "scribe", "note-taker")  # the original, renamed: still in bot-scribe
     made = tool("tico_bot_copy", bot="note-taker", slug="cara-helper")
-    assert made["folder"] == "bot-cara-helper" and (workspace / "bot-cara-helper" / "AGENT.md").is_file()
+    assert made["folder"] == "bot-cara-helper" and (workspace / "bot-cara-helper" / "AGENTS.md").is_file()
     rename(api, "cara-helper", "cara-assistant", token="cara-test")  # the copy, renamed: still in bot-cara-helper
     (original / "skills" / "minutes").mkdir(parents=True)
     (original / "skills" / "minutes" / "SKILL.md").write_text("Minutes.\n")
@@ -366,13 +366,13 @@ def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, 
     assert [(r["bot"], r["status"]) for r in shared["to"]] == [("cara-assistant", "copied")], shared
     assert (workspace / "bot-cara-helper" / "skills" / "minutes" / "SKILL.md").read_text() == "Minutes.\n"
     assert not (workspace / "bot-cara-assistant").exists()
-    (original / "AGENT.md").write_text("# Scribe\n\nOne.\nTwo, better.\n")
+    (original / "AGENTS.md").write_text("# Scribe\n\nOne.\nTwo, better.\n")
     git(original, "commit", "-qam", "Better")
     assert tool("tico_bot_update_from_original", bot="cara-assistant")["status"] == "updated"
-    assert "Two, better." in (workspace / "bot-cara-helper" / "AGENT.md").read_text()
+    assert "Two, better." in (workspace / "bot-cara-helper" / "AGENTS.md").read_text()
     # A new bot given the renamed copy's first slug is built in a folder of its own, not into that checkout.
     again = tool("tico_bot_copy", bot="note-taker", slug="cara-helper")
-    assert again["folder"].startswith("bot-cara-helper-") and (workspace / again["folder"] / "AGENT.md").is_file()
+    assert again["folder"].startswith("bot-cara-helper-") and (workspace / again["folder"] / "AGENTS.md").is_file()
     # The renamed copy's own checkout is untouched: its committed skill is still there.
     assert git(workspace / "bot-cara-helper", "show", "HEAD:skills/minutes/SKILL.md") == "Minutes."
 

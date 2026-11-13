@@ -23,7 +23,7 @@ When a `tico` command refuses something that should work, or Tico contradicts it
 `tico support file "<the command you ran, its operation_id if it had one, the error code and detail, what you expected>"`.
 Tell the person "Blocked on a Tico bug, reported as <ticket>" and stop. The report leaves the company: never paste credential
 values, tokens, customer data or message bodies. File each bug once; keep the ticket in your task note and name it on later
-runs instead of filing again. Never work around a Tico bug by hand-editing a computer (AGENT.md Boundaries).
+runs instead of filing again. Never work around a Tico bug by hand-editing a computer (AGENTS.md Boundaries).
 
 ## Waiting on a computer's update
 A computer's update (any computer's, this one's too) is read once: `tico computer list` or `tico health check`. If it is still

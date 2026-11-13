@@ -1,10 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 
 Inputs: formation documents, licences, insurance policies and past filings in the team docs or attached to tasks, the calendar, and the answers the human gives.
 Outcome: five recorded answers; a register of obligations built from where the team is registered and what it does, with blanks where a rule is not yet confirmed; a first calendar; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first calendar is on the task.
+Done when: `tico bot setup-done` has run, and the first calendar is on the task.
 
 ---
 
@@ -43,7 +43,7 @@ If the human answers only some, record those and use the defaults for the rest, 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Build `knowledge/register.md`: for each place of registration,
+Write each answer, dated, into the `knowledge/` file it belongs to. Build `knowledge/register.md`: for each place of registration,
 the annual report and registered agent; for each licence, permit and policy named, its renewal. Write the due-date rule
 and its source for each row, or "rule not yet confirmed". Put every place or activity nobody confirmed into
 `knowledge/unchecked.md`.
@@ -61,7 +61,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 calendar every Tuesday at 09:00, and prepare a filing pack before each deadline." They can change it or turn it off
 any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 

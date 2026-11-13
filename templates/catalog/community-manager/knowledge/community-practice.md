@@ -35,7 +35,7 @@ Every source carries the year it was read.
 ## Moderation
 
 - The team sets the rules; a person applies them. The bot reports the post, the rule and the link. It hides, edits,
-  warns, mutes or bans only when the task asks for it and a granted Tool allows it (see AGENT.md, Sending). The rules
+  warns, mutes or bans only when the task asks for it and a granted Tool allows it (see AGENTS.md, Sending). The rules
   it applies are in `knowledge/community.md`.
 
 ## Sources

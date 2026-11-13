@@ -389,7 +389,7 @@ def heavy_heartbeat(api, r, bots, n, release="0.4.56", update=None, huge=""):
                 "repository_revision": "f" * 40,
                 "configuration_valid": True,
                 "problems": [] if i or n % 3 else ["The repository is not on this computer yet"],
-                "warnings": ["AGENT.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3
+                "warnings": ["AGENTS.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3
                 if bot != huge
                 else ["z" * 50_000],
             }
@@ -483,13 +483,13 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     )
     assert rows["Mac 01"]["signed_in"] == ["claude", "codex"] and rows["Mac 01"]["recent_errors"] == 50
     assert rows["Mac 05"]["bots"] == 303 and rows["Mac 01"]["bots"] == 3  # a count, not the names
-    assert "repositories" not in rows["Mac 01"] and "AGENT.md" not in json.dumps(listing)
+    assert "repositories" not in rows["Mac 01"] and "AGENTS.md" not in json.dumps(listing)
 
     err, detail = call(api, "tico_computer_list", {"computer": "mac 04"})
     assert not err and detail["label"] == "Mac 04" and len(json.dumps(detail)) <= hubtools.COMPUTER_DETAIL_CHARS
     assert len(detail["repositories"]) == hubtools.COMPUTER_PAGE and len(detail["readiness"]["bots"]) == 3
     assert detail["readiness"]["recent_errors"][0].startswith("2026-10-18T07:49")  # newest first
-    assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENT.md is 41,000")
+    assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENTS.md is 41,000")
     assert detail["readiness"]["bots"]["bot-13"]["warnings"][0].endswith("… (cut)")  # one 50,000-character warning
     assert detail["readiness"]["runtimes"]["claude"]["models"][-1] == "… 10 more"  # catalogs inside a record
     err, bots = call(api, "tico_computer_list", {"computer": detail["id"], "section": "bots"})

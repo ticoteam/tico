@@ -51,9 +51,8 @@ def catalog(root):
         directory = Path(root) / template
         directory.mkdir(parents=True)
         (directory / "card.yaml").write_text(card(template, slug, bootstrap))
-        (directory / "AGENT.md").write_text(AGENT)
+        (directory / "AGENTS.md").write_text(AGENT)
         (directory / "employee.yaml").write_text('name: CHANGE-ME\ndisplay_name: "Change Me"\nschedules: []\n')
-        (directory / "state.md").write_text("# State\n")
     return Path(root)
 
 
@@ -113,7 +112,7 @@ def test_the_catalog_job_sets_a_bot_up_and_answers_on_stdout(tmp_path, monkeypat
         "assistant": {"materialized": "materialized from catalog: assistant", "problem": ""},
         "botops": {"changed": [], "kept": [], "missing": ""},
     }
-    assert "at Acme Ltd" in (path / "AGENT.md").read_text()
+    assert "at Acme Ltd" in (path / "AGENTS.md").read_text()
 
 
 def test_the_catalog_is_parsed_again_only_when_a_card_changes(tmp_path, monkeypatch):
@@ -154,15 +153,17 @@ def test_a_seat_bot_follows_its_template_and_the_refresh_is_reported(tmp_path, m
     monkeypatch.setenv("TICO_CATALOG_DIR", str(root))
     projects = tmp_path / "Companies/Acme"
     path = C.materialize("specialist", "seo", projects, CONFIG, {}, display_name="Sam")
-    (root / "specialist" / "AGENT.md").write_text(AGENT + "\n## Done means\nThe page ranks.\n")
+    (root / "specialist" / "AGENTS.md").write_text(AGENT + "\n## Done means\nThe page ranks.\n")
     client = ReportingClient()
     config = entry("seo", "specialist", template_version="0.6.0-rc.3")["config"]
     request = {"release": "0.6.0-rc.5", "bots": [{"bot": "seo", "entry": {"config": config}, "path": str(path)}]}
     answer = catalog_job.handle({"projects_dir": str(projects)}, client, request)
-    assert answer == {"seo": {"changed": ["AGENT.md"], "kept": [], "missing": ""}}
-    assert (path / "AGENT.md").read_text().startswith("# Sam\n") and "## Done means" in (path / "AGENT.md").read_text()
+    assert answer == {"seo": {"changed": ["AGENTS.md"], "kept": [], "missing": ""}}
+    assert (path / "AGENTS.md").read_text().startswith("# Sam\n") and "## Done means" in (
+        path / "AGENTS.md"
+    ).read_text()
     assert client.posts == [
-        ("bots/seo/template/refresh", {"template": "specialist", "to_version": "0.6.0-rc.5", "updated": ["AGENT.md"]})
+        ("bots/seo/template/refresh", {"template": "specialist", "to_version": "0.6.0-rc.5", "updated": ["AGENTS.md"]})
     ]
     # Once the server has moved its version, a second start changes and reports nothing.
     config["template_version"] = "0.6.0-rc.5"
@@ -176,14 +177,14 @@ def test_a_bot_whose_template_is_gone_is_left_alone_and_reported_once(tmp_path, 
     monkeypatch.setenv("TICO_CATALOG_DIR", str(catalog(tmp_path / "catalog")))
     path = tmp_path / "bot-seo"
     path.mkdir()
-    (path / "AGENT.md").write_text("# Sam\n")
+    (path / "AGENTS.md").write_text("# Sam\n")
     client = ReportingClient()
     config = entry("seo", "seo-specialist")["config"]
     request = {"release": "0.6.0-rc.5", "bots": [{"bot": "seo", "entry": {"config": config}, "path": str(path)}]}
     answer = catalog_job.handle({}, client, request)
     assert answer == {"seo": {"changed": [], "kept": [], "missing": "seo-specialist"}}
     assert client.posts == [("bots/seo/template/refresh", {"template": "seo-specialist", "missing": True})]
-    assert (path / "AGENT.md").read_text() == "# Sam\n"
+    assert (path / "AGENTS.md").read_text() == "# Sam\n"
     config["template_missing"] = "seo-specialist"  # what the server recorded
     catalog_job.handle({}, client, request)
     assert len(client.posts) == 1

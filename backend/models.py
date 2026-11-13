@@ -195,7 +195,8 @@ class TaskCreate(Contract):
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
     body: Text
-    owner: ID
+    # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
+    owner: ID | None = None
     # The pipeline it goes in, by id; General when none is named. It starts in the pipeline's first stage.
     pipeline: ID | None = None
     # The task that files it: that task waits until this one ends. Set once, here.
@@ -1243,7 +1244,7 @@ class BotReadiness(GoalReadiness):
     published: bool | None = None
     configuration_valid: bool = False
     problems: list[str] = Field(default_factory=list, max_length=20)
-    # Soft guidance that does not block claiming work (for example a long AGENT.md).
+    # Soft guidance that does not block claiming work (for example a long AGENTS.md).
     warnings: list[str] = Field(default_factory=list, max_length=20)
     # Runners before 0.5.4 reported the routines they read from a repository manifest. Routines
     # are the hub's own rows now (backend/routines.py); these are accepted and dropped.
@@ -1346,6 +1347,16 @@ class AppDriverReadiness(Contract):
     ] = Field(default_factory=dict)
 
 
+class BrowserReadiness(Contract):
+    """Google Chrome for website tools on this computer (runner-rs/src/browser/): found, its version, how many open."""
+
+    chrome: StrictBool
+    version: (
+        Annotated[str, BeforeValidator(lambda v: v[:80] if isinstance(v, str) else v), Field(max_length=80)] | None
+    ) = None
+    open: int = Field(default=0, ge=0, le=100)
+
+
 class StructuredReadiness(Contract):
     # Physical home of the computer's one login; present only after the computer_logins_v1 handshake.
     computer_profile: str | None = Field(default=None, max_length=80)
@@ -1374,6 +1385,7 @@ class StructuredReadiness(Contract):
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
     appdriver: AppDriverReadiness | None = None
+    browser: BrowserReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
     recent_errors: list[
@@ -1393,6 +1405,7 @@ class StructuredReadiness(Contract):
             "engine",
             "screen",
             "appdriver",
+            "browser",
         ):
             if data.get(field) is None:
                 data.pop(field, None)
@@ -1519,14 +1532,16 @@ class Heartbeat(Contract):
             "memory_tidy_packets_v1",
             "harness_allocation_v1",
             "make_page",
+            "memory_tidy_keep_v1",
+            "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
         ]
     ] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
-    # Actual AGENT.md text for assigned personal inbox bots, read from their runner checkout.
+    # Actual AGENTS.md text for assigned personal inbox bots, read from their runner checkout.
     mail_agent_instructions: dict[str, str] = Field(default_factory=dict, max_length=20)
-    # Changed AGENT.md files for assigned bots. The runner sends each file on first heartbeat
+    # Changed AGENTS.md files for assigned bots. The runner sends each file on first heartbeat
     # and when it changes; the server keeps the last published copy for Messaging.
     agent_instructions: dict[str, str] = Field(default_factory=dict, max_length=100)
     # The runner's own checkout against origin/main (runner-rs/src/follow.rs), #492.
@@ -1664,7 +1679,7 @@ class TeammateAccess(Contract):
     on_behalf_of: ID | None = None
 
 
-# A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
+# A bot's instructions (its AGENTS.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
 # adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
 # backend/tests/test_onboarding.py checks every one against it.
 INSTRUCTIONS_MAX = 50_000

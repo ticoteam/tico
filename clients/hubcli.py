@@ -184,6 +184,12 @@ def cmd_task_dry_run(args, who):
         return 1
     for w in warnings:
         print(f"- {w} (warning: the create is accepted)")
+    if not args.owner:
+        print(
+            "ok: no owner named; the server decides at the create (a first stage that picks from several picks one, "
+            "any other pipeline needs --owner)"
+        )
+        return 0
     if not owner:
         print(
             f"ok: {args.owner} is not in registry/employees.yaml or registry/people.yaml; the server decides at the create "
@@ -436,6 +442,7 @@ def parser():
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
+    from clients.commands import browser as browser_commands, logins
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -904,7 +911,11 @@ def parser():
         help="from a run on your private task: a company-visible task for a bot, in your own words (no "
         "12 words copied from the private work, no secret-shaped value, no file or link of it)",
     )
-    s.add_argument("--owner", required=True)
+    s.add_argument(
+        "--owner",
+        help="who does it: a bot slug, a person id or me; leave out to file into a pipeline whose first stage picks "
+        "from several (the stage picks one)",
+    )
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
@@ -1006,11 +1017,16 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
-    s = task.add_parser("file", help="file a task this one waits on; yours unless --owner")
+    s = task.add_parser(
+        "file",
+        help="file a task this one waits on; yours unless --owner, or picked by a pipeline whose first stage picks",
+    )
     s.add_argument("title")
     s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
     s.add_argument("--pipeline", help="the pipeline's id; default general")
-    s.add_argument("--owner", help="who does it; default you")
+    s.add_argument(
+        "--owner", help="who does it; default you, or the stage's pick in a pipeline whose first stage picks"
+    )
     s.add_argument("--body", help="the details; default the title")
     s.add_argument("--due")
     s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
@@ -1303,6 +1319,8 @@ def parser():
     cli_spec.add(sub, rule_commands.CLI)  # tico rules: clients/commands/rules.py
     cli_spec.add(sub, strategy_commands.STRATEGY)  # tico strategy and tico brand: clients/commands/strategy.py
     cli_spec.add(sub, strategy_commands.BRAND)
+    cli_spec.add(sub, browser_commands.CLI)  # tico browser: clients/commands/browser.py
+    cli_spec.add(sub, logins.CLI)  # tico login: clients/commands/logins.py
     cli_spec.add(sub, strategy_commands.CLI)  # tico growth: clients/commands/strategy.py
 
     cli_spec.add(sub, strategy_commands.LENS)  # tico lens: clients/commands/strategy.py
@@ -2171,7 +2189,7 @@ def parser():
     )
     s.add_argument("bot", help="the copy")
     s.add_argument(
-        "--paths", nargs="+", metavar="PATH", help="only these files or folders, like AGENT.md or skills/triage"
+        "--paths", nargs="+", metavar="PATH", help="only these files or folders, like AGENTS.md or skills/triage"
     )
     s.add_argument("--title")
     s.set_defaults(fn="bot suggest-to-original")

@@ -379,15 +379,16 @@ def score(engine, qset, item, team):
     learnable_q = qset["questions"]["learnable"]
     text = {"source": item["source"], "label": item["label"], "text": item["text"]}
 
-    def build(chunk, first=True):
-        questions = {"learnable": learnable_q} if first else {}
+    def build(chunk):
+        # `learnable` goes in the call that starts with the first recipient only, so `J.pack` sizes the later calls
+        # without it and makes the fewest calls (79 recipients: 40 + 39 questions, not 40 + 39 + 1).
+        questions = {"learnable": learnable_q} if chunk[0] == audience[0] else {}
         questions.update({"rel_" + s: {"type": "noul", "instructions": REL + team[s]["profile"]} for s in chunk})
         return questions, {"item": text, "roster": {s: team[s]["profile"] for s in chunk}}
 
     calls = J.pack(audience, build) or [(audience, *build(audience))]  # too big even alone: the call refuses it
     learnable, scores = None, {}
-    for n, (chunk, _, _) in enumerate(calls):
-        questions, state = build(chunk, first=n == 0)
+    for n, (chunk, questions, state) in enumerate(calls):
         answers = engine(state, questions, qset["label"])["answers"]
         if n == 0:
             learnable = J.noul(answers, "learnable")

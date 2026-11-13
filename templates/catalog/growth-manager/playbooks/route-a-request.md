@@ -15,7 +15,7 @@ Find what it is, the deadline and who wants it. For a lead or account, check it 
 
 ## 2. Match it to an owner
 
-Use `knowledge/routing.md`, then the growth team's lines in `AGENT.md`. A lead, inbound request or target account goes to the sales Owners first; a segment's growth to its segment marketing owner; a channel problem to its channel Owner; a stopped task in one of your pipelines is yours to decide (`playbooks/decide-a-stuck-task.md`). Otherwise use the marketing and sales roles named in `AGENT.md`. If two owners could take it, say why one fits better. If none fits and the same kind of request keeps coming, propose a hire (`playbooks/propose-a-hire.md`) instead of routing it to a human again.
+Use `knowledge/routing.md`, then the growth team's lines in `AGENTS.md`. A lead, inbound request or target account goes to the sales Owners first; a segment's growth to its segment marketing owner; a channel problem to its channel Owner; a stopped task in one of your pipelines is yours to decide (`playbooks/decide-a-stuck-task.md`). Otherwise use the marketing and sales roles named in `AGENTS.md`. If two owners could take it, say why one fits better. If none fits and the same kind of request keeps coming, propose a hire (`playbooks/propose-a-hire.md`) instead of routing it to a human again.
 
 ## 3. Check the load and the calendar
 

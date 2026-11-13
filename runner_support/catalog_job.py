@@ -174,7 +174,8 @@ class BotSetup:
         try:
             record = self.onboarding()
             chosen = (record.get("selected") or {}).get(bot) or {}
-            # A sample company bot is made already set up: its state.md says so, or it would ask the setup questions.
+            # A sample company bot is made already set up (Tico does not mark it Needs setup); its knowledge/company.md
+            # says how the sample stood in for the setup questions.
             setup = ((record.get("sample") or {}).get("setup") or {}).get(bot) or None
             catalog.materialize(
                 template,
@@ -184,7 +185,7 @@ class BotSetup:
                 record.get("answers") or {},
                 display_name=(config or {}).get("display_name") or chosen.get("display_name"),
                 instructions=(config or {}).get("instructions") or chosen.get("instructions"),
-                state=setup if isinstance(setup, dict) else None,
+                setup=setup if isinstance(setup, dict) else None,
                 # The folder the runner works in: a bot made with a UUID id keeps its first slug's.
                 folder=Path(path).name or None,
             )

@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 30 minutes. The outcome is six recorded answers, a first target list with first touches
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The outcome is six recorded answers, a first target list with first touches
 drafted on the task, and both routines checked.
 
 ---
@@ -42,7 +41,7 @@ those and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/icp.md`, `knowledge/voice.md` and
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/icp.md`, `knowledge/voice.md` and
 `knowledge/do-not-contact.md` as present-tense statements. Write the team's meeting target and sender cap into
 `knowledge/outbound-method.md`, under the standing rules. Write who takes booked meetings into `knowledge/team.md`.
 
@@ -62,7 +61,7 @@ Tell the human in one line each: "I will run outbound every weekday at 08:00: re
 your review." and "I will publish the outbound read-out every Monday at 08:30." They can change or turn off either one any time;
 there is nothing to approve.
 
-Record both in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave
+Record both in `memory/decisions.md`. If they asked for a different schedule or to leave
 one off, adjust `knowledge/outbound-method.md` and the routine to match (`tico automation update <id>`, with `--disable` to turn
 it off).
 

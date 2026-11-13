@@ -32,7 +32,7 @@ PACKS = {
     "search-ads-owner": ("search-ads", {"watch": DAILY, "find-ideas": FIND}),
     "social-ads-owner": ("social-ads", {"watch": DAILY, "find-ideas": FIND}),
 }
-# One text in every pack: the stage playbooks and AGENT.md's "Your pipelines" section.
+# One text in every pack: the stage playbooks and AGENTS.md's "Your pipelines" section.
 SHARED = (
     "playbooks/watch.md",
     "playbooks/find-ideas.md",
@@ -47,7 +47,7 @@ def manifest(template):
 
 
 def section(template, heading):
-    text = (CATALOG / template / "AGENT.md").read_text()
+    text = (CATALOG / template / "AGENTS.md").read_text()
     found = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.M | re.S)
     assert found, f"{template}: no ## {heading}"
     return found.group(1)

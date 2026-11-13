@@ -1,6 +1,7 @@
-"""Every Jev use asks all its questions of one input in one call (the "one call per input" spec, Fix 1): Jev charges
-for what it reads, so Tico has no question count limit of its own, only the size of the call (`J.MAX_CALL_CHARS`), and
-the same input goes out again only when its questions do not fit beside it in one call.
+"""Every Jev use asks all its questions of one input in as few calls as it can (the "one call per input" spec, Fix 1):
+Jev charges for what it reads, so the same input goes out again only when its questions do not fit beside it in one
+call (`J.MAX_CALL_CHARS`) or there are more than the Gateway answers in one call (`J.MAX_QUESTIONS`, 40: seen in
+production on 2026-11-13, where 41 or more came back as an error).
 
 Each test hands in a fake Jev that counts its calls and answers each question from its own content and the state it
 was asked about, never from its id, so answers that moved to a merged call can be compared with the answers alone."""
@@ -29,13 +30,19 @@ def answer(state, question):
     return {"noul": round(seed, 3)}
 
 
+GATEWAY_MOST = 40  # the Gateway answers a call of 41 or more questions with an error (production, 2026-11-13)
+
+
 class Jev:
-    """Counts calls, checks each as the real client does (`J.validate`) and answers every question (`answer`)."""
+    """Counts calls, refuses more than GATEWAY_MOST questions as the Gateway does, checks each call as the real client
+    does (`J.validate`) and answers every question (`answer`)."""
 
     def __init__(self):
         self.calls = []
 
     def __call__(self, state, questions, label=None):
+        if len(questions) > GATEWAY_MOST:
+            raise J.JudgeError("unavailable", "The decision model answered with an error")
         J.validate(state, questions, label)
         self.calls.append({"state": state, "questions": dict(questions), "label": label})
         return {
@@ -50,18 +57,36 @@ def nouls(count, text="Is this about item {n}?"):
     return {f"q{n:03}": {"type": "noul", "instructions": text.format(n=n)} for n in range(count)}
 
 
-# ------------------------------------------------------------------------------------------- the client: size, not count
-def test_a_call_takes_any_number_of_questions_and_is_refused_only_past_jevs_size():
-    J.validate({"text": "hello"}, nouls(500))  # was refused past 40
+# ------------------------------------------------------------------------------------------- the client: size and count
+def test_a_call_takes_up_to_the_gateways_40_questions_and_is_refused_past_them_or_its_size():
+    assert J.MAX_QUESTIONS == GATEWAY_MOST
+    J.validate({"text": "hello"}, nouls(40))
+    with pytest.raises(J.JudgeError) as refused:
+        J.validate({"text": "hello"}, nouls(41))
+    assert refused.value.code == "invalid" and "40" in refused.value.detail
     big = {f"q{n}": {"type": "noul", "instructions": "x" * 7_000} for n in range(40)}
     with pytest.raises(J.JudgeError) as refused:
         J.validate({"text": "hello"}, big)
     assert refused.value.code == "invalid" and str(J.MAX_CALL_CHARS) in refused.value.detail
+    assert J.fits({"text": "hello"}, nouls(40)) and not J.fits({"text": "hello"}, nouls(41))
 
 
 def test_questions_that_fit_go_in_one_call_unchanged():
-    questions = nouls(300)
+    questions = nouls(40)
     assert J.split({"text": "hello"}, questions) == [questions]
+
+
+@pytest.mark.parametrize("count, calls", [(41, 2), (59, 2), (80, 2), (81, 3), (300, 8)])
+def test_more_than_40_small_questions_split_into_the_fewest_calls_of_40_each_question_once(count, calls):
+    state, questions = {"text": "hello"}, nouls(count)
+    parts = J.split(state, questions)
+    assert len(parts) == calls == math.ceil(count / GATEWAY_MOST)
+    assert all(len(part) <= GATEWAY_MOST for part in parts)
+    assert sorted(qid for part in parts for qid in part) == sorted(questions)
+    assert all(list(part) == [q for q in questions if q in part] for part in parts)
+    jev = Jev()
+    for part in parts:
+        jev(state, part)  # each call is one the Gateway answers
 
 
 def test_questions_too_big_for_one_call_split_into_the_fewest_that_fit_and_none_twice(monkeypatch):
@@ -95,7 +120,8 @@ def test_pack_puts_every_item_in_one_call_unless_they_do_not_fit(monkeypatch):
     def build(items):
         return {f"i{n}": {"type": "noul", "instructions": f"About {n}"} for n in items}, {"items": items}
 
-    assert [items for items, _, _ in J.pack(list(range(60)), build)] == [list(range(60))]
+    assert [items for items, _, _ in J.pack(list(range(40)), build)] == [list(range(40))]
+    assert [len(items) for items, _, _ in J.pack(list(range(60)), build)] == [40, 20]  # the Gateway's 40 a call
     monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 25)
     assert [len(items) for items, _, _ in J.pack(list(range(60)), build)] == [25, 25, 10]
     monkeypatch.setattr(J, "fits", lambda state, questions: False)
@@ -103,29 +129,63 @@ def test_pack_puts_every_item_in_one_call_unless_they_do_not_fit(monkeypatch):
 
 
 # ------------------------------------------------------------------------------------------- nightly learnings
-def test_a_learning_with_80_possible_recipients_is_sent_once():
+def test_a_learning_with_39_possible_recipients_is_sent_once():
     """AC-2: its text is read once, with every recipient's question in the same call."""
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n} looks after area {n}."} for n in range(39)}
+    item = {"audience": None, "source": "chat", "label": "Lesson", "text": "Deploys need a second pair of eyes."}
+    jev = Jev()
+    learnable, scores = L.score(jev, qset, item, team)
+    assert len(jev.calls) == 1 and len(jev.calls[0]["questions"]) == 40
+    assert sorted(scores) == sorted(team) and learnable is not None
+    state = jev.calls[0]["state"]
+    assert state["item"]["text"] == item["text"] and len(state["roster"]) == 39
+    # Each recipient's score is its own question's answer.
+    assert scores["bot-7"] == round(answer(state, jev.calls[0]["questions"]["rel_bot-7"])["noul"], 3)
+
+
+def test_a_learning_with_80_possible_recipients_makes_3_calls_and_scores_every_recipient():
+    """Past the Gateway's 40 questions a call: 3 calls of at most 40 (the first also asks `learnable`), the item's text
+    once in each, every recipient asked once and scored."""
     qset = J.load_set(L.QUESTION_SET)
     team = {f"bot-{n}": {"profile": f"Bot {n} looks after area {n}."} for n in range(80)}
     item = {"audience": None, "source": "chat", "label": "Lesson", "text": "Deploys need a second pair of eyes."}
     jev = Jev()
     learnable, scores = L.score(jev, qset, item, team)
-    assert len(jev.calls) == 1 and len(jev.calls[0]["questions"]) == 81
+    assert len(jev.calls) == 3 and all(len(call["questions"]) <= GATEWAY_MOST for call in jev.calls)
+    assert [call["state"]["item"]["text"] for call in jev.calls] == [item["text"]] * 3
+    asked = [qid for call in jev.calls for qid in call["questions"]]
+    assert sorted(asked) == sorted(["learnable", *("rel_" + s for s in team)]), "each question once"
     assert sorted(scores) == sorted(team) and learnable is not None
-    state = jev.calls[0]["state"]
-    assert state["item"]["text"] == item["text"] and len(state["roster"]) == 80
-    # Each recipient's score is its own question's answer.
-    assert scores["bot-7"] == round(answer(state, jev.calls[0]["questions"]["rel_bot-7"])["noul"], 3)
+    for call in jev.calls:  # each call's roster is the recipients it asks about
+        assert sorted(call["state"]["roster"]) == sorted(q[4:] for q in call["questions"] if q != "learnable")
+    last = jev.calls[-1]
+    some = next(q[4:] for q in last["questions"] if q != "learnable")
+    assert scores[some] == round(answer(last["state"], last["questions"]["rel_" + some])["noul"], 3)
+
+
+@pytest.mark.parametrize(
+    "recipients, calls", [(39, [40]), (40, [40, 1]), (79, [40, 40]), (80, [40, 40, 1]), (119, [40] * 3)]
+)
+def test_a_learning_makes_the_fewest_calls_of_40_with_learnable_asked_once(recipients, calls):
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(recipients)}
+    item = {"audience": None, "source": "chat", "label": "Lesson", "text": "Ship on Tuesdays."}
+    jev = Jev()
+    _, scores = L.score(jev, qset, item, team)
+    assert [len(call["questions"]) for call in jev.calls] == calls == [40] * (len(calls) - 1) + [calls[-1]]
+    assert len(calls) == math.ceil((recipients + 1) / GATEWAY_MOST), "the fewest calls"
+    assert [q for call in jev.calls for q in call["questions"]].count("learnable") == 1 and len(scores) == recipients
 
 
 def test_a_learning_whose_recipients_do_not_fit_in_one_call_is_split_once_per_needed_call(monkeypatch):
     qset = J.load_set(L.QUESTION_SET)
     team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(80)}
     item = {"audience": None, "source": "chat", "label": "Lesson", "text": "Ship on Tuesdays."}
-    monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 50)
+    monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 30)  # as if 30 fit by size
     jev = Jev()
     _, scores = L.score(jev, qset, item, team)
-    assert [len(call["questions"]) for call in jev.calls] == [50, 31]
+    assert [len(call["questions"]) for call in jev.calls] == [30, 30, 21]
     assert "learnable" in jev.calls[0]["questions"] and "learnable" not in jev.calls[1]["questions"]
     assert len(scores) == 80
 
@@ -197,6 +257,17 @@ def test_merged_decide_steps_that_do_not_fit_in_one_call_ask_apart(monkeypatch):
     run = E.execute(flow(first, second), MESSAGE, services)
     assert [sorted(call["questions"]) for call in services.jev.calls] == [sorted(TRIAGE), sorted(TONE)]
     assert {r["id"]: r["outputs"] for r in run["steps"]} == {"triage": alone(TRIAGE), "tone": alone(TONE)}
+
+
+def test_merged_decide_steps_past_the_gateways_40_questions_ask_apart():
+    """25 + 20 questions on one object: merged they are 45, past what the Gateway answers, so each step asks alone."""
+    services = JudgingServices()
+    many, more = nouls(25, "Is this message about topic {n}?"), nouls(20, "Does it name person {n}?")
+    first = {"id": "topics", "type": "decide", "questions": many, "out": "d1"}
+    second = {"id": "people", "type": "decide", "questions": more, "out": "d2"}
+    run = E.execute(flow(first, second), MESSAGE, services)
+    assert run["status"] == "ok" and [len(call["questions"]) for call in services.jev.calls] == [25, 20]
+    assert {r["id"]: r["outputs"] for r in run["steps"]} == {"topics": alone(many), "people": alone(more)}
 
 
 def test_a_decide_step_edited_while_its_run_waited_asks_its_new_questions():

@@ -44,11 +44,11 @@ MARKED = (
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {waiting}
 They watch this task's note while you work: at the start of each step below, and whenever you begin something that
 takes a while, set it with `tico_task_update` (the note only) to one short line saying what you are doing now, e.g.
-"2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md". Read the task
+"2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENTS.md". Read the task
 with `tico_task_show` first, and pass the version the last call on it printed with every call.
 
-1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
-   rules at the top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
+1. Orient. Read your instructions and memory: AGENTS.md (or CLAUDE.md if present), `memory/` (memory/learnings.md,
+   memory/decisions.md and any index) and `knowledge/`.
    A dream may change all of these files. That is its job: never ask whether you may edit them.
 
 2. Gather. Read your chats and tasks since {since} with the hub tools. Search narrowly; do not dump everything. Note:

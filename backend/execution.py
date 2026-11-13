@@ -85,6 +85,9 @@ HELD_UNREVIEWED = 2 * 3600
 # A failed turn whose only events are these produced nothing and touched nothing.
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
+# A run its bot may not read, failed as it is handed out (Execution.refuse_unreadable). It names no task: the bot may not
+# read the task's title or content, so the reason may not carry them either.
+REFUSED_RUN = "Stopped: this job's task doesn't exist or this bot can't read it. It won't be retried."
 PRE_START_TRIES = 10  # lapsed leases before start: a broken computer must not retry forever
 # Count missed starts across hub restarts without making old computer trouble exhaust today's retries.
 PRE_START_WINDOW_HOURS = 24
@@ -3958,6 +3961,9 @@ class Execution:
             from .views import roster
 
             inbox_isolation.check(c, bot, body.runner_id, roster(c))
+            from . import browser_commands
+
+            browser_commands.check_placement(c, bot, body.runner_id)  # the browser host takes no other bots
             if clash := H.folder_clash(c, bot, body.runner_id):
                 # Two bots in one folder would run in, and commit to, the same checkout.
                 raise Problem(
@@ -5118,6 +5124,8 @@ class Execution:
             },
         )
         aid = turn["id"]
+        if self.refuse_unreadable(c, row, msg, aid):
+            return {"attempt": None, "dropped": True}
         if body.start_places:
             # Decided now, under this write lock: granted a place while the computer holds fewer than its turn limit. A turn
             # past the limit is leased (it counts toward live_limit) and holds no place until one frees.
@@ -5523,6 +5531,25 @@ class Execution:
                 "bot_session_epoch": bot_epoch[0] if bot_epoch else 0,
             }
         }
+
+    @staticmethod
+    def refuse_unreadable(c, row, msg, aid):
+        """The access check every call on a run makes (attempt), made once here as the run is handed out. A run its bot
+        may not read (its task does not exist, or the bot cannot read it) would be refused at its first call, lapse,
+        and go back to the queue to be refused again, ahead of everything queued behind it (#240: 167 refusals of one
+        job). It fails now instead, once, with a reason in the bot's run history that names no task, and its job is
+        never taken again: the claim takes the next job. The check itself is the same and no wider."""
+        principal = privacy.make_page_actor(c, "bot:" + row["bot_id"], msg)
+        if privacy.attempt_readable(c, principal, aid):
+            return False
+        c.execute(
+            "UPDATE attempts SET state='failed',finished_at=?,lease_until=?,final_text=? WHERE id=?",
+            (H.now(), H.now(), REFUSED_RUN, aid),
+        )
+        c.execute("UPDATE jobs SET state='failed',attempt_id=? WHERE id=?", (aid, row["id"]))
+        H.turn_finish(c, H.KEEPER, aid, exit_code="failed", summary=REFUSED_RUN)
+        H.event(c, H.KEEPER, "attempt.refused", aid, {"bot": row["bot_id"], "job_id": row["id"]})
+        return True
 
     @staticmethod
     def obsolete_notice(c, who, job_id, now):

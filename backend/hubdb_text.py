@@ -1058,11 +1058,11 @@ JARGON = (
 
 
 # "the runner pulls/syncs" is the Computer only when Tico context follows before the next semicolon or sentence
-# end, even inside code or a link ("syncs `AGENT.md`"); an athlete who pulls a hamstring stays one when the Tico
+# end, even inside code or a link ("syncs `AGENTS.md`"); an athlete who pulls a hamstring stays one when the Tico
 # word comes after a semicolon. Colons and dashes do not stop it: they can introduce what is synced.
 RUNNER = re.compile(
     r"\bthe runner(?=\s+(?:pulls?|syncs?)\b[^.!?;\n]*?(?:\b(?:updates?|releases?|changes|instructions|"
-    r"repository|repo|next run|Tico)\b|AGENT\.md))",
+    r"repository|repo|next run|Tico)\b|AGENTS?\.md))",
     re.I,
 )
 

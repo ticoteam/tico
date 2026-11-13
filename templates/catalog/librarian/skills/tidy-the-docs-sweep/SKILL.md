@@ -13,7 +13,7 @@ Steps:
 4. No owner: a doc that states a price, a policy or a process and names no owner in its text. Report it.
 5. Dead links: an internal doc that points to an archived doc, or to a linked source that `_librarian/missing.md` lists as unreadable. Match the addresses against `tico doc link-list`. Report the link.
 6. Misplaced: a doc whose folder does not match its title and text, such as a holiday schedule at the top level. Report it only when the right folder is plain from the doc itself.
-7. Credentials: text that looks like a password, key or token. Never quote or copy it. Say the doc holds what looks like a credential and that someone should remove it (the `AGENT.md` rule), and list it in `_librarian/missing.md`.
+7. Credentials: text that looks like a password, key or token. Never quote or copy it. Say the doc holds what looks like a credential and that someone should remove it (the `AGENTS.md` rule), and list it in `_librarian/missing.md`.
 8. Write the findings. Drafts and dead links go under "Out of date" in `_librarian/missing.md`. Duplicates, misplaced docs and docs with no owner go in one task for the team owner, titled "Tidy the docs". Open it only if `tico task list` shows no open task with that title, and otherwise add to that task with `tico task comment <id> "..."`. Credential findings go in the task too, without the text.
 
 Checks before you finish:

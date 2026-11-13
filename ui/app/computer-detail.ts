@@ -476,11 +476,27 @@ function machineSettingsHTML(machine: DetailMachine) {
       <span class="muted" data-turns-note>${esc(machineTurnsNote(machine))}</span></label>` : '',
     admin ? `<label class="computer-detail-check"><input type="checkbox" data-member-bots="${esc(machine.id)}"${machine.accepts_member_bots ? ' checked' : ''}> Accepts members' bots</label>`
       : machine.accepts_member_bots ? '<p>Accepts members\' bots.</p>' : '',
+    admin ? `<label class="computer-detail-check"><input type="checkbox" data-browser-host="${esc(machine.id)}"${machineBrowserHost(machine) ? ' checked' : ''}> Browser host</label>` : '',
     screenMayOpen(machine) ? `<label class="computer-detail-check"><input type="checkbox" data-performance-mode="${esc(machine.id)}"${machine.performance !== 'off' ? ' checked' : ''}> Performance diagnostics</label>` : '',
     `<button type="button" class="ghost" data-computer-performance="${esc(machine.id)}">Performance${betaPill('replay_performance')}</button>`];
   const revoke = manage ? `<button type="button" class="ghost danger-text computer-detail-revoke" data-computer-remove="${esc(machine.id)}">Revoke computer</button>` : '';
   const body = rows.filter(Boolean).join('') + revoke;
   return body || `<p class="muted">${machine.revoked_at ? `Revoked ${esc(ago(machine.revoked_at))}.` : 'Nothing to change here.'}</p>`;
+}
+// The browser host: the one computer whose Chrome runs website tools' shared logins (backend/browser_commands.py). An
+// admin picks it here; the hub refuses while other bots run on it. GET /v2/operations says which one it is.
+const machineBrowserHost = (machine: DetailMachine & {browser_host?: boolean | null}) => !!machine.browser_host;
+async function machineBrowserHostSave(box: HTMLInputElement) {
+  const id = box.dataset.browserHost || '', on = box.checked;
+  box.disabled = true;
+  try {
+    await post(`/v2/runners/${encodeURIComponent(id)}/browser-host`, {on});
+    toast(on ? 'Browser host' : 'Not the browser host');
+    await loadSettings();
+  } catch (error) {
+    toast(errorMessage(error, ''), true);
+    box.checked = !on;
+  } finally { if (box.isConnected) box.disabled = false; }
 }
 // The computer's name, with Rename for an owner or admin: the name becomes a field with Save and Cancel.
 // COMPUTER_RENAME_EDIT counts edit sessions, so a save that answers late touches only the session that sent it.
@@ -558,6 +574,9 @@ function computerDetailOpen(id: string) {
       if (!form) return;
       event.preventDefault();
       void settingsComputerRename(form);
+    });
+    dialog.addEventListener('change', event => {
+      if (event.target instanceof HTMLInputElement && event.target.matches('[data-browser-host]')) void machineBrowserHostSave(event.target);
     });
     // Escape leaves the name as it was; the pop-up stays open.
     dialog.addEventListener('keydown', event => {

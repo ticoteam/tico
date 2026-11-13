@@ -391,7 +391,7 @@ until BotOps has built it.
    this computer's own credential. Both are read fresh, because the wizard is answered after the
    computer is enrolled.
 4. Copy the template folder to `<workspace>/bot-<slug>`, fill the placeholders, set `name:` in
-   `bot.yaml` to the slug, write `knowledge/company.md` from the answers, replace `AGENT.md`
+   `bot.yaml` to the slug, write `knowledge/company.md` from the answers, replace `AGENTS.md`
    with the reviewed instructions when there are any, then `git init` and one commit.
 
 An existing directory is never touched. A failure is a readiness problem on that bot rather than an
@@ -401,7 +401,7 @@ exception, so the computer keeps reporting the others.
 
 BotOps works one setup task at a time, following `playbooks/set-up-a-bot.md` in its own repository:
 read the task, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
-instructions into `AGENT.md` (or tailor the template's to the answers), run `tico bot check <slug>`
+instructions into `AGENTS.md` (or tailor the template's to the answers), run `tico bot check <slug>`
 and fix every failure, then commit the result.
 
 For a human's authorized request, BotOps finishes the work: it places the bot on a computer,
@@ -555,8 +555,8 @@ Tico ships 108 role templates, by group, each with a card. `templates/catalog/` 
   server serves all of them except `onboarding` and `example_output`; the team builder reads `group`, `pack`, `lead`, `kind`, `icon`, `tags`,
   `suggest`, `pains`, `summary` and `recommend_when` ([The team builder](#the-team-builder)); `prerequisites` are shown by the bot's own setup, not by the wizard ([Starter bots](starter-bots.md)). After changing a card or `templates/groups.yaml`, run `python3 scripts/build_catalog_json.py` (the setup page's role list; Tico HQ builds its own copy from each published release, [docs/tico-hq.md](tico-hq.md#the-templates-hq-reads)) and `python3 scripts/build-icon-font.py` (a new icon). A card with a `first_routine` and an
   `onboarding` list is a **starter**: Create parks it (`needs_setup`), so its `onboarding` playbook must end with `tico bot setup-done`.
-- Everything else in the folder is the repository the bot starts from: `AGENT.md`,
-  `bot.yaml`, `playbooks/`, `knowledge/`, `memory/`, `state.md`, `.env.example`, `.gitignore`.
+- Everything else in the folder is the repository the bot starts from: `AGENTS.md`,
+  `bot.yaml`, `playbooks/`, `knowledge/`, `memory/`, `.env.example`, `.gitignore`.
 - `{{company_name}}`, `{{app_name}}`, `{{assistant_name}}` and `{{bot_name}}` are filled in every
   text file before the first commit, and in the card's own words wherever a human reads it.
 - `required: true` means the wizard always includes it. `bootstrap: true` means the computer
@@ -589,7 +589,7 @@ not the owner is sent to Tasks, and a bot administrator can read the record but 
 Everyone else gets `403` on `GET /api/v2/setup`. To see the finished record again, open
 `#/welcome` directly; it opens on its last step.
 
-**Bots stay "Missing bot repository or AGENT.md".** For the assistant or BotOps it means no computer
+**Bots stay "Missing bot repository or AGENTS.md".** For the assistant or BotOps it means no computer
 is enrolled, or the bot sits on a computer that is not running, because a computer only materializes
 its own assignments. Check **Settings → Bots** for the computer column and **Settings → Computers**
 for the last heartbeat. A starter bot needs the same: the computer it is placed on sets it up, and until that computer

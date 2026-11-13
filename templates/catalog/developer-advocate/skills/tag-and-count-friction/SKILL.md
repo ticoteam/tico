@@ -16,7 +16,7 @@ Steps:
 3. Count distinct threads. Three posts in one thread are one thread. Two developers hitting the same error in one thread
    are still one thread.
 4. Apply the rule. Two or more distinct threads in the window is a theme. Five or more in a month is an escalation to the
-   requester (AGENT.md, Escalating).
+   requester (AGENTS.md, Escalating).
 5. For each theme, write the fix that would remove it and its owner: a doc change for the Technical Writer, a product change
    for Product, a clearer error for engineering, a help-centre sentence for the Librarian. A theme with no fix yet stays
    marked "fix not named".

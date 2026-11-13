@@ -15,7 +15,7 @@ use crate::client::Client;
 use crate::util::text_of;
 
 pub const PUBLISH_WARNING: &str = "GitHub history not published: ";
-const DENIED_WARNING: &str = "Claude Code denies what AGENT.md asks for: ";
+const DENIED_WARNING: &str = "Claude Code denies what AGENTS.md asks for: ";
 const DENIES_WARNING: &str = "Claude Code settings deny: ";
 /// Readiness fields an older server may refuse; each is left out for ten minutes after a refusal.
 pub const OPTIONAL: &[&str] = &[
@@ -141,7 +141,7 @@ fn turned_down(before: &str) -> bool {
 
 /// The `gh` commands AGENT.md tells the bot to run that its settings deny (service.py claude_denied).
 pub fn claude_denied(path: &Path) -> Vec<String> {
-    let Ok(text) = std::fs::read(path.join("AGENT.md")) else {
+    let Some(Ok(text)) = crate::instructions::path(path).map(std::fs::read) else {
         return vec![];
     };
     let text = String::from_utf8_lossy(&text);

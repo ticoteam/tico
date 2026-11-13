@@ -179,15 +179,15 @@ def setup_brief(company: str, files: list[str], pipelines: list[str]) -> str:
         '`tico doc search "vision"` for the company\'s strategy or vision pages, if there are any.',
         "- Do not introduce yourself, ask the setup questions, message anyone or open a chat, and ask nothing on this "
         "task.",
-        "- Answer each setup question from what Tico shows, else take its default. Record each in `state.md` under "
-        "`## Answers`, dated, with `(default)` after each answer nobody gave you.",
+        "- Answer each setup question from what Tico shows, else take its default. Record each, dated, in the "
+        "`knowledge/` file it belongs to, with `(default)` after each answer nobody gave you.",
         "- Write the files your setup writes from those answers"
         + (": " + ", ".join(f"`{name}`" for name in files) if files else "")
         + ". Seed them from your template's practice files and what Tico knows. In each, end with a `Not yet told:` "
         "line naming the questions it rests on that nobody has answered, or `none`.",
         "- Produce the first report only from inputs that already exist; if they do not, say on this task which are "
         "missing and go on.",
-        "- Record what you did in `memory/decisions.md`, set `state.md` to `Setup: finished` (with defaults), commit, "
+        "- Record what you did (with defaults) in `memory/decisions.md`, commit, "
         "run `tico bot setup-done`, and mark this task done with a note listing the files you wrote.",
         "- Later, when a task really needs an answer you do not have, ask it then as a question on that task.",
         "",

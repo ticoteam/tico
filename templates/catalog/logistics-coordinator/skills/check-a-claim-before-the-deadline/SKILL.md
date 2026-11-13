@@ -23,13 +23,13 @@ Steps:
 6. Write the claim in `knowledge/claims.md`: shipment, value, evidence, filed date, deadline with the date read, outcome.
    If the deadline is within 7 days, the claim goes at the top of the weekly report.
 7. When the carrier replies, record its decision and date. A settlement offer goes to the owner as a decision. Accepting
-   one is gated in `AGENT.md`.
+   one is gated in `AGENTS.md`.
 
 Checks before you finish:
 - The deadline has its source, the clause or page, and the date read; or it is marked "deadline not found".
 - Every claim within 7 days of its deadline is at the top of the report.
 - The evidence is listed, with each missing item named.
-- Nothing was filed, withdrawn or settled outside the gate in `AGENT.md`.
+- Nothing was filed, withdrawn or settled outside the gate in `AGENTS.md`.
 
 Example (invented, for illustration): "Order 4389, lost, carrier Parcelway, value $146.00 (order record read 2026-09-28).
 Collection scan 2026-09-08 09:40; no scan since 2026-09-10. Deadline 2026-10-02, from the carrier's claim terms

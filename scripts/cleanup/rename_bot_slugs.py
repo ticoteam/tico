@@ -149,7 +149,7 @@ OLD_NAMES = {
 }
 
 # Old card names a file still calls these bots by (the built-ins and the renamed cards); "Senior Software Engineer" stays,
-# since it is a job title the recruiter matches, and the Reviewer's own AGENT.md is written by hand.
+# since it is a job title the recruiter matches, and the Reviewer's own AGENTS.md is written by hand.
 PROSE_NAMES = {
     "Brand Owner": "Design Owner",
     "Goal Manager": "Strategy Owner",

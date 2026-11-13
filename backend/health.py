@@ -383,13 +383,14 @@ def _mail_key_exposed(c):
 
 
 PUBLISH_WARNING = "GitHub history not published: "  # runner-rs/src/readiness_extra.rs
-DENIED_WARNING = "Claude Code denies what AGENT.md asks for: "  # runner-rs/src/readiness_extra.rs
+DENIED_WARNING = "Claude Code denies what AGENTS.md asks for: "  # runner-rs/src/readiness_extra.rs
+OLD_DENIED_WARNING = "Claude Code denies what AGENT.md asks for: "  # a computer on a runner from before AGENTS.md
 DENIES_WARNING = "Claude Code settings deny: "  # runner-rs/src/readiness_extra.rs
 # GitHub writes a bot's access may allow: the command, and the `can` verbs (backend/bot_tools.py) that allow it.
 # Only a push: write access to a repository is given for pushing, and says nothing about whether the bot's work opens,
 # edits or comments on pull requests or issues. A Release Owner given write to push fixes in Merge denies `gh pr create`
 # on purpose, because Tico queues and merges the pull request itself. Whether a bot needs a `gh` command is what its
-# AGENT.md asks for, which the computer compares with the same denies (Health "Claude Code permissions").
+# AGENTS.md asks for, which the computer compares with the same denies (Health "Claude Code permissions").
 GITHUB_WRITES = (("git push", ("write",)),)
 WRITE_VERBS = {"write", "pull_requests", "issues"}
 
@@ -3190,7 +3191,7 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open bots", "#/settings", "bots")],
             )
         )
-    denied = _reported(c, DENIED_WARNING) if full else []
+    denied = (_reported(c, DENIED_WARNING) + _reported(c, OLD_DENIED_WARNING)) if full else []
     if denied:
         checks.append(
             _check(
@@ -3893,6 +3894,12 @@ def view(c, who, settings, auth, github, config):
                 "Move them to another computer.",
                 [_fix("Open Computers", "#/settings", "devices")],
             )
+        )
+    from . import browser_commands
+
+    if full and (browser := browser_commands.health_problem(c)):
+        checks.append(
+            _check("browser_host", "Browser host", "warn", browser, [_fix("Open Computers", "#/settings", "devices")])
         )
     beside = _member_bots_beside_shared_keys(c) if full else []
     if beside:

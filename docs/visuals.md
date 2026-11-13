@@ -24,7 +24,7 @@ Every bot's instructions carry this line, word for word:
   that work to them.
 - **The shared rules** say the same under "Visuals in replies" (`policies/shared-rules.md`), and add how to attach
   one: `--visual <file>` and `--title <caption>` on the reply or comment.
-- **No switch.** It applies to every bot. There is no per-bot or admin setting to turn it off, and `AGENT.md` doesn't
+- **No switch.** It applies to every bot. There is no per-bot or admin setting to turn it off, and `AGENTS.md` doesn't
   need to repeat it.
 
 Keep the text answer complete because not every reader sees the visual: Slack shows only a link to it (see

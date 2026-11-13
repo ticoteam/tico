@@ -1,12 +1,11 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, the policy turned into checks, the
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, the policy turned into checks, the
 open requests worked, a first returns report, and the first routine checked.
 
 Inputs: the task list, `tico team show`, the open return and refund requests, and the policy the Librarian cites.
 
-Done when: the five answers are in `state.md`, the policy checks and the ledger are written, the open requests have a decision each, the first report is on the task, the routine is checked, and `tico bot setup-done` has run.
+Done when: the five answers are in `knowledge/`, the policy checks and the ledger are written, the open requests have a decision each, the first report is on the task, the routine is checked, and `tico bot setup-done` has run.
 
 ---
 
@@ -36,7 +35,7 @@ Numbered, each with its one-line why, offering the defaults.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/policy-checks.md`: each
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/policy-checks.md`: each
 rule as a check, with its source. Start `knowledge/ledger.md` from the open requests.
 
 ## 5. Produce the first result now
@@ -50,7 +49,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Monday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

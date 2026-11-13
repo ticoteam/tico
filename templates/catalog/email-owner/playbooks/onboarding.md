@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, the Email playbook page published, your KPI under the North Star, your first ideas
 filed, and both routines checked.
 
@@ -32,7 +32,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/segments.md` (each list and its promise),
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/segments.md` (each list and its promise),
 `knowledge/voice.md` (with the two good examples), `knowledge/results.md` and `knowledge/do-not-email.md` from them.
 Each flow they already run and want kept becomes one Watching task, with a range from its last month of numbers:
 
@@ -94,4 +94,4 @@ off and no person turned it off, run `tico automation update <id> --enable` with
 one line what each does: "Each morning I check bounces and complaints on what we kept, and on Mondays its conversions; each
 Tuesday I file up to three email ideas." They can change or turn off either at any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
+Record it in `memory/decisions.md`.

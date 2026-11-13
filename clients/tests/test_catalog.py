@@ -69,11 +69,10 @@ def fixture(root, template="assistant", card=CARD, agent=AGENT):
     directory = Path(root) / template
     (directory / "playbooks").mkdir(parents=True)
     (directory / "card.yaml").write_text(card)
-    (directory / "AGENT.md").write_text(agent)
+    (directory / "AGENTS.md").write_text(agent)
     (directory / "employee.yaml").write_text(
         MANIFEST
     )  # an older template: the manifest under its old name still materializes
-    (directory / "state.md").write_text("# State\n\nNothing yet.\n")
     (directory / ".gitignore").write_text(".env\n")
     (directory / "playbooks" / "README.md").write_text("Playbooks for {{bot_name}}.\n")
     return directory
@@ -115,11 +114,11 @@ class Materialize(unittest.TestCase):
         self.assertIn("What the Team does", knowledge)
         self.assertNotIn("refunds", knowledge)
         self.assertNotIn("signing a contract", knowledge)
-        (path / "state.md").write_text("# State\n\nA turn happened here.\n")
+        (path / "notes.md").write_text("A turn happened here.\n")
         with self.assertRaises(ValueError) as caught:
             self.make()
         self.assertIn("already exists", str(caught.exception))
-        self.assertIn("A turn happened here.", (path / "state.md").read_text())
+        self.assertIn("A turn happened here.", (path / "notes.md").read_text())
 
     def test_a_workspace_ancestor_cannot_point_into_the_install(self):
         install = Path(self.tmp.name) / "install"
@@ -138,12 +137,12 @@ class Materialize(unittest.TestCase):
     def test_a_bot_given_another_bots_old_slug_is_built_in_the_folder_the_server_recorded(self):
         # A renamed bot still works in bot-assistant; the new bot named assistant was given bot-assistant-<part of its id>.
         first = self.make()
-        (first / "state.md").write_text("# State\n\nThe renamed bot's memory.\n")
+        (first / "notes.md").write_text("The renamed bot's memory.\n")
         second = self.make(folder="bot-coo-0a1b2c3d")
         # macOS gives tmp as /var, a link to /private/var: the bot folder comes back resolved.
         self.assertEqual(second, (self.workspace / "bot-coo-0a1b2c3d").resolve())
-        self.assertTrue((second / "AGENT.md").is_file())
-        self.assertIn("The renamed bot's memory.", (first / "state.md").read_text())
+        self.assertTrue((second / "AGENTS.md").is_file())
+        self.assertIn("The renamed bot's memory.", (first / "notes.md").read_text())
         # A recorded value that is not one plain folder name is never a path.
         with self.assertRaises(ValueError):
             self.make(folder="../assistant")
@@ -171,6 +170,36 @@ class Refresh(unittest.TestCase):
     def refresh(self):
         return catalog.refresh("assistant", self.path, NAMES, directory=self.catalog)
 
+    def test_a_bot_still_on_agent_md_is_refreshed_once_the_runner_moved_it_to_agents_md(self):
+        import json
+
+        # A bot made before AGENTS.md: its instructions and its stamp name AGENT.md.
+        (self.path / "AGENTS.md").rename(self.path / "AGENT.md")
+        stamp = json.loads((self.path / catalog.STAMP).read_text())
+        stamp["files"]["AGENT.md"] = stamp["files"].pop("AGENTS.md")
+        (self.path / catalog.STAMP).write_text(json.dumps(stamp))
+        git(self.path, "add", "-A")
+        git(self.path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "Before AGENTS.md")
+        (self.template / "AGENTS.md").write_text("Updated instructions.\n")
+        self.assertEqual(self.refresh(), NOTHING)  # it waits for the runner's move
+        self.assertFalse((self.path / "AGENTS.md").exists())
+        (self.path / "AGENT.md").rename(self.path / "AGENTS.md")
+        self.assertEqual(self.refresh(), {**NOTHING, "updated": ["AGENTS.md"]})
+        self.assertEqual((self.path / "AGENTS.md").read_text(), "Updated instructions.\n")
+
+    def test_a_bot_with_an_agents_md_pointer_beside_agent_md_waits_for_the_move(self):
+        # The Reputation Manager template shipped AGENT.md with an AGENTS.md that only says "Read AGENT.md".
+        (self.path / "AGENTS.md").rename(self.path / "AGENT.md")
+        (self.path / "AGENTS.md").write_text("Read AGENT.md: it is the standing instructions for this bot.\n")
+        (self.template / "AGENTS.md").write_text("Updated instructions.\n")
+        self.assertEqual(self.refresh(), NOTHING)
+        self.assertIn("Read AGENT.md", (self.path / "AGENTS.md").read_text())
+
+    def test_an_agent_md_link_to_agents_md_does_not_hold_a_refresh_back(self):
+        (self.path / "AGENT.md").symlink_to("AGENTS.md")
+        (self.template / "AGENTS.md").write_text("Updated instructions.\n")
+        self.assertEqual(self.refresh(), {**NOTHING, "updated": ["AGENTS.md"]})
+
     @pytest.mark.slow
     def test_a_bot_root_or_named_folder_cannot_resolve_into_the_install(self):
         alias = self.path.parent / "bot-alias"
@@ -187,8 +216,8 @@ class Refresh(unittest.TestCase):
         outside = Path(self.tmp.name) / "outside"
         outside.mkdir()
         (outside / "fleet.md").write_text("Keep me.\n")
-        (self.template / "AGENT.md").write_text("Updated instructions.\n")
-        before = (self.path / "AGENT.md").read_text()
+        (self.template / "AGENTS.md").write_text("Updated instructions.\n")
+        before = (self.path / "AGENTS.md").read_text()
         for rel, destination in (
             ("playbooks/fleet.md", outside / "fleet.md"),
             (catalog.STAMP, outside / "new-stamp"),
@@ -200,7 +229,7 @@ class Refresh(unittest.TestCase):
             path.symlink_to(destination)
             with self.assertRaisesRegex(ValueError, "outside the bot repo"):
                 self.refresh()
-            self.assertEqual((self.path / "AGENT.md").read_text(), before)
+            self.assertEqual((self.path / "AGENTS.md").read_text(), before)
             self.assertEqual((outside / "fleet.md").read_text(), "Keep me.\n")
             self.assertFalse((outside / "new-stamp").exists())
             path.unlink()
@@ -222,14 +251,14 @@ class Refresh(unittest.TestCase):
     def test_a_changed_template_file_wins_and_the_rest_stays_the_bots(self):
         (self.path / "playbooks" / "fleet.md").write_text("Improved by the bot.\n")
         (self.path / "playbooks" / "mine.md").write_text("A playbook the bot wrote.\n")
-        (self.path / "state.md").write_text("# State\n\nMid-task.\n")
+        (self.path / "notes.md").write_text("Mid-task.\n")
         (self.template / "playbooks" / "fleet.md").write_text("Check the fleet, then fix it, for {{company_name}}.\n")
         self.assertEqual(self.refresh(), {**NOTHING, "updated": ["playbooks/fleet.md"]})
         self.assertEqual(
             (self.path / "playbooks" / "fleet.md").read_text(), "Check the fleet, then fix it, for Acme Ltd.\n"
         )
         self.assertEqual((self.path / "playbooks" / "mine.md").read_text(), "A playbook the bot wrote.\n")
-        self.assertIn("Mid-task.", (self.path / "state.md").read_text())
+        self.assertIn("Mid-task.", (self.path / "notes.md").read_text())
         self.assertIn("Refresh 1 file from the assistant template", git(self.path, "log", "-1", "--format=%s"))
         self.assertEqual(
             git(self.path, "show", "HEAD~1:playbooks/fleet.md"), "Improved by the bot."
@@ -281,15 +310,15 @@ class SeatRefresh(unittest.TestCase):
         (self.template / "playbooks" / "leads.md").write_text("Answer leads for {{company_name}} within an hour.\n")
         newer = SETTINGS.replace('"Read"', '"Read", "Bash(gh pr checks *)"')
         (self.template / ".claude" / "settings.json").write_text(newer)
-        (self.template / "AGENT.md").write_text(AGENT + "\n## Done means\nThe lead has an answer.\n")
+        (self.template / "AGENTS.md").write_text(AGENT + "\n## Done means\nThe lead has an answer.\n")
         self.assertEqual(
-            self.refresh(), {**NOTHING, "updated": [".claude/settings.json", "AGENT.md", "playbooks/leads.md"]}
+            self.refresh(), {**NOTHING, "updated": [".claude/settings.json", "AGENTS.md", "playbooks/leads.md"]}
         )
         self.assertEqual(
             (self.path / "playbooks" / "leads.md").read_text(), "Answer leads for Acme Ltd within an hour.\n"
         )
         self.assertEqual((self.path / ".claude" / "settings.json").read_text(), newer)
-        agent = (self.path / "AGENT.md").read_text()
+        agent = (self.path / "AGENTS.md").read_text()
         self.assertIn("## Done means", agent)
         self.assertTrue(agent.endswith("## Job description\nAnswer Acme's inbound leads.\n"))
         self.assertIn("Acme Ltd", (self.path / "knowledge" / "company.md").read_text())
@@ -352,9 +381,9 @@ class SeatRefresh(unittest.TestCase):
     def test_instructions_a_person_edited_before_the_bot_was_made_count_as_changed(self):
         self.instructions = self.instructions.replace("## Tools and scope", "## Tone\nShort.\n\n## Tools and scope")
         self.path = self.make("sue")
-        (self.template / "AGENT.md").write_text(AGENT + "\n## Done means\nThe lead has an answer.\n")
-        self.assertEqual(self.refresh(), {**NOTHING, "kept": ["AGENT.md"]})
-        self.assertIn("## Tone", (self.path / "AGENT.md").read_text())
+        (self.template / "AGENTS.md").write_text(AGENT + "\n## Done means\nThe lead has an answer.\n")
+        self.assertEqual(self.refresh(), {**NOTHING, "kept": ["AGENTS.md"]})
+        self.assertIn("## Tone", (self.path / "AGENTS.md").read_text())
 
 
 @functools.lru_cache(maxsize=None)

@@ -31,7 +31,7 @@ def test_a_refresh_is_one_event_and_moves_the_bots_template_version(api):
     body = {
         "template": "inbound-sales-owner",
         "to_version": "0.6.0-rc.5",
-        "updated": ["AGENT.md", ".claude/settings.json"],
+        "updated": ["AGENTS.md", ".claude/settings.json"],
         "kept": ["playbooks/leads.md"],
     }
     post(api, "bots/ops/template/refresh", body, other["token"], expected=403)
@@ -45,7 +45,7 @@ def test_a_refresh_is_one_event_and_moves_the_bots_template_version(api):
                 "template": "inbound-sales-owner",
                 "from_version": "0.6.0-rc.3",
                 "to_version": "0.6.0-rc.5",
-                "updated": ["AGENT.md", ".claude/settings.json"],
+                "updated": ["AGENTS.md", ".claude/settings.json"],
                 "kept": ["playbooks/leads.md"],
             },
         )

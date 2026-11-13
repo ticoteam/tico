@@ -41,7 +41,7 @@ legal advice; have counsel review anything that matters."
 
     tico file publish reports/YYYY-MM-DD-contract-calendar.md
 
-Only the reviewers named in `state.md` receive it. An urgent item is a task for the human who owns the
+Only the reviewers named in `knowledge/playbook.md` receive it. An urgent item is a task for the human who owns the
 relationship, `tico task create --owner <person>`. Nothing goes to a counterparty.
 
 ## 6. Finish

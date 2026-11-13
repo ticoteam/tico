@@ -25,6 +25,7 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser;
 mod browser_exit;
 mod capture;
 mod checkout_groups;
@@ -62,6 +63,7 @@ mod harness_memory;
 mod harness_tools;
 mod hosts;
 mod idle_load;
+mod instructions;
 mod isolation;
 mod lanes;
 mod lease;
@@ -587,7 +589,9 @@ async fn start(command: Command, config: config::Config) -> i32 {
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
     browser_exit::start(client.clone());
+    browser::start(service.config.clone());
     service.run().await;
+    browser::shutdown().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {
         stop.notify_one();

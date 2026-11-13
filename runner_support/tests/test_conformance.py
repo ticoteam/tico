@@ -56,7 +56,7 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
         BS.write(c, slug, config)
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
-    (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
+    (repo / "AGENTS.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
     (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {config['runtime']}\nmodel: {config['model']}\n")
 
 
@@ -1198,14 +1198,17 @@ def test_a_built_in_bots_product_files_follow_the_release_before_its_turn(api, c
     until(lambda: reply_to(api, first["conversation_id"]), "the bot's reply")
     repo = tmp_path / "projects" / "bot-ops"
     stamp = json.loads((repo / ".tico-template.json").read_text())
-    assert stamp["template"] == "botops" and "AGENT.md" in stamp["files"]
-    agent = (repo / "AGENT.md").read_text()
+    assert stamp["template"] == "botops" and "AGENTS.md" in stamp["files"]
+    agent = (repo / "AGENTS.md").read_text()
     assert agent != "# Ops\n\nAnswer the Acme team.\n" and "{{" not in agent.splitlines()[0]
     # Committed in the checkout (the turn's own push carries it; this fixture's file remote takes no push).
     log = subprocess.run(
         ["git", "-C", str(repo), "log", "--format=%s", "main"], capture_output=True, text=True, check=True
     ).stdout
-    assert log.startswith("Refresh ") and "from the botops template" in log, log
+    # The refresh comes first; the runner then adds Tico's standing section to AGENTS.md in its own commit.
+    newest, refresh = log.splitlines()[:2]
+    assert newest.startswith("Instructions: AGENTS.md") and "<!-- tico:standing" in agent, log
+    assert refresh.startswith("Refresh ") and "from the botops template" in refresh, log
 
 
 def git(cwd, *args):

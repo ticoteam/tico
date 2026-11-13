@@ -61,7 +61,7 @@ Write `reports/YYYY-MM-DD-leads.md` in the shape of the example. Then:
     tico file publish reports/YYYY-MM-DD-leads.md
 
 Log the week's counts in `knowledge/sources.md`. Record the qualified count as a KPI reading with `tico kpi log` if
-`tico kpi list` shows one you own. Rewrite `state.md`, and commit this repository.
+`tico kpi list` shows one you own. Note progress on the task and commit this repository.
 
 ## 9. Close
 

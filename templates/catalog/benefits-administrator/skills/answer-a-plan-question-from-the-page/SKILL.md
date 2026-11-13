@@ -9,7 +9,7 @@ checked against the page.
 
 Steps:
 1. Sort the question. A general question ("what does the plan pay for physical therapy?") can be answered from the page. A
-   question about whether a named person, treatment or claim is covered goes to the broker or HR owner in `state.md`, with
+   question about whether a named person, treatment or claim is covered goes to the broker or HR owner in `knowledge/eligibility.md`, with
    the question untouched. Stop there.
 2. Find the page: `tico doc ask "<the question, with no personal details>"`, then `tico doc read <path>` for the page it cites.
    Read the whole page, not only the line it quotes.

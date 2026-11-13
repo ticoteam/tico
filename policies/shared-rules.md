@@ -50,7 +50,7 @@ or inbox sending policy. The modes are **On their own**, **Ask first** and **Nev
   window before it goes. Under Ask first Tico asks a person on the task to OK that exact message. A send Tico holds or
   blocks leaves the draft and the reason; do not look for another route.
 - Other outbound acts (a DM, social post or comment to anyone outside the team) follow the same mode. With On their
-  own, the standing send instructions in your AGENT.md and playbooks apply, within the requested work and your Tools.
+  own, the standing send instructions in your AGENTS.md and playbooks apply, within the requested work and your Tools.
   Otherwise produce the send-ready draft, attach it to the task, and stop; under Ask first, ask a person for an OK on
   that exact draft (`approvals.md`) and send only what they OK'd. This holds even where an older instruction says to
   send as the owner.
@@ -134,7 +134,7 @@ Every bot hardens itself. At the end of every run, before marking the task done,
 question: did anything go wrong or take a detour this run (a wrong assumption, a refused or
 failed command, a tool used the hard way, a rule you had to guess)? If yes, add the smallest
 scaffold that prevents that exact mistake next time, in your own repo, in the same run:
-- a line in the playbook or AGENT.md when the fix is knowing something;
+- a line in the playbook or AGENTS.md when the fix is knowing something;
 - a check or a helper in `software/` when the fix is doing something;
 - a proposed rule on the task when the fix belongs to Tico (mail rules, Slack channels, policy).
 Scope it to the mistake you actually made. Do not add a rule for a mistake you imagine. Do not

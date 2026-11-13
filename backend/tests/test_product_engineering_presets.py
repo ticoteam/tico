@@ -542,7 +542,7 @@ def test_owner_on_the_team_once_at_release_clears_the_owners_it_refuses_and_wake
     assert [E.task(c, t["id"])["owner_id"] for t in (first, second, kept)] == [None, None, "bot:builder"]
     wakes = c.execute(
         "SELECT j.bot_id, m.body FROM messages m JOIN jobs j ON j.message_id = m.id WHERE m.wake_key LIKE ?",
-        ("stage-rules-sweep:%",),
+        ("%:stage-rules-sweep:%",),
     ).fetchall()
     assert [bot for bot, _ in wakes] == [EPM]
     assert wakes[0][1].startswith("Stage rules: 2 tasks have no owner now.")

@@ -306,6 +306,9 @@ function decideStop() {
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
+  // A browser view on screen gives back control and stops reading pictures.
+  const thing: HTMLElement | null = $('.decide .dc-thing');
+  if (thing) { browserView.stopIn(thing); thing.innerHTML = ''; delete thing.dataset.html; }
   const d: HTMLDialogElement | null = $('#need-card');
   if (d?.open) d.close();
   needsListsRedraw();
@@ -436,12 +439,37 @@ function decidePaintBody(st: DecState) {
   } else if (kind === 'mention') {
     html = `<blockquote class="dc-quote">${esc(it.line)}</blockquote>`;
   }
+  // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
+  if (kind !== 'ok') html += (it.ask?.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
   if (host.dataset.html === html && host.dataset.key === it.id) return;
   host.dataset.html = html; host.dataset.key = it.id;
+  browserView.stopIn(host);
   host.innerHTML = html;
+  host.querySelectorAll<HTMLElement>('[data-dc-browser]').forEach(slot => { decideBrowserMount(st, it, slot); });
   const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
+}
+const decideBrowserSlot = (ref: string) => ref.includes('/') ? `<div class="dc-browser" data-dc-browser="${esc(ref)}"></div>` : '';
+/** The live view of the browser an ask shows. Its Done answers the ask "Done" when that is one of its choices (a bot's
+    "sign in for me"), else it only closes the view, which leaves an Open browser button. */
+function decideBrowserMount(st: DecState, it: NeedsEntry, slot: HTMLElement) {
+  const [toolId = '', accountId = ''] = (slot.dataset.dcBrowser || '').split('/');
+  const answers = decideKind(it) === 'question' && (it.ask?.choices || []).includes('Done');
+  const taskId = it.task_id || it.task?.id || '', rid = decideRid(it), ver = it.task?.version ?? null;
+  const closed = () => {
+    if (!slot.isConnected || DEC !== st) return;
+    slot.innerHTML = '<button type="button" class="ghost" data-dc-browser-open>Open browser</button>';
+    const b = slot.querySelector<HTMLButtonElement>('[data-dc-browser-open]');
+    if (b) b.onclick = () => decideBrowserMount(st, it, slot);
+  };
+  browserView.mount(slot, {toolId, accountId, title: it.line, onClose: closed,
+    onDone: async () => {
+      if (!answers) return true;
+      await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, 'Done', ver), decideUndoAnswer);
+      // Still on this item: the answer was refused and says why on the right; the view stays open.
+      return !(DEC === st && st.at === it.id);
+    }});
 }
 const decideBtn = (dc: string, label: string, main = false, extra = '') =>
   `<button type="button" class="${main ? 'primary' : 'ghost'}" data-dc="${dc}"${extra}>${esc(label)}</button>`;
@@ -801,6 +829,7 @@ async function decideShowsRead(v: AskOkView, shows: string[]) {
       if (kind === 'page') { v.pages.push((await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true})).page); continue; }
       if (kind === 'email') { parts.push(emailSendPreviewHTML(await get<EmailSendPreview>('/v2/email/sends/' + encodeURIComponent(id), {fresh: true}))); continue; }
       if (kind === 'file' && pinned) { parts.push(await decideFileHTML(v, {file: pinned[1], version: Number(pinned[2])})); continue; }
+      if (kind === 'browser' && id.includes('/')) { parts.push(decideBrowserSlot(id)); continue; }
     } catch (e) { v.missing = true; parts.push(`<p class="err">${esc(errorMessage(e, `${ref} did not load.`))}</p>`); continue; }
     parts.push(`<p class="dc-ref"><code>${esc(ref)}</code></p>`);
   }

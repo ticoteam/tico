@@ -25,5 +25,5 @@ contact sheet; a person looks at the rest.
 - **The file is the one approved.** Same version and digest as the one on the final task.
 
 ## Sources
-- Owner's standard for finals, from the setup answers in `state.md`.
+- Owner's standard for finals, from the setup answers in this file.
 - Platform disclosure rules for realistic synthetic video, read 2026-11-01 from news and third-party guides; check each platform's own help page before relying on them.

@@ -60,7 +60,7 @@ workers directly.
 ## 6. Hiring check
 
 If the same kind of work came up three or more times this month with no owner, add one hiring proposal
-at the end of the page, following `## Hiring` in `AGENT.md`. One at most per page.
+at the end of the page, following `## Hiring` in `AGENTS.md`. One at most per page.
 
 ## 7. Write the page and hand it over
 

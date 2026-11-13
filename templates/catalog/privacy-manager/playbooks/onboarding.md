@@ -1,10 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 
 Inputs: the privacy notice and signed DPAs in the team docs, open data-request and DPA tasks, and the answers the human gives.
 Outcome: five recorded answers; the DPA position and the subprocessor list written down, with blanks where none were given; open requests logged; a first desk report; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first desk report is on the task.
+Done when: `tico bot setup-done` has run and the first desk report is on the task.
 
 ---
 
@@ -42,7 +42,7 @@ If the human answers only some, record those and use the defaults for the rest, 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/dpa-position.md` in the human's words,
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/dpa-position.md` in the human's words,
 blank where they gave none. Start `knowledge/processing.md` with one row per system named, and
 `knowledge/subprocessors.md` with the vendors behind them, each row marked "from setup, not yet confirmed". Log any
 open request in `knowledge/requests.md`.
@@ -60,7 +60,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 Wednesday at 09:00, and I check every open request's deadline on each run." They can change it or turn it off any
 time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 

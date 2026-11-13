@@ -18,7 +18,7 @@ Steps:
 4. Check sensitivity. Customer names, contracts and personal details wait behind an NDA or a redaction. Say so on the row.
 5. Report the gaps in one list: missing, stale, unowned, blocked by an NDA. Each has an owner and the date it is needed
    (the next meeting that asks for it).
-6. Share nothing and add no one. Access changes wait for a person's go-ahead, per AGENT.md.
+6. Share nothing and add no one. Access changes wait for a person's go-ahead, per AGENTS.md.
 
 Checks before you finish:
 - Every row has an owner and a date.

@@ -63,7 +63,7 @@ Then:
 
     tico file publish reports/YYYY-MM-DD-affiliates.md
 
-Add the dated checks to each `knowledge/affiliates/<name>.md`, rewrite `state.md`, and commit this repository.
+Add the dated checks to each `knowledge/affiliates/<name>.md`, note progress on the task, and commit this repository.
 
 ## 8. Close
 

@@ -4,7 +4,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 # Acme offer and pay change check, Wed 2026-09-30
 
 Sample output for Acme, a fictional studio-software team. Counts only: person-level figures are in
-the attachment on T-470 for the owners named in `state.md`. Nothing has been published or shared. First
+the attachment on T-470 for the owners named in `knowledge/philosophy.md`. Nothing has been published or shared. First
 draft, not yet reviewed.
 
 **Headline: 4 proposals checked; 1 offer above the band maximum; 1 open role has no documented range and

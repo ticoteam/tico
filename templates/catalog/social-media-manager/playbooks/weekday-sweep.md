@@ -38,7 +38,7 @@ For each post, note:
 | `posted_at` | When it was posted |
 
 Take every post the target shows, not the ones you think matter. Redact personal details from
-`text` before you save (the list is in `AGENT.md`).
+`text` before you save (the list is in `AGENTS.md`).
 
 A read ends in one of four states:
 

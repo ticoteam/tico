@@ -180,7 +180,7 @@ Open **Bot → Instructions**, describe the change in **Request instruction chan
 bot reads it at its next run once its computer's checkout has the update. An older app may show
 the **Instructions** tab. See [Creating bots](creating-bots.md#edit-instructions).
 
-For a manual edit, change `AGENT.md` in `bot-<slug>` (playbooks and `knowledge/` for methods and
+For a manual edit, change `AGENTS.md` in `bot-<slug>` (playbooks and `knowledge/` for methods and
 facts), commit and push. The computer pulls before the next run; if you maintain its checkout by
 hand, pull the update there too. Model, effort, computer, owners and status are changed in
 **Bot → Settings**. One-off requests are tasks, not edits.

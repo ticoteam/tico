@@ -21,7 +21,7 @@ Schedule: the 5th of each month at 09:00 team time (routine `monthly-cap-table-c
 4. Check the 409A in force against each grant date and its 12-month expiry. List the expiry date. Say that counsel decides whether a material event has changed it.
 5. Add each confirmed change to `knowledge/change-log.md` with its approval and document. A change with no source goes on the open list, not the log.
 6. If a round is planned, refresh the scenario with `skills/build-a-round-scenario/SKILL.md`, labelled a draft.
-7. If anything on the escalation list in `AGENT.md` applies, tell the Head of Finance and the owner in one message.
+7. If anything on the escalation list in `AGENTS.md` applies, tell the Head of Finance and the owner in one message.
 
 ## 3. Write and hand over
 

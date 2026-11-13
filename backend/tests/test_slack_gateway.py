@@ -408,8 +408,8 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     assert "Second post" in digests(hub)[-1]["body"] and "Launch copy" not in digests(hub)[-1]["body"]
 
 
-def test_a_shared_dm_with_56_active_bots_is_asked_in_one_call_and_routed(gateway, hub):
-    """One call per input: the message is read once, with all 59 questions."""
+def test_a_shared_dm_with_56_active_bots_is_asked_in_2_calls_and_routed(gateway, hub):
+    """56 bots and the three fixed questions are 59, past the Gateway's 40 a call: 2 calls, every question once."""
     add_bots(hub, 56 - 6)  # the fixture already has six active bots
     with hub.read() as c:
         assert len(gateway.fleet(c)) == 56
@@ -417,12 +417,14 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_one_call_and_routed(gateway
     result = send(gateway, "please draft the vendor terms", channel=DM, kind="message")
     assert result["state"] == "routed", result
     assert [r["bot"] for r in result["decision"]["recipients"]] == ["bot-49", "legal"]
-    assert [len(call) for call in engine.calls] == [59], "56 bots and the three fixed questions, in one call"
+    assert len(engine.calls) == 2 and all(len(call) <= 40 for call in engine.calls)
+    asked = [q for call in engine.calls for q in call]
+    assert len(asked) == len(set(asked)) == 59, "every question once"
     assert len(result["decision"]["scores"]) == 56
     assert events(hub)[0]["state"] == "routed"
     with hub.read() as c:
         audit = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.call'").fetchone()[0])
-    assert audit["questions"] == 59 and audit["calls"] == 1
+    assert audit["questions"] == 59 and audit["calls"] == 2
 
 
 def test_a_fleet_too_big_for_one_call_is_asked_in_the_fewest_calls_and_no_question_twice(gateway, hub, monkeypatch):

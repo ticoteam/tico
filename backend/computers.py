@@ -14,12 +14,16 @@ def revoke(c, actor, runner_id, *, reason=None, at=None):
         "DELETE FROM registry_metadata WHERE key IN (?,?)",
         ("computer-repositories:" + runner_id, "computer-enrolled-as:" + runner_id),
     )
+    c.execute("DELETE FROM registry_metadata WHERE key='browser-host' AND value=?", (runner_id,))
     app_delivery.runner_revoked(c, actor, runner_id)
     H.event(c, actor, "runner.revoked", runner_id, {"reason": reason} if reason else None)
 
 
 def disconnect(store, runner_id):
     """Close screen and browser access after revocation commits."""
+    from . import browser_commands
+
+    browser_commands.disconnect(runner_id)  # website tools' commands and live view on it end
     sessions = getattr(store, "screen_sessions", None)
     if sessions is None:
         return

@@ -277,7 +277,7 @@ def test_the_owner_saves_a_revisioned_choice_and_a_stale_editor_is_refused(envir
 
 def test_every_shipped_template_saves_as_the_wizard_sends_it(environment):
     """The wizard sends each picked bot's instructions back as the catalog rendered them (ui/app/welcome.ts). A shipped
-    AGENT.md longer than the setup save accepts stopped every owner on the team chart (BotOps, 24,048 characters,
+    AGENTS.md longer than the setup save accepts stopped every owner on the team chart (BotOps, 24,048 characters,
     against 20,000). The limit is the API's own: the save itself, and the model "Add from catalog" posts."""
     from backend.models import BotDefinitionCreate
 

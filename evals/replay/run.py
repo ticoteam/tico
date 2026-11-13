@@ -2,7 +2,7 @@
 """Replay signed cases on a candidate build or prompt, and report wins and regressions. Release preparation only.
 
     python3 evals/replay/run.py --url https://scratch.example --token <owner API token> --cases <private folder> \\
-        [--only a,b] [--report replay.md] [--json replay.json] [--candidate "v0.3.52-rc1, AGENT.md 3f2a…"]
+        [--only a,b] [--report replay.md] [--json replay.json] [--candidate "v0.3.52-rc1, AGENTS.md 3f2a…"]
 
 The server is a scratch team on the candidate build. Each case's bot must exist there (same slug), on a computer with
 a real model, running the prompt you want to compare: the candidate prompt, or the original one to test a build. The

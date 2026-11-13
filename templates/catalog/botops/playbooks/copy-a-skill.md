@@ -35,5 +35,5 @@ No credential, `.env` or key file is ever copied with a skill. A skill that need
 
 ## 3. Close it out
 
-If a target's `AGENT.md` should tell the bot when to use the skill, add that one line and commit. Then report in one message which bots have
+If a target's `AGENTS.md` should tell the bot when to use the skill, add that one line and commit. Then report in one message which bots have
 it now and which did not, and why.

@@ -10,11 +10,13 @@
     "events": {"method": "POST", "path": "/api/v2/attempts/{aid}/events", "request": "EventBatch", "answer": "EventsAnswer"},
     "renew": {"method": "POST", "path": "/api/v2/attempts/{aid}/renew", "request": "Empty", "answer": "RenewAnswer"},
     "complete": {"method": "POST", "path": "/api/v2/attempts/{aid}/complete", "request": "Completion", "answer": "CompleteAnswer"},
+    "browser_commands": {"method": "GET", "path": "/api/v2/runner-browser-commands", "answer": "BrowserCommandsAnswer"},
     "runner_events": {"method": "GET", "path": "/api/v2/runners/me/events", "stream": {
       "ready": "ReadyFrame", "runner": "RunnerFrame", "reset": "ResetFrame", "expired": "ExpiredFrame"}}
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "browser_commands": "runner-rs/src/browser/host.rs backs off on an older server without this endpoint; expires_in is optional to old readers, and new runners accept its absence from old servers",
     "heartbeat.request.capabilities": "Older servers can negotiate it away; requests stay queued until a runner advertises make_page",
     "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
@@ -30,7 +32,10 @@
     "heartbeat.request.capabilities[]=\"memory_tidy_packets_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 drops this capability for ten minutes; ordinary work continues without packet admission",
     "heartbeat.request.capabilities[]=\"threads_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"harness_allocation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; without allocation reporting the hub preserves existing grants under memory pressure",
+    "heartbeat.request.capabilities[]=\"memory_tidy_keep_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
+    "heartbeat.request.capabilities[]=\"browser_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it no browser command is sent to that computer",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
+    "heartbeat.request.readiness.browser": "runner-rs/src/runner.rs: sent only once GET config says readiness_browser (fallback.rs server_takes_browser)",
     "heartbeat.request.readiness.disk_cleanup": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it reports only what the computer already cleaned",
     "heartbeat.request.readiness.runtimes.*.weekly": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "heartbeat.request.readiness.runtimes.*.five_hour": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
@@ -39,6 +44,24 @@
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
   },
   "$defs": {
+    "BrowserCommandsAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["commands"],
+      "properties": {"commands": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/BrowserRelayCommand"}}}
+    },
+    "BrowserRelayCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "account", "tool", "verb", "args", "sites", "profile", "where", "expires_in"],
+      "properties": {
+        "id": {"type": "string"}, "account": {"type": "string"}, "tool": {"type": "string"},
+        "verb": {"type": "string", "x-open-enum": true},
+        "args": {"type": "object", "additionalProperties": true},
+        "sites": {"type": "array", "maxItems": 50, "items": {"type": "string"}},
+        "profile": {"type": "string"}, "where": {"enum": ["central", "own"]},
+        "bot": {"type": "string"}, "value": {"type": "string"},
+        "expires_in": {"type": "number", "minimum": 0, "maximum": 30,
+          "x-note": "Seconds remaining when this payload leaves the server; the runner subtracts time spent waiting locally and never starts an expired command."}
+      }
+    },
     "ErrorEnvelope": {
       "type": "object", "additionalProperties": false, "required": ["error"],
       "properties": {"error": {"$ref": "#/$defs/Error"}}

@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes. The
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The
 outcome is five recorded answers, the controls register written, a first monthly page, and the first routine checked.
 
 ---
@@ -35,7 +35,7 @@ Numbered, each with its one-line why and a default.
 
 ## 4. Record
 
-Answers go to `state.md` under `## Answers`, dated. Build `knowledge/controls.md` from the list you were given. A control
+Answers go, dated, into the `knowledge/` files they belong to. Build `knowledge/controls.md` from the list you were given. A control
 with no owner or no cadence is kept and marked, never filled in by you. Start `knowledge/evidence-log.md` from what is
 already in the evidence folder, dated by each file. Write `knowledge/evidence-method.md` from the standing file, with the
 framework facts it holds.
@@ -51,8 +51,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 --enable`) and tell the human in one line: "I will run the controls page on the first of every month, and send each control
 owner an evidence request for their own control." They can change it or turn it off any time.
 
-Record it in `memory/decisions.md`, with the list of control owners who may receive evidence requests, and set `state.md` to
-`Setup: finished`. If they asked for a different schedule or to leave it off, change the routine to match (`tico automation
+Record it in `memory/decisions.md`, with the list of control owners who may receive evidence requests. If they asked for a different schedule or to leave it off, change the routine to match (`tico automation
 update <id>`, with `--disable` to turn it off).
 
 Last, run:

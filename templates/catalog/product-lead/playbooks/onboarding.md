@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, a first weekly product summary from
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, a first weekly product summary from
 the real roadmap, and the first routine checked.
 
 ---
@@ -33,7 +32,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roadmap.md`,
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/roadmap.md`,
 `knowledge/team.md` and `knowledge/scoring.md` (the impact scale and the effort unit) as present-tense
 statements. Write `knowledge/company.md` from the answers: what the team builds, who uses it, who decides what gets built, and the scope of this work.
 
@@ -49,7 +48,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this every Monday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

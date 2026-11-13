@@ -405,10 +405,14 @@ def run(args, who=None):
     canonical_names(args)
     counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
+    # A browser verb waits up to 30 s for the computer that runs Chrome; a retry could click twice, so there is none.
+    browsing = args.cmd in ("browser", "login")
     client = Client(
         os.environ["HUB_API_URL"],
         os.environ.get("HUB_TOKEN", ""),
-        timeout=45
+        timeout=40
+        if browsing
+        else 45
         if args.cmd in ("decision", "gateway")
         else 30
         if args.cmd == "sql"
@@ -417,6 +421,7 @@ def run(args, who=None):
         else 130
         if args.cmd == "inbound"
         else 15,
+        **({"retries": 0} if browsing else {}),
     )
     fn = args.fn
     if args.cmd == "calendar" and args.sub in CALENDAR_SUBS and calendar_on_events(args):
@@ -1745,6 +1750,9 @@ def main(args, who=None, fields=None):
             # retrying the same command.
             print(hubtools.refusal_text(hubtools.error_payload(exc), getattr(args, "id", None)))
             return 2
+        if args.cmd in ("browser", "login") and not getattr(args, "json", False):
+            print(exc.detail)  # one plain sentence and what to do next (clients/commands/browser.py SAYS)
+            return cli_plumbing.exit_code(exc)
         print(
             json.dumps(
                 {"error": exc.code, "detail": exc.detail, "retryable": exc.retryable, "operation_id": exc.operation_id},

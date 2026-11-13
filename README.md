@@ -162,7 +162,7 @@ which case the bundle is ad-hoc signed and Gatekeeper asks for **Open Anyway** t
 ## Creating bots
 
 A bot is one durable git repository in the environment's workspace plus one row on the server. The
-repository holds `AGENT.md`, playbooks, knowledge and memory; the server holds runtime, model,
+repository holds `AGENTS.md`, playbooks, knowledge and memory; the server holds runtime, model,
 effort, assignment and tasks. The runner looks for the checkout at
 `<workspace>/bot-<slug>` (an older `emp-<slug>` folder keeps working) unless the registration's `repos` map says otherwise.
 
@@ -276,7 +276,7 @@ change, change this repository.
 
 | Change | Location |
 |---|---|
-| One bot's instructions | `bot-<slug>/AGENT.md` |
+| One bot's instructions | `bot-<slug>/AGENTS.md` |
 | One bot's repeatable method | `bot-<slug>/playbooks/` |
 | Domain facts, learnings and decisions for one bot | `bot-<slug>/knowledge/`, `memory/` |
 | One bot's routines, tools or send switch | `bot-<slug>/bot.yaml` |

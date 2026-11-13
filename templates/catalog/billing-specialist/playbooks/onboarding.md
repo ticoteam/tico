@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes. The outcome is five recorded answers,
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers,
 the next invoice run checked from real contracts and inputs, and the first routine checked.
 
 ---
@@ -28,7 +28,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Build `knowledge/billing-register.md`, one line per customer, each fact with its source. A customer with
+Write each answer, dated, into the `knowledge/` file it belongs to. Build `knowledge/billing-register.md`, one line per customer, each fact with its source. A customer with
 no contract on file is marked so.
 
 ## 5. Produce the first result now
@@ -41,7 +41,7 @@ reviewed". Issue nothing.
 Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`) and tell the human in one line:
 "I will check the invoice run on the 25th of each month." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off, adjust `knowledge/` and
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off, adjust `knowledge/` and
 the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

@@ -1014,6 +1014,10 @@ def create_app(settings=None):
                     if captured
                     else 20_000_000
                     if docs_import or upload and request.state.identity.role in ("human", "owner")
+                    else 14_200_000  # a website tool's upload, 10 MB in base64 (backend/browser_commands.py)
+                    if request.url.path == "/api/v2/browser/commands"
+                    else 20_100_000  # a website tool's download, from the computer
+                    if re.fullmatch(r"/api/v2/runner-browser-commands/[^/]+/file", request.url.path)
                     else 2_000_000
                 )
                 if int(size) > limit:
@@ -3286,6 +3290,16 @@ def create_app(settings=None):
         others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations]
         from .shared_bots import route
 
+        # No owner: a first stage that picks from several picks one as the task arrives (backend/stage_pick.py). The
+        # filer stands in as its requester and reach, as for a task a stage files, and it enters with no assignee.
+        unassigned = not body.owner
+        if unassigned:
+            from . import stage_pick
+
+            refused = stage_pick.no_owner_refusal(c, body.pipeline)
+            if refused:
+                raise Problem("owner", refused, 422)
+            body = body.model_copy(update={"owner": who.actor})
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
         from . import meeting_audience
@@ -3437,7 +3451,7 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id and private:
+        if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
                 "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                 "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot_id=?",
@@ -3495,6 +3509,7 @@ def create_app(settings=None):
             # everyone who will.
             readers=body.readers or (),
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
+            unassigned=unassigned,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if run_model:
@@ -5438,9 +5453,15 @@ def create_app(settings=None):
     from . import api_tools
 
     api_tools.install(app, store, auth, settings)  # Tools: API tools, their keys and levels, and the tool index
+    from . import website_tools
+
+    website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts
     from . import tool_proxy
 
     tool_proxy.install(app, store)
+    from . import browser_commands
+
+    browser_commands.install(app, store, auth, mutate)  # website tools' browser: bots' verbs, computers, live view
     from .finance import actions as finance_vault
 
     finance_vault.use_vault(app.state.vault)  # never one an earlier app left behind (the scheduler may be off)

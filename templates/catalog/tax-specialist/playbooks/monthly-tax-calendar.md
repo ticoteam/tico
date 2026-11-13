@@ -39,4 +39,4 @@ file, and new contractors with no form collected during setup.
 
 Write `reports/YYYY-MM-tax-calendar.md` in the shape of `knowledge/examples/tax-calendar.md`, `tico file publish` it, commit,
 and `tico task done <id> -m "..." --version N` with the next deadline and anything late. Questions for the accountant are
-drafts on the task, under the Sending rules in AGENT.md.
+drafts on the task, under the Sending rules in AGENTS.md.

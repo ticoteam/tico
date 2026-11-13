@@ -38,14 +38,14 @@ Never write that a run happened if it is not in the record. Absence of a record 
     tico bot check <slug>
 
 This tells you whether the repository is in a state Tico will accept: instructions present
-and not the untouched template, a non-empty `## Owns`, `state.md` present, `bot.yaml` parsing
+and not the untouched template, a non-empty `## Owns`, `bot.yaml` parsing
 with the right name, schedules Tico would accept, declared credentials resolving, and the
 runtime available. Read every failure line literally. A failing check explains most "it did not
 run" reports on its own.
 
 ## 3. Read the instructions the run actually had
 
-Open the bot's `AGENT.md` and the playbook the task named, and read them as the bot did: in full,
+Open the bot's `AGENTS.md` and the playbook the task named, and read them as the bot did: in full,
 with no other context. Look for the line that produced the behaviour. Three patterns cover most of
 it:
 

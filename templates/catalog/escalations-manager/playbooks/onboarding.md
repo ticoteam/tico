@@ -1,12 +1,11 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is five recorded answers, a register of open escalations,
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, a register of open escalations,
 a first daily digest, and the first routine checked.
 
 Inputs: the task, `tico team show`, the open tasks, and the recent updates, in your access.
 
-Done when: the five answers are in `state.md`, the register and the first digest are on the task, the routine is checked, and `tico bot setup-done` has run.
+Done when: the five answers are in `knowledge/`, the register and the first digest are on the task, the routine is checked, and `tico bot setup-done` has run.
 
 ---
 
@@ -37,7 +36,7 @@ Numbered, each with its one-line why, offering the defaults.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated, and write `knowledge/escalation-rules.md`
+Write each answer, dated, into `knowledge/escalation-rules.md`
 with the triggers, severities (one example each), cadence, VIP list and owners.
 
 ## 5. Produce the first result now
@@ -52,7 +51,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send this digest every weekday at 08:30." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 
