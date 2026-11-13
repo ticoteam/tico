@@ -128,7 +128,7 @@ async function shot(page: import('playwright').Page, name: string) {
       assert.equal(await page.getByRole('button', {name: 'Add notes', exact: true}).count(), 1, scheme + ': one Add notes button');
       assert.equal(await page.locator('.meet-blank h2, .meet-blank .meet-or').count(), 0, scheme + ': no heading over the tiles');
       await shot(page, 'empty-desktop-' + scheme);
-      assert.equal(await page.locator('#meet-sources').isHidden(), true, scheme + ': the large tiles stand in for the strip');
+      assert.equal(await page.locator('#meet-sources').evaluate((el: HTMLElement) => el.hidden), true, scheme + ': the large tiles stand in for Sources');
       assert.equal(await page.locator('#notes-filters').isHidden(), true, scheme + ': no filters without a meeting');
 
       // A tile opens that source's setup in a dialog, and saving enables it.
@@ -141,9 +141,10 @@ async function shot(page: import('playwright').Page, name: string) {
       await dialog.locator('select[name=runner]').selectOption('mac');
       w.sources = SOME;
       await dialog.locator('button[type=submit]').click();
-      // Once something is connected the large tiles give way to a plain line and the quiet Sources link.
+      // Once something is connected the large tiles give way to a plain line and Sources in the header's ⋯.
       await page.waitForFunction(() => !document.querySelector('.meet-blank') && /No shared meetings yet/.test(document.querySelector('#notes-rows')?.textContent || ''));
-      assert.equal(await page.locator('#meet-sources .meet-src-btn').innerText(), 'Sources');
+      assert.equal(await page.locator('#meet-sources').evaluate((el: HTMLElement) => el.hidden), false, scheme + ': Sources is offered');
+      assert.equal(await page.locator('#meet-sources .meet-src-btn').textContent(), 'Sources');
       assert.deepEqual(w.saved, [{source: 'granola', enabled: true, runner_id: 'mac'}]);
       await page.keyboard.press('Escape');
       await dialog.waitFor({state: 'detached'});
@@ -168,6 +169,7 @@ async function shot(page: import('playwright').Page, name: string) {
       await retired.waitFor({state: 'detached'});
 
       // Close goes to its integration page.
+      await page.locator('.notes-head .ph-more').click();   // Sources is in the header's ⋯ (task #338)
       await page.locator('#meet-sources .meet-src-btn').click();
       assert.equal(await page.locator('#meet-src-dialog [data-src=close] a').getAttribute('href'), '#/tools/close-crm');
       await page.keyboard.press('Escape');
@@ -209,7 +211,7 @@ async function shot(page: import('playwright').Page, name: string) {
       await page.locator('.meet-row').first().waitFor();
       assert.equal(await page.locator('.meet-blank').count(), 0);
       assert.equal(await page.locator('#notes-import').count(), 0);
-      assert.equal(await page.locator('#meet-sources').isVisible(), true);
+      assert.equal(await page.locator('#meet-sources').evaluate((el: HTMLElement) => el.hidden), false, 'Sources is offered');
       assert.equal(await page.locator('#notes-filters').isVisible(), true);
       assert.deepEqual(await page.locator('#notes-filters select').evaluateAll((els: HTMLElement[]) => els.map(el => el.getAttribute('aria-label'))), ['When', 'Participant', 'Source', 'Status']);
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Weekly ops sync', 'Renewal call with Dana', 'Notes from standup']);
@@ -237,7 +239,9 @@ async function shot(page: import('playwright').Page, name: string) {
       await page.locator('.meet-row').first().waitFor();
       assert.equal(await page.locator('#meet-granola, .mg-row').count(), 0, 'no Granola row on the page');
       const sourcesBtn = page.locator('#meet-sources .meet-src-btn');
-      await sourcesBtn.locator('.dot').waitFor();
+      await page.locator('.notes-head .ph-more.meet-src-trouble').waitFor();   // the closed ⋯ shows Sources' dot
+      await page.locator('.notes-head .ph-more').click();   // Sources is in the header's ⋯ (task #338)
+      assert.equal(await sourcesBtn.locator('.dot').count(), 1);
       await sourcesBtn.click();
       const panel = page.locator('#meet-src-dialog');
       await panel.locator('[data-src=zoom]').waitFor();
@@ -271,6 +275,7 @@ async function shot(page: import('playwright').Page, name: string) {
         ({page, errors, context} = await open(browser, viewport, w, {colorScheme: theme}));
         await page.goto('https://tico-ui.test/#/meetings');
         await page.locator('.meet-row').first().waitFor();
+        await page.locator('.notes-head .ph-more').click();   // Sources is in the header's ⋯ (task #338)
         await page.locator('#meet-sources .meet-src-btn').click();
         await page.locator('#meet-src-dialog [data-src=zoom] .msrc-err').waitFor();
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), theme + ': page fits');
@@ -291,6 +296,7 @@ async function shot(page: import('playwright').Page, name: string) {
       ({page, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme}));
       await page.goto('https://tico-ui.test/#/meetings');
       await page.locator('.meet-row').first().waitFor();
+      await page.locator('.notes-head .ph-more').click();   // Sources is in the header's ⋯ (task #338)
       await page.locator('#meet-sources .meet-src-btn').click();
       await page.locator('#meet-src-dialog [data-src=zoom]').waitFor();
       assert.equal(await page.locator('#meet-src-dialog [data-src=google-meet] [data-act=imp-connect]').isDisabled(), true);

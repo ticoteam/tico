@@ -94,6 +94,7 @@ const world = (extra: Partial<World> = {}): World => ({role: 'owner', meetings: 
 const G = '#meet-src-dialog [data-src=granola]';
 const sources = async (page: Page) => {
   if (await page.locator('#meet-src-dialog[open]').count()) return;
+  await page.locator('.notes-head .ph-more').click();   // Sources is in the header's ⋯ (task #338)
   await page.locator('#meet-sources .meet-src-btn').click();
   await page.locator(G).waitFor();
 };
@@ -239,7 +240,8 @@ const shot = async (page: Page, name: string) => { if (shots) await page.screens
       // ---- needs sign-in: no sync on open; "Sign in to Granola again" restarts the flow
       w = world({granola: {...ON, connected: false, plan_hint: 'paid', needs_signin: true, last_error: 'Granola needs sign-in again'}});
       ({page, errors, context} = await open(browser, desk, w, scheme));
-      await page.locator('#meet-sources .meet-src-btn .dot').waitFor();
+      await page.locator('#meet-sources .meet-src-btn .dot').waitFor({state: 'attached'});
+      await page.locator('.notes-head .ph-more.meet-src-trouble').waitFor();   // the closed ⋯ shows it too
       await sources(page);
       const again = page.locator(G + ' [data-act=g-connect]');
       assert.equal(await again.innerText(), 'Sign in again');

@@ -1,0 +1,48 @@
+/* The one page header (ui/app/page-head.ts, task #338). Linked after every page stylesheet, and each rule is scoped
+   under .ph, so an old page rule left on a hook class (.au-ph h1, .rd-strat-head h1…) loses to it. */
+.ph{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;box-sizing:border-box;min-height:calc(var(--ctl) + 9px);margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
+.ph.ph-pad{padding:8px 28px;margin:0}
+.ph>.ph-t{flex:none;margin:0;font-size:var(--t-lg);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-tight);white-space:nowrap}
+.ph>.ph-back{flex:none;margin-right:-6px;color:var(--muted);font-size:var(--t-lg);line-height:var(--lh-tight);text-decoration:none;white-space:nowrap}
+.ph>.ph-back:hover{color:var(--ink);text-decoration:none}
+.ph>.ph-tabs{display:flex;gap:2px;margin:0;padding:0;border:0;background:none;overflow-x:auto;scrollbar-width:none;min-width:0;flex:0 1 auto}
+.ph>.ph-tabs::-webkit-scrollbar{display:none}
+.ph>.ph-tabs:empty{display:none}
+/* one selected look for tabs and every single-choice filter (.ph-seg) on these screens: no track, no raised shadow */
+.ph .ph-tab,.ph-seg>:is(button,a){box-sizing:border-box;height:auto;min-height:0;margin:0;padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;box-shadow:none;color:var(--muted);font:inherit;font-size:var(--t-base);font-weight:400;line-height:20px;text-decoration:none;white-space:nowrap;cursor:pointer}
+.ph .ph-tab:hover,.ph-seg>:is(button,a):hover{background:var(--surface2);color:var(--ink);text-decoration:none}
+.ph .ph-tab:is(.cur,[aria-current=page],[aria-selected=true]),.ph-seg>:is(button,a):is(.cur,[aria-selected=true],[aria-pressed=true],[aria-current=page],[aria-checked=true]){background:var(--surface2);color:var(--ink);font-weight:600;box-shadow:none}
+.ph-seg{display:inline-flex;align-items:center;gap:2px;height:auto;padding:0;background:none;border:0;border-radius:0;box-shadow:none}
+.ph .ph-n{margin-left:4px;color:var(--muted);font-size:var(--t-xs);font-weight:400;font-variant-numeric:tabular-nums}
+.ph>.ph-sp{flex:1 1 0;min-width:0}
+.ph>.ph-tools{flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:8px}
+.ph>.ph-tools:empty{display:none}
+.ph>.ph-tools input[type=search]{min-width:160px}
+.ph>.ph-more{flex:none;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.ph>.ph-more:hover,.ph>.ph-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.ph>.ph-more .nav-icon{font-size:20px}
+.ph-menu[popover]{position:fixed;inset:auto;margin:0;width:max-content;min-width:160px;max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 12px 32px #0005;color:var(--ink)}
+.ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
+.ph-menu :is(button,a):hover{background:var(--surface2);text-decoration:none}
+.ph-menu [hidden]{display:none}
+.ph>.ph-act{flex:none;display:flex;align-items:center;gap:8px}
+.ph>.ph-act:empty{display:none}
+.ph>.ph-act .primary{box-sizing:border-box;height:var(--ctl);white-space:nowrap}
+.ph [hidden]{display:none!important}
+/* Too narrow for one row (page-head.ts pageHeadFit): tabs keep their width; the tools move to a row of their own under
+   the title's, then the tabs do too, wrapping inside it. The title, ⋯ and the filled button keep the first row. */
+@media (min-width:761px){
+  .ph>.ph-tabs{flex:none}
+  .ph.ph-wrap{flex-wrap:wrap;row-gap:6px}
+  .ph.ph-wrap>.ph-tools{order:9;flex:1 1 100%;flex-wrap:wrap;justify-content:flex-end}
+  .ph.ph-wrap2>.ph-tabs{order:8;flex:1 1 100%;flex-wrap:wrap;overflow:visible}
+}
+@media (max-width:760px){
+  .ph{flex-wrap:wrap;row-gap:6px}
+  .ph.ph-pad{padding:8px 12px}
+  .ph>.ph-t{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .ph>.ph-sp{display:none}
+  .ph>.ph-tabs{order:8;flex:1 1 100%}
+  .ph .ph-tab{min-height:40px;display:inline-flex;align-items:center}
+  .ph>.ph-tools{order:9;flex:1 1 100%;flex-wrap:wrap}
+}

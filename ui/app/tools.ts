@@ -81,11 +81,12 @@ async function pageTools() {
   const show = TOOLS_FILTERS.some(([k]) => k === params.get('show')) ? params.get('show') ?? '' : '';
   const run = (TL?.run || 0) + 1;
   TL = {run, rows: TL?.rows || null, counts: TL?.counts || null, error: '', q: TL?.q || '', show};
+  // The one page header (ui/app/page-head.ts): Keys and Settings in its ⋯, Add tool (with its menu) last.
   $('#main').innerHTML = `<div class="tt-wrap" id="tools-root"><div class="tt">
-    <header class="tt-head"><h1>Tools</h1><span class="spacer"></span>
-      <a class="ghost small" href="${TOOLS_KEYS}" data-tl-keys>Keys</a><a class="ghost small" href="#/tools/settings" data-tl-settings>Settings</a>
-      ${toolsAddMenu()}<span class="tt-chat"></span></header>
-    <div class="tt-bar"><div class="theme-seg tt-filters" role="radiogroup" aria-label="Show"></div>
+    ${pageHead({title: 'Tools', hook: 'tt-head', tools: '<span class="tt-chat"></span>',
+      more: `<a href="${TOOLS_KEYS}" data-tl-keys>Keys</a><a href="#/tools/settings" data-tl-settings>Settings</a>`,
+      primary: toolsAddMenu()})}
+    <div class="tt-bar"><div class="theme-seg ph-seg tt-filters" role="radiogroup" aria-label="Show"></div>
       <input type="search" class="tt-q" placeholder="Search" aria-label="Search tools" autocomplete="off" spellcheck="false" value="${esc(TL.q)}"></div>
     <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div></div>`;
   // The page's root, search box and filter bar are drawn just above.
@@ -176,7 +177,7 @@ function toolsAddMenu(): string {
   const items = [...(S.me?.credential_access || admin ? [['api', 'API'], ['website', 'Website']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
     ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
-  return `<details class="tt-add" data-tl-add><summary class="primary small">Add tool</summary><div class="tt-add-menu" role="menu">
+  return `<details class="tt-add" data-tl-add><summary class="primary ph-go">Add tool</summary><div class="tt-add-menu" role="menu">
     ${items.map(([k, label]) => `<button type="button" role="menuitem" data-tl-add-item="${esc(k)}">${esc(label)}</button>`).join('')}</div></details>`;
 }
 function toolsAddBind(root: HTMLElement) {

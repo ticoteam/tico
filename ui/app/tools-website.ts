@@ -99,7 +99,7 @@ function twDrawHead(): void {
       <div class="tt-title-act">${twPill(status)}${twOpenable(state.data) ? '<button type="button" class="ghost small" data-tw-open>Open browser</button>' : ''}${
         manage ? `<button type="button" class="ghost small tw-more" data-tw-tool-menu aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
-      `<a href="${href}" data-tw-tab="${k}"${state.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+      `<a href="${href}" data-tw-tab="${k}"${state.tab === k ? ' class="ph-tab cur" aria-current="page"' : ' class="ph-tab"'}>${label}</a>`).join('')}</nav>`;
 }
 
 // ----------------------------------------------------------------- Overview

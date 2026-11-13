@@ -1,6 +1,6 @@
 // The Rules page header (ui/app/org-rules.ts, ui/styles/org-rules.css) at desktop 1280 and 1024 and phone 390: on each tab
 // (all eight: Company, Outside, Pipelines and stages, Due, Wakes, Automations on tasks, Built in, Suggested) every tab link is the topmost element at its centre, no tab overlaps the header's
-// actions (Internal's search, External's + Add rule and + Add document, Due's + Add due date), the actions are in view,
+// actions (Internal's search, External's Add rule and Add document, Due's Add due date), the actions are in view,
 // and a real click on each tab opens it, with the header's rule-checks line at its longest. The search box once covered all four tabs at 1280, and + Add rule covered Suggested.
 import type * as RealHubSupport from './support/real-hub.cts';
 import type {Browser, Page} from 'playwright';
@@ -33,7 +33,7 @@ function headerProblems(page: Page, acts: string[]) {
     const inView = (r: DOMRect) => r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= vw + 0.5 && r.top >= 0 && r.bottom <= vh + 0.5;
     const meets = (a: DOMRect, b: DOMRect) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
     const actRects = acts.map(sel => {
-      const el = document.querySelector<HTMLElement>('.ru-acts ' + sel);
+      const el = document.querySelector<HTMLElement>('.ru-ph ' + sel);
       if (!el) { bad.push(`${sel} is missing`); return null; }
       const r = el.getBoundingClientRect();
       if (!inView(r)) bad.push(`${sel} is out of view (${Math.round(r.left)}..${Math.round(r.right)} of ${vw})`);
@@ -67,7 +67,7 @@ function headerProblems(page: Page, acts: string[]) {
         for (const from of TABS) {
           await go(page, HASH[from]!);
           await onTab(page, from);
-          for (const sel of ACTS[from]!) await page.locator('.ru-acts ' + sel).waitFor({timeout: t(15000)});
+          for (const sel of ACTS[from]!) await page.locator('.ru-ph ' + sel).waitFor({timeout: t(15000)});
           // The rule-checks line lands in the header after its own read; check the header only once it is there.
           await page.waitForFunction(() => (document.querySelector('.ru-ph .ru-checks')?.textContent || '').length > 0, null, {timeout: t(15000)});
           // While the route's fade runs, Chrome gives the pointer to the root element (ui/app/router.ts), and the fade can

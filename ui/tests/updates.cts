@@ -291,8 +291,12 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.waitForFunction(() => (window as unknown as PageWin).__staleLoadDone);
     assert.equal(await page.locator('[data-upd="u-cmo"]').count(), 0, 'a delayed old inbox load cannot restore an archived card');
     assert.deepEqual(archiveRequests[1], {ids: ['u-cmo'], archived: true});
+    // Archive is in the header's ⋯ (the shared page header): it lists Archive, which opens the Archive as before.
+    await page.locator('.upd-head .ph-more').click();
+    assert.deepEqual(await page.locator('.upd-head .ph-menu :is(button,a)').allInnerTexts(), ['Archive'], '⋯ lists Archive');
     await page.locator('#upd-view').click();
     await page.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-cmo"]'));
+    assert.equal(await page.locator('.ph-menu:popover-open').count(), 0, 'choosing it closes ⋯');
     assert.equal(await page.locator('#upd-allread').isHidden(), true);
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Archive', 'the reader knows they are in the Archive');
     await more.click();
@@ -300,7 +304,9 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await menu.locator('[role=menuitem]', {hasText: 'Restore to Inbox'}).click();
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests[2], {ids: ['u-cmo'], archived: false});
-    await page.locator('#upd-view').click();
+    // The Archive is a sub-page: "Updates ›" before its title goes back to the inbox.
+    assert.equal(await page.locator('.upd-head .ph-back').innerText(), 'Updates ›');
+    await page.locator('.upd-head .ph-back').click();
     await page.locator('[data-upd="u-cmo"]').waitFor();
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Updates');
     await page.locator('[data-upd="u-cmo"] [data-upd-reply]').click();
@@ -391,11 +397,10 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.setViewportSize({width: 390, height: 844});
     await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
-    // Day, week, unread and my bots are icons on a phone.
-    for (const sel of ['[data-upd-kind="daily"]', '[data-upd-kind="weekly"]', '#upd-mine']) {
-      assert.equal(await p.locator(sel + ' .nav-icon').isVisible(), true, sel + ' shows its icon');
-      assert.equal(await p.locator(sel + ' .upd-lbl').isVisible(), false, sel + ' hides its word');
-    }
+    // My bots is an icon on a phone; Daily and Weekly are the header's tabs, in words on their own row.
+    assert.equal(await p.locator('#upd-mine .nav-icon').isVisible(), true, '#upd-mine shows its icon');
+    assert.equal(await p.locator('#upd-mine .upd-lbl').isVisible(), false, '#upd-mine hides its word');
+    for (const kind of ['daily', 'weekly']) assert.equal(await p.locator(`.upd-head .ph-tab[data-upd-kind="${kind}"]`).isVisible(), true, kind + ' tab shows');
     assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').evaluate(el => el.classList.contains('cur')), true);
     const card = (await p.locator('#upd-feed .upd-card').first().boundingBox())!;
     assert(card.x >= 8 && card.x + card.width <= 390 - 8, 'cards fit the phone with a gutter');
@@ -435,13 +440,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.locator('[data-upd="u-game"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests.at(-1), {ids: ['u-game'], archived: true});
     // The swipe's click guard applies only to that card; the Archive header remains usable.
+    await p.locator('.upd-head .ph-more').click();
     await p.locator('#upd-view').click();
     await p.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-game"]'));
     await p.locator('[data-upd="u-game"] [data-upd-menu]').click();
     await p.locator('.thv-pop[role=menu] [role=menuitem]', {hasText: 'Restore to Inbox'}).click();
     await p.locator('[data-upd="u-game"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests.at(-1), {ids: ['u-game'], archived: false});
-    await p.locator('#upd-view').click(); await p.locator('[data-upd="u-game"]').waitFor();
+    await p.locator('.upd-head .ph-back').click(); await p.locator('[data-upd="u-game"]').waitFor();
     const beforeDeckGesture = archiveRequests.length;
     await p.evaluate(() => { location.hash = '#/updates?kind=weekly'; });
     const phoneDeck = p.locator('[data-upd="w-seo"] [data-upd-deck]'); await phoneDeck.waitFor();

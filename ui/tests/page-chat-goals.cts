@@ -68,8 +68,11 @@ async function openGoals(viewport: {width: number; height: number}, sent: Sent[]
       const chat = page.locator('.goal-chat [data-pgc-open]');
       assert.equal(await chat.getAttribute('aria-label'), 'Chat with Strategy Owner');
       assert.equal(await chat.locator('.pgc-word').innerText(), 'Chat');
-      const head = await box(page, '.rd-strat-head'), btn = await box(page, '.goal-chat [data-pgc-open]');
-      assert.ok(btn.right >= head.right - 4 && btn.y < head.bottom, `Chat at the top right of the head: ${JSON.stringify({btn, head})}`);
+      // Chat is a quiet tool of the shared page header: on the title line, last of its tools, and "New goal" stays last.
+      const head = await box(page, '.rd-strat-head'), btn = await box(page, '.goal-chat [data-pgc-open]'), go = await box(page, '#goal-new');
+      assert.ok(btn.y < head.bottom && btn.right <= go.x && go.right >= head.right - 4,
+        `Chat on the head's line, just before New goal: ${JSON.stringify({btn, go, head})}`);
+      assert.ok(await page.locator('.rd-strat-head > .ph-tools > .goal-chat').count(), 'Chat sits in the header\'s tools');
       assert.equal(await chatShown(page), false, 'closed until opened');
       const before = await box(page, '#main'), tree = await box(page, '#goal-tree');
       await chat.click();

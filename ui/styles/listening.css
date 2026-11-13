@@ -3,14 +3,14 @@
    send's run shows its counts beside what it sent.
    The cascade runs in the order index.html links these files; keep rules in order. */
 
-/* the page: no filters, range or tabs; the search sits beside the + */
+/* the page: no filters, range or tabs; the search sits in the header's tools (auPlace), before the chat */
 .au-lst .au-body{grid-template-columns:minmax(0,1fr)}
 .au-lst.ed-open .au-body{grid-template-columns:minmax(0,1fr) var(--rail-right,340px)}
 .au-lst :is(.au-rail,.au-range,.au-fbtn,.au-ctl){display:none}
-.au-lst .au-ph .au-s{padding:0;width:240px}
-.au-lst .au-ph .au-q{width:100%}
-/* one listening open: the search and the + are the list's */
-.au-lst.au-one .au-ph :is(.au-s,.au-newbox){display:none}
+.au-lst .ph-tools>.au-s{padding:0;width:240px}
+.au-lst .ph-tools .au-q{width:100%}
+/* one listening open: the search and New listening are the list's */
+.au-lst.au-one>.ph :is(.au-s,.ph-act){display:none}
 
 /* the list: a dot, the name, the limits, when it last sent */
 .lst-list{display:grid;padding:0 28px 48px}
@@ -63,9 +63,7 @@
 .lst-then{padding:6px 0 2px}
 
 @media (max-width:760px){
-  /* the header is the search and the + */
-  .au-lst .au-ph .au-hrow:first-child{display:none}
-  .au-lst .au-ph .au-s{flex:1;width:auto}
+  .au-lst .ph-tools>.au-s{flex:1;width:auto}
   .lst-list{padding:0 12px 24px}
   .lst-row{grid-template-columns:10px minmax(0,1fr) 48px;min-height:48px}
   .lst-lim{display:none}
@@ -73,11 +71,10 @@
   /* A listening open: the header hides, but the owner's face stays, at the right of the ‹ Listening row, so a
      question can name the listening. */
   .au-lst[data-screen="detail"]{position:relative}
-  .au.au-lst[data-screen="detail"] .au-ph{display:block;position:absolute;z-index:2;top:4px;right:12px;padding:0;min-height:0}
-  .au-lst[data-screen="detail"] .au-ph > :not(:has(.au-chat)),.au-lst[data-screen="detail"] .au-ph .au-hrow > :not(.au-chat){display:none}
+  .au.au-lst[data-screen="detail"]>.ph{display:block;position:absolute;z-index:2;top:4px;right:12px;margin:0;padding:0;min-height:0;border:0}
+  .au.au-lst[data-screen="detail"]>.ph>:not(.ph-tools),.au.au-lst[data-screen="detail"]>.ph>.ph-tools>:not(.au-chat){display:none}
   .au-lst[data-screen="detail"] .au-crumb{min-height:44px;padding-right:60px}
 }
 /* The owner's Chat button (page-chat.ts); the chat itself is the shared column (page-chat.css). */
 .au-lst .au-chat{display:inline-flex;margin-left:6px}
 .au-lst .au-chat:empty{display:none}
-.au-lst:has(.lst-empty) .au-new{display:none}   /* one green action while there is none */

@@ -113,10 +113,10 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
 
     await page.goto('http://tico-ui.test/#/goals');
     await page.locator('#goal-tree .gt-row').first().waitFor();
-    // The tree adds nothing itself: "+ Goal" heads the Strategy tab, and the rest lives in each owner's panel.
+    // The tree adds nothing itself: "New goal" heads the Strategy tab, and the rest lives in each owner's panel.
     assert.equal(await page.locator('#goal-body button').filter({hasText: /Goal|KPI/}).count(), 0, 'no + Goal, + Company goal or + KPI');
     assert.doesNotMatch(await page.locator('#goal-body').innerText(), /\+ ?(Goal|Company goal|KPI)/);
-    assert.equal(await page.locator('#strat-actions #goal-new').innerText(), '+ Goal');
+    assert.equal(await page.locator('#strat-actions #goal-new').innerText(), 'New goal');
     // Three requests draw the page: the tree, Needs you and the KPI views.
     assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 

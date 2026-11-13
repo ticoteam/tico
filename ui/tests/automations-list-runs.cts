@@ -32,11 +32,11 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-list');
 
-      // The header: Automations | Runs and the range, then search, filters and +; no title and no Ask (the tab bar has
-      // the Assistant, and the list is below). The search is on the page and narrows the list.
-      assert.equal(await page.locator('.au-ph h1').isVisible(), false);
+      // The header: the title and New automation, then search and filters; no Ask (the tab bar has the Assistant, and
+      // the list is below). Automations | Runs and the range are the bar's. The search is on the page and narrows the list.
+      assert.equal(await page.locator('.au-ph h1').isVisible(), true);
       assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
-      assert.equal(await page.locator('.au-ph .au-tabs [data-tab="list"]').isVisible(), true);
+      assert.equal(await page.locator('.au-ctl .au-tabs [data-tab="list"]').isVisible(), true);
       await page.fill('.au-ph .au-q', 'deploy');
       assert.deepEqual(await rows(page), ['au_deploy']);
       await page.fill('.au-q', '');
@@ -105,8 +105,8 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       await page.close();
     }
 
-    // A small phone: the header's two rows fit (tabs and range; search, filters and +) on the list and on Runs, + opens
-    // its menu, and nothing scrolls sideways.
+    // A small phone: the header's rows fit (title and New automation; search and filters), then the bar's tabs and range,
+    // on the list and on Runs; New automation opens its menu, and nothing scrolls sideways.
     {
       const W = 320, {page, errors} = await openAutomations(browser, {viewport: {width: W, height: 640}});
       await page.waitForSelector('tr.au-row');
@@ -114,14 +114,16 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       for (const tab of ['list', 'runs']) {
         await page.locator(`[data-tab="${tab}"]`).click();
         const b: Record<string, Box | null> = {};
-        for (const sel of ['.au-tabs', '.au-range', '.au-q', '[data-filters]', '.au-new']) {
+        for (const sel of ['.au-ph h1', '.au-tabs', '.au-range', '.au-q', '[data-filters]', '.au-new']) {
           b[sel] = await box(sel);
           assert.ok(b[sel] && b[sel]!.x >= 0 && b[sel]!.x + b[sel]!.width <= W, `${tab}: ${sel} fits`);
         }
         const mid = (x: Box) => x.y + x.height / 2;
         assert.ok(Math.abs(mid(b['.au-tabs']!) - mid(b['.au-range']!)) < 2, `${tab}: tabs and range share a row`);
-        assert.ok(Math.abs(mid(b['.au-q']!) - mid(b['.au-new']!)) < 2 && b['.au-q']!.y > b['.au-tabs']!.y, `${tab}: search row under it`);
-        assert.ok(b['.au-new']!.width >= 40 && b['[data-filters]']!.width >= 40, `${tab}: + and filters are full-size targets`);
+        assert.ok(Math.abs(mid(b['.au-ph h1']!) - mid(b['.au-new']!)) < 2, `${tab}: the title and New automation share the header's first row`);
+        assert.ok(Math.abs(mid(b['.au-q']!) - mid(b['[data-filters]']!)) < 2 && b['.au-q']!.y > b['.au-new']!.y && b['.au-q']!.y < b['.au-tabs']!.y,
+          `${tab}: the search row under it, above the tabs`);
+        assert.ok(b['.au-new']!.height >= 32 && b['[data-filters]']!.width >= 40, `${tab}: New automation and filters are full-size targets`);
         assert.equal(await sideways(page), false);
       }
       await page.locator('[data-tab="list"]').click();
@@ -129,7 +131,7 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       assert.equal(await page.locator('.au-newm').isVisible(), true);
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('.au-newm').isVisible(), false);
-      // Widened to a computer, the tabs and a typed search move back to the bar and the filters, and return on a phone.
+      // Widened to a computer, a typed search moves back to the filters, and returns to the header on a phone.
       await page.fill('.au-q', 'deploy');
       await page.setViewportSize(DESKTOP);
       await page.waitForSelector('.au-rail .au-q', {state: 'visible'});
@@ -138,7 +140,7 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       assert.deepEqual(await rows(page), ['au_deploy']);
       await page.setViewportSize({width: W, height: 640});
       await page.waitForSelector('.au-ph .au-q', {state: 'visible'});
-      assert.equal(await page.locator('.au-ph .au-tabs').isVisible(), true);
+      assert.equal(await page.locator('.au-ctl .au-tabs').isVisible(), true);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -150,20 +152,19 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       await page.waitForTimeout(200);
       assert.match(page.url(), /#\/automations$/, 'no automation opens by itself');
       assert.equal(await page.locator('.au-rail').isVisible(), true);
-      // The header is one row (title, range, +); search, the tabs and every filter section show in place.
+      // The header is one row (title, New automation); search, the tabs, the range and every filter section show in place.
       assert.equal(await page.locator('.au-ph h1').isVisible(), true);
       assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
-      // The + is icon-only, named for screen readers, and is the range's row height, square, centred on it.
-      assert.equal((await page.locator('.au-new').innerText()).trim(), '');
-      assert.equal(await page.locator('.au-new').getAttribute('aria-label'), 'New automation');
-      const plus = await page.evaluate(() => {
+      // New automation is in words, the header's filled button, 32px high; the range is on the Automations | Runs row.
+      assert.equal((await page.locator('.au-ph > .ph-act .au-new').innerText()).trim(), 'New automation');
+      assert.equal(await page.locator('.au-ph .au-range').count(), 0, 'the range left the header');
+      const place = await page.evaluate(() => {
         const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
-        const add = r('.au-new'), range = r('.au-range');
-        return {h: add.height, w: add.width, rangeH: range.height, mid: add.top + add.height / 2, rangeMid: range.top + range.height / 2};
+        const add = r('.au-new'), range = r('.au-ctl .au-range'), tabs = r('.au-ctl .au-tabs');
+        return {h: add.height, mid: range.top + range.height / 2, tabsMid: tabs.top + tabs.height / 2, right: range.left > tabs.right};
       });
-      assert.equal(plus.h, plus.rangeH, 'the + is the range control height: ' + JSON.stringify(plus));
-      assert.equal(plus.w, plus.h, 'the + is square');
-      assert.ok(Math.abs(plus.mid - plus.rangeMid) < 1, 'the + is centred on the range: ' + JSON.stringify(plus));
+      assert.equal(place.h, 32, 'New automation is 32px high: ' + JSON.stringify(place));
+      assert.ok(Math.abs(place.mid - place.tabsMid) < 2 && place.right, 'the range sits right of the tabs, on their row: ' + JSON.stringify(place));
       assert.equal(await page.locator('[data-filters]').isVisible(), false);
       assert.equal(await page.locator('.au-rail .au-q').isVisible(), true);
       assert.equal(await page.locator('.au-ctl .au-tabs').isVisible(), true);
