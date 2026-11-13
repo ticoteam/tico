@@ -38,6 +38,9 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Customer facts a team loaded into Growth (backend/growth_customers.py): its customers' keys never leave the install.
+    "growth_customers",
+    "growth_customer_loads",
     # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
     "approvals",
     # Provider jobs and send grants never become actionable in a rehearsal copy.

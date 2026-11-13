@@ -107,7 +107,13 @@ def economics_row(cohort, settings):
         "quality": cohort.get("quality") or "actual",
         "sources": cohort.get("sources") or {},
         "origins": cohort.get("origins") or {},
+        **{k: cohort[k] for k in BESIDE if k in cohort},
     }
+
+
+# What `beside` adds to a channel's month and its economics carry: each figure's origin, and with customer facts how many
+# customers it was computed from, the windows not yet due or too few, their dates, counts and a differing typed actual.
+BESIDE = ("computed_or_typed", "computed_from", "status", "fills_on", "counts", "typed")
 
 
 def economics_total(cohorts, settings):
@@ -115,6 +121,7 @@ def economics_total(cohorts, settings):
     total = aggregate(cohorts, settings)
     return {
         **economics_row({**total, "channel": "all"}, settings),
+        "computed_or_typed": None,
         "channel": None,
         "name": "All channels",
         "track": None,
@@ -174,6 +181,9 @@ def settings(c):
         "unit": row.get("unit") or "customers",
         "revenue_month": row.get("revenue_month"),
         "margin_pct": row.get("margin_pct"),
+        "min_cohort": row.get("min_cohort") or 30,
+        "time_zone": row.get("time_zone") or "UTC",
+        "key_readers": json.loads(row.get("key_readers") or "[]"),
     }
 
 
@@ -268,7 +278,90 @@ def _slugs(c):
     return {r[0]: r[1] for r in c.execute("SELECT id, slug FROM growth_channels")}
 
 
+def cohort_months(c, until=None):
+    """Every month with a typed cohort row or customer facts, newest first; `until` (YYYY-MM) leaves out later ones."""
+    from . import growth_computed as GX
+
+    found = {r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts")} | set(GX.months(c))
+    return sorted((m for m in found if not until or m <= until), reverse=True)
+
+
+# A typed figure customer facts can compute. The rest (spend, bot cost, revenue, margin) stay typed.
+COMPUTED_FIELDS = ("new_customers", "kept_d30", "kept_d90", "kept_d180")
+TYPED_FIELDS = (
+    "spend",
+    "bot_cost",
+    "new_customers",
+    "kept_d30",
+    "kept_d90",
+    "kept_d180",
+    "revenue_month",
+    "margin_pct",
+)
+
+
+def beside(row, computed, slug, month):
+    """A channel's month with its computed figures laid over the typed ones (#287's rule: computed wins over a typed
+    estimate; a typed actual that differs is kept in `typed`, beside it, for the channel's owner to choose). Every
+    figure's `computed_or_typed` says which (beside #304's `origins`: typed or which source); a computed window that has not come due, or a cohort under the minimum,
+    is null with its `status` (not_yet, too_few) and `fills_on` date. No customer facts: the typed row as it was."""
+    view = (
+        dict(row)
+        if row
+        else {
+            "id": None,
+            "channel": slug,
+            "month": month,
+            **{k: None for k in TYPED_FIELDS},
+            "quality": "actual",
+            "sources": {},
+            "origins": {},
+            "updated_by": None,
+            "updated_at": None,
+        }
+    )
+    view["computed_or_typed"] = {k: "typed" for k in TYPED_FIELDS if view.get(k) is not None}
+    if not computed:
+        return view
+    actual = bool(row) and (row.get("quality") or "actual") == "actual"
+    typed, status, fills, counts = {}, {}, {}, {}
+    for field in COMPUTED_FIELDS:
+        figure, old = computed[field], view.get(field)
+        if actual and old is not None and (figure["status"] != "ok" or old != figure["value"]):
+            typed[field] = old
+        view[field] = figure["value"]
+        view["computed_or_typed"][field] = "computed"
+        if figure["status"] != "ok":
+            status[field] = figure["status"]
+        if figure.get("fills_on"):
+            fills[field] = figure["fills_on"]
+        if "denominator" in figure:
+            counts[field] = {"count": figure["count"], "denominator": figure["denominator"]}
+    view.update(computed_from=computed["computed_from"], status=status, fills_on=fills, counts=counts, typed=typed)
+    return view
+
+
 def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
+    """Monthly cohorts by channel, newest month first, each with its computed figures beside the typed ones
+    (`beside`). A channel's month with customer facts and no typed row is listed too."""
+    from . import growth_computed as GX
+
+    typed = _typed_cohorts(c, channel_slug, month, limit)
+    computed = GX.by_channel_month(c, month)
+    if channel_slug:
+        computed = {k: v for k, v in computed.items() if (k[0] or UNKNOWN) == channel_slug}
+    out, seen = [], set()
+    for row in typed:
+        key = (row["channel"], row["month"])
+        seen.add(key)
+        out.append(beside(row, computed.get(key), *key))
+    out += [beside(None, figures, *key) for key, figures in computed.items() if key not in seen]
+    out.sort(key=lambda r: (r["channel"] is None, r["channel"] or ""))
+    out.sort(key=lambda r: r["month"], reverse=True)
+    return out[: max(1, min(int(limit or COHORTS_PAGE), COHORTS_MAX))]
+
+
+def _typed_cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
     where, args = [], []
     if channel_slug:
         if channel_slug == UNKNOWN:
@@ -334,7 +427,7 @@ def guardrails(c, hidden=()):
 def economics(c, month=None, hidden=()):
     """One month by channel: each channel's row for it, the Unknown row beside them, the total and the guardrails.
     The latest month with cohorts by default."""
-    months = [r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts ORDER BY month DESC")]
+    months = cohort_months(c)
     month = month or (months[0] if months else None)
     conf = settings(c)
     by_slug = {r["slug"]: r for r in H._rows(c.execute("SELECT * FROM growth_channels"))}
@@ -763,6 +856,17 @@ def settings_update(c, actor, fields):
     c.execute("INSERT OR IGNORE INTO growth_settings (id) VALUES (1)")
     if "unit" in fields and fields["unit"] is None:
         raise Problem("validation", "unit cannot be cleared", 422)
+    if fields.get("time_zone"):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(fields["time_zone"])
+        except (ZoneInfoNotFoundError, ValueError):
+            raise Problem("validation", "time_zone is an IANA zone, such as Europe/London", 422) from None
+    if "key_readers" in fields:
+        # Who besides the owner and admins sees customer keys in a figure's trace: people and bots, by any name.
+        readers = {str(_owner_ref(c, ref)) for ref in fields["key_readers"] or [] if ref}
+        fields["key_readers"] = json.dumps(sorted(readers))
     if fields:
         c.execute(f"UPDATE growth_settings SET {', '.join(k + '=?' for k in fields)} WHERE id=1", list(fields.values()))
         H.event(c, actor, "growth.settings", "settings", fields)
@@ -811,6 +915,11 @@ def install(app, store, auth, mutate):
         so the four steps chain without a read between them."""
         SETUP.record(c, who.actor)
         return {**result, "setup": SETUP.block(c, auth, who)}
+
+    from . import growth_computed, growth_customers
+
+    growth_customers.install(app, store, auth, mutate)  # customer facts in: load, delete
+    growth_computed.install(app, store, auth)  # cohorts computed from them
 
     def reader(who):
         auth.domain(who)
