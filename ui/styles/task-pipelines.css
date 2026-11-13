@@ -68,31 +68,18 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-bar-text{flex:1 1 240px;min-width:0}
 .pv-bar input{flex:1 1 180px;min-width:0;height:30px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
 
-/* The manager's rail. */
+/* The manager's rail (ui/app/pipeline-rail.ts): the manager's name and close, then its direct chat filling the column. */
 .pm-rail{min-width:0;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:var(--t-sm)}
 .pm-shell{display:flex;flex-direction:column;flex:1;min-height:0}
-.pm-strip{display:none;justify-content:center;padding:14px 0;border:0;background:none;cursor:pointer}
-.pm-rail.collapsed .pm-strip{display:flex}
-.pm-rail.collapsed .pm-panel{display:none}
 .pm-panel{display:flex;flex-direction:column;flex:1;min-height:0}
 .pm-head{display:flex;align-items:center;gap:8px;padding:12px 14px}
 .pm-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pm-tabs{display:flex;gap:4px;padding:0 10px 6px}
-.pm-tab{padding:4px 10px;border:0;border-radius:5px;background:none;color:var(--muted);font:inherit;cursor:pointer}
-.pm-tab.on{background:var(--surface2);color:var(--ink)}
-.pm-body{flex:0 1 auto;max-height:45%;overflow:auto;padding:0 6px 8px}
-.pm-group{margin:0 0 8px}
-.pm-h{display:flex;gap:6px;margin:8px 8px 4px;color:var(--muted);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-.pm-row{display:flex;gap:8px;align-items:center;padding:4px 8px;border-radius:6px;cursor:pointer}
-.pm-row:hover{background:var(--hover)}
-.pm-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pm-age{color:var(--muted)}
-.pm-line{display:flex;gap:8px;padding:3px 8px;color:var(--muted)}
-.pm-line[data-task]{cursor:pointer}
-.pm-line[data-task]:hover{color:var(--ink)}
-.pm-at{flex:none}
-.pm-empty{margin:8px}
-.pm-chat{flex:1 1 0;min-height:200px;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.pm-chat{flex:1 1 0;min-height:0;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+/* The chat fills the column, its box at the bottom (a card's chat is otherwise its own height, threads.css), as the
+   page owner's chat does (page-chat.css). */
+.pm-chat > .thv{flex:1 1 auto;min-height:0}
+.pm-chat > .thv-card .thv-scroll{max-height:none}
+.pm-chat > .thv-card .thv-composer{padding:0 10px 10px}
 
 /* The editor. */
 .pe-body{display:flex;flex-direction:column;gap:14px}
