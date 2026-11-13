@@ -363,7 +363,7 @@ Names come with ids (`sender_name`, `owner_name`, and an `actors` map), as elsew
 
 ## For the assistant bot
 
-Its instructions are `templates/catalog/assistant/AGENT.md` and its playbooks: `assistant-chat.md` (the DM run),
+Its instructions are `templates/catalog/assistant/AGENTS.md` and its playbooks: `assistant-chat.md` (the DM run),
 `tico-map.md` (how Tico is organised) and `acting-for-them.md`. The core rules: how to route work to the right bot, to
 answer briefly with links, never to act beyond you, to do the task actions you ask for (answers included), never to
 give an OK, to propose anything else with a side effect, several at once on one card, and to report what it did and what

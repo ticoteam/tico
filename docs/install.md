@@ -176,7 +176,7 @@ Paste this into its Setup DM (or replace it with your own facts):
 
 - **Add an AI provider**: when the DM says "Saved — no AI provider is chosen", use its **Add an AI provider** link
   to open **Settings > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
-- **Offline** or **Missing bot repository or AGENT.md**: check **Settings > Computers** and keep the joined computer running;
+- **Offline** or **Missing bot repository or AGENTS.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
   **Tools > Credentials**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.

@@ -64,9 +64,9 @@ session: the old one wasn't on this computer"), and Health names a bot that lost
 
 A resumed session is sent only what is new: what was said since its last turn, the current message and this turn's
 notices. On a harness that says when it compacts (the `compaction_events` capability: Claude Code and pi), the bot's standing
-instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
+instructions become one line while they, AGENTS.md and the model are unchanged, and the assigned task one line while it
 is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
-runner cannot safely read and hash AGENT.md, including when it is a symlink, it sends the full standing instructions
+runner cannot safely read and hash AGENTS.md, including when it is a symlink, it sends the full standing instructions
 each turn so the bot is told to read the rules again. If the session compacts during a shortened turn anyway, the turn
 is given the lines it left out at once. The whole prompt goes
 again on a new session, after any compaction (the harness's own or `compact_first`), after a side session or an
@@ -76,7 +76,7 @@ repo rules, the checkpoint and the thread since its last turn. Other harnesses g
 
 A stateless bot (`stateless` in its config; the Rules Owner by its template) keeps no session across tasks. Each task starts its
 own session and resumes only that task's, and a message to it starts a new session that is not saved. It gets the
-whole prompt every turn and is never told to read `memory/` or `state.md`. A new session for a task still starts from
+whole prompt every turn and is never told to read `memory/`. A new session for a task still starts from
 the task's checkpoint, as above.
 
 A turn that was cut off (a restart's drain, a **Stop**) leaves its session in place. The next turn resumes it and is

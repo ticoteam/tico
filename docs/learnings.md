@@ -14,9 +14,9 @@ heading says rules), then the newest entries: sections by the date in their head
 
 ## One memory, in the repository
 
-What a bot remembers between turns is its repository's `memory/`, which you read here and can edit. Each turn's
-prompt tells the bot to read the working rules at the top of `memory/learnings.md`, follow them, save a rule it is
-given there, and add other learnings at the top of the log. The runner turns off each harness's own memory on the
+What a bot remembers between turns is its repository's `memory/`, which you read here and can edit. A bot may
+read `memory/learnings.md` and `memory/decisions.md` when its work needs them; it saves a working rule it is given at
+the top of `memory/learnings.md` and other learnings at the top of the log. The runner turns off each harness's own memory on the
 computer, so nothing steers a bot from outside its repository: Claude Code's auto memory
 (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` on every turn, not only for bots with branches), Codex's memories
 (`features.memories = false` on every thread) and the Gemini CLI's `save_memory` tool; a GEMINI.md the CLI saved
@@ -34,13 +34,13 @@ that is a link. The old files are left in place, unread (`runner-rs/src/harness_
 
 Several checkouts and turns of one bot write the same repository, so its commits often land behind what another
 pushed. The runner rebases them onto the remote and pushes again; where both sides added lines to the same spot of
-a `memory/` note (`memory/state.md` aside), it keeps both sides' lines (git's union merge,
-`safegit::MERGE_ATTRIBUTES`) instead of stopping. Only a conflict it cannot settle that way, in AGENT.md say, leaves
+a `memory/` note, it keeps both sides' lines (git's union merge,
+`safegit::MERGE_ATTRIBUTES`) instead of stopping. Only a conflict it cannot settle that way, in AGENTS.md say, leaves
 the commits unpushed, and the health check files it once for BotOps (`push_stuck`, docs/health-monitor.md).
 
 A stateless bot keeps no memory at all: The Rules Owner, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
-says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/`, `knowledge/`
-or `state.md`, its memory folders are not committed for it, and Learn skips it. Each task is judged from
+says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/` or `knowledge/`,
+its memory folders are not committed for it, and Learn skips it. Each task is judged from
 its own text (see [sessions](sessions.md)).
 
 ## Where it comes from
@@ -87,7 +87,7 @@ server is upgraded; the runner retains those reports for retry.
 
 **Dream**, at the top of the Learnings panel, asks the bot to tidy its own instructions and memory, as Claude Code's
 `/dream` does: orient, gather what happened in its chats and tasks since its last dream (two weeks back the first
-time), consolidate, then prune and index, keeping the working rules short. It may change any of those files, AGENT.md
+time), consolidate, then prune and index, keeping the working rules short. It may change any of those files, AGENTS.md
 included, without asking. Midway it may ask the person who started it up to three questions in one message, about the
 business only (what to do, for whom, by which rule or priority), never for permission or about the dream itself, and
 waits for the answer. A stateless bot keeps no memory and has nothing
@@ -113,8 +113,8 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 **Auto dream** is the same dream started without a click: the **Dream** step of the [Maintenance](maintenance.md) run, once a day, on by default. It starts one for each bot whose memory changed a lot since its last dream, and only then.
 A bot is due when it is active, keeps memory, has no open dream, its last dream of either kind started at least 48
 hours ago (a bot that never dreamed must be 48 hours old), and its memory since that dream's start, or 14 days back if
-that is later, changed at least 200 lines over at least 10 memory turns. Counted: `memory/` except `memory/state.md`,
-and AGENT.md, AGENTS.md and CLAUDE.md (the runner reports only `memory/` and `knowledge/` today, so instruction-file
+that is later, changed at least 200 lines over at least 10 memory turns. Counted: `memory/`,
+and AGENTS.md, CLAUDE.md and AGENT.md, its name before the move to AGENTS.md (the runner reports only `memory/` and `knowledge/` today, so instruction-file
 changes do not count yet). A dream's own commits do not count, nor the commits of the retired Nightly memory tidy. At most "Most bots per run" start a
 run (three by default), most changed lines first; a restart does not start them twice.
 `backend/dream_auto.py` holds the rule.

@@ -42,7 +42,7 @@ answers in place of Decide High.
 - **Patterns.** Plain code checks every file and records each hit as `{file, line, pattern}`. It looks for hidden Unicode
   (zero-width, bidi and tag characters), HTML comments, long base64 or hex blobs, and URLs (each one listed). It also
   looks for `curl` or `wget` piped to a shell, reads of secrets, env or the keychain, and writes to `.claude/settings*`,
-  hooks, other skills' folders or `AGENT.md`/`CLAUDE.md`. It flags network calls in scripts and the injection phrases
+  hooks, other skills' folders or `AGENTS.md`/`CLAUDE.md`. It flags network calls in scripts and the injection phrases
   that outside-text screening uses. A hit is a hint for the model and the admin, never a verdict on its own.
 - **The model.** Decide High answers the `skill-screen` question set (`questions/skill-screen.json`) with evidence. The
   state is the skill's name, its description and every file, fenced. For an update it also holds the diff against its
