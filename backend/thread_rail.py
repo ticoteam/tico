@@ -742,7 +742,8 @@ def _walk(c, v, flags, after=None):
                     continue
                 mention = r["id"] in mentions
                 # In a bot's Home only its replies and mentions for the reader count (`_home_replies`).
-                unread = homes.get(r["id"], 0) if _is_bot_home(r, v) else counts.get(r["id"], 0)
+                rid = str(position[1])
+                unread = homes.get(rid, 0) if _is_bot_home(r, v) else counts.get(rid, 0)
                 # An item has a new message the reader may read, or an open attention item they read.
                 if not unread and r["id"] not in held and not mention:
                     continue
