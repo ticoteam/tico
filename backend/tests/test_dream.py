@@ -22,7 +22,7 @@ def ask(api, tid, token, line=QUESTION, to="human:ben"):
     """The bot asks a person on the task, with the version it was shown."""
     version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["task"]["version"]
     return api.post(
-        f"/api/v2/tasks/{tid}/asks", json={"to": to, "line": line, "version": version}, headers=headers(token)
+        f"/api/v2/tasks/{tid}/asks", json={"to": to, "line": line, "version": version, "why": "It sets what goes out on launch day."}, headers=headers(token)
     )
 
 

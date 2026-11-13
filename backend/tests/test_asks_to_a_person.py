@@ -72,8 +72,8 @@ def test_a_badly_shaped_question_to_a_person_is_refused_before_any_call_and_writ
     task = task_for_ops(api)
     r = ask(api, task, {**GOOD, **change})
     assert r.status_code == 409, r.text
-    error = r.json()["error"]
-    assert error["code"] == "task_ask_shape" and error["detail"].startswith(said), r.text
+    error = r.json()
+    assert error["error"] == "task_ask_shape" and error["detail"].startswith(said), r.text
     assert S.NEEDS in error["detail"]
     assert judge.calls == [], "refused in plain code: no model call"
     assert version(api, task) == task["version"], "nothing written"
@@ -88,7 +88,7 @@ def test_a_question_that_shows_what_a_person_cannot_open_is_refused(ruled, ref):
     task = task_for_ops(api)
     r = ask(api, task, {**GOOD, "show": [ref]})
     assert r.status_code == 409, r.text
-    detail = r.json()["error"]["detail"]
+    detail = r.json()["detail"]
     assert detail.endswith("Publish it as a page and show that page.") and ref in detail, detail
     assert judge.calls == []
 
@@ -175,8 +175,8 @@ def test_the_rule_judges_a_bots_question_to_a_person_with_all_its_choices_in_one
 
     task = task_for_ops(api, "Write the second launch note")
     r = ask(api, task, {**GOOD, "why": "It goes out **Friday** under our name."})
-    assert r.status_code == 409 and r.json()["error"]["code"] == "task_rule", r.text
-    assert OR.ASKS_TO_A_PERSON in r.json()["error"]["detail"]  # AC-8: refused with the rule's words
+    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert OR.ASKS_TO_A_PERSON in r.json()["detail"]  # AC-8: refused with the rule's words
     assert version(api, task) == task["version"]
 
 
