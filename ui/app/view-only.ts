@@ -11,6 +11,9 @@
 const VIEW_HIDDEN = [
   '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add',
   '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
+  // The task window: its page +, Ask someone, Follow, Answer, Done or Close, and Stop on a run.
+  '[data-tp-add]', '[data-req-ask]', '[data-prop-follow]', '[data-prop-unfollow]', '[data-task-answer]',
+  '[data-task-finish]', '[data-task-stop]',
 ];
 /** The controls that only read. Anything else that takes a click or input is greyed out and inert in a view.
     ui/tests/app-view-read-only.cts keeps its own list on purpose: the test checks this one rather than reading it, so
@@ -20,7 +23,7 @@ const VIEW_READS = [
   '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x', '#task-archives button', '.tl-mi',
   '.tl-chip button', '#task-more button', '.tk-row', '[data-task]',
   '[data-need]', '[data-reload]', '[data-dash-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
-  '[aria-label="Close"]', '[data-close]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
+  '[aria-label="Close"]', '[data-close]', '[data-modal-close]', '[data-task-earlier]', '[data-task-tab]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
 ];
 const VIEW_CONTROLS = 'button, input, textarea, select, [contenteditable="true"], [role="button"], [role="checkbox"], '
   + '[role="switch"], [role="menuitem"], [role="menuitemradio"]';

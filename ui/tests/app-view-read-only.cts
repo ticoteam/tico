@@ -36,7 +36,7 @@ const READS = [
   '#task-scope', '#task-q', '#task-filter', '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x',
   '#task-archives button',
   '.tl-mi', '#task-more button', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
-  '.dash-tabs a', '.dash-tabs button', '[role="tab"]', '.tmodal [aria-label="Close"]', '.tmodal .x',
+  '.dash-tabs a', '.dash-tabs button', '[role="tab"]', '.tmodal [aria-label="Close"]', '.tmodal .x', '[data-modal-close]', '[data-task-earlier]', '[data-task-tab]',
   '[data-show-more]', '.linkish[data-open]', 'a[href]',
 ];
 
@@ -141,7 +141,10 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await page.locator('.tmodal[open] .view-only-line').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('.tmodal[open] .view-only-line').innerText(), 'Read-only view');
     assert.deepEqual(await writesShown(page), [], 'the task window offers nothing that writes');
-    await page.keyboard.press('Escape');
+    // Nothing that only writes shows, even greyed out: the page +, Ask someone and Follow are gone; × still closes.
+    assert.equal(await page.locator('.tmodal[open] :is([data-tp-add], [data-req-ask], [data-prop-follow])').evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth > 0).length), 0, 'no greyed-out write in the task window');
+    await page.locator('.tmodal[open] [data-modal-close]').click();
+    await page.locator('.tmodal[open]').waitFor({state: 'detached', timeout: t(15000)});
 
     // Company › Mine: one card, the bot's tasks, and no error.
     await go(page, '#/home');
