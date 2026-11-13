@@ -668,7 +668,7 @@ class Vault:
         require_seen(c, who, cid, self.admins)
         if subject.startswith('bot:'):
             subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
-        if subject == COMPUTERS:
+        if subject == COMPUTERS or subject.startswith('group:'):
             require_admin(c, who, self.admins)
             return None
         if administrator(c, who, self.admins):
@@ -737,8 +737,12 @@ class Vault:
                     'This account belongs to its holder alone; add a shared account to grant someone else access.',
                     409,
                 )
-            if not subject.startswith(('human:', 'bot:')):
-                raise Problem('subject', 'Choose a registered person or bot.', 422)
+            # A group, too: every person and bot in it uses the account (backend/website_tools.py `_grant`).
+            if not subject.startswith(('human:', 'bot:', 'group:')):
+                raise Problem('subject', 'Choose a registered person, bot or group.', 422)
+        elif subject.startswith('group:'):
+            # Groups take a website login only: never an API key or any other credential.
+            raise Problem('subject', 'Choose a registered person or bot', 422)
         parent = self.grant_authority(c, who, cid, subject)
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
@@ -766,6 +770,10 @@ class Vault:
             exists = c.execute('SELECT 1 FROM humans WHERE id=?', (H.actor_id(subject),)).fetchone()
         elif subject.startswith('bot:'):
             exists = c.execute('SELECT 1 FROM bots WHERE id=?', (H.actor_id(subject),)).fetchone()
+        elif subject.startswith('group:'):
+            from . import views
+
+            exists = H.actor_id(subject) in (views.roster(c, shared=True).get('org_groups') or {})
         else:
             exists = None
         if not exists:
@@ -826,9 +834,11 @@ class Vault:
                 'forbidden', 'Ask a person with account access to reveal the password while signed in to Tico.', 403
             )
         require_seen(c, who, cid, self.admins)
+        from . import website_tools
+
         if not (
             row['holder'] == who.actor
-            or (not row['holder'] and effective_grant(c, cid, who.actor) is not None)
+            or (not row['holder'] and website_tools.can_use(c, who.actor, row))
             or administrator(c, who, self.admins)
         ):
             raise Problem(
@@ -842,8 +852,6 @@ class Vault:
             )
         if not row['has_password']:
             raise Problem('no_password', 'This account has no password; add one with Replace login.', 409)
-        from . import website_tools
-
         website_tools.spend(cid)  # the same 20 an hour as fill, copy and code (429 slow_down)
         value = self.open_login(c, row)['password']
         H.event(c, who.actor, 'credential.revealed', cid, {'kind': LOGIN})

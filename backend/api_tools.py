@@ -268,8 +268,17 @@ def audience_of(tool):
 
 
 def _can_use(c, tool_id, actor):
-    """An effective grant on one of its keys, or (a website tool) an own account `actor` holds."""
-    return any(_field(k, "holder") == actor or effective_grant(c, k["id"], actor) for k in _keys(c, tool_id))
+    """An effective grant on one of its keys, or (a website tool) an own account `actor` holds or a shared one granted
+    to a group `actor` is in (backend/website_tools.py `_grant`)."""
+    keys = _keys(c, tool_id)
+    if any(_field(k, "holder") == actor or effective_grant(c, k["id"], actor) for k in keys):
+        return True
+    logins = [k for k in keys if k["kind"] == "login" and not _field(k, "holder")]
+    if not logins:
+        return False
+    from . import website_tools
+
+    return any(website_tools.can_use(c, actor, k) for k in logins)
 
 
 def kind_of(tool):
@@ -498,6 +507,9 @@ def seen_by(c, tool, auth=None):
         add("group:" + gid, "group", str((groups.get(gid) or {}).get("name") or gid), "Listed")
     for slug in level["bots"]:
         add("bot:" + slug, "bot", label.get("bot:" + slug) or slug, "Listed")
+    for gid in _login_groups(c, tool["id"]):
+        # A website login granted to a group: each of its members can use it, and so can see the tool.
+        add("group:" + gid, "group", str((groups.get(gid) or {}).get("name") or gid), "Can use it")
     for subject in sorted(grants, key=lambda s: (not s.startswith("human:"), (label.get(s) or s).lower())):
         add(
             subject,
@@ -508,6 +520,17 @@ def seen_by(c, tool, auth=None):
     if finance_rows(c, tool["id"]):
         add("finance", "finance", "Finance", "Can use it")
     return rows
+
+
+def _login_groups(c, tool_id):
+    """The groups a website tool's shared logins are granted to, oldest grant first."""
+    from . import website_tools
+
+    out = []
+    for key in _keys(c, tool_id):
+        if key["kind"] == "login":
+            out += [gid for gid in website_tools._group_grants(c, key) if gid not in out]
+    return out
 
 
 def access_rows_all(c, tool_id):

@@ -7,7 +7,9 @@ An account is a vault credential of kind `login` on the tool: its username, and 
 Either may be empty: an account a person signs in to by hand (Google or SSO sign-in, an emailed code, a passkey) has
 no password (`has_password` 0, sealed password ''), and fill or copy of it is refused with `no_password`.
 A shared account (`holder` NULL) is used by whoever it is granted to; an own account only by its holder (and that
-person's Assistant). The pick rule for a caller and a site: their own account on the tool, else the oldest shared
+person's Assistant). A shared account may also be granted to a group (`group:<id>`, credential administrators only):
+every person and non-archived bot in it and in the groups nested under it uses it, resolved at each use as API tools
+resolve Who can see it (teammate_access.group_member_actors), so leaving the group ends it. The pick rule for a caller and a site: their own account on the tool, else the oldest shared
 account granted to them, else 403 `no_account`.
 
 The password goes out only in a signed-in person's reveal and in a fill or copy command sent to the computer that types
@@ -279,11 +281,70 @@ def _account(c: Any, tool_id: str, account_id: str) -> Any:
     return row
 
 
+GROUP = "group:"
+
+
+def _org_groups(c: Any) -> dict[str, Any]:
+    views: Any = importlib.import_module(".views", __package__)
+    return cast(dict[str, Any], views.roster(c, shared=True).get("org_groups") or {})
+
+
+def _group_name(groups: dict[str, Any], gid: str) -> str:
+    found = cast(dict[str, Any], groups.get(gid) or {})
+    return str(found.get("name") or gid)
+
+
+def group_members(c: Any, gid: str) -> frozenset[str]:
+    """The people and non-archived bots in group `gid` and the groups nested under it, as actors; read once per
+    snapshot (a request's `_choose` asks for each account and each group)."""
+    from . import read_cache
+
+    values = read_cache.cache(c)
+    key = ("website_group_members", gid)
+    if values is not None and key in values:
+        return cast(frozenset[str], values[key])
+    teammates: Any = importlib.import_module(".teammate_access", __package__)
+    found = frozenset(cast(Iterable[str], teammates.group_member_actors(c, gid)))
+    if values is not None:
+        values[key] = found
+    return found
+
+
+def _group_grants(c: Any, account: Any) -> list[str]:
+    """The ids of the groups a shared account is granted to, oldest first, that still exist."""
+    if account["holder"]:
+        return []
+    groups = _org_groups(c)
+    out: list[str] = []
+    for grant in c.execute(
+        "SELECT subject FROM credential_grants WHERE credential_id=? AND subject LIKE 'group:%' AND revoked_at IS NULL "
+        "AND parent_id IS NULL ORDER BY created_at, id",
+        (account["id"],),
+    ).fetchall():
+        gid = str(grant["subject"])[len(GROUP) :]
+        if gid in groups and gid not in out:
+            out.append(gid)
+    return out
+
+
+def _grant(c: Any, account: Any, actor: str) -> Any:
+    """The grant `actor` uses a shared account through: its own effective grant, else the first group grant whose
+    members (nested groups included) take in `actor`, else None. Only a person or a bot is ever in a group."""
+    direct = vaults.effective_grant(c, account["id"], actor)
+    if direct is not None or not str(actor or "").startswith(("human:", "bot:")):
+        return direct
+    for gid in _group_grants(c, account):
+        if actor in group_members(c, gid):
+            return vaults.effective_grant(c, account["id"], GROUP + gid)
+    return None
+
+
 def can_use(c: Any, actor: str, account: Any) -> bool:
-    """`actor` uses the account itself: it holds it (own), or holds an effective grant on it (shared)."""
+    """`actor` uses the account itself: it holds it (own), or holds an effective grant on it, directly or through a
+    group (shared)."""
     if account["holder"]:
         return account["holder"] == actor
-    return vaults.effective_grant(c, account["id"], actor) is not None
+    return _grant(c, account, actor) is not None
 
 
 def _users(c: Any, account: Any) -> list[str]:
@@ -327,7 +388,11 @@ def can_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = No
 
 
 def _bot_user_managed(c: Any, who: Any, account: Any, auth: Any = None) -> bool:
-    return any(s.startswith("bot:") and _manages(c, who, s, auth) for s in _users(c, account))
+    """`who` manages a bot that uses the account, directly or through a granted group."""
+    users = set(_users(c, account))
+    for gid in _group_grants(c, account):
+        users |= group_members(c, gid)
+    return any(s.startswith("bot:") and _manages(c, who, s, auth) for s in sorted(users))
 
 
 # ---- the interface backend/browser_commands.py calls
@@ -353,7 +418,7 @@ def _choose(c: Any, actor: str, accounts: list[Any]) -> Any:
     if own:
         return own[0]
     for account in accounts:  # oldest first
-        if not account["holder"] and vaults.effective_grant(c, account["id"], actor) is not None:
+        if not account["holder"] and _grant(c, account, actor) is not None:
             return account
     return None
 
@@ -626,6 +691,41 @@ def _names(c: Any, subjects: Iterable[str]) -> dict[str, str]:
     return cast(dict[str, str], names.lookup(c, set(subjects)))
 
 
+def _group_who(gid: str, name: str, members: int) -> dict[str, Any]:
+    return {
+        "subject": GROUP + gid,
+        "kind": "group",
+        "id": gid,
+        "name": name,
+        "initials": _initials(name),
+        "members": members,
+    }
+
+
+def _by_name(row: dict[str, Any]) -> tuple[int, str, str]:
+    return ({"group": 0, "person": 1}.get(str(row["kind"]), 2), str(row["name"]).lower(), str(row["subject"]))
+
+
+def _access(c: Any, account: Any, users: list[str], label: dict[str, str], groups: bool) -> list[dict[str, Any]]:
+    """One row per grant: the granted groups (to an administrator: `groups`) with their member count, then people,
+    then bots, each by name. A person or bot granted directly who is also in a granted group carries `via`, the names
+    of those groups."""
+    rows = [_who(s, label.get(s)) for s in users]
+    if groups:
+        names = _org_groups(c)
+        granted: list[tuple[str, frozenset[str]]] = []
+        for gid in _group_grants(c, account):
+            name = _group_name(names, gid)
+            members = group_members(c, gid)
+            granted.append((name, members))
+            rows.append(_group_who(gid, name, len(members)))
+        for row in rows:
+            via = sorted((n for n, m in granted if row["subject"] in m), key=str.lower)
+            if via:
+                row["via"] = via
+    return sorted(rows, key=_by_name)
+
+
 def _account_view(
     c: Any, who: Any, account: Any, admin: bool, label: dict[str, str], admins: Iterable[str] | None, auth: Any
 ) -> dict[str, Any] | None:
@@ -653,7 +753,8 @@ def _account_view(
         "has_password": bool(account["has_password"]),
         "has_totp": bool(account["has_totp"]),
         "holder": _who(holder, label.get(holder)) if holder else None,
-        "access": [_who(s, label.get(s)) for s in users],
+        # A member's view ("themselves and the grants they made") never names a group or what it covers.
+        "access": _access(c, account, users, label, admin and not holder),
         "session": _session(c, account["id"]),
         "can_use": uses,
         "can_manage": manages,
@@ -825,7 +926,7 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
                 "#/tools/website/" + tool["id"],
                 detail=_host_of(sites[0]) if sites else "",
                 way="Browser",
-                who=[{k: p[k] for k in ("kind", "id", "name", "initials")} for p in listed],
+                who=[{k: p[k] for k in ("kind", "id", "name", "initials", "members") if k in p} for p in listed],
                 who_total=len(listed),
                 needs_you=state["tone"] == "fail" or state["label"] == "Needs you",
                 private=tool["audience"] is not None,
@@ -1105,8 +1206,14 @@ def set_access(
             409,
         )
     subject = str(api_tools.subject_of(c, subject))
-    if not subject.startswith(("human:", "bot:")):
-        raise Problem("subject", "Choose a registered person or bot.", 422)
+    if not subject.startswith(("human:", "bot:", GROUP)):
+        raise Problem("subject", "Choose a registered person, bot or group.", 422)
+    if subject.startswith(GROUP):
+        # Only a credential administrator gives a group a login or takes it away, either way before anything changes.
+        if not _admin(c, who, admins):
+            raise Problem("forbidden", "Ask a credential administrator to change access to this account.", 403)
+        if subject[len(GROUP) :] not in _org_groups(c):
+            raise Problem("subject", "Choose a registered person, bot or group.", 422)
     try:
         if on:
             vault.grant(c, who, account["id"], subject)
@@ -1127,9 +1234,48 @@ def set_access(
                 "forbidden", "Ask a credential administrator to change access to this account.", 403
             ) from None
         if code == "subject":
-            raise Problem("subject", "Choose a registered person or bot.", 422) from None
+            raise Problem("subject", "Choose a registered person, bot or group.", 422) from None
         raise
-    return {"subject": subject, "on": vaults.effective_grant(c, account["id"], subject) is not None}
+    # The account's whole list, as the caller sees it, so a dialog repaints member counts and "Also in" from it.
+    admin = _admin(c, who, admins)
+    view = _account_view(c, who, account, admin, _names(c, _users(c, account)), admins, auth)
+    return {
+        "subject": subject,
+        "on": vaults.effective_grant(c, account["id"], subject) is not None,
+        "access": view["access"] if view is not None else [],
+    }
+
+
+def groups_view(c: Any, who: Any, admins: Iterable[str]) -> list[dict[str, Any]]:
+    """`GET /website-tools/groups`: each group with its member count (nested groups included), for the Who can use it
+    picker. Credential administrators only: they alone grant a login to a group."""
+    _require_admin(c, who, admins)
+    groups = _org_groups(c)
+    rows = [{"id": gid, "name": _group_name(groups, gid), "members": len(group_members(c, gid))} for gid in groups]
+    return sorted(rows, key=lambda r: (r["name"].lower(), r["id"]))
+
+
+def forget_group(c: Any, actor: str, gid: str) -> None:
+    """A deleted group's login grants go as a removal does: each revoked with a credential.revoked event, and the
+    account's open browser sessions closed (backend/teammate_access.py forget_group calls this)."""
+    subject = GROUP + gid
+    accounts = [
+        str(r["credential_id"])
+        for r in c.execute(
+            "SELECT DISTINCT g.credential_id FROM credential_grants g JOIN credentials k ON k.id=g.credential_id "
+            "WHERE g.subject=? AND g.revoked_at IS NULL AND k.kind=?",
+            (subject, LOGIN),
+        ).fetchall()
+    ]
+    who = _Actor(actor)
+    for account_id in accounts:
+        api_tools._revoke(c, who, account_id, subject)
+        _close(account_id)
+
+
+class _Actor:
+    def __init__(self, actor: str) -> None:
+        self.actor = actor
 
 
 def current_code(
@@ -1190,6 +1336,12 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
         """Add a website tool (credential administrators): its sites and whether only the browser host opens it."""
         who = request.state.identity
         return change(request, body, manager, lambda c: create_tool(c, who, body, admins()))
+
+    @app.get("/api/v2/website-tools/groups")
+    def website_tool_groups(request: Request) -> Any:
+        """Each group with its member count, for the Who can use it picker (credential administrators)."""
+        with store.read_transaction() as c:
+            return groups_view(c, request.state.identity, admins())
 
     @app.get("/api/v2/website-tools/{tool_id}")
     def get_website_tool(request: Request, tool_id: str) -> Any:
