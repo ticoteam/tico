@@ -2171,6 +2171,9 @@ impl Runner {
         // The thread a turn the model's capacity stopped after it acted left to continue (backend/execution.py
         // capacity_continuation): only that thread, on the bot's own login, takes it; never a fallback or a fresh one.
         let continuing = text_of(&attempt["continue_thread"]);
+        // A job the server released warm names the bot's latest session on this computer (lanes::FORK_SESSION): a
+        // turn that would start a brand-new thread starts it on a fork of that one instead, which is left as it was.
+        let fork_thread = text_of(&attempt["fork_thread"]);
         let mut uses: Vec<String> = vec![runtime.clone()];
         if let Some(hop) = crate::fallback::configured(&config) {
             uses.push(hop.runtime);
@@ -2538,7 +2541,21 @@ impl Runner {
                 self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
                 // without creating or saving a replacement session before that acknowledgement.
-                thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
+                // Only a thread with nothing of its own to carry forks: never one replacing a saved session, a side
+                // run, a person's Clear, a changed binding, a stateless chat or a packet.
+                let fork = !fork_thread.is_empty() && previous.is_none() && continuing.is_empty() && !side_run
+                    && !fresh_chat && !packet_only && !cleared && !binding_changed;
+                thread = Some(if !continuing.is_empty() {
+                    continuing.clone()
+                } else if fork {
+                    let (th, forked) = h.start_thread_forked(&bot, &settings, &fork_thread).await?;
+                    if forked {
+                        session = Some(crate::continuity::Session::new(crate::continuity::FORKED, None));
+                    }
+                    th
+                } else {
+                    h.start_thread(&bot, &settings).await?
+                });
             }
             let th = thread.clone().unwrap();
             self.note_session(&aid, &bot, session.as_ref());
@@ -2758,7 +2775,17 @@ impl Runner {
         // future, before a fallback can stop this host or settlement applies the interrupt-resume capability.
         if let (Some(h), Some(th)) = (&host, &thread) {
             let saved = h.session_id(th);
-            if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
+            if session
+                .as_ref()
+                .is_some_and(|s| s.why == Some(crate::continuity::FORKED))
+                && h.restored(th)
+            {
+                // The session it was to fork is not on this computer: Claude Code began a plain new one.
+                session = Some(crate::continuity::Session::new(
+                    crate::continuity::NONE_SAVED,
+                    Some("the session it was to fork is not on this computer".into()),
+                ));
+            } else if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
                 // Claude Code and Gemini find out only when the turn runs that the saved session is not on this computer.
                 session = Some(crate::continuity::Session::new(
                     crate::continuity::NOT_FOUND,
@@ -8741,6 +8768,141 @@ else:
             server.abort();
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn a_new_thread_released_warm_forks_the_bots_latest_session_and_a_saved_one_still_resumes(
+    ) {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "fork");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let script = dir.join("synthetic_claude.py");
+        std::fs::write(&script, r#"import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+with (root / 'argv.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+sys.stdin.readline()
+if 'gone-session' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'error_during_execution','is_error':True,'num_turns':0,
+                      'errors':['No conversation found with session ID: gone-session']}), flush=True)
+    sys.exit(1)
+flag = '--session-id' if '--session-id' in sys.argv else '--resume'
+sid = sys.argv[sys.argv.index(flag) + 1]
+print(json.dumps({'type':'system','subtype':'init','session_id':sid}), flush=True)
+print(json.dumps({'type':'result','subtype':'success','result':'Sent the Acme invoice.'}), flush=True)
+"#).unwrap();
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec![
+                crate::env::python().display().to_string(),
+                script.display().to_string(),
+            ])
+        });
+        HOST_CLAUDE.with(|on| on.set(true));
+        RUN_SESSION.with(|on| on.set(Some(true)));
+        let attempt = |id: &str, session: &str, fork: &str| {
+            json!({"id": id, "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+                   "conversation": {"id": "c1"}, "message": {"refs": {}}, "fork_thread": fork,
+                   "config": {"runtime": "claude", "harness": "claude", "model": "synthetic", "session": session}})
+        };
+        for id in ["a-fork", "a-again"] {
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                runner.clone().execute(attempt(id, "bot", "latest-session")),
+            )
+            .await
+            .expect("the turn ends")
+            .unwrap();
+            assert_eq!(completion(&seen, id)["outcome"], "completed");
+        }
+        let args: Vec<Vec<String>> = std::fs::read_to_string(dir.join("argv.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(args.len(), 2, "{args:?}");
+        // No session saved for this conversation: the new thread starts on a fork of the bot's latest one.
+        let saved = runner
+            .state
+            .session("ops", "bot", "claude")
+            .unwrap()
+            .expect("the fork is saved");
+        assert_ne!(saved, "latest-session");
+        assert!(
+            args[0].windows(5).any(|w| w
+                == [
+                    "--resume",
+                    "latest-session",
+                    "--fork-session",
+                    "--session-id",
+                    saved.as_str()
+                ]),
+            "{args:?}"
+        );
+        let session = &completion(&seen, "a-fork")["session"];
+        assert_eq!(
+            (session["kind"].as_str(), session["why"].as_str()),
+            (Some("new"), Some("forked")),
+            "{session:?}"
+        );
+        // The next turn resumes its own saved session; the fork is not taken again.
+        assert!(
+            args[1]
+                .windows(2)
+                .any(|w| w == ["--resume", saved.as_str()]),
+            "{args:?}"
+        );
+        assert!(!args[1].contains(&"--fork-session".to_string()), "{args:?}");
+        assert_eq!(completion(&seen, "a-again")["session"]["kind"], "resumed");
+        // A fork source that is not on this computer: Claude Code begins a plain new session, said as one.
+        tokio::time::timeout(
+            Duration::from_secs(12),
+            runner
+                .clone()
+                .execute(attempt("a-gone", "task", "gone-session")),
+        )
+        .await
+        .expect("the turn ends")
+        .unwrap();
+        let done = completion(&seen, "a-gone");
+        assert_eq!(done["outcome"], "completed", "{done:?}");
+        assert_eq!(
+            (
+                done["session"]["kind"].as_str(),
+                done["session"]["why"].as_str()
+            ),
+            (Some("new"), Some("none_saved")),
+            "{done:?}"
+        );
+        let tried = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap();
+        let tried: Vec<Vec<String>> = tried
+            .lines()
+            .skip(2)
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            tried.len(),
+            2,
+            "the fork, then a plain new session: {tried:?}"
+        );
+        assert!(
+            tried[0]
+                .windows(3)
+                .any(|w| w == ["--resume", "gone-session", "--fork-session"]),
+            "{tried:?}"
+        );
+        assert!(
+            !tried[1]
+                .iter()
+                .any(|a| a == "--fork-session" || a == "gone-session"),
+            "{tried:?}"
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

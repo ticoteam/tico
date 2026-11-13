@@ -663,6 +663,10 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         if (b.steps || b.trigger || b.destinations) {
           const bad = b.steps ? flowProblem(b.steps) : '';
           if (bad) return refuse(422, 'invalid_flow', bad);
+          // A schedule's run settings ride on the flow; any other trigger refuses them (automation_flow.py _check_release).
+          const release = 'release' in b ? b.release : a.release, kind = ((b.trigger || a.trigger) as Json).type;
+          if (release != null && kind !== 'schedule') return refuse(422, 'invalid_flow', 'release is for a scheduled routine only');
+          if ('release' in b) { if (b.release === null) delete a.release; else a.release = sortKeys(b.release) as Json; }
           // A listening's new push source gets its address, sent with this answer only.
           const had = new Set((((a.trigger as Json).sources || []) as Json[]).map(s => s.id));
           const pushed = (((b.trigger as Json | undefined)?.sources || []) as Json[]).filter(s => s.kind === 'push' && !had.has(s.id));

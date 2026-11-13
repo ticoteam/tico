@@ -156,14 +156,14 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
         key = 'github-task-wake:' + task['id']
         burst = R.metadata(c, key)
         assert len(burst['items']) == 2
-        # Performance owns the delay at enqueue time; GitHub adds no second debounce.
+        # The notice wait owns the delay at enqueue time; GitHub adds no second debounce.
         assert G.flush_wakes(c) == [task['id']]
         assert G.flush_wakes(c) == []
         assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before + 1
         message = c.execute('SELECT body FROM messages ORDER BY created_at DESC LIMIT 1').fetchone()[0]
         assert '2 review comments' in message and 'tico#412' in message
         job = c.execute("SELECT held,wake_preset FROM jobs WHERE bot_id='cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
-        assert job['held'] and job['wake_preset'] == 'performance'
+        assert job['held'] and job['wake_preset'] is None  # held by the notice wait; no preset is recorded
 
 
 def test_each_merged_pr_ships_once_the_release_contains_it(api):

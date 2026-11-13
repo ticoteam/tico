@@ -95,6 +95,9 @@ interface AuStep {
 interface AuDest { id: string; name?: string; color?: string | undefined; then?: AuThen[] }
 /** What starts an automation: its kind and that kind's fields. */
 interface AuTrigger { type?: string; filters?: AuCond[]; name?: string; inbox?: string; [field: string]: unknown }
+/** A scheduled routine's run settings: wait up to wait_hours for a warm session, then run cold or skip, in a fresh
+ *  session or the latest one continued. */
+interface AuRelease { warm: boolean; wait_hours: number; deadline: 'run' | 'skip'; session: 'fresh' | 'continue' }
 /** A flow: its steps, its destinations (a board's), and its trigger. */
 interface AuFlow { steps?: AuStep[]; destinations?: AuDest[] | null; trigger?: (AuTrigger & Partial<AuFlowTrigger>) | undefined }
 /** An automation as the page holds it (AU.cur): a row (AuRow) with steps and trigger always present (automations.ts
@@ -108,8 +111,10 @@ type AuAutomation = AuRow & {
 };
 /** An automation as the page keeps it (automations.ts auNormal): a list row or the open one. Its trigger is a flow's
  *  (AuFlowTrigger, automations-editors.ts), each field present on its own kind; a built-in or read-only row says so. */
-type AuRow = Omit<import('./api').Automation, 'trigger' | 'hold' | 'last_run' | 'steps' | 'destinations'> & {
+type AuRow = Omit<import('./api').Automation, 'trigger' | 'hold' | 'last_run' | 'steps' | 'destinations' | 'release'> & {
   trigger?: Partial<AuFlowTrigger>; builtin?: boolean; readonly?: boolean;
+  /** A scheduled routine's run settings (backend/automation_flow.py `_check_release`); absent is the defaults. */
+  release?: AuRelease | null;
   /** The flow (AuStep, AuDest: automations-editors.ts); api.d.ts has each as a bare record. */
   steps?: AuStep[]; destinations?: AuDest[] | null;
   /** The last run as the list reads it: its status and when it started (api.d.ts has it as a bare record). */

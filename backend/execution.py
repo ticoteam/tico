@@ -161,6 +161,11 @@ TASK_GOALS = "task_goals_v1"
 # other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
 CAPACITY_CONTINUE = "capacity_continue_v1"
 
+# A runner that advertises this starts a turn whose claim names `fork_thread` on a fork of that session
+# (`claude --resume <thread> --fork-session`), leaving the original untouched (backend/wake_presets.py, session `fork`).
+# Any other runner is handed no fork and starts the job on a fresh session.
+FORK_SESSION = "fork_session_v1"
+
 # A runner that advertises this runs a private live meeting's turns in that meeting's own checkout, read-only on GitHub
 # (runner-rs/src/sessions.rs, private lanes). Any other runner would run them in the bot's checkout and push what they
 # wrote, so it is never handed one: the turn waits for an updated runner (live_meetings `meeting.bot_turn_waiting`).
@@ -300,6 +305,11 @@ def claimed_busy(runner_id, fresh=CLAIMED_FRESH):
     if not seen or time.monotonic() - seen[2] > fresh:
         return frozenset(), frozenset()
     return seen[0], frozenset(tuple(entry.split("|", 1)) for entry in seen[1] if "|" in entry)
+
+
+def runner_forks(runner):
+    """Whether this runner row (its `capabilities`) forks a session a claim names (FORK_SESSION)."""
+    return bool(runner) and FORK_SESSION in capability_set(runner["capabilities"])
 
 
 def capability_set(capabilities_json):
@@ -5136,11 +5146,15 @@ class Execution:
         run_diagnostics.touch(c, aid, "leased")
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
         org_turns.observe(c, self.store.settings, detailed=False)
-        # What woke this turn, the wake preset and the bot's profile, for its run record (backend/wake_presets.py).
-        job = c.execute("SELECT wake_preset,wake_class,hold_until FROM jobs WHERE id=?", (row["id"],)).fetchone()
+        # What woke this turn, the bot's profile and how the release policy let it go, for its run record
+        # (backend/wake_presets.py). A job released to fork the bot's latest session names it to a runner that can.
+        job = c.execute("SELECT wake_class,hold_until,release,released FROM jobs WHERE id=?", (row["id"],)).fetchone()
+        fork_thread = (
+            wake_presets.fork_thread(c, row["id"], row["bot_id"], runner["id"]) if runner_forks(runner) else None
+        )
         c.execute(
             "UPDATE attempts SET wake=?,handed_runtime=?,handed_model=? WHERE id=?",
-            (json.dumps(wake_presets.record(c, job, msg, row["bot_id"])), *handed, aid),
+            (json.dumps(wake_presets.record(c, job, msg, row["bot_id"], forked=bool(fork_thread))), *handed, aid),
         )
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
         thread_bot_digest.grant(c, aid, msg)
@@ -5505,6 +5519,8 @@ class Execution:
                 "task": wire_task,
                 **({"github_repository": github_repository} if github_repository else {}),
                 **({"continue_thread": continue_thread} if continue_thread else {}),
+                # A job the release policy let go to continue the bot's latest session (runner-rs forks it).
+                **({"fork_thread": fork_thread} if fork_thread else {}),
                 **({"source_continuation": source} if source else {}),
                 # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                 "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],

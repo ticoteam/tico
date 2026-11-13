@@ -9,12 +9,16 @@ interface TrSubagent { id: string; parent_id?: string | null; type?: string | nu
 interface TrShell { tool: string; summary?: string | null; running?: boolean; started_at?: string | null; status?: string | null; }
 interface TrDecision { by_kind?: string | null; by?: string | null; at?: string | null; decision: string; state?: string | null; note?: string | null; }
 interface TrNext { kind: string; by?: string | null; at?: string | null; note?: string | null; }
-interface TrWake { reason: string; profile_label?: string | null; preset_label?: string | null; held_until?: string | null; }
+// How the release policy let a job go (backend/wake_presets.py): warm or cold, a forked or a fresh session, and how long it waited.
+interface TrRelease { warm: boolean; session: 'fork' | 'fresh'; waited_seconds: number; due?: string | null; wait_seconds?: number | null; deadline?: string | null; }
+// preset_label is on runs from before profiles only; release only on a job the policy released.
+interface TrWake { reason: string; profile_label?: string | null; preset_label?: string | null; held_until?: string | null; release?: TrRelease | null; }
 interface TrAttempt {
   id: string; state: string; outcome?: string | null; reason?: string | null; try: number; tries: number; bot?: string | null;
   waiting?: boolean; paused?: boolean; moved?: boolean; took_s?: number | null; started_at?: string | null; created_at?: string | null;
   ran_on?: TrRanOn | null; decision?: TrDecision | null; next?: TrNext | null; lease?: Array<{ kind: string; at: string }> | null;
   wake?: TrWake | null; background?: TrShell[] | null; subagents?: TrSubagent[] | null;
+  cache_read_tokens?: number | null; cache_write_tokens?: number | null;
 }
 interface TaskRunsView { runs?: TrAttempt[] | null; checkpoint?: { text: string; by?: string | null; at?: string | null } | null; }
 // The task dialog, with the expandos this file keeps on it between loads.
@@ -92,8 +96,8 @@ function runAttemptHTML(a: TrAttempt, open: boolean): string {
     : 'Lease restored by the runner')} · ${esc(ago(l.at))}</li>`).join('');
   // What woke the turn, the bot's profile then (the preset on runs from before profiles), and until when it was held
   // (backend/wake_presets.py record).
-  const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc(a.wake.reason)} · ${esc(a.wake.profile_label || a.wake.preset_label)}${a.wake.held_until
-    ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>` : '';
+  const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc([a.wake.reason, a.wake.profile_label || a.wake.preset_label].filter(Boolean).join(' · '))}${a.wake.held_until
+    ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>${runReleaseHTML(a)}` : '';
   const background = a.background || [];
   const shells = background.length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${background.map(runShellHTML).join('')}</ul></div>` : '';
   return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.id)}">
@@ -102,6 +106,16 @@ function runAttemptHTML(a: TrAttempt, open: boolean): string {
       `<p class="muted truns-moved">${esc(t)}</p>`).join('')}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
     ${runAgentsHTML(a.subagents || [], ranOn(a.ran_on, false))}${shells}
     ${(a.subagents || []).length || shells || nxt || a.reason || a.waiting || a.paused || a.moved || ranOnNote(a.ran_on) ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;
+}
+// "1.2M", "182k", "640": a run's token count on its record line.
+const runTokens = (n: number): string => n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+// How the release policy let the job go, with the run's cache use: "warm · fresh · waited 3 h 10 min · cache read 182k".
+function runReleaseHTML(a: TrAttempt): string {
+  const r = a.wake?.release;
+  if (!r) return '';
+  const parts = [r.warm ? 'warm' : 'cold', r.session === 'fork' ? 'fork' : 'fresh', `waited ${callLength(r.waited_seconds)}`,
+    a.cache_read_tokens != null ? `cache read ${runTokens(a.cache_read_tokens)}` : '', a.cache_write_tokens != null ? `cache write ${runTokens(a.cache_write_tokens)}` : ''];
+  return `<p class="muted truns-release">${esc(parts.filter(Boolean).join(' · '))}</p>`;
 }
 function taskRunsHTML(v: TaskRunsView): string {
   const runs: TrAttempt[] = v.runs || [], cp = v.checkpoint;
