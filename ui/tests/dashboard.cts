@@ -175,7 +175,7 @@ async function shot(page: Page, name: string) {
     {
       const {page, errors, fake} = await open(browser);
       await page.locator('#dash-grid .dash-pin').first().waitFor();
-      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you 2', 'Latest pages'], 'the default cards; the count on the header line');
+      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you', 'Latest pages'], 'the default cards; each heading its own text, the count beside it');
       assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Dashboard');
       assert.equal(await page.locator('#main h1').first().innerText(), 'Company', 'the page is Company');
       assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Company is current');
@@ -276,7 +276,7 @@ async function shot(page: Page, name: string) {
       await page.waitForFunction(() => location.hash === '#/team/eng');
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.equal(await page.locator('.dash-head h1').innerText(), 'Engineering');
-      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you 2'], 'its own team goes unsaid');
+      assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you'], 'its own team goes unsaid');
       assert.match(await page.locator('[data-dash-audience]').innerText(), /Seen by Everyone$/);
       assert.equal(await shown(page, EDIT_CONTROLS), 0, 'a new page opens viewing');
       assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1, 'its leads arrange it with Edit');
@@ -311,7 +311,7 @@ async function shot(page: Page, name: string) {
       const {page, errors} = await open(browser, {viewport, hash: '', me: MEMBER});
       await page.waitForFunction(() => location.hash === '#/home');
       await page.locator('#dash-grid .dash-pin').nth(4).waitFor();
-      assert.deepEqual(await headings(page), ['Needs attention 2', 'Unread threads', 'My tasks', 'Updates', 'Latest pages']);
+      assert.deepEqual(await headings(page), ['Needs attention', 'Unread threads', 'My tasks', 'Updates', 'Latest pages']);
       assert.equal(await page.locator('.dash-tabs a.cur').getAttribute('href'), '#/home');
       assert.equal(await page.locator('.dash-actions').isVisible(), true, 'a member arranges their own');
       assert.equal(await shown(page, EDIT_CONTROLS), 0);
