@@ -90,6 +90,7 @@ EMPTY = (
     "trigger_deliveries",
     "trigger_bodies",
     "trigger_seen",
+    "growth_source_secrets",  # a file source's signing key: the live install's would let a copy post as it
     "rule_events_seen",
     "rule_task_runs",
     "rule_task_state",
