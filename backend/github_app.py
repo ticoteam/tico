@@ -490,6 +490,9 @@ class GitHubApp:
         kind = owner.get("type") if owner.get("type") in ACCOUNT_TYPES else account
         if kind == PERSONAL and owner.get("login"):
             org = str(owner["login"])
+        if not org:
+            # A personal connect names no account up front, so the conversion's owner is the only one there is.
+            raise Problem("github_exchange", "GitHub's answer did not say which account the app was made for", 502)
         secrets_blob = json.dumps(
             {
                 "pem": conversion["pem"],
@@ -1944,7 +1947,7 @@ def install_github_app(app, settings, store):
 
     def app_name(name=""):
         """The name the App is made with: the one asked for, else "<team name> Tico"."""
-        return (name or f"{settings.company_name} Tico").strip()
+        return (name or f"{settings.company_name} Tico").strip()[:34]  # GitHub's limit, as manifest() sends it
 
     def status_view(refresh=False):
         row = service.row()

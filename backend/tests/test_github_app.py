@@ -1262,10 +1262,25 @@ def test_no_account_connects_the_signed_in_personal_account_without_asking_githu
     assert status["org"] == "octo-dev" and status["account_type"] == "User"
 
 
+def test_a_personal_connect_whose_return_names_no_account_saves_no_app(api, gh):
+    # With no account typed, the conversion's owner is the only account there is: without it nothing is saved.
+    personal(gh, "octo-dev")
+    gh.conversion_owner = {}
+    state = api.get("/api/v2/github/app/manifest", headers=auth()).json()["state"]
+    api.get("/api/v2/github/app/callback", params={"code": "c", "state": state}, headers=auth())
+    assert api.get("/api/v2/github/app", headers=auth()).json()["connected"] is False
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM github_app").fetchone()[0] == 0
+
+
 def test_the_form_is_told_the_name_github_will_give_the_app_until_it_is_connected(api, gh):
     assert api.get("/api/v2/github/app", headers=auth()).json() == {"connected": False, "app_name": "Acme Tico"}
     api.app_state.store.settings.company_name = "Company"  # the team name was never set: no made-up name is offered
     assert api.get("/api/v2/github/app", headers=auth()).json()["app_name"] == ""
+    api.app_state.store.settings.company_name = "Northwind Regional Logistics Cooperative"
+    named = api.get("/api/v2/github/app", headers=auth()).json()["app_name"]
+    assert named == api.get("/api/v2/github/app/manifest", headers=auth()).json()["manifest"]["name"]
+    assert len(named) == 34  # the form names the app GitHub is sent, not a longer one
 
 
 def test_a_personal_manifest_asks_for_the_authorization_callback_and_an_organization_does_not(api, gh):
