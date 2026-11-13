@@ -20,7 +20,7 @@ interface DecAboutTask {
   requester_id?: string | null;
   created_at?: string | null;
   attachments?: {id: string; name?: string | null}[] | null;
-  links?: {url: string; title?: string | null}[] | null;
+  links?: {url: string; title?: string | null; kind?: string | null}[] | null;
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
@@ -30,6 +30,9 @@ interface DecAbout {
 }
 const DEC_ABOUT = new Map<string, DecAbout>();   // held while the screen is open (decideStop clears it)
 let DEC_SENT = '';                               // the item whose reply was just sent: "Sent" shows under its box
+/** A reply an org rule held (the comment's answer, `held`): shown under its box as the task page shows it, with the
+    rule and the actions the sender may take. Nothing was written; an "Ask first" hold may still be sent by a reviewer. */
+let DEC_HELD: {item: string; box: '#dc-reply' | '#dc-other'; hold: RuleHold} | null = null;
 let DEC_RESUME = '';                             // the item Go to left from: ▶ picks up there
 const DEC_HEAD_LONG = 90, DEC_HEAD_MAX = 60;
 
@@ -109,7 +112,8 @@ function decideAboutHTML(it: NeedsEntry, kind: AskKind): string {
     at its version. */
 function decideAboutChips(t: DecAboutTask, text: string): string {
   const chips: string[] = [];
-  for (const l of t.links || []) if (l.url) chips.push(`<a class="dc-ref-chip" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>`);
+  // What a person can open: a task's PR, worktree and session links are the builder's, as on the task page.
+  for (const l of t.links || []) if (l.url && !['pr', 'worktree', 'session'].includes(String(l.kind || ''))) chips.push(`<a class="dc-ref-chip" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>`);
   for (const f of t.attachments || []) if (f.id) chips.push(`<a class="dc-ref-chip" href="${API}/v2/files/${encodeURIComponent(f.id)}">${esc(f.name || 'File')}</a>`);
   const pages = new Set<string>();
   for (const m of text.matchAll(/\bpage:([A-Za-z0-9_-]{6,80})(?:@(\d+))?/g)) {
@@ -201,7 +205,7 @@ function decideReplyHTML(st: DecState, it: NeedsEntry): string {
   const off = st.busy ? ' disabled' : '';
   return `<div class="dc-reply"><label class="dc-notes"><span>${esc(label)}</span><textarea id="dc-reply" data-dc-grow rows="3" maxlength="4000"></textarea></label>
     ${decideFilesHTML(st)}<div class="dc-reply-row">${decideBtn('reply', 'Send', false, ` data-dc-needs="#dc-reply" disabled${off}`)}`
-    + `${DEC_SENT === it.id ? '<span class="dc-sent" role="status">Sent</span>' : ''}</div></div>`;
+    + `${DEC_SENT === it.id ? '<span class="dc-sent" role="status">Sent</span>' : ''}</div>${decideHeldHTML(it, '#dc-reply')}</div>`;
 }
 /** Reply and Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked.
     The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words stay. */
@@ -214,16 +218,20 @@ async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | 
   const to = decideReplyTo(it), handle = to ? decideHandle(to) : '';
   const named = handle && new RegExp(`(?<![\\w@])@${decideReEsc(handle)}(?![\\w-])`, 'i').test(words);
   const text = decideWithFiles(handle && !named ? `@${handle} ${words}` : words, files);
-  st.busy = true; st.error = ''; DEC_SENT = '';
+  st.busy = true; st.error = ''; DEC_SENT = ''; DEC_HELD = null;
   decidePaintSide(st);
   try {
-    const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text}) as {held?: {reason?: string} | null};
+    const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text}) as {held?: RuleHold | null};
     if (DEC !== st) return;
     st.busy = false;
-    if (r?.held) st.error = `Not sent: a rule holds it. ${r.held.reason || ''}`.trim();
-    else {
+    const el = $(`.decide ${box}`) as HTMLTextAreaElement | null;
+    if (r?.held) {
+      DEC_HELD = {item: it.id, box, hold: r.held};
+      // An "Ask first" hold waits for a reviewer who may still send it: the words leave the box, so a second Send
+      // cannot post them twice. A "Stop" hold keeps them, to change and send again.
+      if (r.held.outcome === 'escalated' && el) { el.value = ''; st.files = []; }
+    } else {
       st.files = []; DEC_SENT = it.id;
-      const el = $(`.decide ${box}`) as HTMLTextAreaElement | null;
       if (el) el.value = '';
     }
   } catch (e) {
@@ -231,4 +239,25 @@ async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | 
     st.busy = false; st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not sent.');
   }
   if (st.at === it.id) decidePaintSide(st);
+}
+/** The held reply under its box: what happened in one line, then the hold's card (rule, and Edit and resend). */
+function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other'): string {
+  const h = DEC_HELD?.item === it.id && DEC_HELD.box === box ? DEC_HELD.hold : null;
+  if (!h) return '';
+  const line = h.outcome === 'escalated' ? 'Held for a reviewer: a rule asks first. It is posted if they send it anyway.'
+    : 'Not sent: a rule stops it.';
+  return `<div class="dc-held" data-dc-held><p class="dc-held-line" role="status">${esc(line)}</p>${ruleHoldHTML(h)}</div>`;
+}
+/** After the right side draws: the held card's actions. Withdrawing a held reply puts its words back in the box. */
+function decideHeldWire(st: DecState, host: HTMLElement) {
+  const slot = host.querySelector<HTMLElement>('[data-dc-held]'), held = DEC_HELD, it = decideCurrent(st);
+  if (!slot || !held || !it) return;
+  ruleHoldsWire(slot, decideTaskId(it), (_card, _hid, path) => {
+    if (DEC_HELD !== held) return;
+    DEC_HELD = null;
+    if (DEC !== st || st.at !== held.item) return;
+    decidePaintSide(st);
+    const el = $(`.decide ${held.box}`) as HTMLTextAreaElement | null;
+    if (path === 'withdraw' && el && held.hold.text && !held.hold.text_cut) { el.value = held.hold.text; el.focus(); decideNeedsText($('.decide')!); }
+  });
 }

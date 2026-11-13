@@ -71,6 +71,8 @@
 .dc-reply-row{display:flex;align-items:center;gap:10px}
 .dc-reply-row button{min-height:36px;padding:0 14px;border-radius:10px;font-weight:600}
 .dc-sent{color:var(--muted);font-size:var(--t-sm)}
+.dc-held{display:flex;flex-direction:column;gap:6px}
+.dc-held-line{margin:0;font-size:var(--t-sm);font-weight:600}
 /* Skip: a quiet link after the buttons, never a row of its own */
 .dc-acts .dc-skip{min-width:44px;min-height:40px;padding:0 6px;border:0;background:none;color:var(--muted);font-weight:500;text-decoration:underline}
 @media (min-width:761px){

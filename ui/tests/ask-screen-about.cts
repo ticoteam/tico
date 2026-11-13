@@ -82,6 +82,9 @@ function world(over: {title?: string} = {}) {
         assert.deepEqual(boxes.map(b => b.t), ['Done', 'Snooze', 'Give to…', 'Skip']);
         assert.ok(boxes.every(b => Math.abs(b.y - boxes[0]!.y) < 2), `one line: ${JSON.stringify(boxes)}`);
         assert.ok(boxes.slice(0, 3).every(b => Math.abs(b.h - 36) < 1), `36 px buttons: ${JSON.stringify(boxes)}`);
+        assert.ok(await row.evaluate(el => el.scrollWidth <= el.clientWidth), 'the row does not overflow');
+        const side = (await card(page).locator('.dc-side').boundingBox())!, skipAt = (await row.locator('[data-dc="skip"]').boundingBox())!;
+        assert.ok(skipAt.x + skipAt.width <= side.x + side.width, 'Skip ends inside the side pane');
 
         // Reply to PM: a comment that names PM; the item stays; the box clears and says Sent.
         assert.equal(await card(page).locator('.dc-reply .dc-notes span').innerText(), 'Reply to PM');
@@ -171,6 +174,53 @@ function world(over: {title?: string} = {}) {
         await page.evaluate(() => { decideOpen('r2'); });
         await card(page).locator('.dc-q', {hasText: 'Which latency budget for Perf I31?'}).waitFor({timeout: 5000});
         assert.equal(await card(page).locator('.dc-full').innerText(), LONG);
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+
+    // A reply a team rule holds: the rule shows under the box, as on the task page. "Ask first" waits for a reviewer, so
+    // the box clears (a second Send would post it twice); "Stop" keeps the words. Edit and resend puts them back.
+    for (const outcome of ['escalated', 'blocked'] as const) {
+      const {tasks, needs} = world();
+      const words = 'What do you mean by **Vision**?';
+      const {page, errors, posts} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}, beforeGoto: async p => {
+        await p.route(u => u.pathname === '/api/v2/tasks/t-3/comments', route => route.request().method() !== 'POST' ? route.fallback()
+          : route.fulfill({contentType: 'application/json', body: JSON.stringify({held: {id: 'h1', outcome, state: 'held', author: 'human:ana',
+            text: `@pm ${words}`, rules: [{id: 'ru1', kind: 'internal', text: 'No Markdown in comments'}], can_withdraw: true}})}));
+        await p.route(u => u.pathname === '/api/v2/rule-holds/h1/withdraw', route => {
+          posts.push({p: '/api/v2/rule-holds/h1/withdraw', body: {}});
+          return route.fulfill({contentType: 'application/json', body: '{}'});
+        });
+      }});
+      try {
+        await page.evaluate(() => { decideOpen('task:t-3'); });
+        await card(page).locator('.dc-md').waitFor({timeout: 5000});
+        await card(page).locator('#dc-reply').fill(words);
+        await card(page).locator('[data-dc="reply"]').click();
+        const held = card(page).locator('[data-dc-held]');
+        await held.waitFor({timeout: 5000});
+        assert.equal(await held.locator('.dc-held-line').innerText(), outcome === 'escalated'
+          ? 'Held for a reviewer: a rule asks first. It is posted if they send it anyway.' : 'Not sent: a rule stops it.', outcome);
+        assert.equal(await held.locator('.rh-rule').innerText(), 'No Markdown in comments', `${outcome}: the rule is named`);
+        assert.equal(await card(page).locator('.dc-sent').count(), 0, `${outcome}: not "Sent"`);
+        assert.equal(await card(page).locator('#dc-reply').inputValue(), outcome === 'escalated' ? '' : words, `${outcome}: the box`);
+        await held.locator('[data-hold-edit]').click();
+        await held.waitFor({state: 'detached', timeout: 5000});
+        assert.equal(await card(page).locator('#dc-reply').inputValue(), `@pm ${words}`, `${outcome}: Edit and resend puts the words back`);
+        assert.ok(posts.some(x => x.p === '/api/v2/rule-holds/h1/withdraw'));
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+
+    // A question nobody named asked (a stage's): no Ask back, Send answer stays.
+    {
+      const {tasks, needs} = world();
+      needs.find(n => n.id === 'r2')!.ask!.asked_by = 'stage';
+      const {page, errors} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}});
+      try {
+        await page.evaluate(() => { decideOpen('r2'); });
+        await card(page).locator('[data-dc="other"]').waitFor({timeout: 5000});
+        assert.equal(await card(page).locator('[data-dc="askback"]').count(), 0);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
