@@ -14,6 +14,12 @@ So once SAME of one job's runs in a row come back for the same reason, no wait w
 - the task waits on the bot as Paused with that cause (`task_wakes.CANT_START`, from `held_bots`) until BotOps closes
   its task. Then the never-stuck check wakes the bot on the task again, and a new run that fails the same way files
   again.
+
+A computer that claims the run and then says nothing (never starts it, never renews its lease, never hands it back) gives
+no reason to compare, so its lapses are not counted here. On Tico Team (Nov 12) the shared machine did that to
+Performance Owner's runs ~344 times in a day: each job failed after PRE_START_TRIES lapses and the next wake started
+over, with nobody told. So the expiry that spends a job's PRE_START_TRIES on lapses files here too (`file` with
+`lapses`), with LAPSED_WHY as the reason, and the task waits on BotOps the same way.
 """
 
 import json
@@ -31,6 +37,8 @@ EVENT = "task.cant_start"  # on the task: {bot, review (BotOps's task), reason, 
 TITLE = "Find why {bot}'s runs can't start"
 REASON_CHARS = 500
 BOTOPS_HAS_IT = "BotOps is checking why."  # ends the failed run's text: no person is asked (execution.last_stop)
+# The reason a job's runs that only lapsed are filed with: the computer said nothing, so this is all that is known.
+LAPSED_WHY = "it took each run and never started it, renewed its lease or handed it back"
 
 
 def reason(c: Any, aid: str) -> str:
@@ -87,10 +95,11 @@ def _task(c: Any, row: Any) -> Any:
     return H.task(c, task_id) if task_id else None
 
 
-def file(c: Any, row: Any, why: str, computer: str) -> str | None:
+def file(c: Any, row: Any, why: str, computer: str, lapses: int = 0) -> str | None:
     """Give BotOps the bot's runs that cannot start: one open task per bot, a comment on it naming each further task,
     and the hold on this run's task (EVENT). Answers BotOps's task id, or None when there is no BotOps to give it to
-    (the bot is BotOps, or the company has none): then the job still fails, and the task is not held."""
+    (the bot is BotOps, or the company has none): then the job still fails, and the task is not held. `lapses` is how
+    many runs its computer took and went silent on (execution.expire), when that, not SAME hand-backs, is why."""
     maintainer = H.FLEET_MAINTAINER
     bot = row["bot_id"]
     if bot == maintainer or not H.bot(c, maintainer):
@@ -110,8 +119,10 @@ def file(c: Any, row: Any, why: str, computer: str) -> str | None:
     else:
         about = "a task you cannot read"
     said = (
-        f"{name}'s computer ({computer}) handed back its last {SAME} runs on {about} before starting them, each time "
-        f"saying: {why}"
+        f"{name}'s computer ({computer}) took {lapses} runs on {about} and never started them: {why}"
+        if lapses
+        else f"{name}'s computer ({computer}) handed back its last {SAME} runs on {about} before starting them, each "
+        f"time saying: {why}"
     )
     review = c.execute(
         "SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title=? AND status='open' AND instr(body,?)>0 "

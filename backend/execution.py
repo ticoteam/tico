@@ -1,6 +1,7 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -55,7 +56,7 @@ from . import (
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
-from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
+from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
 from . import company_pause, lifecycle, start_holds
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
@@ -776,7 +777,8 @@ def last_stop(c, bot, status):
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
         if str(attempt["final_text"] or "").endswith(start_holds.BOTOPS_HAS_IT):
-            # Handed back for the same reason start_holds.SAME times: BotOps has it, so it is no person's to fix.
+            # Handed back for the same reason start_holds.SAME times, or taken and dropped in silence PRE_START_TRIES
+            # times: BotOps has it, so it is no person's to fix.
             return {
                 "kind": "never_started",
                 "tone": "soft",
@@ -784,7 +786,11 @@ def last_stop(c, bot, status):
                 "action": None,
                 "at": at,
                 "attempt_id": attempt["id"],
-                "reason": f"Its computer handed this run back {start_holds.SAME} times for the same reason.",
+                "reason": (
+                    f"Its computer took this run {PRE_START_TRIES} times and never started it."
+                    if start_holds.LAPSED_WHY in str(attempt["final_text"])
+                    else f"Its computer handed this run back {start_holds.SAME} times for the same reason."
+                ),
                 "text": attempt["final_text"],
             }
         # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
@@ -3143,7 +3149,10 @@ def handed_back_until(c, job):
     """When a job its computer last handed back before starting (Execution.hand_back) may be claimed again, or None.
     A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
     all PRE_START_TRIES in seconds and fail a run over a short hiccup; with it, ten hand-backs take about half an
-    hour, as ten lapsed leases used to take about fifteen minutes."""
+    hour, as ten lapsed leases used to take about fifteen minutes.
+    A run its computer took and went silent on (LAPSED) waits the same way from its second lapse in a row: the first
+    already waited out a whole lease, but on Nov 12 a computer that lapsed every run was handed the job again at once,
+    ten times, for every wake."""
     last = (
         c.execute(
             "SELECT state,started_at,finished_at,final_text FROM attempts WHERE id=?", (job["attempt_id"],)
@@ -3151,18 +3160,17 @@ def handed_back_until(c, job):
         if job["attempt_id"]
         else None
     )
-    if (
-        not last
-        or last["started_at"]
-        or last["state"] != "expired"
-        or not (last["final_text"] or "").startswith(HANDED_BACK)
-    ):
+    said = str(last["final_text"] or "") if last else ""
+    if not last or last["started_at"] or last["state"] != "expired" or not said.startswith((HANDED_BACK, LAPSED)):
         return None
+    kind = HANDED_BACK if said.startswith(HANDED_BACK) else LAPSED
     count = c.execute(
         "SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL AND state='expired' "
         "AND substr(final_text,1,?)=?",
-        (job["id"], len(HANDED_BACK), HANDED_BACK),
-    ).fetchone()[0]
+        (job["id"], len(kind), kind),
+    ).fetchone()[0] - (kind == LAPSED)
+    if count < 1:
+        return None
     return H.shift(last["finished_at"], seconds=min(HAND_BACK_WAIT * 2 ** max(count - 1, 0), HAND_BACK_MAX))
 
 
@@ -4192,7 +4200,18 @@ class Execution:
 
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
-                if row["state"] == "leased" and state == "queued" and not benched:
+                botops = False
+                lapsed = row["state"] == "leased" and state == "queued" and not benched
+                if lapsed:
+                    # Never started and never handed back: say so on the run (Runs, run_diagnostics.reason) and in the log.
+                    c.execute("UPDATE attempts SET final_text=? WHERE id=?", (LAPSED + ".", row["id"]))
+                    logging.getLogger("tico.execution").warning(
+                        "run %s of %s never started on runner %s (%s)",
+                        row["id"],
+                        row["bot_id"],
+                        row["runner_id"],
+                        UNSTARTED_CATEGORIES[LAPSED],
+                    )
                     tries = failed_starts(c, row["job_id"])
                     if tries >= PRE_START_TRIES:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
@@ -4212,6 +4231,14 @@ class Execution:
                             else "check that Computer"
                         )
                         reason = f"Your {name} couldn't start on {label}; {remedy}"
+                        # Every try lapsed in silence: no wait clears that, and the next wake would loop again. BotOps
+                        # gets it and the task waits on it, as for hand-backs (start_holds.file).
+                        botops = bool(start_holds.file(c, row, start_holds.LAPSED_WHY, label, lapses=tries))
+                        if botops:
+                            reason = (
+                                f"Your {name} couldn't start on {label}: {start_holds.LAPSED_WHY}. "
+                                f"{start_holds.BOTOPS_HAS_IT}"
+                            )
                         state = "failed"
                         c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
                         job = c.execute(
@@ -4290,14 +4317,20 @@ class Execution:
                     settle_status(
                         c,
                         row["bot_id"],
-                        "crashed",
+                        "idle" if botops else "crashed",
                         reason if state == "failed" else "One run stopped; saved for later",
                         claimed=row["created_at"],
                         stop=row["id"],
                     )
                     if facts:
                         self.tell_held(c, row, facts)
-                H.event(c, H.KEEPER, "attempt.expired", row["id"], {"job_state": state})
+                H.event(
+                    c,
+                    H.KEEPER,
+                    "attempt.expired",
+                    row["id"],
+                    {"job_state": state, **({"cause": UNSTARTED_CATEGORIES[LAPSED]} if lapsed else {})},
+                )
 
     def tell_held(self, c, row, facts):
         """One notice to the person whose message a lapsed run was answering, when the run is held for review rather
@@ -4406,7 +4439,10 @@ class Execution:
                 claimed=row["created_at"],
                 stop=row["id"],
             )
-        H.event(c, H.KEEPER, event, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "job_state": state})
+        detail = {"bot": row["bot_id"], "job_id": row["job_id"], "job_state": state}
+        if event == "attempt.returned":
+            detail["cause"] = UNSTARTED_CATEGORIES[HANDED_BACK]
+        H.event(c, H.KEEPER, event, row["id"], detail)
         return state
 
     def hand_back(self, c, row, body):

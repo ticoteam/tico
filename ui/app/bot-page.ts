@@ -3,13 +3,16 @@
 'use strict';
 
 // ----------------------------------------------------------------- pages
-// /status from the v2 server no longer carries recent_runs, so a bot page falls back to /runs,
-// cached for a minute so the 30s refresh does not refetch it every pass.
-// The bot's recent runs (GET /runs, its rows as /status sends them) and when they were read.
-interface BotRunsCache { at: number; list: NonNullable<ServerStatus['recent_runs']> }
-let RUNS_CACHE: BotRunsCache = {at: 0, list: []};
-async function recentRuns() {
-  if (Date.now() - RUNS_CACHE.at > 60000) RUNS_CACHE = {at: Date.now(), list: await get('/runs')};
+// /status from the v2 server no longer carries recent_runs, so a bot page falls back to /runs?bot=,
+// cached for a minute so the 30s refresh does not refetch it every pass. It asks for this bot's runs: the company's
+// newest 200 left a quiet bot's failed starts off its card.
+// The bot's recent runs (GET /runs?bot=, its rows as /status sends them), whose they are and when they were read.
+interface BotRunsCache { at: number; bot: string; list: NonNullable<ServerStatus['recent_runs']> }
+let RUNS_CACHE: BotRunsCache = {at: 0, bot: '', list: []};
+async function recentRuns(slug: string) {
+  if (RUNS_CACHE.bot !== slug || Date.now() - RUNS_CACHE.at > 60000) {
+    RUNS_CACHE = {at: Date.now(), bot: slug, list: await get(`/runs?bot=${encodeURIComponent(slug)}`)};
+  }
   return RUNS_CACHE.list || [];
 }
 
