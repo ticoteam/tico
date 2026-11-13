@@ -293,7 +293,15 @@ async function viewerShow() {
   let file: ViewedFile;
   try { file = await viewFile(item.fileId, item.name, item.version); }
   catch (e) { if (VIEW === state) { d.close(); toast(errorMessage(e, 'Could not open the file.'), true); } return; }
-  const extra = '<button class="ghost" type="button" data-doc-download>Download</button>';
+  const fileId = item.fileId;
+  // A Word file shows in the review view, which draws it (file-review.ts); the viewer has no Word kind of its own.
+  if (!file.kind && frvKindOf(file.name, file.blob.type) === 'docx') {
+    d.close();
+    fileReviewOpen(fileId, {name: file.name, version: item.version});
+    return;
+  }
+  const extra = '<button class="ghost" type="button" data-doc-download>Download</button>'
+    + '<button class="ghost" type="button" data-doc-review aria-label="Open full screen" title="Open full screen"><span class="nav-icon" aria-hidden="true">open_in_full</span></button>';
   if (!file.kind || ((file.kind === 'markdown' || file.kind === 'text') && file.blob.size > DOC_VIEW_LIMIT) || (file.kind === 'csv' && file.blob.size > CSV_LIMIT)
       || (file.kind === 'html' && file.blob.size > HTML_VIEW_LIMIT)) {
     if (VIEW === state && state.items.length === 1) d.close();
@@ -319,6 +327,8 @@ async function viewerShow() {
   }
   const dl = d.querySelector<HTMLButtonElement>('[data-doc-download]');
   if (dl) dl.onclick = () => saveBlob(file.blob, file.name);
+  const review = d.querySelector<HTMLButtonElement>('[data-doc-review]');
+  if (review) review.onclick = () => { d.close(); fileReviewOpen(fileId, {name: file.name, version: item.version}); };
 }
 // Everything viewable that sits with `el` (a message, an update, a task), in page order.
 function viewerOpenFrom(el: Element): boolean {
@@ -336,9 +346,10 @@ function viewerOpenFrom(el: Element): boolean {
   void viewerShow();
   return true;
 }
+// A file opened from a list of files (a bot's Files, Library › Files, a file in a message) opens in the review view:
+// the file full screen, the chat with its bot beside it (file-review.ts).
 async function openFileLink(id: string | undefined, fallbackName?: string) {
-  VIEW = {items: [{fileId: id, name: fallbackName || 'file', kind: viewKindOf(fallbackName)}], index: 0};
-  await viewerShow();
+  if (id) fileReviewOpen(id, {name: fallbackName});
 }
 document.addEventListener('click', ev => {
   if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;

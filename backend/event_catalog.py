@@ -29,6 +29,7 @@ class Event:
     name: str  # "task.done"
     group: str  # "task"
     description: str  # one short line, plain words
+    label: str  # the event in a few words, for pickers and summaries: "Task created"
     example: dict  # the `data` object of a typical payload; what "Send example" posts
     version: int = 1
     aliases: tuple = ()  # old spellings still accepted: ("recording.ready",)
@@ -63,34 +64,41 @@ def _change(field, old, new, move=None, **more):
 def _build():
     found = []
 
-    def add(name, description, example, aliases=(), sourceless=False, outbound=True):
-        found.append(Event(name, name.split(".", 1)[0], description, example, 1, tuple(aliases), sourceless, outbound))
+    def add(name, description, label, example, aliases=(), sourceless=False, outbound=True):
+        found.append(
+            Event(name, name.split(".", 1)[0], description, label, example, 1, tuple(aliases), sourceless, outbound)
+        )
 
-    add("task.created", "A task was filed.", _task(actor="human:ana", parent_id=None))
+    add("task.created", "A task was filed.", "Task created", _task(actor="human:ana", parent_id=None))
     add(
         "task.assigned",
         "A task was given to someone else.",
+        "Task reassigned",
         _change("owner", "bot:ops", "bot:finance", owner_id="bot:finance", actor="human:ana"),
     )
     add(
         "task.step_changed",
         "A task moved to another stage of its pipeline, Done and Closed included.",
+        "Task moved",
         _change("stage", "general-todo", "general-done", "done", status="done", stage="general-done"),
     )
-    add("task.commented", "Someone commented on a task.", _task(actor="human:ana", comment_id="c1"))
+    add("task.commented", "Someone commented on a task.", "Task commented", _task(actor="human:ana", comment_id="c1"))
     add(
         "task.done",
         "A task was finished.",
+        "Task done",
         _change("status", "open", "done", "done", status="done", stage="general-done"),
     )
     add(
         "task.closed",
         "A task was closed without finishing.",
+        "Task closed",
         _change("status", "open", "closed", "closed", status="closed", stage="general-closed", actor="human:ana"),
     )
     add(
         "task.reopened",
         "A finished or closed task was opened again.",
+        "Task reopened",
         _change("status", "done", "open", "reopen", actor="human:ana"),
     )
 
@@ -106,10 +114,11 @@ def _build():
         "parent_id": None,
         "parent_message_id": None,
     }
-    add("thread.created", "A thread was started.", thread)
+    add("thread.created", "A thread was started.", "Thread started", thread)
     add(
         "message.created",
         "A message was posted to a thread (outgoing webhooks only).",
+        "Message posted",
         {
             "id": "m1",
             "thread_id": "t1",
@@ -124,19 +133,32 @@ def _build():
     add(
         "message.held",
         "The org rules held a message before it reached its thread.",
+        "Message held",
         {"id": "m2", "thread_id": "t1", "root_id": "t1", "sender_id": "bot:ops", "rule": "refund_terms", "hold": "h1"},
     )
 
-    add("bot.run_failed", "A bot's run failed.", {"bot": "ops", "run_id": "r1", "error_class": "login"})
+    add(
+        "bot.run_failed",
+        "A bot's run failed.",
+        "Bot run failed",
+        {"bot": "ops", "run_id": "r1", "error_class": "login"},
+    )
     add(
         "bot.held",
         "A bot was held: it hit a limit or kept failing.",
+        "Bot held",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK},
     )
-    add("bot.released", "A held bot was released.", {"bot": "ops", "reason": "budget", "released_by": "human:ana"})
+    add(
+        "bot.released",
+        "A held bot was released.",
+        "Bot released",
+        {"bot": "ops", "reason": "budget", "released_by": "human:ana"},
+    )
     add(
         "org_rule.retired",
         "A rule was retired and no longer applies to anyone.",
+        "Rule retired",
         {
             "id": "r1",
             "kind": "internal",
@@ -146,63 +168,74 @@ def _build():
         },
     )
     checked = {"hold": "h1", "operation": "message", "rules": ["r1"], "cached": False, "reviewer": "human:ana"}
-    add("rules.blocked", "A bot's output broke a rule and was held.", checked)
+    add("rules.blocked", "A bot's output broke a rule and was held.", "Output blocked", checked)
     add(
         "rules.escalated",
         "A bot's output broke a rule and was held for a person to review.",
+        "Held for review",
         {**checked, "task": _TASK},
     )
     add(
         "rules.warned",
         "A bot's output broke a rule and went through with a warning.",
+        "Output warned",
         {"operation": "message", "rules": ["r1"], "cached": False},
     )
     add(
         "rules.unchecked",
         "A bot's output went through without a rule check.",
+        "Output not checked",
         {"operation": "message", "reason": "deadline", "rules": ["r1"]},
     )
 
     add(
         "release.published",
         "A release of the server's release repository was published.",
+        "Release published",
         {"release": "v1.4.0", "repository": "acme/app", "url": "https://github.com/acme/app/releases/tag/v1.4.0"},
         aliases=("release_published",),
     )
     add(
         "meeting.ready",
         "A team meeting with a transcript was imported.",
+        "Meeting ready",
         {"id": "m1", "title": "Acme weekly sync", "source": "recorder", "ended": "2026-03-02T17:30:00Z"},
         aliases=("recording.ready",),
     )
     add(
         "strategy.published",
         "A new version of the strategy was published.",
+        "Strategy published",
         {"version": 3, "note": "Focus on Acme's renewals.", "published_by": "human:ana"},
     )
     add(
         "brand.published",
         "A new version of the brand page was published.",
+        "Brand published",
         {"version": 2, "note": "Warmer voice for Acme's home visits.", "published_by": "human:ana"},
     )
     add(
         "market.insight.urgent",
         "An urgent market insight was reported.",
+        "Urgent insight",
         {"id": "i1", "about": "Rival Co", "reported_by": "bot:market-analyst"},
     )
     add(
         "market.briefing",
         "The weekly market briefing is ready.",
+        "Market briefing",
         {"week": "2026-W10", "bets": ["Renewals", "Self-serve onboarding"]},
     )
     add(
         "inbound.received",
         "New mail arrived for a person's inbox bot.",
+        "Mail received",
         {"message_id": "g1", "inbox_id": "ib1", "kind": "email"},
     )
     add(
         "health.finding",
         "Tico found a problem on this install.",
+        "Health finding",
         {
             "key": "computer-silent:mac",
             "check": "computer-silent",
@@ -215,6 +248,7 @@ def _build():
     add(
         "webhook.received",
         "An incoming webhook was accepted.",
+        "Webhook received",
         {
             "trigger": {"id": "shop", "name": "Acme shop"},
             "delivery": "d1",
@@ -228,6 +262,7 @@ def _build():
     add(
         "tico.notice",
         "A notice from the Tico team reached this install.",
+        "Tico notice",
         {
             "id": "tn1",
             "kind": "info",
@@ -241,6 +276,7 @@ def _build():
     add(
         "finance.budget.warn",
         "A Finance budget reached its warning level this period.",
+        "Budget warning",
         {"budget_id": "b1", "event_id": "e1", "period": "2026-10-01"},
         sourceless=True,
         outbound=False,
@@ -248,6 +284,7 @@ def _build():
     add(
         "finance.budget.cutoff",
         "A Finance budget reached its limit this period.",
+        "Budget limit reached",
         {"budget_id": "b1", "event_id": "e2", "period": "2026-10-01"},
         sourceless=True,
         outbound=False,
@@ -256,6 +293,7 @@ def _build():
     add(
         "finance.feed.new",
         "A new bank or card transaction arrived in Finance.",
+        "New transaction",
         {"feed_id": "f1", "event_id": "e3"},
         sourceless=True,
         outbound=False,
@@ -263,6 +301,7 @@ def _build():
     add(
         "finance.feed.needs_category",
         "A bank transaction needs a category before it can be posted.",
+        "Transaction needs a category",
         {"feed_id": "f1", "event_id": "e4"},
         sourceless=True,
         outbound=False,
@@ -270,6 +309,7 @@ def _build():
     add(
         "finance.payment.sent",
         "A Finance payment settled at the bank.",
+        "Payment sent",
         {"payment_id": "p1", "event_id": "e5"},
         sourceless=True,
         outbound=False,
@@ -277,6 +317,7 @@ def _build():
     add(
         "finance.payment.failed",
         "A Finance payment failed, was returned or was rejected at the bank.",
+        "Payment failed",
         {"payment_id": "p1", "why": "returned", "event_id": "e6"},
         sourceless=True,
         outbound=False,
@@ -284,6 +325,7 @@ def _build():
     add(
         "finance.card.declined",
         "A card charge was declined.",
+        "Card declined",
         {"card_id": "c1", "feed_id": "f2", "event_id": "e7"},
         sourceless=True,
         outbound=False,
@@ -291,6 +333,7 @@ def _build():
     add(
         "finance.sync.failed",
         "Finance could not sync a bank connection.",
+        "Bank sync failed",
         {"connection_id": "n1", "event_id": "e8"},
         sourceless=True,
         outbound=False,
@@ -299,6 +342,7 @@ def _build():
     add(
         "finance.bill.received",
         "A bill was recorded in Finance (by hand, upload or the bills address).",
+        "Bill received",
         {"bill_id": "bl1", "origin": "email", "event_id": "e9"},
         sourceless=True,
         outbound=False,
@@ -306,6 +350,7 @@ def _build():
     add(
         "finance.bill.due_soon",
         "An unpaid Finance bill is due in 7 days, in 1 day or today.",
+        "Bill due soon",
         {"bill_id": "bl1", "stage": "due_in_7", "due_date": "2026-11-07", "event_id": "e10"},
         sourceless=True,
         outbound=False,
@@ -313,6 +358,7 @@ def _build():
     add(
         "finance.invoice.overdue",
         "A Finance invoice is 1, 7, 30, 60 or 90 days overdue.",
+        "Invoice overdue",
         {"invoice_id": "in1", "stage": "overdue_7", "due_date": "2026-10-24", "event_id": "e11"},
         sourceless=True,
         outbound=False,
@@ -320,6 +366,7 @@ def _build():
     add(
         "finance.cash.below",
         "The company's cash dropped under the owner's alert amount (read the cash metric for amounts).",
+        "Cash below alert",
         {"metric": "cash", "crossing": 1, "event_id": "e12"},
         sourceless=True,
         outbound=False,
@@ -327,6 +374,7 @@ def _build():
     add(
         "finance.period.ready",
         "A month is ready to close in Finance.",
+        "Month ready to close",
         {"month": "2026-10", "event_id": "e13"},
         sourceless=True,
         outbound=False,
@@ -334,6 +382,7 @@ def _build():
     add(
         "finance.vendor.renewal_due",
         "A vendor's renewal is 30 or 7 days away (its date is on the vendor).",
+        "Vendor renewal due",
         {"contact_id": "c1", "stage": "renewal_in_7", "renewal_on": "2026-11-07", "event_id": "e14"},
         sourceless=True,
         outbound=False,
@@ -341,6 +390,7 @@ def _build():
     add(
         "custom.*",
         "Anything a bot or rule sends: custom.<name>.",
+        "Custom events",
         {"note": "custom.<name> carries whatever its sender puts in data."},
     )
     return found
@@ -386,6 +436,7 @@ def listing(group=None):
             "name": e.name,
             "group": e.group,
             "description": e.description,
+            "label": e.label,
             "version": e.version,
             "example": e.example,
             "aliases": list(e.aliases),

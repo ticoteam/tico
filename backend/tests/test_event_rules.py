@@ -217,3 +217,20 @@ def test_the_listing_endpoint_names_the_catalog(api):
         "task.closed",
         "task.reopened",
     ]
+
+
+def test_every_event_has_a_plain_label_unique_among_outbound_ones(api):
+    """The endpoint picker and its summary say events in words (`Task created`), not codes: each catalog event has a
+    label, two events an endpoint can pick never share one, and the listing returns it."""
+    from backend import event_catalog as CAT
+
+    for e in CAT.EVENTS.values():
+        assert e.label.strip() and e.label == e.label.strip(), e.name
+        assert "." not in e.label and "_" not in e.label, f"{e.name}: {e.label!r} reads as a code"
+    outbound = [e.label for e in CAT.EVENTS.values() if e.outbound]
+    assert len(outbound) == len(set(outbound))
+    assert CAT.EVENTS["task.created"].label == "Task created"
+    setup(api)
+    out = {e["name"]: e for e in get(api, "event-types")["items"]}
+    assert out["bot.run_failed"]["label"] == "Bot run failed"
+    assert all(e["label"] for e in out.values())

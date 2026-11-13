@@ -59,6 +59,16 @@ td.tags .pill{margin-right:2px}
 :is(.empty-state,.upd-empty,.tl-empty,.notes-empty) :is(b,strong){color:var(--ink);font-weight:600}
 :is(.empty-state,.upd-empty,.tl-empty,.notes-empty) .nav-icon{font-size:32px;width:32px;height:32px;margin-bottom:var(--s1);color:var(--muted)}
 :is(.empty-state,.upd-empty,.tl-empty,.notes-empty)>:is(button,a.primary,a.ghost){margin-top:var(--s2)}
+/* An empty state's little picture (ui/app/empty-art.ts): 128x80, ink and hairlines only, never the accent. */
+.ea-art{display:block;width:128px;height:80px;margin:0 auto var(--s2)}
+.ea-art .ea-card{fill:var(--surface);stroke:var(--line);stroke-width:1.5}
+.ea-art .ea-face{fill:var(--surface2);stroke:var(--line);stroke-width:1.5}
+.ea-art .ea-ink,.ea-art .ea-dot{fill:var(--ink)}
+.ea-art .ea-bar{fill:var(--line)}
+.ea-art .ea-line{fill:none;stroke:var(--line);stroke-width:1.5;stroke-linecap:round}
+.ea-art .ea-stroke{fill:none;stroke:var(--ink);stroke-width:1.8;stroke-linecap:round}
+.ea-art .ea-z{fill:var(--muted);font:600 16px/1 var(--sans)}.ea-art .ea-z.small{font-size:12px}
+.ea-art .ea-moon{fill:var(--muted)}
 /* A fold with no chevron icon of its own: one small triangle that turns --chev-open, never the browser's marker. */
 :is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary{list-style:none}
 :is(.task-orig,.chat-side,.run-steps,.run-fold,.settings-more)>summary::-webkit-details-marker{display:none}

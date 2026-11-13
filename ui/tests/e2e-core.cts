@@ -180,7 +180,9 @@ const needsYou = (() => {
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
     const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
     await row(QUESTION).waitFor({timeout: t(20000)});
-    await row(OK).waitFor({timeout: t(20000)});
+    // An OK row leads with its task's title, the ask is its tooltip (a question keeps its line under the title).
+    const okRow = page.locator('#task-body [data-need]', {hasText: 'Set the beta budget'}).first();
+    await okRow.waitFor({timeout: t(20000)});
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
@@ -194,7 +196,7 @@ const needsYou = (() => {
     assertClean(page, `${where}: answered`);
 
     // The OK: the card goes on to it (or its row opens it), and she approves it there.
-    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await row(OK).click();
+    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();
     await until(async () => (await ok())?.met, `${where}: the OK given on the hub`);
