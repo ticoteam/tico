@@ -89,7 +89,7 @@ Every page a person reads to decide is built the same way, with the `build-the-p
 (`templates/catalog/segment-product-owner/skills/build-the-page/`; the Reviewer and Builder templates carry the same
 copy). Four templates: a spec for a screen change, a spec for a bug or a change with no screen (cause and fix first,
 then the behaviour before and after), the Checked in production page, and a page about a pull request (a Review page,
-or the Builder's What was built page). Each opens with what it is and what to decide in two or three lines, then real
+or the Builder's QA page). Each opens with what it is and what to decide in two or three lines, then real
 screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
 never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo
 (`scripts/release_shots.py`). The skill's `page.py` embeds the pictures, checks the page against those rules, and draws

@@ -82,7 +82,7 @@ PAGE_SKILL = "build-the-page"
 PAGE_WRITERS = {
     "segment-product-owner": ("playbooks/write-a-spec-page.md", "playbooks/validate-in-production.md"),
     "reviewer": ("playbooks/review-a-pull-request.md",),
-    "builder": ("playbooks/show-what-was-built.md",),
+    "builder": ("playbooks/qa.md",),
 }
 
 
@@ -106,7 +106,7 @@ def page_tool():
 
 
 def test_every_bot_that_writes_a_page_a_person_reads_uses_the_one_page_skill():
-    # Spec, Validate, Review and What was built pages were each written their own way, as text or drawn mock-ups, and
+    # Spec, Validate, Review and QA pages were each written their own way, as text or drawn mock-ups, and
     # were sent back as unreadable. One skill builds them all; a copy that drifts teaches one bot an older page.
     canonical = page_skill()
     assert {"SKILL.md", "page.py"} <= set(canonical)

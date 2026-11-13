@@ -1,6 +1,6 @@
 ---
 name: build-the-page
-description: Build any page a person reads to decide - a spec, a Checked in production page, a Review page or a What was built page - as one HTML page from a ready template. It opens with what it is and what to decide in two or three lines, then real screenshots of the app at phone and desktop width with red numbered arrows, then the details. page.py embeds the screenshots, checks the page and renders the published copy before it is attached. Read before you write any of those pages.
+description: Build any page a person reads to decide - a spec, a Checked in production page, a Review page or a QA page - as one HTML page from a ready template. It opens with what it is and what to decide in two or three lines, then real screenshots of the app at phone and desktop width with red numbered arrows, then the details. page.py embeds the screenshots, checks the page and renders the published copy before it is attached. Read before you write any of those pages.
 ---
 
 # Build the page
@@ -35,11 +35,11 @@ The page brings the proof. It never asks its reader to test, look at the app, or
 | A spec for a change on a screen | `templates/screen-spec.html` | Product Owner, Spec |
 | A spec for a bug fix or a change with no screen (API, command, job) | `templates/change-spec.html` | Product Owner, Spec |
 | Checked in production | `templates/validation.html` | Product Owner, Validate |
-| A Review page, or the What was built page | `templates/review.html` | Reviewers, Review 1 and 2; Builder, Fixes 2 |
+| A Review page, or the QA page | `templates/review.html` | Reviewers, Review 1 and 2; Builder, QA |
 
 Each template has the sections its stage's checker reads (a spec: goal, scope, acceptance criteria; Checked in
-production: the version and what was run there; a review: the head commit, what was read and run, the findings; What
-was built: how it was checked with output, the checks at the head, what each reviewer found). Keep every section; write
+production: the version and what was run there; a review: the head commit, what was read and run, the findings; QA:
+how it was checked with output, the checks at the head, what each reviewer found). Keep every section; write
 "Nothing." in one that has nothing, and delete the pictures section only where no screen changed (say so in the
 opening).
 
