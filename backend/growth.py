@@ -729,7 +729,8 @@ def settings_update(c, actor, fields):
             raise Problem("validation", "time_zone is an IANA zone, such as Europe/London", 422) from None
     if "key_readers" in fields:
         # Who besides the owner and admins sees customer keys in a figure's trace: people and bots, by any name.
-        fields["key_readers"] = json.dumps(sorted({_owner_ref(c, ref) for ref in fields["key_readers"] or [] if ref}))
+        readers = {str(_owner_ref(c, ref)) for ref in fields["key_readers"] or [] if ref}
+        fields["key_readers"] = json.dumps(sorted(readers))
     if fields:
         c.execute(f"UPDATE growth_settings SET {', '.join(k + '=?' for k in fields)} WHERE id=1", list(fields.values()))
         H.event(c, actor, "growth.settings", "settings", fields)
