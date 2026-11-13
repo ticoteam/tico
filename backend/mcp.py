@@ -352,6 +352,11 @@ def task_dry_run(c, auth, who, body):
     # The task that files it (`parent`); other relations are notes and never a parent.
     named_parent = getattr(body, "parent", None)
     related_refs = [r.task for r in getattr(body, "relations", None) or [] if r.kind != "parent"]
+    if not body.owner:
+        from . import stage_pick
+
+        refused = stage_pick.no_owner_refusal(c, pipeline_id)
+        return {"ok": not refused, "problems": [refused] if refused else [], "warnings": []}
     target = H.resolve_actor(c, body.owner)
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name

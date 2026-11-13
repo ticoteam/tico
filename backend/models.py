@@ -195,7 +195,8 @@ class TaskCreate(Contract):
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
     body: Text
-    owner: ID
+    # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
+    owner: ID | None = None
     # The pipeline it goes in, by id; General when none is named. It starts in the pipeline's first stage.
     pipeline: ID | None = None
     # The task that files it: that task waits until this one ends. Set once, here.
