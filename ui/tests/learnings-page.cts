@@ -59,7 +59,8 @@ const rows = (page: Page) => page.evaluate(() => [...document.querySelectorAll('
   const box = (sel: string): Box => { const r = s.querySelector(sel)!.getBoundingClientRect(); return {x: r.x, y: r.y, right: r.right, bottom: r.bottom}; };
   const nm = s.querySelector<HTMLElement>('.nm')!;
   return {name: nm.textContent || '', title: nm.title, cut: nm.scrollWidth > nm.clientWidth, nm: box('.nm'), first: box('.first'), more: box('.more .nav-icon'),
-    ellipsis: getComputedStyle(nm).textOverflow};
+    // "…" draws only in a block box: a flex one (Threads' global .nm) clips the name with no ellipsis.
+    ellipsis: getComputedStyle(nm).display === 'block' ? getComputedStyle(nm).textOverflow : 'none'};
 })));
 
 (async () => {

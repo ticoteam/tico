@@ -17,7 +17,8 @@
 .lrn-subj summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:22px min(var(--lrn-nm,150px),40%) minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 4px;border-radius:6px;font-size:var(--t-base)}
 .lrn-subj summary::-webkit-details-marker{display:none}
 .lrn-subj summary:hover{background:var(--surface2)}
-.lrn-subj .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* block: the global .nm (thread-rail.css, New message) is a flex box, which clips a long name with no "…" */
+.lrn-subj .nm{display:block;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lrn-subj .nm a{color:var(--ink)}
 .lrn-subj .first{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
 .lrn-subj .more{display:inline-flex;align-items:center;gap:2px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
