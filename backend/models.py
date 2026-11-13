@@ -2177,7 +2177,10 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: CompactAt
+    # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
+    compact_at: CompactAt | None = Field(
+        description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
+    )
     expected_revision: int = Field(ge=1)
 
 

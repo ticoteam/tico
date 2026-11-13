@@ -268,6 +268,16 @@ def _pair(text):
     return key.strip(), value
 
 
+def _compact_at(text):
+    """`--compact-at` of `tico bot model`: a size in tokens, or `default` for the model's own."""
+    if text == "default":
+        return text
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text} is not a number of tokens or default") from None
+
+
 def thread_page_flags(s, key="next_cursor"):
     """The paging flags of a thread list: a page's next_cursor (or `key`) reads on, and --limit sets the size."""
     s.add_argument("--cursor", help=f"the page after this cursor: a page's {key}")
@@ -2170,9 +2180,9 @@ def parser():
     s.add_argument("--effort")
     s.add_argument(
         "--compact-at",
-        type=int,
+        type=_compact_at,
         help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
-        "600000, 700000, 800000, 900000 or 1000000",
+        "600000, 700000, 800000, 900000 or 1000000; default puts it back on its model's default",
     )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
