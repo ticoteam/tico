@@ -91,9 +91,10 @@ def quoted_back(sent_back: str | None, parts: list[str]) -> bool:
 def parts_of(saying: Row) -> list[str]:
     """Each piece of text a bot says with a version, for `quoted_back`."""
     answered: list[Row] = saying.get("answered") or []
+    changed: list[str] = saying.get("changed") or []
     return [
         str(saying.get("note") or ""),
-        *[str(line) for line in saying.get("changed") or []],
+        *changed,
         *[f"{p['point']}: {p['why']}" for p in answered],
     ]
 

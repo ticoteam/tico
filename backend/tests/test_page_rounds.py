@@ -13,7 +13,7 @@ from backend.blobs import Blobs
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers
-from backend.tests.test_page_requirement import _page, _pipeline, _say, _task, _v
+from backend.tests.helpers.page_requirement import _page, _pipeline, _say, _task, _v
 
 ANA, WRITER = X.ANA, "bot:writer"
 NOTE = (

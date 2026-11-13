@@ -23,21 +23,10 @@ from backend.blobs import Blobs
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers
+from backend.tests.helpers.page_requirement import _page, _pipeline, _say, _stages, _task, _v
 
 ANA, BEN = X.ANA, "human:ben"
 WRITER, REVIEWER = "bot:writer", "bot:reviewer"
-
-
-def _stages(page_settings=None, person=None, line="Spec page", who_oks="none"):
-    return (
-        {
-            "name": "Spec",
-            "owner": WRITER,
-            "requirements": [
-                {"kind": "page", "line": line, "person": person, "settings": page_settings or {}, "who_oks": who_oks}
-            ],
-        },
-    )
 
 
 @pytest.fixture
@@ -67,42 +56,6 @@ def seeded(store):
     return seed
 
 
-def _pipeline(c, **kw):
-    made = X.pipeline(c, "product", "Product", _stages(**kw), manager="bot:manager")
-    return made["requirements"]["Spec"][0]
-
-
-def _page(c, store, text="<h1>Spec</h1><p>Build the importer.</p>", fid=None):
-    """A page (a Tico file) with one more version holding `text`. Returns (file id, version)."""
-    data = text.encode()
-    digest = store.blobs.put(data, "text/html")
-    now = H.now()
-    blob = H.new_id()
-    c.execute(
-        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
-        (blob, "bot:writer", digest, len(data), "spec.html", "text/html", now),
-    )
-    if fid is None:
-        fid = "file-" + uuid.uuid4().hex[:24]
-        c.execute(
-            "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
-            "last_activity_at) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?)",
-            (fid, "writer", "bot", fid, "Spec", now, now),
-        )
-    version = c.execute("SELECT current_version FROM bot_files WHERE id=?", (fid,)).fetchone()[0] + 1
-    c.execute(
-        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (fid, version, blob, digest, len(data), "spec.html", "text/html", "bot:writer", now),
-    )
-    c.execute("UPDATE bot_files SET current_version=? WHERE id=?", (version, fid))
-    return fid, version
-
-
-def _task(c):
-    return X.new_task(c, ANA, "Importer spec", "product", assignee=WRITER)
-
-
 def _attach(c, row, ref, by=WRITER, requirement="Spec page"):
     seen = E.task(c, row["id"])["version"]
     return P.attach(c, row["id"], requirement, ref, by, seen_version=seen)
@@ -111,16 +64,6 @@ def _attach(c, row, ref, by=WRITER, requirement="Spec page"):
 def _standing(c, row):
     (standing,) = R.standings(c, E.task(c, row["id"]))
     return standing
-
-
-def _say(c, page_row, verdict, reasons="", failed=False):
-    """Jev's verdict on an attached page, as the Jev step records it."""
-    key = page_row["rubric_hash"]
-    owed = V.owe(c, page_row["file_id"], page_row["version"], key)
-    result = {"verdict": verdict, "p": {"met": 0.9, "not_met": 0.1}.get(verdict, 0.5), "reason": reasons}
-    for _ in range(V.TRIES if failed else 1):
-        V.record(c, owed["id"], result, failed=failed)
-    return V.get(c, page_row["file_id"], page_row["version"], key)
 
 
 def _refused(rule):
@@ -268,10 +211,6 @@ def test_a_private_tasks_page_ok_falls_to_the_tasks_person_when_the_named_one_ca
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
     _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "met")
     assert W.unreadable(c, E.task(c, row["id"]), R.standings(c, E.task(c, row["id"]))) == BEN
-
-
-def _v(c, row):
-    return E.task(c, row["id"])["version"]
 
 
 def _owned(c, owner):
