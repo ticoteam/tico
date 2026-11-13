@@ -257,17 +257,11 @@ def register(
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_compact_at(c, request.state.identity, bot, body))
 
-    @app.post("/api/v2/bots/{bot}/wake-preset")
-    def bot_wake_preset(request: Request, bot: str, body: M.BotWakePreset):
-        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py)."""
-        with store.read() as c:
-            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-        return mutate(request, body, lambda c: settings_admin.set_wake_preset(c, request.state.identity, bot, body))
-
     @app.get("/api/v2/wake-presets/measures")
     def wake_preset_measures(request: Request, since: str | None = None, until: str | None = None):
-        """Per wake preset, over jobs queued in [since, until) (the last 7 days by default): turns and tokens per accepted
-        ticket, pickup latency, blocked time and missed actions. Owners and admins."""
+        """Per wake preset a past job recorded, over jobs queued in [since, until) (the last 7 days by default): turns and
+        tokens per accepted ticket, pickup latency, blocked time and missed actions. History only: the presets are
+        retired and new jobs record none. Owners and admins."""
         admin_only(request.state.identity, "sees wake preset measures")
         with store.read() as c:
             return wake_presets.measures(c, since or H.shift(H.now(), days=-7), until)

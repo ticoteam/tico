@@ -527,11 +527,20 @@ def settle_sent(c, row):
             return False
         return True
     job = c.execute(
-        "SELECT j.state, a.state attempt_state FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
-        "WHERE j.message_id=?",
+        "SELECT j.state, j.held, j.wake_class, j.released, a.state attempt_state FROM jobs j "
+        "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE j.message_id=?",
         (row["message_id"],),
     ).fetchone()
-    age = (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds()
+    from . import wake_presets
+
+    if job and job["state"] == "queued" and job["held"] and job["wake_class"] in wake_presets.POLICY_CLASSES:
+        # Waiting for a warm session (its release policy): not out yet, so the queue moves on and no limit runs.
+        return False
+    # The limits run from when the request could start: its send, or the release that let it go.
+    released = (H._json(job["released"], {}) or {}) if job and job["released"] else {}
+    started = released.get("at") if isinstance(released, dict) and released.get("at") else row["sent_at"]
+    now, since = H.parse_ts(H.now()), H.parse_ts(started) or H.parse_ts(row["sent_at"])
+    age = (now - since).total_seconds() if now and since else 0.0
     if job and job["state"] == "completed":
         learning_feedback(c, row)
     if job and job["state"] == "completed" and _delivery_only(row):
@@ -1196,6 +1205,18 @@ def write_draft(store, author, write, assistant):
         return posted
 
 
+# How long a shipped update routine may wait for a warm session: one schedule interval (spec v4, item 10).
+SHIPPED_WAIT = {"daily": 24 * 3600, "weekly": 7 * 86400}
+
+
+def shipped_release(kind):
+    """The release policy a shipped update routine's request carries: Prefers warm, up to one interval, Run cold,
+    Fresh."""
+    from . import wake_presets as W
+
+    return W.policy(wait=SHIPPED_WAIT.get(kind, SHIPPED_WAIT["daily"]), warm=True, deadline=W.RUN, session=W.FRESH)
+
+
 def send_request(c, row, assistant=None, delivery=False):
     redo = bool(row["redo"]) if "redo" in row.keys() else False
     if is_person(row["bot"]):
@@ -1208,6 +1229,10 @@ def send_request(c, row, assistant=None, delivery=False):
     items = [] if redo else learnings.pending(c, row["bot"], row["id"])
     suggestion_items = [] if redo else suggestions.pending(c, row["bot"], row["id"])
     refs = {"update_request": row["id"], "wake": "update", **({"delivery_only": True} if delivery else {})}
+    if not redo and not delivery:
+        # A shipped routine: it waits for a warm session up to one interval, then runs cold, in a fresh session
+        # (backend/wake_presets.py). A redo a person asked for, and a delivery turn, start at once.
+        refs["release"] = shipped_release(row["kind"])
     message = H.say(
         c,
         H.KEEPER,
@@ -1252,9 +1277,10 @@ def dispatch(c, at=None, assistant=None, build=True):
     day = local.date().isoformat()
     if build and local.hour >= START_HOUR:
         build_queue(c, day, kind_for(day), assistant)
-    out = c.execute("SELECT * FROM update_queue WHERE state='sent' ORDER BY sent_at LIMIT 1").fetchone()
-    if out and settle_sent(c, out):
-        return None
+    # Every request out: one still going holds the queue; one waiting for a warm session does not.
+    for out in c.execute("SELECT * FROM update_queue WHERE state='sent' ORDER BY sent_at").fetchall():
+        if settle_sent(c, out):
+            return None
     # Today's requests first, then any redo of a past day an owner asked for.
     chart = None
     for row in c.execute(

@@ -2752,7 +2752,7 @@ def install_views(app, store, auth, mutate, task_view):
                     "icon": icon_of(config),
                     "helper": helper(config),
                     # What Settings and the branch editor show and pick from (backend/wake_presets.py).
-                    "wake": wake_presets.effective(config),
+                    "wake": wake_presets.waits(config),
                     "profile": profiles.effective(config),
                     "my_access": mine_level,
                     **policy,

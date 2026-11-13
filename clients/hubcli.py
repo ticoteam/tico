@@ -2139,12 +2139,6 @@ def parser():
         help="the profile to set; leave out to read the bot's and the choices",
     )
     s.add_argument(
-        "--batch-seconds", dest="batch_seconds", type=int, help="how long news waits to be batched (seconds)"
-    )
-    s.add_argument(
-        "--sweep-seconds", dest="sweep_seconds", type=int, help="least seconds between two runs of the same sweep"
-    )
-    s.add_argument(
         "--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest"
     )
     s.add_argument("--pulls", choices=["all", "review", "none"], help="custom: which open tasks it starts by itself")

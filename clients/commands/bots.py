@@ -648,18 +648,6 @@ _PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "cus
     {
         "bot": _s("Bot slug"),
         "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
-        "batch_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 604800,
-            "description": "How long news waits to be batched",
-        },
-        "sweep_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 604800,
-            "description": "Least time between two runs of a sweep",
-        },
         "digest_hour": {
             "type": "integer",
             "minimum": 0,
@@ -692,9 +680,7 @@ def bot_profile(api, args):
     if not args.get("profile"):
         return {**current, "choices": who.get("profiles")["profiles"]}
     body = {
-        k: args[k]
-        for k in ("batch_seconds", "sweep_seconds", "digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules")
-        if args.get(k) is not None
+        k: args[k] for k in ("digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules") if args.get(k) is not None
     }
     return who.post(
         path, {**body, "profile": args["profile"], "expected_revision": current["revision"]}, key=_key(args)

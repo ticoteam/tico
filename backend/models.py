@@ -1547,6 +1547,8 @@ class Heartbeat(Contract):
             "model_switch_to_key_v1",
             "computer_logins_v1",
             "capacity_continue_v1",
+            "fork_session_v1",
+            "fresh_session_v1",
             "source_continue_v1",
             "turns_at_once_v1",
             "private_lanes_v1",
@@ -2176,13 +2178,6 @@ class BotTaskModel(Contract):
 
 class BotCompactAt(Contract):
     compact_at: CompactAt
-    expected_revision: int = Field(ge=1)
-
-
-class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"] = Field(
-        description="Token saver or Performance; legacy current is accepted as an alias for Performance."
-    )
     expected_revision: int = Field(ge=1)
 
 

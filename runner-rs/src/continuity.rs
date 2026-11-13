@@ -13,6 +13,11 @@ pub const RESUME_FAILED: &str = "resume_failed";
 pub const COMPACT_FAILED: &str = "compact_failed";
 pub const INTERRUPTED: &str = "interrupted";
 pub const FALLBACK_SIDE: &str = "fallback_side";
+/// A new session started on a fork of the bot's latest one (the claim's `fork_thread`), which is left as it was.
+pub const FORKED: &str = "forked";
+/// A one-off session the server asked for (`fresh_session`): the conversation's saved one is neither resumed nor
+/// replaced, and its next ordinary turn resumes it.
+pub const FRESH: &str = "fresh";
 /// A resumed session that was compacted first (`config.compact_first`): `kind` stays `resumed`.
 pub const COMPACTED: &str = "compacted";
 

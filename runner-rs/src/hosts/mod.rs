@@ -1164,6 +1164,20 @@ impl Host {
         }
     }
 
+    /// A new thread started on a fork of session `from`, and whether it is one: only Claude Code forks a session;
+    /// every other host starts a plain new thread.
+    pub async fn start_thread_forked(
+        &self,
+        bot: &str,
+        settings: &Settings,
+        from: &str,
+    ) -> Result<(String, bool), HostError> {
+        match self {
+            Host::Claude(h) => Ok((h.start_thread_forked(settings, from), true)),
+            _ => Ok((self.start_thread(bot, settings).await?, false)),
+        }
+    }
+
     pub async fn resume_thread(
         &self,
         thread_id: &str,

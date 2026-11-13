@@ -84,9 +84,9 @@ def _links_for(c, url):
 
 
 def _due(c, task, burst):
-    # Under a wake preset the preset is the one timer: the burst goes out on the next flush, and the hold coalesces it
-    # from then (backend/wake_presets.py). Current behaviour keeps the three-minute burst.
-    return H.now() if _preset_owner(c, task) else burst.get("due") or H.shift(H.now(), seconds=170)
+    # A bot owner's burst goes out on the next flush and the release policy's notice wait coalesces it from then
+    # (backend/wake_presets.py); a person's keeps the three-minute burst.
+    return H.now() if _bot_owner(task) else burst.get("due") or H.shift(H.now(), seconds=170)
 
 
 def _save_burst(c, task, burst, **parts):
@@ -100,7 +100,7 @@ def queue_wake(c, task, item, batch=None):
     """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
 
     `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a finished
-    request), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
+    request), which the release policy's notice wait holds. A burst stays batchable only while every item in it is;
     one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once. The burst
     also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each sent as its own
     message so one can never lift or lower another."""
@@ -145,14 +145,8 @@ def queue_checks_done(c, task, head, result, item, armed):
     _save_burst(c, task, burst, done=done[-10:])
 
 
-def _preset_owner(c, task):
-    from . import wake_presets
-
-    owner = str(task.get("owner_id") or "")
-    if not owner.startswith("bot:"):
-        return False
-    row = c.execute(BS.ONE_SQL, (owner[4:],)).fetchone()
-    return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
+def _bot_owner(task):
+    return str(task.get("owner_id") or "").startswith("bot:")
 
 
 def fire_once(detail, item):

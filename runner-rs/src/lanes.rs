@@ -11,6 +11,11 @@ use serde_json::Value;
 
 use crate::util::text_of;
 
+/// The runner starts a new thread on a fork of the session the claim names (`fork_thread`, execute.rs).
+pub const FORK_SESSION: &str = "fork_session_v1";
+/// The runner starts a claim marked `fresh_session` on a new thread and keeps the conversation's saved one (execute.rs).
+pub const FRESH_SESSION: &str = "fresh_session_v1";
+
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -38,6 +43,8 @@ pub const CAPABILITIES: &[&str] = &[
     "harness_allocation_v1",
     // Make page uses a fresh provider session in disposable scratch, apart from the private Assistant's session.
     "make_page",
+    FORK_SESSION,
+    FRESH_SESSION,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -189,6 +196,8 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
         }
         for name in [
             crate::browser::CAPABILITY,
+            FRESH_SESSION,
+            FORK_SESSION,
             "make_page",
             "harness_allocation_v1",
             "memory_tidy_packets_v1",
@@ -395,6 +404,65 @@ mod tests {
         drop_held(&mut body);
         release("make_page");
         assert_eq!(body["capabilities"], json!(["task_lanes_v2", "threads_v1"]));
+    }
+
+    #[test]
+    fn the_runner_offers_to_fork_a_session_and_an_older_server_drops_only_that() {
+        assert!(CAPABILITIES.contains(&FORK_SESSION));
+        let all = json!({"capabilities": CAPABILITIES});
+        let older: Vec<&str> = CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|c| *c != FRESH_SESSION)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(FORK_SESSION)
+        );
+        let index = CAPABILITIES
+            .iter()
+            .position(|c| *c == FORK_SESSION)
+            .unwrap();
+        assert_eq!(
+            refused_field(
+                &format!("body.capabilities.{index}: Input should be 'task_lanes_v2'"),
+                &all
+            )
+            .as_deref(),
+            Some(FORK_SESSION)
+        );
+    }
+
+    #[test]
+    fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
+        assert!(CAPABILITIES.contains(&FRESH_SESSION));
+        let all = json!({"capabilities": CAPABILITIES});
+        assert_eq!(
+            refused_field("body.capabilities: bad", &all).as_deref(),
+            Some(FRESH_SESSION)
+        );
+        let index = CAPABILITIES
+            .iter()
+            .position(|c| *c == FRESH_SESSION)
+            .unwrap();
+        assert_eq!(
+            refused_field(
+                &format!("body.capabilities.{index}: Input should be 'task_lanes_v2'"),
+                &all
+            )
+            .as_deref(),
+            Some(FRESH_SESSION)
+        );
+        let mut body = all.clone();
+        hold_back(FRESH_SESSION);
+        drop_held(&mut body);
+        release(FRESH_SESSION);
+        let kept: Vec<&str> = CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|c| *c != FRESH_SESSION)
+            .collect();
+        assert_eq!(body["capabilities"], json!(kept));
     }
 
     #[test]

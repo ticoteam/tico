@@ -323,6 +323,9 @@ button.au-chip:hover{background:var(--surface2)}
 .au-ir{display:flex;align-items:center;gap:6px;min-width:0}
 .au-ir>:is(input,select){flex:1;min-width:0}
 .au-days>input{flex:0 0 80px}
+/* a schedule's run settings: the warm switch on its label's line, its hours under it */
+.au-rel-sw{justify-content:space-between}
+.au-rel-sw>input.people-switch{flex:none}
 .au-cond-row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.7fr) minmax(0,1fr) 62px auto;gap:6px;align-items:center}
 .au-cond-row.nomin{grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr) minmax(0,1.2fr) auto}
 /* a board pop-up's chain: numbered actions, each with its fields under it, then where it ends */
