@@ -953,8 +953,9 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-noone{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted)}
 .subs-you{font-size:var(--t-sm);font-weight:400}
 .subs-in-use td{background:color-mix(in srgb,var(--ok) 8%,transparent)}
-.subs-pick-line{display:block;margin-top:2px;font-size:var(--t-sm)}
-.subs-pick-mark{color:var(--muted)}.subs-pick-mark.in-use{color:var(--ok)}
+.subs-mark{margin-left:6px;font-size:var(--t-sm);font-weight:400;vertical-align:1px}.subs-mark.in-use{color:var(--ok)}
+.subs-offline{display:inline-grid;place-items:center;width:24px;height:24px;margin:-8px -8px -8px -2px;padding:0;border:0;background:none;cursor:pointer;vertical-align:middle}
+.subs-offline::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--wait)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
 .subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}

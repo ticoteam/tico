@@ -98,78 +98,90 @@ const subsPlural = (n: number, one: string, many = one + 's') => `${n} ${n === 1
 const subsStopWords = (n: number) => `${subsPlural(n, 'running task')} ${n === 1 ? 'stops and restarts' : 'stop and restart'}`;
 
 // ---- Settings > Models > Subscriptions
-// Usage: the share used in the plan's window, a small bar, and the time until it resets ("4d 15h"); the share left and
-// the reset time in the tooltip. An API key shows the month's spend.
-function subsResetIn(iso: string | null | undefined) {
+// Usage: what is left of the plan's tighter window (the server's reading is its most-used one, 5-hour or week), a bar
+// of that share, and the hours until it resets ("62% left · resets in 98h"); the window and the reset time in the
+// tooltip. A plan with no reading says so, with the server's reason in the tooltip. An API key shows the month's spend.
+// Computers never show here: only on the count (subsCountHTML).
+function subsHoursUntil(iso: string | null | undefined) {
   const ms = Date.parse(iso || '') - Date.now();
   if (!(ms > 0)) return '';
-  const m = Math.max(1, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
-  return d ? `${d}d${h ? ` ${h}h` : ''}` : h ? `${h}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`;
+  return ms >= 3600e3 ? `${Math.round(ms / 3600e3)}h` : `${Math.max(1, Math.round(ms / 60000))}m`;
 }
 function subsUsageHTML(sub: SubsRow) {
   const usage: SubsUsage = sub.usage || {};
   if (typeof usage.used_pct === 'number') {
-    const used = Math.max(0, Math.min(100, Math.round(usage.used_pct)));
-    const resetIn = subsResetIn(usage.resets_at);
-    const at = resetIn ? new Date(usage.resets_at!).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '';
-    const words = [`${used}% used${usage.window ? ` in the ${usage.window === 'week' ? 'week' : usage.window + ' window'}` : ''}`,
-      `${100 - used}% left`, at ? `resets ${at}` : ''].filter(Boolean).join(' · ');
-    const level = used >= 95 ? ' bad' : used >= 80 ? ' warn' : '';
-    return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${used}%"></b></span><span class="tnum">${used}%</span><span class="sr-only"> used</span>${resetIn ? `<span class="subs-reset tnum"><span class="sr-only">resets in </span>${esc(resetIn)}</span>` : ''}</span>`;
+    const left = 100 - Math.max(0, Math.min(100, Math.round(usage.used_pct)));
+    const resetIn = subsHoursUntil(usage.resets_at);
+    const at = resetIn ? new Date(usage.resets_at!).toLocaleString(undefined, {weekday: 'short', hour: 'numeric', minute: '2-digit'}) : '';
+    const window = usage.window === 'week' ? 'Week' : usage.window === '5h' ? '5-hour window' : '';
+    const words = [`${window ? `${window}: ` : ''}${left}% left`, at ? `resets ${at} (in ${resetIn})` : ''].filter(Boolean).join(' · ');
+    const level = left <= 5 ? ' bad' : left <= 20 ? ' warn' : '';
+    return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${left}%"></b></span><span class="subs-left tnum">${left}% left</span>${resetIn ? `<span class="subs-reset tnum">resets in ${esc(resetIn)}</span>` : ''}</span>`;
   }
-  if (usage.reason) return `<span class="subs-usage muted">${esc(usage.reason)}</span>`;
   if (typeof usage.cost_usd_month === 'number') {
     const cost = usage.cost_usd_month >= 100 ? Math.round(usage.cost_usd_month).toLocaleString() : usage.cost_usd_month.toFixed(2).replace(/\.00$/, '');
     return `<span class="subs-usage tnum">$${esc(cost)} this month</span>`;
   }
+  if (usage.reason || subsOwned(sub.kind)) return `<span class="subs-usage muted subs-none"${usage.reason ? ` title="${esc(usage.reason)}"` : ''}>No reading yet</span>`;
   return '';
 }
+// The plan's own state, which stops any reading: its sign-in expired.
 function subsStatusHTML(sub: SubsRow) {
-  if (sub.status === 'needs_reconnect') {
-    const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
-    return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
-      : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
-  }
-  const computers = sub.computers || [];
-  if (!computers.length && subsOwned(sub.kind)) return `<span class="subs-diagnosis">No computer assigned</span>${subsMayEdit() ? ' <span class="muted">Assign this plan to a computer in Settings → Computers.</span>' : ''}`;
-  const offline = computers.map(id => {
-    const machine = (SETTINGS_DATA?.machines || []).find(row => row.id === (typeof id === 'string' ? id : id.runner_id));
-    return machine && (machine.online === false || ['stopped', 'stopping'].includes(String(machine.cloud_machine?.state))) ? subsComputerLabel(id) : '';
-  }).filter(Boolean);
-  if (offline.length) return `<span class="subs-usage">Computer offline: ${esc(offline.join(', '))} · Bring it online.</span>`;
-  if (sub.status && sub.status !== 'working') {
-    const names = computers.map(subsComputerLabel).filter(Boolean).join(', ');
-    return `<span class="subs-diagnosis">Connection unavailable${names ? ` on ${esc(names)}` : ''}</span>`;
-  }
-  return '';
+  if (sub.status !== 'needs_reconnect') return '';
+  const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
+  return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
+    : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
 }
-// A short day and time ("Fri 09:00") for a reset or a hold's end.
+// A short day and time ("Fri 09:00") for a hold's end.
 const subsWhen = (iso: string | null | undefined) => {
   const at = Date.parse(iso || '');
   return Number.isFinite(at) ? new Date(at).toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'}) : '';
 };
-// In a person's group: the plan in use names its computers, the next one is marked, a held one says until when.
+// The computers a subscription is given to: directly, or (a plan) through its owner's plans for its tool, so a person's
+// next or held plan counts the computers its set is on.
+function subsComputers(sub: SubsRow): SubsComputer[] {
+  const found = new Map<string, SubsComputer>();
+  for (const c of sub.computers || []) found.set(typeof c === 'string' ? c : c.runner_id, c);
+  if (subsOwned(sub.kind) && sub.owner_id) {
+    for (const a of SUBS.assignments) if (a.person === sub.owner_id && a.runtime === subsRuntime(sub) && !found.has(a.runner_id)) found.set(a.runner_id, a.runner_id);
+  }
+  return [...found.values()];
+}
+const subsOffline = (c: SubsComputer) => {
+  const machine = (SETTINGS_DATA?.machines || []).find(row => row.id === (typeof c === 'string' ? c : c.runner_id));
+  return !!machine && (machine.online === false || ['stopped', 'stopping'].includes(String(machine.cloud_machine?.state)));
+};
+// The count of computers, their names in its tooltip; an amber dot when one is offline, which opens Settings > Computers.
+function subsCountHTML(sub: SubsRow) {
+  const computers = subsComputers(sub);
+  const count = computers.length;
+  const title = count ? computers.map(subsComputerLabel).join(', ') : 'Not on a computer. Give it to one in Settings › Computers.';
+  const offline = computers.filter(subsOffline).map(subsComputerLabel);
+  const words = offline.length ? `${offline.join(', ')} ${offline.length === 1 ? 'is' : 'are'} offline` : '';
+  return `<td class="subs-count" title="${esc(title)}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span>${words ? `<button type="button" class="subs-offline" data-subs-offline title="${esc(words)}" aria-label="${esc(words)}. Open Settings › Computers"></button>` : ''}</td>`;
+}
+// In a person's group: the plan in use and the next one get a short mark after the name; the in-use one names its
+// computers in the tooltip.
 function subsPickHTML(sub: SubsRow, next: boolean) {
   const using = sub.in_use_on || [];
-  if (using.length) return `<span class="subs-pick-mark in-use" data-subs-mark="in-use">In use · ${esc(using.map(subsComputerLabel).join(', '))}</span>`;
-  if (next) return '<span class="subs-pick-mark" data-subs-mark="next">Next</span>';
-  if (subsOwned(sub.kind) && sub.status !== 'needs_reconnect' && sub.usage?.used_pct === 100 && sub.usage.resets_at) return `<span class="subs-pick-mark" data-subs-mark="held">Held until ${esc(subsWhen(sub.usage.resets_at))}</span>`;
+  if (using.length) return `<span class="pill subs-mark in-use" data-subs-mark="in-use" title="${esc(`In use on ${using.map(subsComputerLabel).join(', ')}`)}">In use</span>`;
+  if (next) return '<span class="pill subs-mark" data-subs-mark="next" title="Next when the plan in use runs out">Next</span>';
   return '';
 }
+// Kind: the tool for a plan ("Claude", "ChatGPT"), the key's kind for an API key.
+function subsKindLabel(sub: SubsRow) {
+  const label = sub.label || subsKind(sub.kind).label;
+  return subsOwned(sub.kind) ? label.replace(/ plan$/i, '') : label;
+}
 function subsRowHTML(sub: SubsRow, next = false) {
-  const count = (sub.computers || []).length;
-  const names = (sub.computers || []).map(subsComputerLabel).join(', ');
-  const status = subsStatusHTML(sub);
-  const usage = subsUsageHTML(sub);
-  const offlineWithUsage = status?.includes('Computer offline:') && (typeof sub.usage?.used_pct === 'number' || typeof sub.usage?.cost_usd_month === 'number');
   const pick = subsPickHTML(sub, next);
   const order = typeof sub.order === 'number' ? String(sub.order) : subsOwned(sub.kind) ? '—' : '·';
   return `<tr data-subs-row="${esc(sub.id)}"${sub.in_use_on?.length ? ' class="subs-in-use"' : ''}>
     <td class="subs-order tnum muted" title="${typeof sub.order === 'number' ? `${esc(subsToolName(subsRuntime(sub)))} pick order` : ''}">${order}</td>
-    <td class="subs-name">${esc(sub.name)}</td>
-    <td class="muted subs-kind">${esc(sub.label || subsKind(sub.kind).label)}</td>
-    <td class="subs-count" title="${esc(names || 'No computers')}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span></td>
-    <td class="subs-use">${offlineWithUsage ? `${status} ${usage}` : status || usage}${pick ? `<span class="subs-pick-line">${pick}</span>` : ''}</td>
+    <td class="subs-name">${esc(sub.name)}${pick ? ` ${pick}` : ''}</td>
+    <td class="muted subs-kind">${esc(subsKindLabel(sub))}</td>
+    ${subsCountHTML(sub)}
+    <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
     <td class="subs-more-cell">${subsMayEdit() ? `<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {
@@ -188,6 +200,7 @@ async function renderSettingsSubs() {
   restore();
   el.onclick = (event: MouseEvent) => {
     if (eventElement(event)?.closest('[data-subs-add]')) { planSignIn(); return; }
+    if (eventElement(event)?.closest('[data-subs-offline]')) { settingsShow('computers'); return; }
     const reconnect = eventElement(event)?.closest<HTMLElement>('[data-subs-reconnect]');
     if (reconnect) { const sub = subsById(reconnect.dataset.subsReconnect); if (sub) planSignIn({sub}); return; }
     const more = eventElement(event)?.closest<HTMLElement>('[data-subs-more]');
