@@ -18,7 +18,7 @@ from backend.tests.helpers.tasks_board import bot_token
 
 ANA = X.ANA
 # What Jev reads as a block in a snooze's why: a task, a PR, a merge, a release, main or checks, or a person.
-BLOCKED_WORDS = ("#", "rc.", "merge", " pr", "main", "checks", "read-only", "no access", "customer", "decide")
+BLOCKED_WORDS = ("#", "rc.", "merge", " pr ", " pr.", "main", "checks", "read-only", "no access", "customer", "decide")
 LOOK_AGAIN = "couldn't reproduce, try again Nov 16"
 
 
@@ -34,7 +34,7 @@ class FakeJev:
         if self.fail:
             raise RuntimeError("Jev is down")
         why = state["event"]["why"].lower()
-        p = 0.95 if any(word in why for word in BLOCKED_WORDS) else 0.05
+        p = 0.95 if (any(word in why for word in BLOCKED_WORDS) or " pr" in why.replace("production", "")) else 0.05
         return {"answers": {q: {"noul": p} for q in questions}}
 
 
@@ -69,8 +69,10 @@ def test_a_bots_snooze_on_another_task_or_a_release_is_refused_and_look_again_on
         assert line == "Rule Snooze only for a real wait: " + SR.BLOCKED
         assert "Blocked? tico task relate <id> depends_on #N." in E.refusal_line(rule, line)
     assert SR.judge_snooze(c, row, "bot:ops", LOOK_AGAIN, "2099-11-16T08:00:00Z") is None
-    assert len(jev.calls) == 3
-    assert [call[2] for call in jev.calls] == ["stage-rule@1"] * 3
+    why = "look again on 2099-11-16: read the version production runs"
+    assert SR.judge_snooze(c, row, "bot:ops", why, "2099-11-16T08:00:00Z") is None
+    assert len(jev.calls) == 4
+    assert [call[2] for call in jev.calls] == ["stage-rule@1"] * 4
     assert all([q["instructions"]["question"] for q in call[1].values()] == [SR.REAL_WAIT_JEV] for call in jev.calls)
 
 
