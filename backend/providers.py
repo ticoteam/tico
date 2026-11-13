@@ -457,9 +457,11 @@ class _ById(dict):
 MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
 # Where a bot's conversation compacts, in tokens: the sizes a person or agent may choose (backend/models.py CompactAt),
-# and the default for a bot, task or run with none saved. The default follows the model's family (Opus 400k, Haiku
-# 150k, any other 250k) and never passes the model's own window. The runner's DEFAULT_COMPACT_AT
-# (runner-rs/src/hosts/mod.rs) is only the last resort for a turn that arrives without one.
+# and the default for a bot, task or run with none saved. The default follows the model's family (Opus and Sonnet 300k,
+# Haiku 150k, any other 250k) and never passes the model's own window. Every call re-reads the whole context, so a 1M
+# window is room to finish a turn, not a size to grow to: a person or agent raises Compact at where a bot needs more.
+# The runner's DEFAULT_COMPACT_AT (runner-rs/src/hosts/mod.rs) is only the last resort for a turn that arrives without
+# one.
 COMPACT_SIZES = (
     100_000,
     150_000,
@@ -475,7 +477,7 @@ COMPACT_SIZES = (
     1_000_000,
 )
 DEFAULT_COMPACT_AT = 250_000
-COMPACT_DEFAULTS = (("opus", 400_000), ("haiku", 150_000))
+COMPACT_DEFAULTS = (("opus", 300_000), ("sonnet", 300_000), ("haiku", 150_000))
 
 
 def fit_compact_at(size, window):

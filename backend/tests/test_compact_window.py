@@ -1,5 +1,6 @@
 """Where a bot's conversation compacts (task #230): twelve sizes from 100k to 1M, a default that follows the model (Opus
-400k, Haiku 150k, any other 250k, never past the model's window), sent with every turn, and settable by an agent."""
+and Sonnet 300k, Haiku 150k, any other 250k, never past the model's window), sent with every turn, and settable by an
+agent."""
 
 from backend import bot_settings as BS
 from backend import providers
@@ -46,9 +47,9 @@ def test_a_task_context_length_takes_the_new_sizes(api):
 
 
 def test_the_default_follows_the_model_and_never_passes_its_window():
-    assert providers.compact_default("claude-opus-5-5") == 400_000
+    assert providers.compact_default("claude-opus-5-5") == 300_000
     assert providers.compact_default("claude-haiku-5-5") == 150_000
-    assert providers.compact_default("claude-sonnet-5-5") == 250_000
+    assert providers.compact_default("claude-sonnet-5-5") == 300_000
     assert providers.compact_default("") == 250_000
     assert providers.compact_default("no-such-model") == 250_000
     # A window below the default: the largest size that fits in it.
@@ -60,8 +61,8 @@ def test_the_default_follows_the_model_and_never_passes_its_window():
 def test_a_bot_with_no_saved_window_shows_and_runs_on_its_models_default(api):
     machine = ops_on_sonnet(api)
     on_model(api, "claude-opus-5-5")
-    assert get(api, "bots/ops")["compact_at"] == 400_000
-    assert chat_turn(api, machine)["config"]["compact_at"] == 400_000
+    assert get(api, "bots/ops")["compact_at"] == 300_000
+    assert chat_turn(api, machine)["config"]["compact_at"] == 300_000
     on_model(api, "claude-haiku-5-5")
     assert get(api, "bots/ops")["compact_at"] == 150_000
 
@@ -82,9 +83,9 @@ def test_a_saved_window_wins_over_the_models_default(api):
 
 def test_an_agent_sets_the_window_with_tico_bot_model_and_a_size_off_the_list_is_refused(api):
     ops_on_sonnet(api)
-    err, out = call(api, "tico_bot_model", {"bot": "ops", "compact_at": 300_000})
+    err, out = call(api, "tico_bot_model", {"bot": "ops", "compact_at": 400_000})
     assert not err, out
-    assert get(api, "bots/ops")["compact_at"] == 300_000
+    assert get(api, "bots/ops")["compact_at"] == 400_000
     assert get(api, "bots/ops")["model"] == "claude-sonnet-5-5"
     err, out = call(api, "tico_bot_model", {"bot": "ops", "model": "claude-opus-5-5", "compact_at": 800_000})
     assert not err, out
@@ -130,9 +131,9 @@ def test_a_saved_window_goes_back_to_the_models_default_and_then_moves_with_the_
     on_model(api, "claude-opus-5-5")
     post(api, "bots/ops/compact-at", {"compact_at": 700_000, "expected_revision": revision(api)})
     cleared = post(api, "bots/ops/compact-at", {"compact_at": None, "expected_revision": revision(api)})
-    assert (cleared["compact_at"], cleared["compacts_at"]) == (None, 400_000)
+    assert (cleared["compact_at"], cleared["compacts_at"]) == (None, 300_000)
     assert saved_window(api) == "unsaved"
-    assert get(api, "bots/ops")["compact_at"] == 400_000
+    assert get(api, "bots/ops")["compact_at"] == 300_000
     with api.app.state.store.transaction() as c:
         rows = c.execute(
             "SELECT before, after FROM settings_changes WHERE bot='ops' AND field='compact_at' ORDER BY created_at"
@@ -147,7 +148,7 @@ def test_clearing_a_window_that_was_never_saved_changes_nothing(api):
     ops_on_sonnet(api)
     before = revision(api)
     cleared = post(api, "bots/ops/compact-at", {"compact_at": None, "expected_revision": before})
-    assert (cleared["compact_at"], cleared["compacts_at"], cleared["revision"]) == (None, 250_000, before)
+    assert (cleared["compact_at"], cleared["compacts_at"], cleared["revision"]) == (None, 300_000, before)
     assert revision(api) == before
     with api.app.state.store.transaction() as c:
         assert not c.execute("SELECT 1 FROM settings_changes WHERE bot='ops' AND field='compact_at'").fetchone()
@@ -165,7 +166,7 @@ def test_an_agent_puts_the_window_back_on_the_default_with_tico_bot_model(api):
     err, out = call(api, "tico_bot_model", {"bot": "ops", "compact_at": "default"})
     assert not err, out
     assert saved_window(api) == "unsaved"
-    assert get(api, "bots/ops")["compact_at"] == 400_000
+    assert get(api, "bots/ops")["compact_at"] == 300_000
 
 
 def test_tico_bot_model_takes_compact_at_default_on_the_command_line():
@@ -187,9 +188,9 @@ def employee(api, bot="ops"):
 
 def test_the_model_list_marks_each_models_default_window(api):
     rows = {row["id"]: row for row in get(api, "models")["models"]}
-    assert rows["claude-opus-5-5"]["compact_default"] == 400_000
+    assert rows["claude-opus-5-5"]["compact_default"] == 300_000
     assert rows["claude-haiku-5-5"]["compact_default"] == 150_000
-    assert rows["claude-sonnet-5-5"]["compact_default"] == 250_000
+    assert rows["claude-sonnet-5-5"]["compact_default"] == 300_000
     assert all(row["compact_default"] in SIZES for row in rows.values())
 
 

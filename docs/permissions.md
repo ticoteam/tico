@@ -735,6 +735,9 @@ The server applies the requester's rights to every BotOps v2 call, including fri
 Older Computers receive the same behavior without adding a delegation header. `X-Tico-On-Behalf-Of: turn` and
 `on_behalf_of` remain supported; citing another human cannot widen the current requester's access. `/me` identifies
 the calling credential so clients can discover which tools are offered; it does not change the rights used by tools.
+A code bot (the Builder, both Reviewers, and the QA, Release and Code Hygiene Owners) gets `tool_profile: developer`
+there, and its MCP server lists only the tools a code bot uses (`hubtools.DEVELOPER_TOOLS`, about 35). Only the list is
+shorter: a call to any other tool its kind allows still runs, and the `tico` CLI still reaches every route.
 The route's normal permission checks apply, just as when the requester uses it directly. No per-tool opt-in is needed.
 A Credential never travels in a `tico api` body (a key named `secret`, `password`, `token`, `api_key` and the like is refused).
 

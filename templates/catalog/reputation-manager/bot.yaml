@@ -6,7 +6,6 @@ slack_channel: "#marketing"
 
 # These must agree with the bot's settings on the server, or be left out of this file entirely.
 # Public text is written at high effort: every reply this bot drafts is read by a stranger.
-reasoning_effort: high
 max_run_minutes: 60
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup

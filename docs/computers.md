@@ -310,18 +310,23 @@ while a turn runs on a subscription, another bot's turn on the same computer cou
 #### Bots' models follow the plans
 
 When a Claude or ChatGPT plan is added, connected or reconnected, or one is removed or **Needs reconnect**, each bot made
-from a template moves to its role's model for the plans that work now (`backend/plan_models.py` `SETS`). A start does the
-same, so a company that had a plan before this keeps up. With no plan, nothing moves. An API key is not a plan.
+from a template moves to its role's model for the plans that work now (`backend/plan_models.py` `SETS`), and its tasks to
+its role's task model (`TASK_SETS`). A start does the same, so a company that had a plan before this keeps up. With no
+plan, nothing moves. An API key is not a plan.
 
-| Role | Claude only | ChatGPT only | Both |
-| --- | --- | --- | --- |
-| Builder, Reviewer 1, managers, the Assistant, every other role | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
-| Reviewer 2 | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
-| Librarian, Rules, Updates, Automations and Finance Owners | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
+| Role | | Claude only | ChatGPT only | Both |
+| --- | --- | --- | --- | --- |
+| Builder, Reviewer 1, every Owner, Product Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
+| | tasks | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
+| The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
+| Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
+| Librarian, Rules, Updates, Automations and Finance Owners (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
 
 A model the catalog does not offer yet is replaced by the set's first offered model on the same tool. A bot whose model a
-person changed (Settings, the model picker, a manager bot or the Assistant) keeps it; undoing that change gives it back to
-the plans. Each move is a `bot.model_changed` event with `why: plans`. Decision models (pipeline judges, Decide) stay on
+person changed (Settings, the model picker, a manager bot or the Assistant) keeps it, and gets no task model from the
+plans; undoing that change gives it back to the plans. A task model a person set stays the same way. A task model keeps
+its task context length when the plans move it. Each move is a `bot.model_changed` or `bot.task_model_changed` event
+with `why: plans`. Decision models (pipeline judges, Decide) stay on
 the Gateway. On Tico Cloud, setup's **Done** waits for a plan or key.
 
 ### Bots sharing one ChatGPT sign-in run side by side

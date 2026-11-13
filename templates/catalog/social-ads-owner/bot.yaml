@@ -3,8 +3,7 @@ display_name: "Social Ads Owner"
 labels: [owner:social-ads-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: medium
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
 # Declared off. Starting setup (or going live) switches on both, once, unless a person changed one first

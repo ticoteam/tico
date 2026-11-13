@@ -216,13 +216,15 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
 
     @app.get("/api/v2/me")
     def me(request: Request):
-        from .mcp import caller_kind
+        from .mcp import caller_kind, tool_profile
 
         who = request.state.identity
         slug = None
+        profile = ""
         if who.role == "bot":  # the bot's label beside its id (the actor), for a client that shows it
             with store.read() as c:
                 slug = (H.bot(c, H.actor_id(who.actor)) or {}).get("slug")
+                profile = tool_profile(c, auth, who)
         return {
             "actor": who.actor,
             "role": who.role,
@@ -232,6 +234,8 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             "agent": who.agent,
             "kind": caller_kind(auth, who),
             **({"slug": slug} if slug else {}),
+            # The tool list this caller's MCP server offers: `developer` for a code bot (backend/mcp.py tool_profile).
+            **({"tool_profile": profile} if profile else {}),
         }
 
     # A person's own API tokens (backend/personal_tokens.py). Made only from a browser sign-in: a token is that

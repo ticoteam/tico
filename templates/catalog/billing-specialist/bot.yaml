@@ -3,8 +3,7 @@ display_name: "Billing Specialist"
 labels: [owner:billing-specialist]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: medium
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 45
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup

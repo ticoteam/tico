@@ -257,6 +257,43 @@ def caller_kind(auth, who):
     return None
 
 
+# The code bots, offered only the tools a code bot uses (clients/commands/_access.py DEVELOPER_TOOLS): the Builder, both
+# Reviewers, and the QA, Release and Code Hygiene Owners. A bot is one by its template, its slug (a slug is its name), or
+# the pipeline seat it fills (backend/pipeline_seats.py). Everyone else is offered the whole list.
+DEVELOPER_TEMPLATES = frozenset(("builder", "reviewer", "qa-owner", "release-owner", "code-hygiene-owner"))
+DEVELOPER_SLUGS = DEVELOPER_TEMPLATES | {"reviewer-1", "reviewer-2"}
+
+
+def tool_profile(c, auth, who):
+    """`developer` for a code bot's own turn (DEVELOPER_TEMPLATES), else "": the tool list `tools/list` offers it
+    (hubtools.listing). Only the listing is smaller: every call the caller's kind allows still runs, and the `tico` CLI
+    still reaches every route."""
+    from . import hubdb as H
+    from . import pipeline_seats
+
+    if caller_kind(auth, who) != "bot":
+        return ""
+    bot = H.actor_id(who.actor)
+    row = c.execute(
+        "SELECT b.slug, s.template FROM bots b LEFT JOIN bot_settings s ON s.bot_id=b.id WHERE b.id=?", (bot,)
+    ).fetchone()
+    if row and (row[1] in DEVELOPER_TEMPLATES or row[0] in DEVELOPER_SLUGS):
+        return hubtools.DEVELOPER
+    seats = pipeline_seats.resolve(c)
+    roles = (
+        pipeline_seats.BUILDER,
+        pipeline_seats.REVIEWER_1,
+        pipeline_seats.REVIEWER_2,
+        pipeline_seats.RELEASE_MANAGER,
+    )
+    return hubtools.DEVELOPER if who.actor in {seats.get(role) for role in roles} else ""
+
+
+def _profile_of(app, who):
+    with app.state.store.read() as c:
+        return tool_profile(c, app.state.auth, who)
+
+
 def operation_key(method, raw, key):
     """A write's operation id, allocated once before it is sent: the caller's own, or a new one. The request, a lost
     answer and an error all report this same id, so a retry can reuse it as the CLI's does."""
@@ -294,7 +331,10 @@ def install_mcp(app, settings):
         api = InProcessApi(app, asyncio.get_running_loop(), request.headers.get("authorization", ""), base_url)
         who = getattr(request.state, "identity", None)
         kind = caller_kind(app.state.auth, who) if who else None
-        protocol = hubtools.Protocol(api, api_error=ApiProblem, kind=kind)
+        profile = None
+        if kind == "bot" and message.get("method") == "tools/list":
+            profile = await asyncio.to_thread(_profile_of, app, who)
+        protocol = hubtools.Protocol(api, api_error=ApiProblem, kind=kind, profile=profile)
         started = time.monotonic()
         reply = await asyncio.to_thread(protocol.handle, message)
         if reply is None:

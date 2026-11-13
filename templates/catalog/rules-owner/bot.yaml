@@ -3,8 +3,6 @@ display_name: "Rules Owner"
 labels: [owner:rules-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: high
 # The Rules Owner's tasks are private (its requester and the Rules Owner only); matches the server's default for this template.
 private_tasks_default: true
 
