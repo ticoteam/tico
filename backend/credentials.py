@@ -742,7 +742,7 @@ class Vault:
                 raise Problem('subject', 'Choose a registered person, bot or group.', 422)
         elif subject.startswith('group:'):
             # Groups take a website login only: never an API key or any other credential.
-            raise Problem('subject', 'Choose a registered person or bot', 422)
+            raise Problem('subject', 'Choose a registered person or bot.', 422)
         parent = self.grant_authority(c, who, cid, subject)
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:

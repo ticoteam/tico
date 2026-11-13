@@ -141,7 +141,9 @@ function fake() {
 
 const sideways = (page: import('playwright').Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
 const shots: string[] = [];
-async function shot(page: import('playwright').Page, name: string) {
+// `fullPage` off for the touch state: Chromium's full-page capture under mobile emulation drops (hover:none), so the ×s
+// the assertions see would be missing from the picture.
+async function shot(page: import('playwright').Page, name: string, fullPage = true) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -150,7 +152,7 @@ async function shot(page: import('playwright').Page, name: string) {
     await page.evaluate(() => Promise.all(document.getAnimations()
       .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
     const file = path.join(dir, `website-${name}-${theme}.png`);
-    await page.screenshot({animations: 'disabled', path: file, fullPage: true});
+    await page.screenshot({animations: 'disabled', path: file, fullPage});
     shots.push(file);
   }
   await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
@@ -493,9 +495,11 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
       await access.locator('[data-tw-access-row]').first().waitFor();
       const xs = await access.locator('.tw-x').evaluateAll(b => b.map(x => [getComputedStyle(x).opacity, x.getBoundingClientRect().width, x.getBoundingClientRect().height]));
       assert.ok(xs.length === 5 && xs.every(([o, w, h]) => o === '1' && w === 36 && h === 36), `touch: every × shows at 36px (${JSON.stringify(xs)})`);
+      const boxes = await access.locator('.tw-x').evaluateAll(b => b.map(x => getComputedStyle(x).borderTopWidth));
+      assert.ok(boxes.every(w => w === '0px'), `touch: every × is a quiet ghost with no border (${JSON.stringify(boxes)})`);
       assert.equal(await sideways(page), false, 'touch: no sideways scroll');
       assert.equal(await access.evaluate(d => d.scrollWidth > d.clientWidth + 1), false, 'touch: the dialog has no sideways scroll');
-      await shot(page, 'access-touch');
+      await shot(page, 'access-touch', false);
       assert.deepEqual(errors, [], 'touch: no page errors');
       await page.close();
     }
