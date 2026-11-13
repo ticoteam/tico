@@ -813,7 +813,7 @@ def run(args, who=None):
             return hubtools.task_show(client, {"id": ids[0]})
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
-        if sub in ("list", "readers", "followers", "follow", "unfollow"):
+        if sub in ("list", "readers", "followers", "follow", "unfollow", "caps"):
             return via_tool(client, args)
         if sub in (
             "done",
@@ -830,6 +830,7 @@ def run(args, who=None):
             "queue",
             "release",
             "unlink",
+            "after",
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))
