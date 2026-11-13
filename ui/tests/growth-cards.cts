@@ -511,7 +511,6 @@ async function shot(page: Page, name: string) {
       await page.close();
     }
     {
-    {
       // Synced sources: the banner, each Number's origin line, a conflict chosen on its card.
       Object.assign(SYNC, {on: true, conflict: true, may: true});
       const {page, errors, fake} = await open(browser);
@@ -603,6 +602,7 @@ async function shot(page: Page, name: string) {
       assert.equal(fake.writes.filter(([m, p]) => m === 'PATCH' && p === '/api/v2/growth/sources/s5').length, 1, 'it changed the one made');
       assert.deepEqual(errors, []);
       await page.close();
+    }
     {
       // A member sees the banner, the lines and the conflicts, but no Keep or Use; with 7 conflicts the list shows 5
       // and says there are more.
