@@ -23,6 +23,12 @@
 .dash-pin.dragging{opacity:.6;outline:2px dashed var(--ink);outline-offset:2px}
 .dash-pin-head{position:relative;display:flex;align-items:center;gap:6px;padding:8px 10px 0 12px;min-height:32px}
 .dash-pin-head h2{margin:0;font-size:var(--t-base);font-weight:600;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-pin-head h2 .dash-head-n{margin-left:6px;color:var(--muted);font-weight:500;font-variant-numeric:tabular-nums;text-decoration:none}
+.dash-pin-head h2 .dash-head-n:hover{text-decoration:underline}
+.dash-needs li>a{flex:1;display:flex;align-items:baseline;gap:6px;color:inherit;text-decoration:none}
+.dash-needs li>a:hover .dash-needs-t{text-decoration:underline}
+.dash-needs-t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-needs li>a>.muted{flex:none;font-size:var(--t-sm)}
 .dash-pin-head h2 .muted{font-weight:500}
 .dash-pin-head .spacer{flex:1}
 .dash-plus{font-size:16px;line-height:var(--lh-none)}
@@ -125,6 +131,7 @@ a.dash-big:hover strong{text-decoration:underline}
   a.dash-big{min-height:40px}
   /* So are the page's own controls: the Mine/Dashboard tabs, Edit, + Card, + Page, Done, the grips and the card menu. */
   .dash-head .dash-tabs a{display:inline-flex;align-items:center;min-height:40px}
+  .dash-pin-head h2 .dash-head-n:not([hidden]){display:inline-flex;align-items:center;min-height:40px;padding:0 4px}
   .dash-actions button{min-height:40px}
   .dash-more{width:40px;height:40px}
   .dash-grip{width:40px;height:40px}

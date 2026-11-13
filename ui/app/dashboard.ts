@@ -63,7 +63,7 @@ interface DashView {
 }
 // What a built-in card shows, by template (backend/cards.py): each template's card carries its own of these fields.
 interface DashWeek { week: string; done: number }
-interface DashNeedsItem { task_id?: string | null; title?: string | null }
+interface DashNeedsItem { task_id?: string | null; title?: string | null; line?: string | null; act?: string | null }
 interface DashThread extends ThreadRow { unread?: number | null; updated_at?: string | null }
 interface DashTask { id: string; title?: string | null; due_at?: string | null }
 interface DashUpdate { read?: boolean; headline?: string | null; author?: string | null; created_at?: string | null }
@@ -146,9 +146,11 @@ function dashPageRow(p: DashPageItem) {
 }
 // A thread's address: the threads page's own when this build has it (ui/app/threads*.js).
 const dashThreadHref = (id: string) => typeof window.threadHref === 'function' ? window.threadHref(id) : '#/threads/' + encodeURIComponent(id);
+// Needs you cards (needs_attention, needs_you): the count on the header line, each row its title and the word for what it needs.
+const DASH_COUNTED = new Set(['needs_you', 'needs_attention']);
+const DASH_ACT: Record<string, string> = {done: 'Done', ok: 'OK', answer: 'Answer', reply: 'Reply', fix: 'Fix'};
 function dashNeeds(d: DashCardData) {
-  return `<a class="dash-big" href="${NEEDS_YOU}"><strong>${dashNum(d.count)}</strong><span class="muted">waiting on you</span></a>
-    ${d.items.length ? `<ul class="dash-list">${d.items.map(it => `<li>${it.task_id ? `<a href="#/task/${encodeURIComponent(it.task_id)}">${esc(it.title || 'Untitled')}</a>` : `<a href="${NEEDS_YOU}">${esc(it.title || 'Untitled')}</a>`}</li>`).join('')}</ul>` : ''}`;
+  return d.items.length ? `<ul class="dash-list dash-needs">${d.items.map(it => `<li><a href="${it.task_id ? '#/task/' + encodeURIComponent(it.task_id) : NEEDS_YOU}"${it.line && it.line !== it.title ? ` title="${esc(it.line)}"` : ''}><span class="dash-needs-t">${esc(it.title || 'Untitled')}</span>${it.act && DASH_ACT[it.act] ? `<span class="muted">${DASH_ACT[it.act]}</span>` : ''}</a></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing waiting on you</p>';
 }
 const dashDue = (due: string | null | undefined) => {
   if (!due) return '';
@@ -311,6 +313,8 @@ function dashCardsPatch(template: string, patch: (d: DashCardData, card: DashCar
     v.pins[i] = {...pin, card: next};
     const body = state.root?.querySelector(`.dash-pin[data-at="${i}"] .dash-pin-body`);
     if (body) body.innerHTML = dashCardBody(next);
+    const n = state.root?.querySelector(`.dash-pin[data-at="${i}"] .dash-head-n`);
+    if (n instanceof HTMLElement) { n.textContent = dashNum(data.count); n.hidden = !data.count; }
   });
 }
 // My tasks (backend/cards.py my_tasks): the open tasks the reader owns, the soonest due first, the first N and how many.
@@ -353,11 +357,13 @@ function dashTasksPut(events: LiveTaskEvent[]): void {
   });
 }
 // Needs you (needs_attention, and needs_you without a team): the list the app holds (S.v2.needs, in the server's order)
-// and its count, each item by its task's title or its line. A team's card counts the items its bots are behind, which
+// and its count, each item by the server's rule (backend/cards.py needs_brief): its task's title, a Paused cause or an
+// item without a task by its line, with the line as its tooltip and the word for what it needs. A team's card counts the items its bots are behind, which
 // the held items do not say: the safety read.
+const dashAct = (it: NeedsEntry) => ({ok: 'ok', question: 'answer', yours: 'done', stuck: 'fix', fix: 'fix', mention: 'reply'} as Record<string, string>)[decideKind(it)] || '';
 function dashNeedsLive(): void {
   const items = S.v2?.needs || [], count = S.v2?.needsCount ?? items.length;
-  const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: it.task?.title || it.line || '',
+  const brief = (n: number): DashNeedsItem[] => items.slice(0, n).map(it => ({title: (it.kind !== 'paused' && it.task?.title) || it.line || '', line: it.line || '', act: dashAct(it),
     task_id: (it.task_id as string | undefined) || (it.kind === 'task' || it.kind === 'ask' ? String(it.id) : null)}));
   for (const [template, n] of [['needs_attention', 5], ['needs_you', 3]] as const)
     dashCardsPatch(template, (d, card) => {
@@ -462,7 +468,7 @@ function dashDraw(state: DashState) {
     el.className = 'dash-pin' + (pin.card ? '' : ' dash-pin-page'); el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
     el.innerHTML = `<header class="dash-pin-head">
         ${v.can_edit ? `<button type="button" class="dash-grip" data-dash-grip aria-label="Move ${esc(dashPinTitle(pin, v))}" title="Move">${BOT_SVG.grip}</button>` : ''}
-        <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>
+        <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && DASH_COUNTED.has(pin.card.template) && !pin.card.hidden && pin.card.data ? ` <a class="dash-head-n" href="${NEEDS_YOU}"${dashData(pin.card).count ? '' : ' hidden'}>${dashNum(dashData(pin.card).count)}</a>` : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>
         <span class="spacer"></span>
         ${v.can_edit ? `<button type="button" class="dash-more" data-dash-menu aria-haspopup="menu" aria-expanded="false" aria-label="${esc(dashPinTitle(pin, v))} menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}</header>
       <div class="dash-pin-body"></div>`;
