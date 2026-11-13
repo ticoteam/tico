@@ -76,7 +76,7 @@ async function start(browser: import('playwright').Browser, {width = 1280, admin
   return {...got, saved, sent, grants};
 }
 
-const paste = (page: Page, text: string) => page.locator('.tt-pgc .p-text').evaluate((box, t) => {
+const paste = (page: Page, text: string) => page.locator('aside.pgc .p-text').evaluate((box, t) => {
   const dt = new DataTransfer();
   dt.setData('text/plain', t);
   box.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
@@ -85,7 +85,7 @@ const paste = (page: Page, text: string) => page.locator('.tt-pgc .p-text').eval
 const kept = (page: Page) => page.evaluate(() => {
   const store = (s: Storage) => Array.from({length: s.length}, (_, i) => s.key(i) + '=' + s.getItem(s.key(i) || '')).join('\n');
   return [document.documentElement.outerHTML, store(localStorage), store(sessionStorage),
-    (document.querySelector('.tt-pgc .p-text') as HTMLTextAreaElement | null)?.value || '', location.href].join('\n');
+    (document.querySelector('aside.pgc .p-text') as HTMLTextAreaElement | null)?.value || '', location.href].join('\n');
 });
 // "Sent names only" shows as the saves finish, just before the message posts: wait for the post itself.
 async function messageSent(sent: Sent[], n = 1): Promise<void> {
@@ -97,7 +97,7 @@ const shot = async (page: Page, name: string) => {
 };
 async function openChat(page: Page) {
   await page.locator('.tt-chat [data-pgc-open]').click();
-  await page.locator('.tt-pgc .p-text').waitFor();
+  await page.locator('aside.pgc .p-text').waitFor();
 }
 
 (async () => {
@@ -109,36 +109,36 @@ async function openChat(page: Page) {
       page.on('console', m => logs.push(m.text()));
       await openChat(page);
       // AC-1
-      const empty = await page.locator('.tt-pgc .th-empty').innerText();
+      const empty = await page.locator('aside.pgc .th-empty').innerText();
       assert.match(empty, /Jira and PostHog need keys/, 'the empty state names the tools in Problem');
-      assert.equal(await page.locator('.tt-pgc .thv-attach-wrap').isHidden(), true, 'no attachments in this chat');
-      assert.equal(await page.locator('.tt-pgc .p-text').getAttribute('spellcheck'), 'false');
+      assert.equal(await page.locator('aside.pgc .thv-attach-wrap').isHidden(), true, 'no attachments in this chat');
+      assert.equal(await page.locator('aside.pgc .p-text').getAttribute('spellcheck'), 'false');
       // AC-2
       await paste(page, `for jira user chris / ${PASSWORD} and ${TOKEN}`);
-      await page.locator('.tt-pgc [data-kd-item]').nth(1).waitFor();
-      const items = await page.locator('.tt-pgc [data-kd-item]').evaluateAll(els => els.map(el => ({
+      await page.locator('aside.pgc [data-kd-item]').nth(1).waitFor();
+      const items = await page.locator('aside.pgc [data-kd-item]').evaluateAll(els => els.map(el => ({
         kind: el.querySelector('.kd-kind')?.textContent?.trim(), name: (el.querySelector('[data-kd-name]') as HTMLInputElement).value,
         preview: el.querySelector('.kd-preview')?.textContent})));
       assert.deepEqual(items, [
         {kind: '🔒 Jira login · chris', name: 'JIRA_LOGIN', preview: '••••••'},
         {kind: '🔒 GitHub token', name: 'GITHUB_TOKEN', preview: TOKEN.slice(0, 3) + '…' + TOKEN.slice(-3)},
       ]);
-      assert.equal(await page.locator('.tt-pgc .p-text').inputValue(), 'for jira user chris / [key:JIRA_LOGIN] and [key:GITHUB_TOKEN]');
+      assert.equal(await page.locator('aside.pgc .p-text').inputValue(), 'for jira user chris / [key:JIRA_LOGIN] and [key:GITHUB_TOKEN]');
       let all = await kept(page);
       assert.ok(!all.includes(PASSWORD) && !all.includes(TOKEN), 'no value in the box, the DOM, storage or the address');
-      assert.match(await page.locator('.tt-pgc [data-kd-proof]').innerText(), /2 keys locked\. They go to Credentials, encrypted/);
+      assert.match(await page.locator('aside.pgc [data-kd-proof]').innerText(), /2 keys locked\. They go to Credentials, encrypted/);
       // AC-14: GITHUB_TOKEN exists; Send waits until it is replaced or renamed.
-      assert.match(await page.locator('.tt-pgc .kd-replace').innerText(), /Replaces the existing GITHUB_TOKEN/);
-      assert.equal(await page.locator('.tt-pgc .p-send').isDisabled(), true, 'Send waits for Replace or a new name');
+      assert.match(await page.locator('aside.pgc .kd-replace').innerText(), /Replaces the existing GITHUB_TOKEN/);
+      assert.equal(await page.locator('aside.pgc .p-send').isDisabled(), true, 'Send waits for Replace or a new name');
       await shot(page, '1280');
-      const name = page.locator('.tt-pgc [data-kd-name]').nth(1);
+      const name = page.locator('aside.pgc [data-kd-name]').nth(1);
       await name.fill('GH_DEPLOY_TOKEN');
       await name.press('Tab');
-      await page.waitForFunction(() => !document.querySelector('.tt-pgc .kd-replace'));
-      assert.equal(await page.locator('.tt-pgc .p-text').inputValue(), 'for jira user chris / [key:JIRA_LOGIN] and [key:GH_DEPLOY_TOKEN]');
+      await page.waitForFunction(() => !document.querySelector('aside.pgc .kd-replace'));
+      assert.equal(await page.locator('aside.pgc .p-text').inputValue(), 'for jira user chris / [key:JIRA_LOGIN] and [key:GH_DEPLOY_TOKEN]');
       // AC-10
-      await page.locator('.tt-pgc .p-send').click();
-      await page.waitForFunction(() => /Sent names only/.test(document.querySelector('.tt-pgc [data-kd-proof]')?.textContent || ''));
+      await page.locator('aside.pgc .p-send').click();
+      await page.waitForFunction(() => /Sent names only/.test(document.querySelector('aside.pgc [data-kd-proof]')?.textContent || ''));
       assert.deepEqual(saved.map(s => [s.path, s.body.name, s.body.kind, s.body.username, s.body.source]), [
         ['/api/v2/credentials', 'JIRA_LOGIN', 'password', 'chris', 'tools-chat'],
         ['/api/v2/credentials', 'GH_DEPLOY_TOKEN', 'token', '', 'tools-chat'],
@@ -147,19 +147,19 @@ async function openChat(page: Page) {
       await messageSent(sent);
       const message = sent.find(s => typeof s.text === 'string');
       assert.equal(message?.text, 'for jira user chris / [saved JIRA_LOGIN for Jira] and [saved GH_DEPLOY_TOKEN for GitHub]');
-      assert.equal(await page.locator('.tt-pgc [data-kd-proof]').innerText(), 'Sent names only: JIRA_LOGIN, GH_DEPLOY_TOKEN.');
+      assert.equal(await page.locator('aside.pgc [data-kd-proof]').innerText(), 'Sent names only: JIRA_LOGIN, GH_DEPLOY_TOKEN.');
       all = await kept(page);
       assert.ok(!all.includes(PASSWORD) && !all.includes(TOKEN), 'after Send no value is anywhere on the page');
       assert.ok(!logs.some(l => l.includes(PASSWORD) || l.includes(TOKEN)), 'no value in the console');
       // AC-6: typed, locked within a second, no draft kept.
-      const box = page.locator('.tt-pgc .p-text');
+      const box = page.locator('aside.pgc .p-text');
       await box.click();
       await box.pressSequentially('the token: ' + TYPED, {delay: 5});
-      await page.waitForFunction(() => /\[key:TOKEN\]/.test((document.querySelector('.tt-pgc .p-text') as HTMLTextAreaElement).value), null, {timeout: 1000});
+      await page.waitForFunction(() => /\[key:TOKEN\]/.test((document.querySelector('aside.pgc .p-text') as HTMLTextAreaElement).value), null, {timeout: 1000});
       assert.ok(!(await kept(page)).includes(TYPED), 'the typed value left the box and no draft holds it');
       // AC-8: Mark as secret on the last word.
       await box.pressSequentially(' and pw hunter', {delay: 5});
-      await page.locator('.tt-pgc [data-kd-mark]').click();
+      await page.locator('aside.pgc [data-kd-mark]').click();
       assert.match(await box.inputValue(), /and pw \[key:SECRET\]$/);
       assert.deepEqual(seen.errors, []);
       await page.close();
@@ -169,24 +169,24 @@ async function openChat(page: Page) {
       const {page, saved, sent} = await start(browser, {failSaves: 1});
       await openChat(page);
       await paste(page, `posthog ${['ph', 'x_', 'k3JdP9xQa8LmZ2vR7tYbW4nE6'].join('')} then jira user chris / ${PASSWORD}`);
-      await page.locator('.tt-pgc [data-kd-item]').nth(1).waitFor();
-      await page.locator('.tt-pgc .p-send').click();
-      await page.locator('.tt-pgc .kd-bad').waitFor();
-      assert.match(await page.locator('.tt-pgc .kd-bad').innerText(), /The vault is busy/);
+      await page.locator('aside.pgc [data-kd-item]').nth(1).waitFor();
+      await page.locator('aside.pgc .p-send').click();
+      await page.locator('aside.pgc .kd-bad').waitFor();
+      assert.match(await page.locator('aside.pgc .kd-bad').innerText(), /The vault is busy/);
       assert.equal(sent.filter(s => typeof s.text === 'string').length, 0, 'no message while a save failed');
       assert.equal(saved.length, 1);
-      await page.locator('.tt-pgc .p-send').click();
-      await page.waitForFunction(() => /Sent names only/.test(document.querySelector('.tt-pgc [data-kd-proof]')?.textContent || ''));
+      await page.locator('aside.pgc .p-send').click();
+      await page.waitForFunction(() => /Sent names only/.test(document.querySelector('aside.pgc [data-kd-proof]')?.textContent || ''));
       assert.deepEqual(saved.map(s => s.body.name), ['POSTHOG_API_KEY', 'JIRA_LOGIN'], 'the saved one is not saved twice');
       await messageSent(sent);
       assert.equal(sent.filter(s => typeof s.text === 'string').length, 1, 'the message goes once');
       // AC-7: a dropped file is refused with one line.
-      await page.locator('.tt-pgc .thv-ask').evaluate(el => {
+      await page.locator('aside.pgc .thv-ask').evaluate(el => {
         const dt = new DataTransfer();
         dt.items.add(new File(['x'], 'keys.txt', {type: 'text/plain'}));
         el.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
       });
-      assert.match(await page.locator('.tt-pgc [data-kd-proof]').innerText(), /Files can’t go in this chat/);
+      assert.match(await page.locator('aside.pgc [data-kd-proof]').innerText(), /Files can’t go in this chat/);
       await page.close();
     }
     {
@@ -194,10 +194,10 @@ async function openChat(page: Page) {
       const {page, saved} = await start(browser, {admin: false});
       await openChat(page);
       await paste(page, 'for github ' + TOKEN);
-      await page.locator('.tt-pgc .kd-denied').waitFor();
-      assert.match(await page.locator('.tt-pgc .kd-denied').innerText(), /Ask Ana.*Request a key/s);
-      assert.equal(await page.locator('.tt-pgc .p-send').isDisabled(), true);
-      await page.locator('.tt-pgc .p-text').press('Enter');
+      await page.locator('aside.pgc .kd-denied').waitFor();
+      assert.match(await page.locator('aside.pgc .kd-denied').innerText(), /Ask Ana.*Request a key/s);
+      assert.equal(await page.locator('aside.pgc .p-send').isDisabled(), true);
+      await page.locator('aside.pgc .p-text').press('Enter');
       assert.equal(saved.length, 0, 'no value leaves the page');
       await page.close();
     }
@@ -205,33 +205,33 @@ async function openChat(page: Page) {
       // AC-8 on a phone, 360 px: full screen, no sideways scroll, Mark as secret in the bar.
       const {page} = await start(browser, {width: 360});
       await page.locator('.tt-chat [data-pgc-open]').click();
-      await page.locator('.tt-pgc.pgc-full .p-text').waitFor();
+      await page.locator('aside.pgc.pgc-full .p-text').waitFor();
       // Full screen over the page, as page-chat's phone layout says, not a block under the list.
-      const panel = await page.locator('.tt-pgc').evaluate(el => {
+      const panel = await page.locator('aside.pgc').evaluate(el => {
         const r = el.getBoundingClientRect();
         return {position: getComputedStyle(el).position, top: Math.round(r.top), height: Math.round(r.height)};
       });
       assert.deepEqual(panel, {position: 'fixed', top: 0, height: 780}, 'the chat covers the phone screen');
       await paste(page, `jira user chris / ${PASSWORD}, posthog ${['ph', 'x_', 'k3JdP9xQa8LmZ2vR7tYbW4nE6'].join('')}, more ${TOKEN}`);
-      await page.locator('.tt-pgc .kd-wide').waitFor();
-      assert.equal(await page.locator('.tt-pgc [data-kd-for]').count(), 3, 'three items open the tray with For');
-      assert.equal(await page.locator('.tt-pgc [data-kd-for]').nth(1).inputValue(), 'PostHog', 'For is pre-filled from the vendor');
-      const wide = await page.evaluate(() => [document.documentElement, document.querySelector('.tt-pgc')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+      await page.locator('aside.pgc .kd-wide').waitFor();
+      assert.equal(await page.locator('aside.pgc [data-kd-for]').count(), 3, 'three items open the tray with For');
+      assert.equal(await page.locator('aside.pgc [data-kd-for]').nth(1).inputValue(), 'PostHog', 'For is pre-filled from the vendor');
+      const wide = await page.evaluate(() => [document.documentElement, document.querySelector('aside.pgc')].some(el => el && el.scrollWidth > el.clientWidth + 1));
       assert.equal(wide, false, 'no sideways scroll at 360 px');
       await shot(page, '360');
-      const box = page.locator('.tt-pgc .p-text');
+      const box = page.locator('aside.pgc .p-text');
       await box.evaluate(b => { const t = b as HTMLTextAreaElement; t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
       await box.pressSequentially(' and also secondpw', {delay: 5});
-      await page.locator('.tt-pgc [data-kd-mark]').click();
+      await page.locator('aside.pgc [data-kd-mark]').click();
       assert.match(await box.inputValue(), /and also \[key:[A-Z_]+\]$/);
-      assert.equal(await page.locator('.tt-pgc [data-kd-item]').count(), 4, 'the marked word is a fourth item');
+      assert.equal(await page.locator('aside.pgc [data-kd-item]').count(), 4, 'the marked word is a fourth item');
       await page.close();
     }
     {
       // AC-16, AC-18: the card's rows; one removed; Grant; each key's result, a failure with its fixes.
       const {page, grants, seen} = await start(browser, {card: true});
       await openChat(page);
-      const card = page.locator('.tt-pgc [data-kg="kg-1"]');
+      const card = page.locator('aside.pgc [data-kg="kg-1"]');
       await card.waitFor();
       assert.equal(await card.locator('[data-kg-row]').count(), 3);
       const words = async (l: import('playwright').Locator) => ((await l.textContent()) || '').replace(/\s+/g, ' ').trim();
@@ -242,10 +242,10 @@ async function openChat(page: Page) {
       await card.locator('[data-kg-remove="2"]').click();
       assert.equal(await card.locator('[data-kg-grant]').innerText(), 'Grant 2');
       await card.locator('[data-kg-grant]').click();
-      await page.locator('.tt-pgc .kg-result.kg-bad').waitFor();
+      await page.locator('aside.pgc .kg-result.kg-bad').waitFor();
       assert.deepEqual(grants, [{keep: [0, 1]}], 'exactly the rows kept are granted');
-      assert.match(await words(page.locator('.tt-pgc .kg-ok')), /✓ JIRA_LOGIN Connected to Jira/);
-      const bad = page.locator('.tt-pgc .kg-bad');
+      assert.match(await words(page.locator('aside.pgc .kg-ok')), /✓ JIRA_LOGIN Connected to Jira/);
+      const bad = page.locator('aside.pgc .kg-bad');
       assert.match(await words(bad), /POSTHOG_API_KEY Didn't work: Key rejected/);
       assert.equal(await bad.locator('[data-kg-paste]').innerText(), 'Paste a new key');
       assert.equal(await bad.locator('a').getAttribute('href'), '#/tools/api/posthog');
