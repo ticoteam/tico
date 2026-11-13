@@ -941,19 +941,17 @@ async function updUnreadRefresh(): Promise<UpdData | null> {
   return r;
 }
 // The bot's latest update heads the Updates section of its right rail: its age, the text (long ones fold
-// behind a small "More"), and an icon to all of its updates. Once the rail shows it, it counts as read.
+// behind a small "More"), and "All updates" beside it, to all of its updates. Once the rail shows it, it counts as read.
 async function botLatestUpdate(slug: string): Promise<void> {
   const host = $('#bot-latest'); if (!host) return;
   const r: {updates?: UpdUpdate[]} | null = await v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`);
   const u = r?.updates?.[0];
   if (!$('#bot-latest') || BOT?.slug !== slug) return;
   if (!u) { host.hidden = true; host.innerHTML = ''; return; }
-  const all = `<a class="rail-ico" href="#/bot/${encodeURIComponent(slug)}/history" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a>`;
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
-      <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
-      <span class="spacer"></span>${all}</header>
+      <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}</header>
     <div class="upd-body md">${safeMd(updNormalizeBody(u.body), {shortLinks: true})}</div>
-    <button type="button" class="rail-more" data-latest-more hidden>More</button>`;
+    <div class="rail-foot"><button type="button" class="rail-more" data-latest-more hidden>More</button><a class="rail-more" href="#/bot/${encodeURIComponent(slug)}/history" data-latest-all>All updates</a></div>`;
   host.hidden = false;
   const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
   more.onclick = () => { const open = body.classList.toggle('open'); more.textContent = open ? 'Less' : 'More'; };

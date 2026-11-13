@@ -214,9 +214,9 @@ async function assistantRail(slug: string, load: number) {
   const u = latest?.updates?.[0], up = $('#asst-latest');
   if (u) {
     up.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
-        <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>
-        <span class="spacer"></span><a class="rail-ico" href="${UPDATES}" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a></header>
-      <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>`;
+        <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span></header>
+      <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>
+      <div class="rail-foot"><a class="rail-more" href="${UPDATES}" data-latest-all>All updates</a></div>`;
     up.hidden = false;
   }
   assistantRailFit();

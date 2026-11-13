@@ -127,13 +127,13 @@ async function visualHandshake(browser: Browser) {
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
   assert.deepEqual(reads, [] as string[], 'boot has not rendered a visual before the bridge ACK');
   const firstRead = page.waitForResponse(response => new URL(response.url()).origin === VISUAL);
-  // A pinned page drawn before the ACK is an Open card, and becomes its frame once the shell trusts the address.
+  // A pinned page drawn before the ACK is a plain row, and becomes its frame once the shell trusts the address.
   assert.equal(await page.evaluate(src => {
     const slot = document.createElement('div'); slot.id = 'pin-test';
     slot.append((window as unknown as VisualWin).pageCard({file_id:'p1', title:'Plan', version:1, updated_at:'2026-01-01T00:00:00Z', src}, {size:'small'}));
     document.body.append(slot);
     return slot.querySelectorAll('.pg-card:not(.pg-framed) .pg-open').length;
-  }, VISUAL+'/visuals/'+TOKEN), 1, 'an untrusted page is an Open card');
+  }, VISUAL+'/visuals/'+TOKEN), 1, 'an untrusted page is a plain row');
   await ack(1, true);
   await page.locator('iframe.vcard-frame[src]').waitFor();
   await page.locator('#pin-test .pg-card.pg-framed iframe.page-frame').waitFor();

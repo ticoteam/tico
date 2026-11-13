@@ -4077,6 +4077,10 @@ SCHEMAS = {
             "synced": "b",
             "size": {"type": ["integer", "null"]},
             "name": "n",
+            "thumb_blob_id": {
+                "type": ["string", "null"],
+                "description": "set when an image has a small preview at /api/v2/files/{id}/thumb",
+            },
             "open": {
                 "type": ["object", "null"],
                 "description": "{type: tico|external, url}: "
