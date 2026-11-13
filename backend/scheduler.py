@@ -17,7 +17,7 @@ from .store import H, encode
 from . import sources as SRC
 
 if TYPE_CHECKING:
-    from .heartbeat import Context
+    from .heartbeat import Context, Outside
     from .drains import Drains
 
 LOG = logging.getLogger("tico.scheduler")
@@ -443,6 +443,9 @@ class Scheduler:
         # The server's drain workers (backend/drains.py) while it runs them: the automation queue, its email sends and
         # the Workspace key check run on them, beside this pass; without them the tick drains the queue itself.
         self.drains: "Drains | None" = None
+        # The outside polls' worker (backend/heartbeat.py `Outside`) while the server runs it: the steps that call
+        # GitHub run on it, beside the beat; without it the beat runs them in its own order.
+        self.outside: "Outside | None" = None
 
     def finance_due(self, key, at, every):
         last = self.finance_checked.get(key)
@@ -617,6 +620,9 @@ class Scheduler:
         if self.drains is not None:
             # The drains' failures since the last pass go on this pass's health row, as when they ran in it.
             failures.extend(self.drains.take_failures())
+        if self.outside is not None:
+            # Likewise the outside polls' failures (backend/heartbeat.py `Outside`).
+            failures.extend(self.outside.take_failures())
         with SR.recording(self.store, "screening", failures) as run:
             from . import screening
 
