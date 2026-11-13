@@ -73,3 +73,24 @@ def test_a_planned_bot_nothing_is_making_says_what_finishes_it_with_no_info_butt
     line = top_line(api)
     assert line["cause"] == "Builder 3 has not started yet: ask BotOps to take it live"
     assert line["fix"] is None and "task" not in line
+
+
+def test_a_start_ok_reads_as_an_ok_with_its_button(api, botops):  # noqa: F811
+    task_id = made_on_a_task(api, botops)
+    with api.app.state.store.transaction() as c:
+        H.task_ask(c, "bot:botops", task_id, "human:ana", ASK, kind="ok", seen_version=H.task(c, task_id)["version"])
+    line = top_line(api)
+    assert line["cause"] == "Builder 3 is waiting for your OK"
+    assert line["fix"] == "open_ask" and line["ask"]["kind"] == "ok"
+
+
+def test_a_viewer_who_may_not_read_the_making_task_gets_no_link_words_or_button(api, botops):  # noqa: F811
+    """The making task turned private after the bot was made: a reader of the bot who is no party to it learns only
+    that the bot waits, never the task's title, the ask's words or a button into it."""
+    task_id = made_on_a_task(api, botops)
+    with api.app.state.store.transaction() as c:
+        H.task_ask(c, "bot:botops", task_id, "human:ana", ASK, seen_version=H.task(c, task_id)["version"])
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
+    hidden = top_line(api, "cara-test")
+    assert hidden["cause"].startswith("Builder 3 is waiting for ") and hidden["fix"] is None
+    assert "task" not in hidden and "line" not in hidden["ask"] and "Add Builder 3" not in str(hidden)
