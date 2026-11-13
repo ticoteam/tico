@@ -748,6 +748,29 @@ def test_learnings_page_reads_pending_update_and_old_packet_receipts(api, monkey
     assert packet.status_code == 200 and len(packet.json()["items"]) == 2
 
 
+def test_learnings_night_counts_one_item_in_the_singular(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(
+            c, "human:ana", "Invoice rules", "Friday is the cutoff.", "bot:ops", lint=False, private=False
+        )
+        item = {"key": "rule", "source": "task", "ref": {"task": task["id"]}}
+        old = keep_items(c, [item], H.shift(H.now(), days=-8))
+        fresh = keep_items(c, [item])
+
+    def status(run_id):
+        page = api.get(f"/api/v2/learnings/{run_id}", headers=headers())
+        assert page.status_code == 200
+        return page.json()["sections"]["bots"][0]["delivery_status"]
+
+    assert status(fresh) == "1 item waiting for Update"
+    with store.transaction() as c:
+        learnings.pending(c, "ops")  # expires the eight-day-old delivery
+        updates.send_request(c, queue(c), delivery=True)
+    assert status(old) == "1 item expired"
+    assert status(fresh) == "1 item sent in Update"
+
+
 def learn_migration():
     path = Path(__file__).resolve().parents[1] / "migrations" / "20261105010100_learn_beta.py"
     spec = importlib.util.spec_from_file_location("learn_beta", path)

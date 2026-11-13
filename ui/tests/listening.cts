@@ -66,6 +66,9 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal(await page.locator('.lst-row.off .lst-nm').innerText(), 'Pricing page watch', tag + ': an off one is dimmed');
       await page.fill('.au-q', 'northwind');
       assert.deepEqual(await page.locator('.lst-row .lst-nm').allInnerTexts(), ['Market listening'], tag + ': the search reads the sources too');
+      await page.fill('.au-q', 'zzz');
+      assert.equal((await page.locator('.au-lst .muted', {hasText: 'No matches'}).innerText()).trim(), 'No matches', tag + ': a search that hides every row says so');
+      assert.equal(await page.locator('.lst-empty, [data-lst-new]').count(), 0, tag + ': with no button');
       await page.fill('.au-q', '');
       await shot(page, 's1-list-desktop');
 
@@ -215,6 +218,37 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal(mb.enabled, false);
       assert.deepEqual({...mb.trigger, tz: ''}, {type: 'listening', sources: [], rules: [], limits: [{count: 10, per: 'day'}], at: '08:00', tz: ''});
       assert.deepEqual(mb.steps.map(s => [s.type, s.do]), [['action', 'post_update']]);
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+
+    // None yet: one line on what Listening does and one green New listening; the + hides until one exists. A double
+    // press makes one listening.
+    {
+      const tag = 'none';
+      let posts = 0;
+      const {page, errors} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/listening',
+        tweak: fx => { fx.automations = fx.automations.filter(a => (a.trigger as {type?: string}).type !== 'listening'); },
+        routes: async p => {
+          await p.route('**/api/v2/automations', async route => {
+            if (route.request().method() === 'POST') { posts++; await new Promise(r => setTimeout(r, 300)); }
+            await route.fallback();
+          });
+        }});
+      const empty = page.locator('.au-lst .empty-state.lst-empty');
+      await empty.waitFor();
+      assert.equal((await empty.locator('p').innerText()).trim(), 'Watches the sites and searches you pick, and posts what matters to Updates.', tag + ': what it does');
+      assert.equal(await empty.locator('.ea-art').count(), 1, tag + ': its little picture');
+      assert.deepEqual(await page.locator('.au-lst :is(button,a).primary:visible').allInnerTexts(), ['New listening'], tag + ': one green action');
+      assert.equal(await page.locator('.au-lst .au-new').count(), 1, tag + ': the + stays in the page');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), false, tag + ': but hides');
+      await empty.locator('[data-lst-new]').dblclick();
+      await page.waitForFunction(() => /^#\/listening\/au_\d+$/.test(location.hash));
+      await page.waitForSelector('.lst-blk');
+      assert.equal(posts, 1, tag + ': a double press makes one listening');
+      await page.locator('.au-crumb a').click();
+      await page.waitForSelector('.lst-row');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the + is back once one exists');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
