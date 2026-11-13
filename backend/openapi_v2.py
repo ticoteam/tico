@@ -1057,7 +1057,8 @@ STABLE = [
         "relateTask",
         "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take "
         "the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and "
-        "on depends_on, in any stage (Blocked by task until it ends)",
+        "on depends_on, in any stage (Blocked by task until it ends; with until: released, until production runs a "
+        "release that holds task's merged PRs)",
         "TaskResult",
     ),
     (

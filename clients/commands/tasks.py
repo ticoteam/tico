@@ -897,7 +897,9 @@ def task_followers(api, args):
     "Relate another task to this one, read as `id kind task`: related (they belong together, the default), "
     "duplicate_of, follow_up (it was split off or followed up from task), or depends_on (this task cannot go on until "
     "task ends: it shows Blocked by it, with no date, nobody is woken for it, and its owner is woken once when task "
-    "ends; use it, never a snooze, when you wait on another task, its PR, a fix for main or a release). The other "
+    "ends; use it, never a snooze, when you wait on another task, its PR, a fix for main or a release). With until "
+    "released, a depends_on holds after task is Done, until production runs a release that holds its merged PRs: how a "
+    "Validate task waits for its work to reach production. The other "
     "relations are notes, and a task's parent is set when it is filed. `remove` takes the relation off. The reply's "
     "`readback` says what was stored, both ends: check it before reporting the link as fixed.",
     {
@@ -906,6 +908,11 @@ def task_followers(api, args):
         # No enum: blocks and blocked_by are answered with what to do instead, not with a list of choices.
         "kind": _s("related (the default), duplicate_of, follow_up or depends_on", default="related"),
         "remove": {"type": "boolean", "default": False},
+        "until": {
+            "type": "string",
+            "enum": ["released"],
+            "description": "depends_on only: stay blocked after task is Done, until production runs its release",
+        },
     },
     required=("id", "task"),
     writes=True,
@@ -922,11 +929,14 @@ def task_relate(api, args):
         raise ValueError(BLOCKING_GONE)
     if kind not in RELATION_KINDS:
         raise ValueError(f"A relation is {', '.join(RELATION_KINDS)}, not {kind}")
-    return api.post(
-        f"tasks/{args['id']}/relations",
-        {"task": str(args["task"]).lstrip("#"), "kind": kind, "remove": bool(args.get("remove"))},
-        key=_key(args),
-    )
+    body = {"task": str(args["task"]).lstrip("#"), "kind": kind, "remove": bool(args.get("remove"))}
+    if args.get("until"):
+        if kind != "depends_on" or args.get("remove"):
+            raise ValueError(
+                "--until released goes with depends_on: tico task relate <id> depends_on <task> --until released"
+            )
+        body["until"] = args["until"]
+    return api.post(f"tasks/{args['id']}/relations", body, key=_key(args))
 
 
 @tool(

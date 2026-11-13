@@ -265,6 +265,23 @@ def test_depends_on_takes_three_words_and_unrelate_takes_it_off(monkeypatch):
         hubtools.task_relate(Recorder(), {"id": "T1", "task": "depends_on", "other": "T2", "kind": "follow_up"})
 
 
+def test_depends_on_until_released_goes_to_the_api_from_the_cli_and_the_mcp_tool(monkeypatch):
+    """`tico task relate <id> depends_on <task> --until released` and the MCP tool's `until` send `until: released`; it
+    goes with depends_on only."""
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    remotecli.run(hubcli.parser().parse_args(["task", "relate", "T1", "depends_on", "T2", "--until", "released"]))
+    write = ("POST", "tasks/T1/relations", {"task": "T2", "kind": "depends_on", "remove": False, "until": "released"})
+    assert cli.writes() == [write]
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "depends_on", "until": "released"})
+    assert api.writes() == [write]
+    assert hubtools.BY_NAME["tico_task_relate"]["inputSchema"]["properties"]["until"]["enum"] == ["released"]
+    with pytest.raises(ValueError, match="goes with depends_on"):
+        hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": "follow_up", "until": "released"})
+
+
 def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatch, capsys):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     sent = []
