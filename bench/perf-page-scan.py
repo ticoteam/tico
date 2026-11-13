@@ -27,6 +27,7 @@ from backend.tests.helpers.payload_budgets import clone
 
 RUNS = int(os.environ.get("RUNS", 9))
 INBOX = (10, 100, 500)
+SHORT, LONG = 7, 220  # comments: with the task's own events, the spec's 8 and 221 items
 WORDS = (
     "The weekly numbers are in and the totals match the ledger, except for two refunds that landed after the cut. "
     "I moved them to next week and left a note on the reconciliation so the close is not held up by them. "
@@ -161,11 +162,11 @@ def test_task_share_by_history_and_links(api):
 
     print()
     short = task("Short task")
-    comment(api, short, 3)
+    comment(api, short, SHORT)
     share(f"task, {items(short)} comments and events, no page links", reader(short), len(reader(short)().content))
 
     long_ = task("Long task")
-    comment(api, long_, 110)
+    comment(api, long_, LONG)
     share(f"task, {items(long_)} comments and events, no page links", reader(long_), len(reader(long_)().content))
 
     held = task("Pages")
@@ -175,14 +176,14 @@ def test_task_share_by_history_and_links(api):
     ]
     for count in (1, 10, 100):
         named = task(f"Long task naming {count} pages")
-        comment(api, named, 110 - count)
+        comment(api, named, LONG - count)
         comment(api, named, count, lambda i: f"page:{made[i]}")
         share(f"task, {items(named)} items, {count} page links", reader(named), len(reader(named)().content))
 
     secret = made[0]
     edit(api, secret, {"people": ["ben"]})
     denied = task("Long task naming a page Cara may not open")
-    comment(api, denied, 109)
+    comment(api, denied, LONG - 1)
     comment(api, denied, 1, lambda i: f"page:{secret}")
     share(f"task, {items(denied)} items, 1 denied page", reader(denied), len(reader(denied)().content))
     assert "A page you can't open" in reader(denied)().text
