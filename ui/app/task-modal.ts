@@ -41,6 +41,9 @@ interface ModalDialog extends TfDialog {
   taskRail?: TaskRailState;
   tpOff?: (() => void) | null;
   tpEl?: TaskPagesSlot | null;
+  /** The phone tab shown (Chat, Pages or Info) and whether ⋯ › Activity and links is open, kept across redraws. */
+  taskTab?: TaskTab;
+  taskActivity?: boolean;
 }
 // GET /v2/tasks/{id} as the dialog and its conversation read it.
 interface ModalDetail {
@@ -64,7 +67,7 @@ interface ModalCommentTo { bot?: string; wakes?: boolean; mention?: string[]; }
 // The run answering the thread (`execution`): the bot's chat's pending run, with whose it is and its steps so far.
 interface ModalExecution extends ChatExecution { bot?: string; from_person?: boolean; parts?: {text: string}[]; }
 // A change in the task's history, a comment, and one line of the conversation (either).
-interface ModalEvent { created_at: string; field: string; old?: string | null; new?: string | null; note?: string | null; actor?: string; via?: string; }
+interface ModalEvent { id?: string; created_at: string; field: string; old?: string | null; new?: string | null; note?: string | null; actor?: string; via?: string; }
 interface ModalReconnectFix { runtime?: string; runner?: string; machine?: string; }
 interface ModalReconnect { fix?: ModalReconnectFix; status?: string; person?: string; service?: string; key?: string; }
 type ModalRefs = NonNullable<TfMessage['refs']> & {via?: string; quiet?: boolean; turn_id?: string; reconnect?: ModalReconnect | null; credential_request?: string};
@@ -189,6 +192,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !!opts.thread);     // a redraw of the same task keeps the view it had
+    d.taskTab = 'chat'; d.taskActivity = false;      // a task opens on its chat, Activity and links shut
     d.dataset.ask = opts.ask ? '1' : '';
   }
   const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
@@ -311,6 +315,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
   if (full) d.taskRail.full = task;
   taskRailPaint(d, task); taskRailBind(d, task);
+  taskTabsBind(d);
   const dismiss = () => d.close();
   $('[data-modal-close]', d).onclick = dismiss;
   const back = $('[data-thread-back]', d), details = $('[data-thread-details]', d);
@@ -337,8 +342,6 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   taskRequirementsBind(d, task, fresh => { if (d.open && String(d.dataset.task) === String(task.id)) { d.liveTask = fresh; void taskModalShow(fresh, d); } });
   taskPropsBind(d, task, change);
   roadmapTaskBind(d, task, change);
-  const privacy = $('[data-task-private]', d);
-  if (privacy) privacy.onchange = () => change({private: privacy.checked}, undefined, 'private');
   d.querySelectorAll<HTMLElement>('[data-drop-label]').forEach(b => b.onclick = () => change(cur => ({labels: (cur.labels || []).filter(l => l !== b.dataset.dropLabel)}), undefined, 'tags'));
   const opening = d.taskOpening;
   const linkCurrent = () => d.open && String(d.dataset.task) === String(task.id) && d.taskOpening === opening;
@@ -648,6 +651,8 @@ interface TaskChatState {
   dialog: ModalDialog; host: HTMLElement; path: string; id: string | number; poll: number; sending: boolean; reading: boolean;
   liveOff?: (() => void) | null; cid?: string; stopped?: boolean; data?: ModalDetail; rendered?: string; stopping?: string | undefined;
   reach?: ComposeReach; goalOnce?: boolean; openLines?: Set<string>; count?: number;
+  /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
+  shown?: number; earlier?: boolean;
 }
 let TASK_CHAT: TaskChatState | null = null;
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
@@ -687,6 +692,9 @@ const taskStageWord = (id: string | null | undefined) => ((typeof TASK_PIPELINES
 const taskStagesFor = async (data: ModalDetail | null | undefined) => {
   if (!TASK_PIPELINES && data?.events?.some(e => e.field === 'move')) await tasksPipelinesRead().catch(() => []);
 };
+// Jev's verdict on a page, and an answer to an ask (ok, a send-back, done), in words.
+const JEV_WORDS: Record<string, string> = {met: 'met', not_met: 'not met', unsure: 'unsure'};
+const ANSWER_WORDS: Record<string, string> = {ok: 'gave the OK', no: 'sent it back', done: 'said done', yes: 'answered yes'};
 // A move (backend/task_engine.py) names the stage it went to; a reassign who has it now.
 const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {move: id => `moved it to ${taskStageWord(id)}`, reassign: v => `handed it to ${actorLabel(v)}`, status: s => `moved it to ${taskStatusLabel({status: s ?? null})}`, owner: v => `handed it to ${actorLabel(v)}`,
   lane: v => `moved it to the ${v === 'company' ? 'team' : v} lane`, labels: v => { try { const l = JSON.parse(v || '[]'); return l.length ? `set the tags: ${l.join(', ')}` : 'removed the tags'; } catch { return 'changed the tags'; } },
@@ -696,7 +704,39 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   duplicated_by: v => v ? 'marked a duplicate of it' : 'unmarked a duplicate of it', follow_up_of: v => v ? 'marked it a follow-up' : 'unmarked it as a follow-up',
   follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up',
   link: v => v ? `linked ${v}` : 'removed a link', file: (v, x) => v ? `added ${v}` : `removed ${x.old || 'a file'}`, due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
-  lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
+  lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment',
+  // The rest of the history the server writes (backend/task_engine.py and its neighbours), so no line reads
+  // "changed <field>". A page attached carries its chip (taskEventChipHTML).
+  page_attached: (_v, x) => x.old ? 'attached a new version of a page' : 'attached a page',
+  jev_verdict: v => `Jev's check: ${JEV_WORDS[String(v)] || String(v || '')}`,
+  answer: v => ANSWER_WORDS[String(v)] || `answered: ${clipLine(String(v || ''), 80)}`,
+  requirement: () => 'asked for an answer', requirement_withdrawn: () => 'withdrew an ask',
+  snooze: v => v ? `snoozed it to ${new Date(String(v)).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'})}` : 'snoozed it',
+  unsnooze: () => 'woke it', snooze_refused: () => 'was refused a snooze', woken_again: () => 'woke it again', late: () => 'marked it late',
+  handoff_filed: () => 'filed a hand-off task', pick: v => `gave the turn to ${actorLabel(v)}`, give: v => `gave it to ${actorLabel(v)}`,
+  github: v => `GitHub: ${v || ''}`, number: v => `numbered it #${v}`, pr_queued: v => `queued ${v} to merge`, pr_dequeued: () => 'took it out of the merge queue',
+  pr_queue_removed: v => `dropped ${v || 'it'} from the merge queue`, merge_queue_failed: () => 'the merge queue sent it back',
+  session: () => 'started a new session', task_model: v => `ran on ${v}`, before: () => 'set the order', after: () => 'set the order', work: () => 'stopped its work',
+  title: () => 'renamed it', body: () => 'edited the request', goal_id: v => v ? 'tied it to a goal' : 'took it off its goal',
+  ladder: v => `asked the ${v || 'next person'} instead`, requester: v => v ? `made ${actorLabel(v)} a requester` : 'removed a requester',
+  stage_rule: () => 'applied a stage rule', reader: v => v ? `let ${actorLabel(v)} see it` : 'took a reader off', readers: () => 'changed who can see it',
+  private: v => ['1', 'true'].includes(String(v)) ? 'made it private' : 'made it visible to the team', from_private: () => 'filed it from a private task',
+  visibility: v => v === 'public' ? 'put it on the public roadmap' : 'took it off the public roadmap', size: () => 'set its size',
+  type: v => `made it a ${v || 'task'}`, step: v => `moved it to ${v || 'a step'}`};
+// The history lines that always show on their own: moves, hand-overs, snoozes, pages, Jev's checks, answers and asks,
+// subtasks. Every other change (tags, due, followers, visibility, GitHub, the queue) folds when three or more come in a
+// row (taskCommentsRender).
+const TASK_EVENT_MILESTONES = new Set(['move', 'status', 'reassign', 'owner', 'give', 'pick', 'page_attached', 'jev_verdict', 'answer', 'requirement',
+  'requirement_withdrawn', 'snooze', 'unsnooze', 'subtask', 'handoff_filed', 'merge_queue_failed', 'comment']);
+// A page attached is a chip that opens that version of the page: `page:<file id>@<version>`.
+function taskEventChipHTML(x: ModalLine) {
+  if (x.kind !== 'event' || x.field !== 'page_attached') return '';
+  const m = /^page:([^@\s]+)(?:@(\d+))?$/.exec(String(x.new || ''));
+  if (!m) return '';
+  return ` <a class="tpage-chip" href="${PAGE_ROUTE}${encodeURIComponent(m[1]!)}${m[2] ? `?v=${m[2]}` : ''}">${PROP_ICON.open}<span>Page${m[2] ? ` v${m[2]}` : ''}</span></a>`;
+}
+// The note an event carries reads as its first line (a send-back's reason, Jev's finding); GitHub's repeats the line.
+const taskEventNote = (x: ModalLine) => x.kind === 'event' && x.field !== 'github' ? String(x.note || '').trim().split('\n')[0] || '' : '';
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
   if (x.kind === 'event') {
@@ -716,14 +756,15 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
         || (y.kind === 'comment' && String(y.message?.body || '').trim() === text)))) return '';
     }
     const words = TASK_EVENT_WORDS[x.field];
-    const say = words ? words(x.new, x) : `changed ${x.field}`;
+    const say = words ? words(x.new, x) : 'updated the task';
     // A result mirrored into a comment keeps its full text there; the event still records the status move.
     const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.sender_id === x.actor
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
     const src = rowSource(x, x.actor), who = commentAuthor(x.actor, x.via, src);
     // A change the server made with no name to give it (a system line) reads as a sentence of its own.
     const said = who ? say : say.charAt(0).toUpperCase() + say.slice(1);
-    return `<div class="tcomment sys tmark">${who ? `<span class="tcomment-who">${who}</span>` : ''} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(clipLine(x.note, 200))}` : ''}</span>
+    const note = x.field !== 'note' && !mirrored ? taskEventNote(x) : '';
+    return `<div class="tcomment sys tmark" data-event="${esc(x.field)}">${who ? `<span class="tcomment-who">${who}</span>` : ''} <span class="muted">${esc(said)}${note ? ` — ${esc(clipLine(note, 200))}` : ''}</span>${taskEventChipHTML(x)}
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
@@ -993,8 +1034,11 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
     thread.addEventListener('toggle', (ev: Event) => {
       if (ev.target instanceof HTMLDetailsElement && ev.target.matches?.('details.run-steps')) void taskStepsOpen(ev.target);
       sourceGroupToggle(state.openLines, ev.target);
+      if (ev.target instanceof HTMLDetailsElement && ev.target.matches('details.src-group')) state.openLines?.[ev.target.open ? 'add' : 'delete']('g:' + ev.target.dataset.srcGroup);
     }, true);
+    thread.addEventListener('scroll', () => { if (thread.scrollTop < 48 && $('[data-task-earlier]', thread)) taskChatEarlier(state); }, {passive: true});
     thread.addEventListener('click', (ev: MouseEvent) => {
+      if (eventElement(ev)?.closest('[data-task-earlier]')) { taskChatEarlier(state); return; }
       const stop = eventElement(ev)?.closest<HTMLButtonElement>('[data-task-stop]');
       if (stop && taskChatCurrent(state)) void taskRunStop(state, stop);
     });
@@ -1013,11 +1057,20 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}${/^out of credit/i.test(data.waiting_for) ? cloudCreditLinkHTML() : ''}</p>`;
-  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
+  // Three or more updates in a row (task updates, and the history lines that are not milestones) are one "N updates"
+  // row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
   const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id));
-  const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
+  const isUpdate = (x: ModalLine) => x.kind === 'event' ? !TASK_EVENT_MILESTONES.has(x.field)
+    : !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
   state.openLines ||= new Set();
-  const html = (sourceRunsHTML(said, {isUpdate, open: (run: ModalLine[]) => run.some(x => state.openLines!.has(x.message!.id)),
+  state.shown ||= TASK_CHAT_PAGE;
+  const openLines = state.openLines;
+  // The newest lines are drawn first; scrolling to the top (or its "earlier" line) draws older ones, back to the first.
+  const older = Math.max(0, said.length - state.shown);
+  const earlier = older ? `<button type="button" class="linkish task-earlier" data-task-earlier>↑ ${older} earlier message${older === 1 ? '' : 's'} and moves</button>` : '';
+  const groupKey = (run: ModalLine[]) => { const x = run[0]; return 'g:' + String(!x ? '' : x.kind === 'event' ? x.id : x.message.id); };
+  const html = (earlier + sourceRunsHTML(said.slice(older), {isUpdate, min: 3, noun: 'updates',
+    open: (run: ModalLine[]) => openLines.has(groupKey(run)) || run.some(x => !!x.message && openLines.has(x.message.id)),
     line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
   if (html !== state.rendered) {
@@ -1034,6 +1087,18 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
       reload: () => taskChatRead(state)});
     state.rendered = html;
   }
+}
+// Draws the next older page of lines above the ones shown, keeping the line that was at the top where it was.
+const TASK_CHAT_PAGE = 50;
+function taskChatEarlier(state: TaskChatState) {
+  const thread = $('.task-comments', state.host);
+  if (!thread || !state.data || state.earlier) return;
+  state.earlier = true;
+  const fromBottom = thread.scrollHeight - thread.scrollTop;
+  state.shown = (state.shown || TASK_CHAT_PAGE) + TASK_CHAT_PAGE;
+  taskCommentsRender(state, state.data);
+  thread.scrollTop = thread.scrollHeight - fromBottom;
+  requestAnimationFrame(() => { state.earlier = false; });
 }
 async function taskChatRead(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.sending || state.reading) return;
@@ -1160,6 +1225,33 @@ function taskCauseLinkHTML(href: string | null | undefined): string {
   if (!href || !TASK_CAUSE_PAGES[href]) return '';
   return (href === '#/settings/billing' && cloudCreditLinkHTML()) || ` <a href="${esc(href)}">${TASK_CAUSE_PAGES[href]}</a>`;
 }
+// A phone shows the window as three tabs (task-code.css): Chat, the default, then Pages (with a count) and Info. On a
+// computer the chat is the left column and the tabs are not shown; the tab shown is kept on the dialog across redraws.
+type TaskTab = 'chat' | 'pages' | 'info';
+const TASK_TABS: [TaskTab, string][] = [['chat', 'Chat'], ['pages', 'Pages'], ['info', 'Info']];
+function taskTabPaint(d: ModalDialog) {
+  const tab = d.taskTab || 'chat', body = $('.task-layout', d);
+  if (body) body.dataset.taskTabShown = tab;
+  for (const b of d.querySelectorAll<HTMLElement>('[data-task-tab]')) b.setAttribute('aria-selected', String(b.dataset.taskTab === tab));
+  $('[data-task-activity]', d)?.classList.toggle('open', !!d.taskActivity);
+}
+function taskTabsBind(d: ModalDialog) {
+  taskTabPaint(d);
+  for (const b of d.querySelectorAll<HTMLElement>('[data-task-tab]')) b.onclick = () => {
+    d.taskTab = b.dataset.taskTab as TaskTab; taskTabPaint(d);
+    if (d.taskTab === 'chat' && TASK_CHAT?.dialog === d) stickScroll($('.task-comments', TASK_CHAT.host)).toBottom();
+  };
+}
+// Activity and links: Links, Runs on, Sessions, Runs, Related, Meetings and Files sit in one section at the foot of the
+// right column (a phone's Info tab). Each shows only with something in it, and the section only when one does
+// (task-code.css); ⋯ › Activity and links opens it with the empty ones too, to add a link or a session.
+function taskActivityOpen(d: ModalDialog) {
+  d.taskActivity = true; d.taskTab = 'info'; taskTabPaint(d);
+  const activity = $('[data-task-activity]', d);
+  activity?.scrollIntoView({block: 'nearest'});
+  $('.rail-h', activity)?.setAttribute('tabindex', '-1');
+  ($('.rail-h', activity) as HTMLElement | null)?.focus({preventScroll: true});
+}
 // The task in full. The header holds actions only: Snoozed (a button that wakes it), the Screen icon, 👍 👎, the age, then
 // Done and Close for whoever may use them as labelled buttons, then "…" and ✕. Who has it now is one line under the title
 // (the turn's own words), with Answer when it is your ask; then the details, To leave <stage> and the rest.
@@ -1195,18 +1287,24 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
     <div class="task-edit-meta muted"><span data-task-edited></span><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
     <div class="muted" data-task-edit-current hidden></div>
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
-    <div class="tmodal-body task-layout">
+    ${turnLine}
+    ${taskDeferredHTML(t)}
+    <div class="task-tabs" role="tablist" aria-label="Task">${TASK_TABS.map(([tab, label]) => `<button type="button" role="tab" class="task-tab" data-task-tab="${tab}" aria-selected="${tab === 'chat'}">${label}${tab === 'pages' ? ' <span class="tparts" data-task-page-count></span>' : ''}</button>`).join('')}</div>
+    <div class="tmodal-body task-layout" data-task-tab-shown="chat">
+      <section class="task-chat" aria-label="Conversation"><p class="muted" role="status">Loading the conversation…</p></section>
+      <aside class="task-side" aria-label="Details">
       <div class="tmodal-main">
       ${githubNudgeTaskHostHTML(t)}
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
       <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
-      ${turnLine}
-      ${taskDeferredHTML(t)}
       ${taskEditBodyHTML(t, original, turn?.line || '')}
       ${note && note.replace(/\s+/g, ' ').trim() !== clipLine(turn?.line, 400) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria!.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
-      <div class="tsecs">
-      ${taskRequirementsHTML(t)}
+      <div class="tsecs">${taskRequirementsHTML(t)}</div>
+      </div>
+        <section class="task-props" data-task-props aria-label="Properties">${taskPropsHTML(t)}</section>
+        <div class="task-rail" data-task-rail hidden></div>
+        <section class="task-activity" data-task-activity aria-label="Activity and links"><h3 class="rail-h">Activity and links</h3>
       <section class="tsec task-links${links.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
@@ -1217,12 +1315,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
       ${t.relations ? taskRelHTML(t) : ''}
       <section class="tsec task-meetings" data-task-meetings aria-label="Meetings" hidden></section>
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
-      </div>
-      </div>
-      <aside class="task-side" aria-label="Details">
-        <section class="task-props" data-task-props aria-label="Properties">${taskPropsHTML(t)}</section>
-        <div class="task-rail" data-task-rail hidden></div>
+        </section>
       </aside>
-      <section class="task-chat" aria-label="Conversation"><p class="muted" role="status">Loading the conversation…</p></section>
     </div>`;
 }

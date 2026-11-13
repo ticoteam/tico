@@ -64,7 +64,10 @@ const init = () => {
     return route.fulfill({json: {task}});
    });
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
+   // A phone shows the details and properties in the task window's Info tab (task #409).
+   const info = async () => { if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click(); };
    await page.evaluate(async task => taskModalShow(task), task);
+   await info();
    const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
    const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tk-row, #task-body .empty'));
    const emit = (topic: string) => page.evaluate(topic => {
@@ -131,9 +134,9 @@ const init = () => {
     await retry(); assert.equal(task[key], 'My ' + key);
     assert.ok(focusedBase >= base);
    }
-   // Size and the due-date fallback also retain the version of the field they displayed.
+   // The due-date fallback also retains the version of the field it displayed (Size is not in the window: task #409).
    for (const [key, selector, value, remote] of [
-    ['size', '[data-task-size]', '3', 8], ['due', '[data-prop-date]', '2026-12-04', '2026-12-08T17:00:00.000Z']
+    ['due', '[data-prop-date]', '2026-12-04', '2026-12-08T17:00:00.000Z']
    ] as const) {
     const box = page.locator('#task-modal ' + selector);
     await box.evaluate(el => { el.classList.add('shown'); el.focus(); });
@@ -167,10 +170,13 @@ const init = () => {
    assert.equal(await page.locator('#task-modal [data-prop-date]').inputValue(), '2026-12-10');
    delete task.occurrence;
    // Every Add box and the comment box keep all their texts while each one has focus during both redraw paths.
+   // Links and Sessions are under ⋯ › Activity and links (task #409). On a phone the message box is the Chat tab's, so
+   // it is checked at desktop width only.
+   await page.locator('[data-task-more]').click(); await page.getByRole('menuitem', {name: 'Activity and links', exact: true}).click();
    await page.locator('[data-task-more]').click(); await page.getByText('Add subtask', {exact: true}).click();
    await page.getByRole('button', {name: 'Add a link', exact: true}).click();
    await page.getByRole('button', {name: 'Add a session', exact: true}).click();
-   const boxes = ['Add subtask', 'Add a link', 'Add a session', 'Message'];
+   const boxes = ['Add subtask', 'Add a link', 'Add a session', 'Message'].slice(0, width <= 390 ? 3 : 4);
    const values = ['Typed child', 'https://acme.example/typed', 'session to keep', 'Unsent comment'];
    for (let i = 0; i < boxes.length; i++) await page.getByRole('textbox', {name: boxes[i]!, exact: true}).fill(values[i]!);
    for (let i = 0; i < boxes.length; i++) {
@@ -198,6 +204,7 @@ const init = () => {
    const owner = await page.evaluate(() => { window.oldView = taskModal().taskLive; taskModal().close(); return oldView!.owner; });
    await page.waitForFunction(() => !taskModal().taskLive);
    await page.evaluate(async task => taskModalShow(task), task);
+   await info();
    assert.notEqual(await page.evaluate(() => taskModal().taskLive!.owner), owner);
    pending.resolve(); await idle();
    assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().taskLive!.id) === taskModal().taskLive!.draft), true, 'late success cannot evict the reopened draft');
@@ -220,6 +227,7 @@ const init = () => {
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), 'New view failed draft');
    // Offline title/details survive a real reload with their old revisions and still conflict before overwriting B.
+   await info();
    await page.getByRole('button', {name: 'Edit details', exact: true}).click();
    await details.fill('Offline details to keep');
    const keptVersion = task.version;
@@ -228,6 +236,7 @@ const init = () => {
    task.title = 'B title during offline'; task.body = 'B details during offline'; task.version++;
    page.on('dialog', dialog => dialog.accept());
    await page.reload();
+   await info();
    await page.locator('#task-modal[open] [data-task-field="body"]').waitFor();
    assert.equal(await title.textContent(), 'New view failed draft');
    assert.equal(await details.inputValue(), 'Offline details to keep');
@@ -248,6 +257,7 @@ const init = () => {
    });
    assert.equal(await unload(), false);
    await page.reload();
+   await info();
    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal[open] .tmodal-title')?.textContent === 'Before debounce');
    await page.waitForFunction(() => !taskModal().taskLive!.draft.flight && !Object.keys(taskModal().taskLive!.draft.patch).length);
    // A closed task's failed title/details survive expiry with their bases, even after another editor saves.
@@ -273,7 +283,7 @@ const init = () => {
    await tasksReady();
    assert.equal(await page.locator('#task-modal[open]').count(), 0, 'the closed task stays closed after sign-in');
    await page.evaluate(id => { location.hash = '#/task/' + id; }, task.id);
-   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'}); await idle(); await info();
    assert.equal(await title.textContent(), 'Closed task title');
    assert.equal(await details.inputValue(), 'Closed task details');
    assert.equal(writes.length, beforeReturn, 'failed drafts wait for Retry after reopening');
@@ -287,19 +297,20 @@ const init = () => {
    offline = true;
    await fillTitle('Sign-in title to keep'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.evaluate(() => {
-    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['size', '5'], ['due', '2026-12-15']] as const) {
+    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['due', '2026-12-15']] as const) {
       const el = taskModal().querySelector<HTMLInputElement>(`[data-task-field="${key}"]`)!;
       (el as HTMLInputElement).value = value; el.dispatchEvent(new Event('input', {bubbles: true}));
     }
     SESSION.seen = true; signedOut('/auth/login');
    });
    assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.filter((f: {base?: unknown}) => f.base).map((f: {key: string}) => f.key).sort()),
-     ['Public summary', 'Public title', 'Size', 'Title', 'due'].sort());
-   assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith(TASK_EDIT_STORAGE)).length), 5);
+     ['Public summary', 'Public title', 'Title', 'due'].sort());
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith(TASK_EDIT_STORAGE)).length), 4);
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.find((f: {key: string}) => f.key === 'Title').value), 'Sign-in title to keep');
    const recoveryBase = await page.evaluate(() => Math.min(...JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.filter((f: {base?: unknown}) => f.base).map((f: {base: {version: number}}) => f.base.version)));
    offline = false;
    await page.reload();
+   await info();
    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
    await error.waitFor(); await idle(); await retry();
    await page.waitForFunction(() => taskModal().taskLive!.draft.error || (!taskModal().taskLive!.draft.flight && !Object.keys(taskModal().taskLive!.draft.patch).length));
@@ -310,10 +321,11 @@ const init = () => {
    }
    assert.equal(task.title, 'Sign-in title to keep');
    assert.equal(task.public_title, 'Recovered public title'); assert.equal(task.public_summary, 'Recovered public summary');
-   assert.equal(task.size, 5); assert.equal(new Date(task.due_at!).toLocaleDateString('sv'), '2026-12-15', 'the day as the viewer picked it');
+   assert.equal(new Date(task.due_at!).toLocaleDateString('sv'), '2026-12-15', 'the day as the viewer picked it');
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
+   if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
    await page.getByRole('textbox', {name: 'Message', exact: true}).fill('Ana private comment');
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive);

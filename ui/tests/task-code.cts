@@ -457,9 +457,13 @@ async function desktop(browser: Browser) {
 async function phone(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   const modal = page.locator('#task-modal'), rail = modal.locator('[data-task-rail]');
+  // A phone shows the window as tabs (task #409): the rail is in Info, under the details; the chat is its own tab.
+  await rail.locator('.task-subs .sub-row').first().waitFor({state: 'attached'});
+  await modal.getByRole('tab', {name: 'Info'}).click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
-  const main = (await modal.locator('.tmodal-main').boundingBox())!, side = (await rail.boundingBox())!, chat = (await modal.locator('.task-chat').boundingBox())!;
-  assert.ok(side.y >= main.y + main.height - 1 && chat.y >= side.y + side.height - 1, 'details, then the rail, then comments');
+  const main = (await modal.locator('.tmodal-main').boundingBox())!, side = (await rail.boundingBox())!;
+  assert.ok(side.y >= main.y + main.height - 1, 'details, then the rail');
+  assert.equal(await modal.locator('.task-chat').isVisible(), false, 'the chat is a tab away');
   assert.ok(side.x >= 0 && side.x + side.width <= 390, 'inside the screen');
   const overflow = await modal.evaluate(d => d.querySelector('.tmodal-body')!.scrollWidth - d.querySelector('.tmodal-body')!.clientWidth);
   assert.ok(overflow <= 1, 'no sideways scroll');
@@ -539,6 +543,8 @@ async function retirementHistory(browser: Browser) {
   for (const width of [1440, 390]) {
     const {page, errors} = await open(browser, {viewport: {width, height: 900}});
     const rail = page.locator('#task-modal [data-task-rail]');
+    // A phone shows the rail in the task window's Info tab (task #409).
+    if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();
     await rail.locator('.code-line').first().waitFor();
     await rail.evaluate(el => {
       const first = {computer_id: 'first', ahead: 2, dirty_files: 1, last_commit: 'a'.repeat(40)};
