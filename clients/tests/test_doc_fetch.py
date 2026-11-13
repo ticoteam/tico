@@ -120,7 +120,9 @@ def test_a_failure_after_a_fallback_is_reported_beside_the_skipped_address():
 def test_a_tls_failure_on_a_later_address_is_reported():
     import ssl
 
-    net = Net({"syften.com": [GOOGLE_V6, GOOGLE_V4]}, down={GOOGLE_V6: UNREACHABLE, GOOGLE_V4: ssl.SSLError(1, "bad cert")})
+    net = Net(
+        {"syften.com": [GOOGLE_V6, GOOGLE_V4]}, down={GOOGLE_V6: UNREACHABLE, GOOGLE_V4: ssl.SSLError(1, "bad cert")}
+    )
     with pytest.raises(F.FetchError) as failed:
         net.fetch("https://syften.com/")
     assert "Network is unreachable" in failed.value.message and "bad cert" in failed.value.message
