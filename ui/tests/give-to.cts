@@ -256,6 +256,29 @@ async function needsYou(browser: Browser): Promise<void> {
   for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(100);
   assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['botops'], 'Give sends the value the old list sent');
 
+  // Suggested reads the whole task the screen loads, not only the item's brief (title and requester): a bot named only
+  // in the body and the area tag's owner are suggested too, the same as the task's Owner menu (#385 in production).
+  const bare = {...brief, id: 't-body', number: 9, title: 'The board shows the wrong stage', owner_id: 'bot:jev'};
+  const full = {...bare, body: 'BotOps sees it on every run; Engineer last touched the stage code.', tags: [{id: 'g-bugs', key: 'bugs', owner: 'bot:b-release'}]};
+  const bodyItem = {id: 't-body', kind: 'task', line: bare.title, since: now, task: bare, task_id: 't-body'};
+  let reads = 0;
+  await page.route('**/api/v2/tasks/t-body', route => { reads++; return route.fulfill({json: {task: full}}); });
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [bodyItem]}}));
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 't-body'));
+  assert.equal(await page.evaluate(i => decideOpen('t-body', [i]), bodyItem), true);
+  await page.locator('.decide .dc-md').waitFor();
+  assert.equal(reads, 1, 'the screen read the task once');
+  await page.locator('.decide [data-dc="give"]').click();
+  await field.click();
+  await pop.waitFor();
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gt-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gt-name')?.textContent}: ${r.querySelector('.gt-why')?.textContent}`)),
+    ['Sam: Asked for it', 'BotOps: Named in the task', 'Engineer: Named in the task', 'Release Owner: Owns its area']);
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
+  assert.equal(reads, 1, 'opening the picker made no network call');
+
   // 👎 on a bot's question, Wrong person: the same field, ✓ on the task's owner, and Give to… sends the pick.
   const ask = {kind: 'ask', id: 'r-ny', task_id: 't-ask', requirement_id: 'r-ny', line: 'Which day does the beta start?', since: now,
     task: {...brief, id: 't-ask', number: 8, title: 'Plan the beta with Finance Owner', owner_id: 'bot:jev'},
@@ -264,10 +287,12 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.unroute('**/api/v2/needs-you**');
   await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [ask]}}));
   const given: unknown[] = [];
+  await page.route('**/api/v2/tasks/t-ask', route => route.fulfill({json: {task: {...ask.task, body: 'API Engineer has the dates.'}}}));
   await page.route('**/api/v2/tasks/t-ask/asks/r-ny/give', route => { given.push(route.request().postDataJSON()); return route.fulfill({json: {task: ask.task}}); });
   await page.evaluate(() => v2NeedsRead());
   await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ny'));
   assert.equal(await page.evaluate(i => decideOpen('r-ny', [i]), ask), true);
+  await page.locator('.decide .dc-md').waitFor();
   await page.locator('.decide [data-dc="down"]').click();
   await page.locator('.decide [data-dc-chip="person"]').click();
   const why = page.locator('.decide button[data-give-to]'), whyGive = page.locator('.decide [data-dc="why-give"]');
@@ -276,6 +301,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await pop.waitFor();
   assert.deepEqual(await pop.locator('[aria-checked=true] .gv-name').allTextContents(), ['Jev'], "the task's owner shows ✓");
   assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="finance"]').count(), 1, 'a bot the title names is suggested');
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 1, 'a bot only the body names is suggested');
   await page.keyboard.type('sam');
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});

@@ -21,6 +21,7 @@ interface DecAboutTask {
   created_at?: string | null;
   attachments?: {id: string; name?: string | null}[] | null;
   links?: {url: string; title?: string | null; kind?: string | null}[] | null;
+  tags?: {owner?: string | null}[] | null;
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
