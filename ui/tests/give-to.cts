@@ -81,6 +81,10 @@ async function desktop(browser: Browser): Promise<void> {
 
   // The task's Owner opens the picker: a combobox, focus in it, Suggested then Everyone, the owner ✓, no model text.
   const modal = page.locator('#task-modal');
+  // Owner is a row of the task's Details, which is one closed line until opened.
+  await modal.locator('details.task-details, [data-prop="owner"]').first().waitFor({state: 'attached'});
+  const details = modal.locator('details.task-details:not([open]) > summary');
+  if (await details.count()) await details.click();
   const owner = modal.locator('[data-prop="owner"]');
   const asked: string[] = [];
   // The reads a picker could make (the roster, tasks, tags); the app's own timers (live stream, sign-in, support) are not its.
@@ -104,7 +108,8 @@ async function desktop(browser: Browser): Promise<void> {
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-prop')), 'owner');
   assert.equal(await page.locator('#task-modal').evaluate(d => (d as HTMLDialogElement).open), true, 'Esc closes only the picker');
 
-  // The picker stays under its button when the window changes size.
+  // The picker stays under its button when the window changes size. At 700 px the full picker fits neither below nor
+  // above the Owner row, so it takes the roomier side, shortened, and never covers its button.
   await owner.click();
   await pop.waitFor();
   await page.setViewportSize({width: 1000, height: 700});
@@ -112,6 +117,11 @@ async function desktop(browser: Browser): Promise<void> {
     const p = document.querySelector('.gt-pop:popover-open')?.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')?.getBoundingClientRect();
     return !!p && !!b && p.right <= innerWidth - 8 && Math.abs(p.top - (b.bottom + 4)) <= 20;
   });
+  const fit = await page.evaluate(() => {
+    const p = document.querySelector('.gt-pop:popover-open')!.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')!.getBoundingClientRect();
+    return {clear: p.top >= b.bottom || p.bottom <= b.top, inside: p.top >= 8 && p.bottom <= innerHeight - 8};
+  });
+  assert.deepEqual(fit, {clear: true, inside: true}, 'the picker leaves its button in view and stays on screen');
   await page.keyboard.press('Escape');
   await pop.waitFor({state: 'detached'});
   await page.setViewportSize({width: 1440, height: 900});

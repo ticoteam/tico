@@ -219,9 +219,14 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   pop.addEventListener('mousedown', ev => { if (ev.target instanceof Element && ev.target.closest('.gt-row')) ev.preventDefault(); });   // the search box keeps focus
   function place(): void {
     if (!pop.isConnected) { done(); return; }   // removed without being hidden (its dialog drew again): no toggle comes
+    pop.style.maxHeight = '';
     if (matchMedia('(max-width:760px)').matches) { pop.style.top = pop.style.left = ''; return; }
     const a = anchor.getBoundingClientRect();
-    const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
+    // Below the button when it fits, else above; when neither fits (a short window, the button mid-way), the roomier
+    // side, shortened to it, so the picker never covers its own button.
+    const roomBelow = innerHeight - 8 - (a.bottom + 4), roomAbove = a.top - 4 - 8, h = pop.offsetHeight;
+    const below = h <= roomBelow || (h > roomAbove && roomBelow >= roomAbove);
+    if (h > (below ? roomBelow : roomAbove)) pop.style.maxHeight = `${Math.max(120, below ? roomBelow : roomAbove)}px`;
     pop.style.top = `${Math.max(8, below ? a.bottom + 4 : a.top - pop.offsetHeight - 4)}px`;
     pop.style.left = `${Math.max(8, Math.min(a.left, innerWidth - pop.offsetWidth - 8))}px`;
   }
