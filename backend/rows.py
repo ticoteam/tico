@@ -936,6 +936,9 @@ class ToolRow(TypedDict):
     created_at: str
     updated_at: str
     audience: str | None
+    kind: str
+    sites: str | None
+    central_only: int
 
 
 class ToolCheckRow(TypedDict):
