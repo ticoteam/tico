@@ -241,3 +241,39 @@ def test_a_removal_by_hand_at_the_queued_head_does_not_say_the_run_failed(c):
     standing = _qa_page(c, eng)
     assert (standing.state, standing.on) == (R.NOT_MET, BUILDER)
     assert standing.line.startswith("Merge queue ran aaa and it did not merge (Taken out by hand): push a fix.")
+
+
+def test_a_by_hand_removal_after_the_failed_run_still_names_the_failed_check(c):
+    """#266: the move out of Merge itself records a by-hand removal at the same head after the queue's failed run. The
+    failed check is still the reason given."""
+    eng, _rid = _merge_failed(c)
+    F.save_and_settle(c, T.REPO, 12, {"queue_state": "queued"}, F.version_now())  # queued again at aaa
+    _dropped(c, 12, why="Taken out by hand", check=None)
+    assert X.events(c, eng).count("pr_queue_removed") == 2
+    _back_to_qa(c, eng)
+    assert _qa_page(c, eng).line.startswith(f"Merge queue ran aaa and it failed ({WHY}, e2e): push a fix.")
+
+
+def test_a_pr_that_merged_in_the_queue_does_not_hold_the_task(c):
+    """Two PRs queued together: #13 merges, #12 fails. Only #12 is waited on: a merged PR gets no new commits."""
+    eng, _rid = _merge_failed(c, (12, 13), dropped=None)
+    F.save_pr(c, T.REPO, 13, {"state": "merged", "merged_sha": "m13"}, F.version_now())
+    _dropped(c, 12)
+    _back_to_qa(c, eng)
+    line = _qa_page(c, eng).line
+    assert line.startswith(f"Merge queue ran {PR} at aaa and it failed ({WHY}, e2e): push a fix.")
+    assert PR2 not in line
+    _checks(c, 12, "ccc")  # the fix, checks green (T._push saves at version 1, under the newer reads)
+    for sha in ("aaa", "ccc"):
+        F.save_diff(c, T.REPO, sha, "same-lines")
+    assert not _qa_page(c, eng).line.startswith("Merge queue"), "the fix to #12 alone ends the wait"
+
+
+def test_moved_back_before_the_queue_ran_says_it_was_queued_not_that_it_ran(c):
+    """Pulled out of Merge while still queued: no removal is recorded yet. The task still waits at that head, and the
+    line says the commit was queued and did not merge, not that the queue ran it."""
+    eng, _rid = _merge_failed(c, dropped=None)
+    _back_to_qa(c, eng, "Pulling it: e2e is flaky on main.")
+    standing = _qa_page(c, eng)
+    assert (standing.state, standing.on) == (R.NOT_MET, BUILDER)
+    assert standing.line.startswith("Merge queue had aaa and it did not merge: push a fix.")
