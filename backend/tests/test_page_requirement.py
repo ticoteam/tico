@@ -11,6 +11,7 @@ import uuid
 import pytest
 
 from backend import answers as A
+from backend import decide_groups as DG
 from backend import item_metadata as IM
 from backend import page_verdicts as V
 from backend import pipeline_judges as PJ
@@ -1384,3 +1385,170 @@ def test_tico_task_attach_with_req_attaches_a_page_through_the_pages_route(monke
         hubtools.task_attach(Client(), {"id": "T-1", "req": "Spec page", "version": 4})
     with pytest.raises(ValueError, match="name"):
         hubtools.task_attach(Client(), {"id": "T-1"})
+
+
+# ----------------------------------------------------------------------------- several pages, several requirements
+class RawJev:
+    """Jev as judge.server_engine answers it (PJ.ASK), for the grouped Jev step: counts calls, answers each requirement's
+    `met` from its own rubric (`ps`, by rubric; 0.95 otherwise), and reads each item of a grouped call on its own.
+    `drop` names a page text whose answer goes missing in a grouped call; `fail` makes every call fail."""
+
+    def __init__(self, ps=None, drop=None, fail=None):
+        self.ps, self.drop, self.fail, self.calls = ps or {}, drop, fail, []
+
+    def answer(self, one, own):
+        requirement = one["requirement"] if own == "met" else one["requirements"]["requirement" + own[3:]]
+        return {"type": "noul", "noul": self.ps.get(requirement["rubric"], 0.95)}
+
+    def __call__(self, state, questions, label):
+        self.calls.append({"state": state, "questions": sorted(questions), "label": label})
+        if self.fail:
+            raise self.fail
+        parts = DG.split(state, questions) or [("", state, {q: q for q in questions})]
+        answers = {}
+        for _name, one, ids in parts:
+            if len(parts) > 1 and self.drop and self.drop in str(one["attachment"]["text"]):
+                continue
+            for own, key in ids.items():
+                answers[key] = self.answer(one, own)
+        return {"answers": answers, "model": "tico-decide-low", "provider": "gateway", "cost_usd": 0.003, "ms": 7}
+
+
+RUBRICS = ("Says what done looks like", "Names the risks", "Lists who is affected")
+
+
+def _three(c):
+    stages = (
+        {
+            "name": "Spec",
+            "owner": WRITER,
+            "requirements": [
+                {"kind": "page", "line": line, "person": None, "settings": {"rubric": rubric}, "who_oks": "none"}
+                for line, rubric in zip(("Spec page", "Risk page", "Who page"), RUBRICS, strict=True)
+            ],
+        },
+    )
+    X.pipeline(c, "product", "Product", stages, manager="bot:manager")
+
+
+def _verdicts(store):
+    with store.read() as r:
+        return {row["rubric_hash"]: dict(row) for row in r.execute("SELECT * FROM page_verdicts").fetchall()}
+
+
+def test_one_page_on_three_requirements_is_read_once_and_each_has_its_own_verdict(store, seeded, monkeypatch):
+    """AC-7: one page attached to three requirements is one call, its text sent once, three questions, and each
+    requirement takes its own answer."""
+
+    def build(c):
+        _three(c)
+        row = _task(c)
+        fid, _ = _page(c, store, "<p>Done means the importer runs nightly.</p>")
+        return [_attach(c, row, "page:" + fid, requirement=line) for line in ("Spec page", "Risk page", "Who page")]
+
+    attached = seeded(build)
+    jev = RawJev(ps={RUBRICS[0]: 0.95, RUBRICS[1]: 0.05, RUBRICS[2]: 0.5})
+    monkeypatch.setattr(PJ, "ASK", jev)
+    monkeypatch.setattr(PJ, "SAME_PAGE", True)
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 3
+    (call,) = jev.calls
+    assert call["questions"] == ["met1", "met2", "met3"] and call["label"] == PJ.QUESTION_SET
+    assert json.dumps(call["state"]).count("importer runs nightly") == 1, "the page is sent once"
+    assert sorted(r["rubric"] for r in call["state"]["requirements"].values()) == sorted(RUBRICS)
+    got = _verdicts(store)
+    by_rubric = {}
+    for row in attached:
+        rubric = json.loads(row["judged_against"])["rubric"] if row.get("judged_against") else None
+        by_rubric[rubric] = got[row["rubric_hash"]]
+    assert {k: v["verdict"] for k, v in by_rubric.items()} == {
+        RUBRICS[0]: "met",
+        RUBRICS[1]: "not_met",
+        RUBRICS[2]: "unsure",
+    }
+    assert round(sum(v["cost_usd"] for v in got.values()), 6) == 0.003, "the call's cost is shared, not repeated"
+
+
+def test_as_shipped_one_page_on_three_requirements_is_three_calls_as_before(store, seeded, monkeypatch):
+    """SAME_PAGE off (until the real-Jev replay): each requirement is its own call with today's one `met` question."""
+
+    def build(c):
+        _three(c)
+        row = _task(c)
+        fid, _ = _page(c, store, "<p>Done means the importer runs nightly.</p>")
+        return [_attach(c, row, "page:" + fid, requirement=line) for line in ("Spec page", "Risk page", "Who page")]
+
+    seeded(build)
+    jev = RawJev(ps={RUBRICS[0]: 0.95, RUBRICS[1]: 0.05, RUBRICS[2]: 0.5})
+    monkeypatch.setattr(PJ, "ASK", jev)
+    assert PJ.SAME_PAGE is False
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 3
+    assert [call["questions"] for call in jev.calls] == [["met"], ["met"], ["met"]]
+
+
+def _five(c, store):
+    _pipeline(c, page_settings={"rubric": "Says what done looks like"})
+    rows = []
+    for n in range(5):
+        row = X.new_task(c, ANA, f"Spec {n}", "product", assignee=WRITER)
+        rows.append(row)
+        _attach(c, row, "page:" + _page(c, store, f"<p>Page {n}: done means it runs.</p>")[0])
+    return rows
+
+
+def test_five_small_pages_owed_take_fewer_than_five_calls(store, seeded, monkeypatch):
+    """AC-7: five small pages owed, grouped: fewer than five calls, and every page judged on its own."""
+    monkeypatch.setattr(PJ, "GROUP", DG.MOST)
+    rows = seeded(lambda c: _five(c, store))
+    jev = RawJev()
+    monkeypatch.setattr(PJ, "ASK", jev)
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 5
+    assert len(jev.calls) < 5
+    with store.read() as r:
+        assert all(E.task(r, row["id"])["stage"]["name"] == "Done" for row in rows)
+    assert all(v["verdict"] == "met" for v in _verdicts(store).values())
+
+
+def test_five_pages_at_one_per_call_are_five_calls_as_before(store, seeded, monkeypatch):
+    """GROUP = 1 (what ships until the replay): each page its own call, its state exactly as alone."""
+    monkeypatch.setattr(PJ, "GROUP", 1)
+    seeded(lambda c: _five(c, store))
+    jev = RawJev()
+    monkeypatch.setattr(PJ, "ASK", jev)
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 5
+    assert len(jev.calls) == 5 and all(call["questions"] == ["met"] for call in jev.calls)
+    assert all("requirement" in call["state"] for call in jev.calls)
+
+
+def test_the_spend_cap_is_read_again_before_each_page_call(store, seeded, monkeypatch):
+    """A beat that crosses the monthly cap makes no more calls after it, as when the cap was read before every page."""
+    monkeypatch.setattr(PJ, "GROUP", 1)
+    seeded(lambda c: _five(c, store))
+    jev = RawJev()
+    monkeypatch.setattr(PJ, "ASK", jev)
+    monkeypatch.setattr(PJ.judge, "over_spend_cap", lambda c, settings: "capped" if jev.calls else None)
+    V.run(store, H.shift(H.now(), seconds=1))
+    assert len(jev.calls) == 1
+
+
+def test_a_page_whose_answer_is_missing_in_a_group_is_asked_again_alone(store, seeded, monkeypatch):
+    """AC-9: the page with no answer is asked again on its own; no page takes another page's answer."""
+    monkeypatch.setattr(PJ, "GROUP", DG.MOST)
+    seeded(lambda c: _five(c, store))
+    jev = RawJev(drop="Page 2:")
+    monkeypatch.setattr(PJ, "ASK", jev)
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 5
+    assert len(jev.calls) == 2
+    assert "Page 2:" in jev.calls[1]["state"]["attachment"]["text"] and jev.calls[1]["questions"] == ["met"]
+    assert all(v["verdict"] == "met" for v in _verdicts(store).values())
+
+
+def test_a_failed_grouped_call_counts_a_try_on_each_page(store, seeded, monkeypatch):
+    """AC-10: a grouped call that fails is each page's failed call: a try counted, the verdict still owed, retried."""
+    monkeypatch.setattr(PJ, "GROUP", DG.MOST)
+    seeded(lambda c: _five(c, store))
+    jev = RawJev(fail=PJ.JudgeError("unavailable", "Jev did not answer", retryable=True))
+    monkeypatch.setattr(PJ, "ASK", jev)
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 0
+    assert len(jev.calls) == 1
+    got = list(_verdicts(store).values())
+    assert len(got) == 5 and all(v["verdict"] is None and v["tries"] == 1 and v["next_try_at"] for v in got)

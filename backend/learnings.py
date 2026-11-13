@@ -1,5 +1,6 @@
 """Learn scoring, pending Update deliveries and the Learnings page (docs/learnings.md)."""
 
+from typing import Any
 import difflib
 import json
 import logging
@@ -23,6 +24,7 @@ from .store import H, Problem
 from .updates import ZONE
 from .views import human_only
 from . import bot_settings as BS
+from . import decide_groups as DG
 
 LOG = logging.getLogger("tico.learnings")
 
@@ -34,6 +36,9 @@ MEETING_CHARS = 2000
 MAX_ITEMS = 600  # per night; the oldest beyond it are dropped and counted
 PER_RECIPIENT = 40
 WORKERS = 6
+# Items asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 QUESTION_SET = "learnings-route"
 HELPERS = ("botops", "strategy-owner")  # with the assistant: they work for people, they are not the org chart
 LIBRARIAN = "librarian"
@@ -369,13 +374,13 @@ def question_set(settings):
     return J.load_set(QUESTION_SET, registry_dir=settings.registry_dir)
 
 
-def score(engine, qset, item, team):
-    """(learnable, {id: relevance}) for one item, asking only about the recipients it may reach: every recipient in one
-    call, so the item's text is read once; more calls only when the recipients' profiles do not fit beside it in one
-    (`J.pack`), with `learnable` asked in the first."""
+def _calls(qset, item, team):
+    """[(recipients, questions, state)] for one item, asking only about the recipients it may reach: every recipient in
+    one call, so the item's text is read once; more calls only when the recipients' profiles do not fit beside it in
+    one (`J.pack`), with `learnable` asked in the first. [] when it may reach no one."""
     audience = [s for s in team if item["audience"] is None or s in item["audience"]]
     if not audience:
-        return None, {}
+        return []
     learnable_q = qset["questions"]["learnable"]
     text = {"source": item["source"], "label": item["label"], "text": item["text"]}
 
@@ -386,29 +391,71 @@ def score(engine, qset, item, team):
         questions.update({"rel_" + s: {"type": "noul", "instructions": REL + team[s]["profile"]} for s in chunk})
         return questions, {"item": text, "roster": {s: team[s]["profile"] for s in chunk}}
 
-    calls = J.pack(audience, build) or [(audience, *build(audience))]  # too big even alone: the call refuses it
+    return J.pack(audience, build) or [(audience, *build(audience))]  # too big even alone: the call refuses it
+
+
+def _read(calls, replies):
+    """(learnable, {id: relevance}) from each call's answers, in `_calls` order."""
     learnable, scores = None, {}
-    for n, (chunk, questions, state) in enumerate(calls):
-        answers = engine(state, questions, qset["label"])["answers"]
+    for n, ((chunk, _questions, _state), answers) in enumerate(zip(calls, replies, strict=True)):
         if n == 0:
             learnable = J.noul(answers, "learnable")
         scores.update({s: round(J.noul(answers, "rel_" + s), 3) for s in chunk})
     return round(learnable, 3), scores
 
 
-def route(engine, qset, items, team):
-    """Score every item in parallel. A failed call skips that item; the run goes on."""
+def score(engine, qset, item, team):
+    """(learnable, {id: relevance}) for one item, asked on its own (`_calls`)."""
+    calls = _calls(qset, item, team)
+    if not calls:
+        return None, {}
+    return _read(calls, [engine(state, questions, qset["label"])["answers"] for _chunk, questions, state in calls])
 
-    def one(item):
+
+def route(engine, qset, items, team) -> dict[str, int]:
+    """Score every item, calls in parallel. An item that fits one call alone shares a call with up to GROUP-1 other
+    such items (backend/decide_groups.py: each item gets only its own answers, a missing answer is asked again alone);
+    an item whose recipients need more than one call is asked on its own, as before. A failed call skips its items;
+    the run goes on."""
+    results: list[tuple[Any, Any]] = [((None, {}), None)] * len(items)
+    alone, pairs, places = [], [], []
+    for n, item in enumerate(items):
+        calls = _calls(qset, item, team)
+        if len(calls) == 1:
+            _chunk, questions, state = calls[0]
+            pairs.append((state, questions))
+            places.append((n, calls))
+        elif calls:
+            alone.append(n)
+
+    def one(n):
         try:
-            return score(engine, qset, item, team), None
-        except Exception as exc:  # one item's failure never stops the night
-            return (None, {}), getattr(exc, "code", type(exc).__name__)
+            return n, score(engine, qset, items[n], team), None
+        except Exception as exc:  # noqa: BLE001 - one item's failure never stops the night
+            return n, (None, {}), getattr(exc, "code", type(exc).__name__)
+
+    def run(chunk):
+        out = []
+        replies = DG.ask_run(engine, [pairs[k] for k in chunk], qset["label"])
+        for k, reply in zip(chunk, replies, strict=True):
+            n, calls = places[k]
+            if isinstance(reply, BaseException):
+                out.append((n, (None, {}), getattr(reply, "code", type(reply).__name__)))
+                continue
+            try:
+                out.append((n, _read(calls, [reply["answers"]]), None))
+            except Exception as exc:  # noqa: BLE001 - an answer that cannot be read is that item's failure
+                out.append((n, (None, {}), getattr(exc, "code", type(exc).__name__)))
+        return out
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        results = list(pool.map(one, items))
+        jobs = [pool.submit(run, chunk) for chunk in DG.packs(pairs, GROUP)]
+        jobs += [pool.submit(lambda n=n: [one(n)]) for n in alone]
+        for job in jobs:
+            for n, scored, err in job.result():
+                results[n] = (scored, err)
     failed = Counter(err for _, err in results if err)
-    for item, ((learnable, scores), err) in zip(items, results):
+    for item, ((learnable, scores), err) in zip(items, results, strict=True):
         item["learnable"], item["scores"], item["failed"] = learnable, scores, bool(err)
     return dict(failed)
 
