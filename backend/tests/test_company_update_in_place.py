@@ -156,6 +156,12 @@ def intended(before):
     for task in after["tasks"].values():
         if task["title"] == VIEW_TITLE and task["status"] == "open":
             task.update(status="closed", stage=task["stage"].rsplit("-", 1)[0] + "-closed", asks=[])
+    return ideas_move_on(after)
+
+
+def ideas_move_on(reading):
+    """The reading with Product's Ideas no longer left by hand, as migration ideas_say_it_once leaves it (a copy)."""
+    after = copy.deepcopy(reading)
     product = after.get("pipelines", {}).get("product")
     if product:
         product["stages"] = [
@@ -337,7 +343,7 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
         results.append((schema(path), seen(path)))
     assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
     assert not changes(results[0][1], results[1][1])
-    assert not changes(company.before, results[0][1]), "The pending migrations changed the company"
+    assert not changes(ideas_move_on(company.before), results[0][1]), "The pending migrations changed the company"
 
 
 REMOVED = ("growth-manager", "legal-owner", "segment-product-owner")  # live seat bots' templates in the fixture
