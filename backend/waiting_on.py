@@ -1247,14 +1247,18 @@ def _blocks(
 ) -> None:
     """ "Blocks #307, #308" in the Needs you of the person who owns a task others depend on (task_depends.blocking).
     Said after the task's own line where it is already in their list, else as the task's one entry. A task they may
-    not open is counted, not named."""
-    from . import task_calls
+    not read is counted, not named."""
+    from . import hubdb
 
-    readable = task_calls._readable_rows(conn, owner, [other for other, _number, _since in held])
-    named = [task_depends.ref({"id": other, "number": number}) for other, number, _since in held if other in readable]
+    H: Any = hubdb
+    named: list[str] = []
+    for other, number, _since in held:
+        found = H.task(conn, other)
+        if found and H.task_private_readable(conn, owner, found):
+            named.append(task_depends.ref({"id": other, "number": number}))
     said = task_depends.blocks_line(named, len(held) - len(named))
     task_id = str(row["id"])
-    entry = next((e for e in mine if e.get("task_id") == task_id and e["kind"] == "task"), None)
+    entry: Row | None = next((e for e in mine if e.get("task_id") == task_id and e["kind"] == "task"), None)
     if entry is None:
         entry = {
             "kind": "task",
@@ -1270,7 +1274,7 @@ def _blocks(
             "since": min(since for _other, _number, since in held),
         }
         mine.append(entry)
-    entry["line"] = R.sentences(entry["line"], said)
+    entry["line"] = R.sentences(str(entry["line"] or ""), said)
     entry["blocks"] = named
 
 
