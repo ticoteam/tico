@@ -457,6 +457,7 @@ interface TaskPagesSlot extends HTMLDivElement {
   tpCards?: Map<string | null, TaskPagesRow>;
   tpFollow?: (() => void) | null;
   tpFollowCid?: string | null | undefined;
+  tpMakeOpen?: boolean;
 }
 // The task's dialog, which holds its section (tpEl) and the release of its live handlers (tpOff).
 interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null; tpOff?: (() => void) | null; }
@@ -475,13 +476,20 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
   d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
+  // "+" offers Make page or Link page; the Describe box shows only once Make page is chosen (or a draft is kept).
+  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><button type="button" class="prop-add" data-tp-add aria-expanded="false" aria-label="Add a page" title="Add a page" hidden>${TL_ICON.plus}</button></header>
+    <div class="tp-actions" hidden><button type="button" class="ghost" data-tp-make>Make page</button><button type="button" class="ghost" data-tp-link>Link page</button></div>
     <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
       <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div>
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
     <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
+  slot.tpMakeOpen = !!prompt.value;
+  const add = $('[data-tp-add]', slot), choices = $('.tp-actions', slot);
+  const choose = (open: boolean) => { choices.hidden = !open; add.setAttribute('aria-expanded', String(open)); };
+  add.onclick = () => choose(choices.hidden);
+  $('[data-tp-make]', slot).onclick = () => { choose(false); slot.tpMakeOpen = true; make.hidden = false; prompt.focus(); };
   prompt.oninput = () => { try { if (prompt.value) localStorage.setItem(taskMakeDraftKey(id), prompt.value); else localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ } };
   make.onsubmit = async (ev: Event) => {
     ev.preventDefault();
@@ -499,8 +507,8 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
   };
   const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
-  $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
-  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
+  $('[data-tp-link]', slot).onclick = () => { choose(false); picker.hidden = false; input.focus(); };
+  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; add.focus(); };
   let soon = 0, search = 0;
   input.oninput = () => {
     clearTimeout(soon);
@@ -582,20 +590,20 @@ async function taskPagesLoad(d: TaskPagesHost) {
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
     const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
-    $('[data-tp-link]', slot).hidden = !r.can_link;
-    $('.tp-make', slot).hidden = !r.can_link;
+    $('[data-tp-add]', slot).hidden = !r.can_link;
+    $('.tp-make', slot).hidden = !r.can_link || !(slot.tpMakeOpen || ['making', 'update_required', 'failed'].includes(slot.tpMaking?.state ?? ''));
+    // The Pages tab counts them (a phone's task window, ui/app/task-modal.ts TASK_TABS).
+    const count = d.querySelector<HTMLElement>('[data-task-page-count]');
+    if (count) count.textContent = pins.length ? String(pins.length) : '';
     const kept = slot.tpCards || new Map<string | null, TaskPagesRow>(), cards = new Map<string | null, TaskPagesRow>();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
       let row = kept.get(pin.id);
       if (!row || row.key !== key) {
+        // One row: the page's icon and name, and the row opens the page. Its version is on the chat's chip, not here.
         const el = document.createElement('div'); el.className = 'tp-page';
-        el.append(window.pageCard(pin.page, {size: pin.size || 'medium'}));
-        if (pin.can_unpin) {
-          const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost tp-unlink';
-          b.dataset.tpUnlink = String(pin.id); b.textContent = 'Unlink'; b.setAttribute('aria-label', 'Unlink ' + pin.page.title);
-          el.append(b);
-        }
+        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}"><span class="nav-icon" aria-hidden="true">article</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
+          ? `<button type="button" class="ghost tp-unlink" data-tp-unlink="${esc(pin.id)}" aria-label="${esc('Unlink ' + pin.page.title)}" title="Unlink">${TL_ICON.x}</button>` : ''}`;
         row = {key, el};
       }
       cards.set(pin.id, row);

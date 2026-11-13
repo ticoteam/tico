@@ -20,6 +20,12 @@ interface MakeStatus {
 }
 
 
+// A phone shows a task's pages in its Pages tab, and "+" offers Make page or Link page (task #409).
+async function pagesTab(p: Pick<import('playwright').Page, 'locator'>) {
+    const tab = p.locator('#task-modal[open]').getByRole('tab', {name: /^Pages/});
+    await p.locator('#task-modal[open] [data-task-pages]').waitFor({state: 'attached'});
+    if (await tab.isVisible()) await tab.click();
+}
 async function filesPages({hub, browser, phone}: PassContext) {
     const where = phone ? 'phone' : 'desktop';
     const page = await open(browser, hub, 'dana', {phone, hash: '#/library/files'});
@@ -117,6 +123,8 @@ async function filesPages({hub, browser, phone}: PassContext) {
     assert.equal(permissions.can_link, true, `${where}: the reader can link a page`);
     go(page, '#/task/' + id);
     const section = reader.locator('[data-task-pages]');
+    await pagesTab(reader); await pagesTab(page);
+    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
     await section.getByRole('button', {name: 'Link page', exact: true}).click();
     // A later task update in the same batch must not hide the earlier files invalidation.
     const refreshed = reader.waitForResponse(r => decodeURIComponent(new URL(r.url()).pathname) === '/api/v2/places/task:' + id);
@@ -128,7 +136,7 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const choice = section.getByRole('button', {name: 'Engineering weekly', exact: true});
     const linkedPage = await choice.getAttribute('data-tp-page');
     await choice.click();
-    const card = `.pg-card[data-page="${linkedPage}"]`;
+    const card = `.tp-row[data-page="${linkedPage}"]`;
     await section.locator(card).waitFor({timeout: t(15000)});
     await page.locator('[data-task-pages] ' + card).waitFor({timeout: t(15000)});
     assert.equal(await section.locator('.tp-picker').isVisible(), false, `${where}: linking closes the picker`);
@@ -139,8 +147,8 @@ async function filesPages({hub, browser, phone}: PassContext) {
 
     // The owner unlinks it in another tab; its files event refreshes the already loaded section in both tabs.
     await page.locator('[data-task-pages]').getByRole('button', {name: 'Unlink Engineering weekly', exact: true}).click();
-    await section.locator('.pg-card').waitFor({state: 'detached', timeout: t(15000)});
-    await page.locator('[data-task-pages] .pg-card').waitFor({state: 'detached', timeout: t(15000)});
+    await section.locator('.tp-row').waitFor({state: 'detached', timeout: t(15000)});
+    await page.locator('[data-task-pages] .tp-row').waitFor({state: 'detached', timeout: t(15000)});
     assertClean(page, `${where}: unlink reaches both task readers`);
     assertClean(reader, `${where}: linked pages refresh without reopening the task`);
     await reader.context().close();
@@ -165,10 +173,14 @@ async function makePage({hub, browser, phone}: PassContext) {
       return route.fulfill({response});
     });
     const section = page.locator('[data-task-pages]'), field = section.getByRole('textbox', {name: 'Describe the page'});
+    await pagesTab(page);
+    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
+    await section.getByRole('button', {name: 'Make page', exact: true}).click();
     await field.fill('The alert flow: three scenarios as tabs.');
     await go(page, '#/tasks');
     await section.waitFor({state: 'hidden', timeout: t(10000)});
     await go(page, '#/task/' + id);
+    await pagesTab(page);
     await field.waitFor();
     assert.equal(await field.inputValue(), 'The alert flow: three scenarios as tabs.', 'closing and reopening the task restores the unsent prompt');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
@@ -203,7 +215,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     status!.state = 'made';
     const published = await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
       text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
-    await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
+    await section.locator('.tp-row[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
       const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,
         open: (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open, section: document.querySelector<HTMLElement>('[data-task-pages]')?.innerText}));
       assert.fail(e.message + '\n' + JSON.stringify({state, errors: page.watch.errors,
@@ -221,6 +233,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     await card.getByRole('link', {name: 'Open chat'}).click();
     await page.waitForURL(/#\/assistant$/, {timeout: t(10000)});
     await go(page, '#/task/' + id);
+    await pagesTab(page);
     await card.getByRole('link', {name: 'Open chat'}).waitFor({timeout: t(10000)});
 
     cap = true;

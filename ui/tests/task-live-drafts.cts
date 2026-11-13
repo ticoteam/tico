@@ -131,9 +131,9 @@ const init = () => {
     await retry(); assert.equal(task[key], 'My ' + key);
     assert.ok(focusedBase >= base);
    }
-   // Size and the due-date fallback also retain the version of the field they displayed.
+   // The due-date fallback also retains the version of the field it displayed (Size is not in the window: task #409).
    for (const [key, selector, value, remote] of [
-    ['size', '[data-task-size]', '3', 8], ['due', '[data-prop-date]', '2026-12-04', '2026-12-08T17:00:00.000Z']
+    ['due', '[data-prop-date]', '2026-12-04', '2026-12-08T17:00:00.000Z']
    ] as const) {
     const box = page.locator('#task-modal ' + selector);
     await box.evaluate(el => { el.classList.add('shown'); el.focus(); });
@@ -287,15 +287,15 @@ const init = () => {
    offline = true;
    await fillTitle('Sign-in title to keep'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.evaluate(() => {
-    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['size', '5'], ['due', '2026-12-15']] as const) {
+    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['due', '2026-12-15']] as const) {
       const el = taskModal().querySelector<HTMLInputElement>(`[data-task-field="${key}"]`)!;
       (el as HTMLInputElement).value = value; el.dispatchEvent(new Event('input', {bubbles: true}));
     }
     SESSION.seen = true; signedOut('/auth/login');
    });
    assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.filter((f: {base?: unknown}) => f.base).map((f: {key: string}) => f.key).sort()),
-     ['Public summary', 'Public title', 'Size', 'Title', 'due'].sort());
-   assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith(TASK_EDIT_STORAGE)).length), 5);
+     ['Public summary', 'Public title', 'Title', 'due'].sort());
+   assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith(TASK_EDIT_STORAGE)).length), 4);
    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.find((f: {key: string}) => f.key === 'Title').value), 'Sign-in title to keep');
    const recoveryBase = await page.evaluate(() => Math.min(...JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.filter((f: {base?: unknown}) => f.base).map((f: {base: {version: number}}) => f.base.version)));
    offline = false;
@@ -310,7 +310,7 @@ const init = () => {
    }
    assert.equal(task.title, 'Sign-in title to keep');
    assert.equal(task.public_title, 'Recovered public title'); assert.equal(task.public_summary, 'Recovered public summary');
-   assert.equal(task.size, 5); assert.equal(new Date(task.due_at!).toLocaleDateString('sv'), '2026-12-15', 'the day as the viewer picked it');
+   assert.equal(new Date(task.due_at!).toLocaleDateString('sv'), '2026-12-15', 'the day as the viewer picked it');
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
