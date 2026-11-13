@@ -1060,7 +1060,7 @@ def save_asked_vision(c, actor, task_id, text):
         raise Problem("state", "The team has a vision already; only the owner changes it, on the Strategy page", 409)
     row = H._one(c, "SELECT owner FROM goal_asks WHERE kind='vision' AND task_id=?", (task_id,))
     task = H.task(c, task_id) if row else None
-    if not task or task["status"] != "open":
+    if not row or not task or task["status"] != "open":
         raise Problem("not_found", f"No open vision question of the {name} on that task", 404)
     clean = " ".join(str(text or "").split())
     if not clean or _words(clean) not in _owner_wrote(c, task_id, row["owner"]):

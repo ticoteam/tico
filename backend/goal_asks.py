@@ -551,7 +551,7 @@ def sync(conn, owner_id, at=None, reads=None):
 
     for key, row in list(have.items()):
         task = H.task(conn, row["task_id"])
-        if key[0] == "vision" and key in want and _old_vision(task):
+        if key[0] == "vision" and key in want and task and _old_vision(task):
             # Filed as a to-do by an older release: closed, and asked as the Strategy Owner's question below.
             with isolated(conn, "goal_ask_reshape", row["task_id"], private=True):
                 if task["status"] in LIVE:
