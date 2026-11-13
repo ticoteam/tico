@@ -482,13 +482,13 @@ function pageGoals() {
   // draws the page again at its address.
   const pick = open || (PGC?.page === 'goals' && GOALS_ST?.pick) || '';
   const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, pick, panel: null, strategy: null, q: ''};
-  // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is its owner's chat.
+  // Goals is a Strategy tab: the tree is the page and "New goal" heads it. Talking about goals is its owner's chat.
   $('#main').classList.add('strategy-layout', 'rd-goals');
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><input type="search" id="goal-search" class="goal-search" aria-label="Search goals or people" autocomplete="off" placeholder="Search goals or people…"><div id="goal-body"><p class="muted">Loading…</p></div>
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   const actions = $('#strat-actions');
   if (actions && (mePerson() || S.me?.role === 'owner')) {
-    actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
+    actions.innerHTML = '<button class="primary ph-go" type="button" id="goal-new">New goal</button>';
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
   // Chat with the page's owner (page-chat.ts), the Strategy Owner by default: the goal last opened rides along.
