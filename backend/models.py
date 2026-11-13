@@ -3465,15 +3465,20 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py). Part 1 brings file import; database query, Finance ad spend and bot
-# cost follow in later parts.
-GrowthSyncKind = Literal["file"]
+# A synced source's kind (backend/growth_sync.py): file import and database query; Finance ad spend and bot cost follow
+# in later parts.
+GrowthSyncKind = Literal["file", "db_query"]
 
 
 class GrowthSyncMap(Contract):
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
     fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
+    # that database, which runs it daily.
+    database: str | None = Field(default=None, min_length=1, max_length=80)
+    query: str | None = Field(default=None, min_length=1, max_length=120)
+    bot: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class GrowthSourceCreate(Contract):
