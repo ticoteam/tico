@@ -183,7 +183,7 @@ window.pageMarket = async function pageMarket() {
     if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + `<div id="market-shell" class="${at.kind === 'map' ? 'market-shell' : 'mkt-host mkt-page'}"><p class="market-loading">Opening the market…</p></div>`;
-    if (at.kind === 'map') $('#strat-actions').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
+    if (at.kind === 'map') $('.rd-strat-head > .ph-tools').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
     const shell = $('#market-shell');
     try {
       const mounted = await (at.kind === 'map' ? mountMarket(shell) : mountMarketPage(shell));
