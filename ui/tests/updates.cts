@@ -23,6 +23,7 @@ type Gate = {held: Promise<unknown>; received: boolean};
 interface PageWin { __badges: (string | null)[]; __staleLoadDone: boolean }
 declare const UPD: {mine: boolean; loading: boolean; fromCache: boolean};
 declare function updLoad(state: typeof UPD): Promise<unknown>;
+declare function updUnreadRefresh(): Promise<unknown>;
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
 const day = (ms: number) => new Date(now + ms).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['game', 'Temp Game']].map(([name, display_name]) =>
@@ -53,7 +54,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
   const threads: Record<string, Msg[]> = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
                              {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
   const archivedIds = new Set<string>(), archiveRequests: Body[] = [];
-  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, keepUnread: string | null = null;
+  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, holdRead: Promise<unknown> | null = null, keepUnread: string | null = null;
   const isArchived = (u: Update) => archivedIds.has(u.id) || !!u.superseded;
   const feed = (kind: string | null, archive = false, includeArchive = false) => {
     const source = kind === 'weekly' ? weekly : updates;
@@ -104,6 +105,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         return json(payload);                            // a real round trip; delayed replies can be stale
       }
       if (p === '/api/v2/updates/read') {
+        if (holdRead) await holdRead;                    // held: the server does not count these reads yet
         const body = req.postDataJSON(); posted.push({path: p, body});
         for (const u of updates) if ((body.all || body.ids.includes(u.id)) && u.id !== keepUnread) u.read = body.read !== false;
         return json({marked: body.ids.length, read: body.read !== false});
@@ -173,9 +175,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await page.locator('#upd-mine .upd-lbl').isVisible(), true, 'words on a desktop');
     assert.equal(await page.locator('#upd-feed .upd-headline, #upd-feed .upd-day, #upd-today, .upd-missed, [data-upd-open], .upd-body.clamp').count(), 0);
     assert.match(await page.locator('[data-upd="u-seo"] .upd-body').innerText(), /Published the vacation rental checklist page/);
-    // Seen is read: the visible unread cards are marked in one small request.
+    // Seen is read: the visible unread cards are marked in one small request. While it is unsent or in flight the
+    // server still counts them, so an unread refresh then (the 30 s one, or after a load) must not put the badge back.
+    let releaseRead!: (value?: unknown) => void; holdRead = new Promise(r => { releaseRead = r; });
     await page.waitForFunction(() => !document.querySelector('#upd-feed .upd-card.unread'));
     await page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.hidden === true);
+    await page.evaluate(() => updUnreadRefresh());
+    assert.equal(await page.locator('.side-scroll [data-upd-badge]').evaluate(el => (el as HTMLElement).hidden), true, 'a count asked for before the reads landed leaves the badge alone');
+    holdRead = null; releaseRead();
     for (const end = Date.now() + t(10000); !posted.some(x => x.path === '/api/v2/updates/read') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     const reads = posted.filter(x => x.path === '/api/v2/updates/read');
     assert.equal(reads.length, 1, 'batched: ' + JSON.stringify(reads));

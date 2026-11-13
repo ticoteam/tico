@@ -685,10 +685,14 @@ function updWatch(state: UpdState): void {
   }, {threshold: [0, 0.25, 0.5, 0.6, 0.75, 1]});
   for (const el of document.querySelectorAll('#upd-feed .upd-card.unread, #upd-feed .upd-card.upd-quiet')) state.io.observe(el);
 }
+// Reads the server may not count yet: seen cards waiting to be sent (UPD.pending) and requests in flight. An unread
+// count asked for before they settle is stale (it still counts them) and would put the badge back; updUnreadRefresh
+// drops it.
+const UPD_READS = {sending: 0, at: 0};
 function updSeen(state: UpdState, id: string): void {
   const u = state.data?.updates?.find(x => x.id === id);
   if (!u || u.read || state.manualUnread.has(id) || UPD !== state) return;
-  u.read = true; state.pending.add(id);
+  u.read = true; state.pending.add(id); UPD_READS.at = Date.now();
   const el = document.querySelector<HTMLElement>(`#upd-feed [data-upd="${CSS.escape(id)}"]`);
   el?.classList.remove('unread', 'upd-quiet'); el?.querySelector('.upd-meta .upd-dot')?.remove();
   const t = el?.querySelector<HTMLElement>('[data-upd-toggle]'); if (t) t.outerHTML = updReadBtn(true);
@@ -699,7 +703,9 @@ function updSeen(state: UpdState, id: string): void {
 async function updFlush(state: UpdState): Promise<void> {
   const ids = [...state.pending]; state.pending.clear();
   if (!ids.length) return;
+  UPD_READS.sending++;
   try { await post('/v2/updates/read', {ids}); if (UPD === state) updCacheWrite(state, state.data); } catch { ids.forEach(id => state.pending.add(id)); }
+  UPD_READS.sending--; UPD_READS.at = Date.now();
 }
 async function updOpen(state: UpdState, id: string, focusReply?: boolean): Promise<void> {
   const u = state.data!.updates.find(x => x.id === id); if (!u) return;
@@ -908,8 +914,14 @@ function updBind(state: UpdState): void {
 // The badge on the rail and the phone's bar, from the 30 s refresh (one small count).
 // Only your direct reports' updates alert, one level down the org chart.
 async function updUnreadRefresh(): Promise<UpdData | null> {
+  const asked = Date.now();
   const r = await v2Get('/v2/updates/unread?scope=direct');
-  if (r) { updBadge(r.unread); meetPendingBadge(r.meetings_pending || 0); }
+  if (r) {
+    // A count asked for while this page's reads were unsent, or before they settled, still counts them: the next
+    // refresh brings the right number.
+    if (!UPD?.pending?.size && !UPD_READS.sending && asked > UPD_READS.at) updBadge(r.unread);
+    meetPendingBadge(r.meetings_pending || 0);
+  }
   return r;
 }
 // The bot's latest update heads the Updates section of its right rail: its age, the text (long ones fold
