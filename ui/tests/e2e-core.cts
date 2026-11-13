@@ -178,9 +178,12 @@ const needsYou = (() => {
     const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});
     // This OK binds no content (no grant), so its card's preview read is a 404 and the card shows the ask's own line.
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
+    // A question's row shows it under the task's title; an OK's row shows the task's title, with the OK's line as its tooltip.
     const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
+    const okRow = page.locator(`#task-body [data-need][title="${OK}"]`).first();
     await row(QUESTION).waitFor({timeout: t(20000)});
-    await row(OK).waitFor({timeout: t(20000)});
+    await okRow.waitFor({timeout: t(20000)});
+    assert.equal(await okRow.locator('.tk-title').textContent(), 'Set the beta budget', `${where}: the OK's row leads with its task's title`);
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
@@ -194,7 +197,7 @@ const needsYou = (() => {
     assertClean(page, `${where}: answered`);
 
     // The OK: the card goes on to it (or its row opens it), and she approves it there.
-    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await row(OK).click();
+    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();
     await until(async () => (await ok())?.met, `${where}: the OK given on the hub`);
