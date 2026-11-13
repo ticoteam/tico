@@ -104,12 +104,12 @@ def is_wait(requirement_id: object) -> bool:
     return str(requirement_id or "").startswith(KIND + ":")
 
 
+_NAMED = "SELECT t.id, t.number, t.title, s.name FROM tasks t LEFT JOIN stages s ON s.id = t.stage_id WHERE t.id=?"
+
+
 def line(conn: "sqlite3.Connection", blocker_id: str) -> str:
     """ "Blocked by #304 Growth synced sources part 1, in Build"."""
-    found = conn.execute(
-        "SELECT t.id, t.number, t.title, s.name FROM tasks t LEFT JOIN stages s ON s.id = t.stage_id WHERE t.id=?",
-        (blocker_id,),
-    ).fetchone()
+    found = read_cache.one(conn, _NAMED, (blocker_id,))
     if not found:
         return UNNAMED
     said = LINE.format(ref=ref({"id": found[0], "number": found[1]}), title=str(found[2] or "").strip(), stage="")
