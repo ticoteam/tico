@@ -289,6 +289,10 @@ def readout(c, settings, days=7, at=None):
             "share": round(spent / cap, 4) if cap > 0 else None,
         },
     }
+    # How well each bot asks people: "Badly written" send-backs over its asks, and the guard (backend/ask_quality.py).
+    from . import ask_quality
+
+    data["asks_to_people"] = ask_quality.per_bot(c, stamp(start), stamp(end))
     data["text"] = text(data)
     return data
 
@@ -345,4 +349,7 @@ def text(data):
     month = data["month"]
     cap = f"of the {_usd(month['cap_usd'])} cap ({_pct(month['share'])})" if month["cap_usd"] > 0 else "(no cap set)"
     lines.append(f"This month ({month['month']}): {_usd(month['spent_usd'])} {cap}")
+    from . import ask_quality
+
+    lines += ask_quality.lines(data.get("asks_to_people") or [])
     return "\n".join(lines)

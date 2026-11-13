@@ -166,6 +166,21 @@ def strategy_draft(api, args):
 
 
 @tool(
+    "tico_strategy_vision",
+    "The Strategy Owner only: save the vision the owner sent on your vision question (\"What is this team for?\"), "
+    "in their own words; saving it closes the question. Never a vision of your own.",
+    {
+        "task": _s("The vision question's task"),
+        "vision": _s("The vision, as the owner wrote it on that task"),
+    },
+    required=("task", "vision"),
+    writes=True,
+)
+def strategy_vision(api, args):
+    return api.call("POST", "strategy/vision", {"task": args["task"], "vision": args["vision"]}, _key(args))
+
+
+@tool(
     "tico_strategy_publish",
     "Owner only: the draft becomes the next numbered version. Needs an active bet with "
     "rules_out and wrong_if, and \"What we won't do\".",
@@ -1238,6 +1253,12 @@ STRATEGY = (
         "owner only: change the draft; a bot proposes instead (proposal create --kind strategy_draft)",
         args=(Arg("sections", type=json.loads, metavar="JSON"), Arg("section", metavar="KEY=TEXT")),
         example="tico strategy draft --section 'serve=Small offices with one IT person' --revision 4",
+    ),
+    Command(
+        "strategy vision",
+        "the Strategy Owner only: save the vision the owner sent on its question, in their words",
+        args=(Arg("task", "--task"), Arg("vision", positional=True)),
+        example="tico strategy vision --task t_1 'Every small landlord runs on bots'",
     ),
     Command(
         "strategy publish",

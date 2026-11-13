@@ -848,6 +848,14 @@ class StrategyDraft(Contract):
     sections: dict | None = None  # {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any
 
 
+class StrategyVision(Contract):
+    """The Strategy Owner saves the vision the owner sent on its vision question (backend/strategy.py
+    save_asked_vision): the task that asks it and the vision, in the owner's words."""
+
+    task: str = Field(min_length=1, max_length=128)
+    vision: str = Field(min_length=1, max_length=2000)
+
+
 class StrategyPublish(Contract):
     note: str = Field(default="", max_length=2000)
     revision: int

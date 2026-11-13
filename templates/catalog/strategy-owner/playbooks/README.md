@@ -9,6 +9,8 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
   one `strategy_draft` proposal, and ask the owner to confirm and publish. Never write the page, never publish.
 - `keep-proof-current.md`: fill or refresh "How we know they want it" from the Growth numbers, support work, meetings,
   Listening and what customer-facing bots learned, each fact with its source, as one `strategy_draft` proposal.
+- `vision-question.md`: the server's question "What is this team for?" to the owner. A reply that is a vision you save in
+  their words (`tico strategy vision`), which closes it; a question you answer, and it stays open.
 - `bet-tripped.md`: a task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level.
   One proposal for the owner: retire, rewrite, or keep with a new wrong-if, and your pick.
 - `run-a-lens.md`: the owner asks for a lens, or a tripped bet or a weekly review calls for one. Answer its questions

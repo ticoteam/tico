@@ -7611,6 +7611,14 @@ STABLE.extend(
             None,
         ),
         (
+            '/api/v2/strategy/vision',
+            'post',
+            'Strategy',
+            'saveAskedVision',
+            'The Strategy Owner only: save the vision the owner sent on its vision question, in their words',
+            None,
+        ),
+        (
             '/api/v2/strategy/publish',
             'post',
             'Strategy',

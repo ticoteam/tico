@@ -156,7 +156,7 @@ became lenses; `GET /api/v2/strategy/guides` is deprecated and lists the Default
 |---|---|---|---|
 | The owner | the draft and every version | yes, on the page or with `tico strategy draft` and `tico strategy bet` | yes, with a note |
 | Any human on the team | the published versions | no | no |
-| The Strategy Owner | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms | never |
+| The Strategy Owner | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms. The one exception is the vision the owner sends on its "What is this team for?" question, saved in their words while there is none (`tico strategy vision`, [Goals and KPIs](goals-and-kpis.md)) | never |
 | Every other bot, and an external agent over MCP | the published versions (`tico strategy show`, `tico strategy summary`) | no | never |
 
 **The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every

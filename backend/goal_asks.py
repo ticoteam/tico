@@ -11,8 +11,9 @@ their Why lines are. `sync` files what is new and closes what is resolved: a fre
 proposal decided, or the thing now someone else's. A task the person closed while the cause stands is left
 alone, and asked again only once the cause has cleared and come back.
 
-Two more wait on a person: the company's vision, while it is empty (one ask to the environment owner, first in their
-list), and the Why lines the Strategy Owner proposed (one bundled ask per person who decides them, never one per goal).
+Two more wait on a person: the company's vision, while it is empty (one question to the environment owner, asked by
+the Strategy Owner on a task it holds, so it is a question in their list and not a to-do; the Strategy Owner saves the
+vision they reply with, strategy.save_asked_vision), and the Why lines the Strategy Owner proposed (one bundled ask per person who decides them, never one per goal).
 Asks are filed most important first (`ORDER`). At level 2 and 3 a recovery the Strategy Owner proposes for a goal
 (backend/strategy_suggest.py) is its own item, with its options, and takes the place of asking that goal's owner why a
 KPI is off track.
@@ -291,13 +292,14 @@ def _ask(conn, item, manager=strategy_bot.NAME):
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
     closes = "This closes by itself once "
     if item["kind"] == "vision":
-        title = f"Tell your {manager} what this team is for"
         body = (
-            f"{title}: write the team's Vision (one or two sentences: where it is going) and what it sells (for "
-            f"whom) on the Strategy page (#/strategy). The {manager} ties every goal to the vision. {closes}a "
+            f"The {manager} asks {H.actor_name(conn, item['owner'])} what this team is for, as a question with no "
+            f"choices: they write the vision (one or two sentences: where the team is going, and what it sells to "
+            f"whom). A reply that is a vision is saved as the team's vision in their words (`tico strategy vision`) "
+            f"and this closes; a reply that is a question is answered here and the question stays open. {closes}a "
             f"vision is saved."
         )
-        return title, body
+        return VISION_QUESTION, body
     if item["kind"] == "recovery":
         return item["ask"]
     if item["kind"] == "why":
@@ -369,6 +371,45 @@ def _ask(conn, item, manager=strategy_bot.NAME):
         f"under Needs you on the Goals page. {closes}it is decided."
     )
     return title, body
+
+
+# The vision is the Strategy Owner's question to the owner, on its own task: the owner's list has the question, never a
+# to-do ("Tell your Strategy Owner what this team is for", which an older release filed and `sync` replaces).
+VISION_QUESTION = "What is this team for?"
+VISION_LINE = (
+    "What is this team for? Write its vision in one or two sentences: where it is going, and what it sells to whom."
+)
+VISION_WHY = "Every goal ties to the vision, so until there is one no goal can say why it matters."
+VISION_REASKED = "Asked as a question by the {manager} now, on its own task: the answer goes there."
+
+
+def _vision_question(conn, item, title, body):
+    """The vision ask: a task the Strategy Owner holds, with its question to the person (a typed answer, no choices),
+    so their list has the question and Write to the Strategy Owner, not a to-do."""
+    made = H.task_create(
+        conn,
+        G.AUTO_ACTOR,
+        _free_title(conn, G.AUTO_ACTOR, title),
+        body,
+        G.AUTO_ACTOR,
+        lint=False,
+        lane="company",
+    )
+    H.task_ask(
+        conn,
+        G.AUTO_ACTOR,
+        made["id"],
+        item["owner"],
+        VISION_LINE,
+        seen_version=made["version"],
+        brief={"why": VISION_WHY, "details": None, "recommend": None},
+    )
+    return made
+
+
+def _old_vision(task):
+    """A vision ask an older release filed as the person's own to-do: `sync` closes it and asks the question."""
+    return bool(task) and task["owner_id"] != G.AUTO_ACTOR
 
 
 # The goal suggestions whose asks use their card's words (ui/goals-kpis.ts goalPropHtml), never "Confirm or reject".
@@ -510,6 +551,16 @@ def sync(conn, owner_id, at=None, reads=None):
 
     for key, row in list(have.items()):
         task = H.task(conn, row["task_id"])
+        if key[0] == "vision" and key in want and task and _old_vision(task):
+            # Filed as a to-do by an older release: closed, and asked as the Strategy Owner's question below.
+            with isolated(conn, "goal_ask_reshape", row["task_id"], private=True):
+                if task["status"] in LIVE:
+                    note = VISION_REASKED.format(manager=strategy_bot.name(conn))
+                    H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
+                    closed.append(task["id"])
+                conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
+                del have[key]
+            continue
         # Marked done while its cause stands: accepted and asked again, so it does not sit done and hidden.
         again = key in want and task and task["status"] == "done"
         if key in want and not again:
@@ -550,17 +601,19 @@ def sync(conn, owner_id, at=None, reads=None):
                 # A KPI name the title lint refuses would be refused, and counted against the Strategy Owner, every hour.
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
                 continue
-            made = H.task_create(
-                conn,
-                G.AUTO_ACTOR,
-                _free_title(conn, item["owner"], title),
-                body,
-                item["owner"],
-                lint=False,
-                lane="company",
-                top=item["kind"] == "vision",
-                private=True if item.get("private") else None,
-            )
+            if item["kind"] == "vision":
+                made = _vision_question(conn, item, title, body)
+            else:
+                made = H.task_create(
+                    conn,
+                    G.AUTO_ACTOR,
+                    _free_title(conn, item["owner"], title),
+                    body,
+                    item["owner"],
+                    lint=False,
+                    lane="company",
+                    private=True if item.get("private") else None,
+                )
             conn.execute(
                 "INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES (?,?,?,?,?)",
                 (*key, made["id"], H.now()),
