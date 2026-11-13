@@ -252,7 +252,7 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
         if E.advance(conn, task_id) is not None:
             continue
         E.changed(conn, task_id, E.SYSTEM)
-        if said == "not_met":
+        if said == "not_met" and R.jev_gates(requirement):
             line = (
                 f'Jev sent back "{R.name_of(requirement)}": {reasons}'
                 if reasons

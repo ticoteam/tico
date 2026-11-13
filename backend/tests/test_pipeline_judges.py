@@ -359,7 +359,8 @@ def test_a_met_on_a_cut_spec_is_unsure_and_a_not_met_stays_not_met(tmp_path):
 
 
 def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path):
-    """Jev answers a probability, never prose: Tico says the band, p and the check, so no verdict is a bare word."""
+    """Jev answers a probability, never prose: Tico says what it found in one line naming the requirement, so no
+    verdict is a bare word."""
     path = tmp_path / "hub.sqlite"
     copy_booted(path)
     c = hub(path)
@@ -369,8 +370,11 @@ def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path)
         result = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(p, reason=""))
         said[result["verdict"]] = result["reason"]
     assert set(said) == {"met", "unsure", "not_met"}
-    assert all(REQ["rubric"] in reason for reason in said.values()), said
-    assert "could not tell" in said["unsure"] and "p 0.50" in said["unsure"]
+    assert said == {
+        "met": 'Meets "Shows the page live".',
+        "unsure": 'Can\'t tell if it meets "Shows the page live".',
+        "not_met": 'Doesn\'t meet "Shows the page live".',
+    }
     kept = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5, reason="No scope line"))
     assert kept["reason"] == "No scope line", "a model's own reason is kept"
 

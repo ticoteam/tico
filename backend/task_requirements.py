@@ -460,7 +460,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
     # Jev's verdict on a spec predicts nothing a person decides (task #351: specs it passed were sent back 49% of the
     # time, those it was unsure of 36%), so on a Spec page it never gates: a missing part goes to the person as its line.
-    gates = not (oks_anyway and _check_of(requirement) == "spec")
+    gates = jev_gates(requirement)
     if (
         said == "not_met"
         and gates
@@ -546,6 +546,13 @@ def _ok_line(conn: "sqlite3.Connection", person: str | None, page: Row) -> str:
     H: Any = hubdb
     name = H.actor_name(conn, person) if person else "someone"
     return f"OK {name} (version {page['version']})"
+
+
+def jev_gates(requirement: Row) -> bool:
+    """Whether Jev's not met sends a page back to its owner: everywhere but a Spec page a person OKs, where Jev only
+    shows the person the part that is missing (`_page`)."""
+    oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
+    return not (oks_anyway and _check_of(requirement) == "spec")
 
 
 def _check_of(requirement: Row) -> str | None:

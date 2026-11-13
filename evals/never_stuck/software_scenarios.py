@@ -706,7 +706,7 @@ def github_5xx_for_hours(r: SoftRig) -> None:
 
 
 # ----------------------------------------------------------------------------- Jev
-@case("jev-fails-three-times", "Jev's call fails 3 times: a person decides, and their OK moves it")
+@case("jev-fails-three-times", "Jev's call fails 3 times on a spec: a person decides, shown nothing from Jev")
 def jev_fails_three_times(r: SoftRig) -> None:
     p = r.idea("Webhooks")
     r.by_hand(p)
@@ -715,7 +715,7 @@ def jev_fails_three_times(r: SoftRig) -> None:
         r.w.shift(gap + 1)
         r.jev()
         r.check()
-    r.says(p, "Jev couldn't check this")
+    r.says(p, "OK ")
     expect(r.fake_jev.counts[FAIL] == 3, f"Jev was called {r.fake_jev.counts[FAIL]} times, not 3")
     person = r.person_on(p)
     r.ok_page(p, person)

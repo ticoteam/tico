@@ -227,24 +227,16 @@ def _again(c, store, row, fid, verdict="unsure", reasons="Still can't tell", tex
     return _say(c, _attach(c, row, "page:" + fid), verdict, reasons)
 
 
-def test_unsure_on_a_bots_stage_goes_back_to_the_bot_once_then_to_the_pipelines_manager(c, store):
-    """The two sign-offs rule (Nov 11): Jev unsure of a page on a stage a bot holds is the bot's to fix or explain, with
-    Jev's reason and the check; unsure again in the same visit is the manager bot's to decide, with why. No person."""
+def test_unsure_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_once(c, store):
+    """Jev unsure of a page on a stage a bot holds: the manager bot looks once, with Jev's line naming the part and never
+    the whole check, and decides with why. The page's bot is not sent back to rewrite it (task #351). No person."""
     rid = _pipeline(c, page_settings={"rubric": "Says what done looks like"})
     row = _task(c)
     fid, _ = _page(c, store)
-    _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell if the scope is set")
-    standing = _standing(c, row)
-    assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
-    assert standing.line == (
-        f"{R.FIX_OR_EXPLAIN} Jev is unsure: Can't tell if the scope is set. The check: Says what done looks like"
-    )
-    with _refused("task_requirement"):
-        A.answer(c, row["id"], rid, BEN, "ok")  # nobody's to OK: it is the bot's turn
-    _again(c, store, row, fid)
+    _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell if the scope is set.")
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-    assert standing.line.startswith(f"{R.DECIDE} Jev is unsure: Still can't tell"), standing.line
+    assert standing.line == f"{R.DECIDE} Jev is unsure: Can't tell if the scope is set."
     for who in (BEN, WRITER):
         with _refused("task_requirement"):
             A.answer(c, row["id"], rid, who, "ok", "Looks fine", seen_version=_v(c, row))
@@ -273,7 +265,7 @@ def test_unsure_on_a_bots_stage_goes_back_to_the_bot_once_then_to_the_pipelines_
     assert "Scope is in its second section; it meets the check" in notes, "the decision is on the task with its why"
 
 
-def test_jevs_unsure_wakes_the_bot_with_the_reason_then_the_manager(store, seeded, monkeypatch):
+def test_jevs_unsure_wakes_the_manager_with_the_line_not_the_bot(store, seeded, monkeypatch):
     def build(c):
         _pipeline(c, page_settings={"rubric": "Says what done looks like"})
         row = _task(c)
@@ -293,15 +285,10 @@ def test_jevs_unsure_wakes_the_bot_with_the_reason_then_the_manager(store, seede
                 )
             ]
 
-    (told,) = woken(WRITER)
-    assert 'Jev is unsure of "Spec page": Not yet met' in told and "Says what done looks like" in told
-    with store.transaction() as c:
-        fid = P.current(c, E.task(c, row["id"])["visit"]["id"], _standing(c, row).requirement["id"])["file_id"]
-        _page(c, store, "<p>v2, the scope is the importer only</p>", fid=fid)
-        _attach(c, row, "page:" + fid)
-    V.run(store, H.shift(H.now(), seconds=2))
+    assert woken(WRITER) == []
     (asked,) = woken("bot:manager")
-    assert "you decide it, as the pipeline's manager" in asked and R.DECIDE in asked
+    assert 'Jev is unsure of "Spec page": you decide it, as the pipeline\'s manager' in asked and R.DECIDE in asked
+    assert "Says what done looks like" not in asked, "the line, never the whole check"
 
 
 def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
@@ -311,23 +298,20 @@ def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
     row = _task(c)
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
-    assert _standing(c, row).state == R.NOT_MET, "the bot's one round first"
-    _again(c, store, row, fid)
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev is unsure: Still can't tell")
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev is unsure: Can't tell"), (
+        "no bot round"
+    )
     A.answer(c, row["id"], rid, BEN, "no", "Set the scope")
     _again(c, store, row, fid, text="<p>v3</p>")
     assert (_standing(c, row).state, _standing(c, row).on) == (R.NOT_MET, WRITER), "a person decided one this visit"
 
 
-def test_unsure_on_the_managers_own_stage_goes_back_to_it_once_then_to_a_person(c, store):
+def test_unsure_on_the_managers_own_stage_is_a_persons(c, store):
     _pipeline(c)
     row = _owned(c, "bot:manager")
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid, by="bot:manager"), "unsure", "Can't tell")
-    assert (_standing(c, row).state, _standing(c, row).on) == (R.NOT_MET, "bot:manager")
-    _page(c, store, "<p>v2</p>", fid=fid)
-    _say(c, _attach(c, row, "page:" + fid, by="bot:manager"), "unsure", "Still can't tell")
     assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, None)
 
 
@@ -347,15 +331,13 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
     standing = _standing(c, row)
-    assert (standing.state, standing.line) == (R.WAITING, "Jev is unsure: Can't tell"), "no bot round trip"
+    assert (standing.state, standing.line) == (R.WAITING, "OK someone (version 1)"), "no bot round trip, no Jev line"
     A.answer(c, row["id"], rid, BEN, "no", "Round the result to 10 places")
     assert _standing(c, row).on == WRITER
     _again(c, store, row, fid)
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, BEN), "asked again of the person who sent it back"
-    assert standing.line == (
-        'Version 2, after the send back: "Round the result to 10 places". Jev is unsure: Still can\'t tell'
-    )
+    assert standing.line == ('Version 2, after the send back: "Round the result to 10 places". OK Ben (version 2)')
     # The bot never asks its own OK of the page, or "OK to merge?" of it: Tico asks the person.
     page = [f"page:{fid}@2"]
     for kind, choices, shows in (("ok", None, page), ("ok", None, None), ("answer", ["Yes", "No"], page)):
@@ -566,7 +548,7 @@ def test_a_failed_check_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_o
     _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-    assert standing.line == f"{R.DECIDE} Jev couldn't check this: no model. The check: Says what done looks like"
+    assert standing.line == f"{R.DECIDE} Jev couldn't check this: no model."
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, BEN, "ok")
     with _refused("task_why"):
@@ -588,7 +570,7 @@ def test_a_failed_check_on_a_page_a_person_oks_anyway_is_theirs(c, store):
     row = _task(c)
     _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev couldn't check this: no model")
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "OK someone (version 1)")
 
 
 def test_a_failed_check_goes_to_a_person_once_per_visit_with_no_manager_bot(c, store):
@@ -741,7 +723,7 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
     assert (standing.state, standing.on) == (R.WAITING, None), "now any person's"
     assert standing.line == (
         "reviewer reviewed the commits since the reviews: Read dce5a62: sign() fixed, the tests cover 0. "
-        "Jev is unsure: Can't tell"
+        "OK someone (version 1)"
     )
     # The decision view draws the page's rounds instead of this line: the bot's read stays on the face as a notice,
     # and so does a merge conflict the person's OK hands to the Builder (as Needs you adds it to the line).
@@ -1148,7 +1130,7 @@ def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monk
 
 def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
     """Jev answers a probability and no prose (Acme, Nov 11: three Review pages "Jev is unsure" with nothing after it).
-    The verdict, its history line and the standing a person or the owner reads all say what was checked."""
+    The verdict, its history line and the standing the manager reads all name the requirement, never its rubric."""
 
     def build(c):
         _pipeline(c, page_settings={"rubric": "Says what done looks like"})
@@ -1168,8 +1150,8 @@ def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, 
                 (row["id"],),
             )
         ]
-    assert line.startswith(f"{R.FIX_OR_EXPLAIN} Jev is unsure: Jev could not tell") and "done looks like" in line, line
-    assert notes and all("Says what done looks like" in (n or "") for n in notes), notes
+    assert line == f'{R.DECIDE} Jev is unsure: Can\'t tell if it meets "Spec page".', line
+    assert notes == ['Can\'t tell if it meets "Spec page".'], notes
 
 
 def test_the_judge_is_told_the_one_linked_prs_repo_number_and_author(store, seeded, monkeypatch):
@@ -1776,7 +1758,8 @@ def test_at_release_an_open_unsure_is_judged_again_and_old_lines_lose_their_prob
 
     migration = importlib.import_module("backend.migrations.20261113060000_jev_reasons_by_part")
     _pipeline(c)
-    open_row, closed_row = _task(c), _task(c)
+    open_row = _task(c)
+    closed_row = X.new_task(c, ANA, "Billing spec", "product", assignee=WRITER)
     old = "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): Spec page"
     waiting = _say(c, _attach(c, open_row, "page:" + _page(c, store)[0]), "unsure", old)
     shut = _say(c, _attach(c, closed_row, "page:" + _page(c, store)[0]), "unsure", old)
