@@ -223,7 +223,7 @@ def source_view(row):
 def sources(c, include_retired=False):
     rows = H._rows(
         c.execute(
-            "SELECT * FROM gtm_sources"
+            f"SELECT {GS.listed(c)} FROM gtm_sources"
             + ("" if include_retired else " WHERE retired_at IS NULL")
             + " ORDER BY truth_for COLLATE NOCASE, system COLLATE NOCASE"
         )

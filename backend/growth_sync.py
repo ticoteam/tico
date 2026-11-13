@@ -109,6 +109,14 @@ def health(row: dict[str, Any], at: datetime | None = None) -> dict[str, Any]:
     return {"health": "fresh", "since": None}
 
 
+def listed(c: Any, alias: str = "") -> str:
+    """The gtm_sources columns to select for a list: every column but the stored file, which can be 1 MB a source, with
+    `has_payload` saying whether one is kept."""
+    p = f"{alias}." if alias else ""
+    names = [str(r[1]) for r in c.execute("PRAGMA table_info(gtm_sources)") if r[1] != "last_payload"]
+    return ", ".join(p + n for n in names) + f", length({p}last_payload) > 0 AS has_payload"
+
+
 def view(row: dict[str, Any]) -> dict[str, Any]:
     """What a source adds to its list row: its kind, what it fills, its mapping and its health."""
     kind = row.get("sync_kind")
@@ -124,7 +132,7 @@ def view(row: dict[str, Any]) -> dict[str, Any]:
         "last_run_at": row.get("last_run_at"),
         "last_good_run": row.get("last_good_run_at"),
         "last_error": row.get("last_error"),
-        "has_file": bool(row.get("last_payload")),
+        "has_file": bool(row.get("has_payload") or row.get("last_payload")),
     }
 
 
@@ -499,7 +507,8 @@ def live_owner(c: Any, cohort_id: str, field: str) -> dict[str, Any] | None:
     hands it back to typing."""
     row = H._one(
         c,
-        "SELECT s.* FROM growth_origins o JOIN gtm_sources s ON s.id=o.source_id WHERE o.cohort_id=? AND o.field=? "
+        f"SELECT {listed(c, 's')} FROM growth_origins o JOIN gtm_sources s ON s.id=o.source_id WHERE o.cohort_id=? "
+        "AND o.field=? "
         "AND o.origin='synced' AND s.sync_kind IS NOT NULL AND s.retired_at IS NULL",
         (cohort_id, field),
     )

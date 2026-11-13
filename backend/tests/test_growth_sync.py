@@ -69,6 +69,7 @@ def test_a_csv_fills_known_channels_lists_the_unknown_one_and_marks_each_number_
     assert get(api, "growth/cohorts")["cohorts"] and cohort(api, "unknown", m) is None
     listed = get(api, "growth/sources")["sources"][0]
     assert listed["health"] == "fresh" and listed["last_good_run"] and listed["last_error"] is None
+    assert listed["has_file"] is True and "last_payload" not in listed
     numbers = get(api, "growth/numbers")
     search_series = next(ch for ch in numbers["channels"] if ch["slug"] == "search-ads")["series"][-1]
     assert search_series["origins"]["new_customers"]["source"] == "Signups sheet"
