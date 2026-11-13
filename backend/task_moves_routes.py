@@ -452,7 +452,9 @@ def register(
             seen_version=version,
             mover=mover(c, who) or None,
         )
-        org_rule_check.late_on(c, gate, "task_note", task=task_id)
+        if gate and gate.get("late"):
+            saved: dict[str, Any] = H.task(c, task_id) or {}
+            org_rule_check.late_on(c, gate, "task_note", task=task_id, note=saved.get("note") or "")
         return {"requirement_id": made.get("requirement_id")}
 
     says("task_ask", M.TaskAsk, ask_said, ask_call, to=lambda body: body.to, ask=True, late=True)

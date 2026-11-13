@@ -1680,7 +1680,11 @@ def answer(gate):
 # with `late`, `apply` queues it in `org_rule_late` inside the write). A broken rule then puts today's warning line on
 # the saved words (`late_on` says where they are) and tells the author; a check that cannot run records the same
 # `rules.unchecked` as before. A rule that can hold a write is never left for later: it is checked before the write.
-LATE_TRIES = 5  # passes a late check waits for a free call slot (`busy`) before it is recorded unchecked
+# A late check with every call slot busy is not lost to a burst of other writes: it waits by age, not by passes, and is
+# tried again every LATE_RETRY_SECONDS until LATE_BUSY_SECONDS have passed since its write; only then is it recorded
+# unchecked (reason `busy`). `tries` counts the waits.
+LATE_BUSY_SECONDS = 60
+LATE_RETRY_SECONDS = 1.0
 LATE_KEYS = (
     "author",
     "sender",
@@ -1723,7 +1727,8 @@ def _queue_late(c, verdict):
 def late_on(c, gate, kind, **ref):
     """Where a write left for a late check saved its words, so a broken rule's line lands on them: `message` (a
     comment: `message`, `task`), `answer` (a done note: `answer`) or `task_note` (an ask, whose line goes before the
-    task's note as today: `task`). Nothing for any other gate."""
+    task's note as today: `task`, and the `note` it saved, so a note changed since keeps no line). Nothing for any
+    other gate."""
     if gate and gate.get("late"):
         c.execute(
             "UPDATE org_rule_late SET target=? WHERE id=?",
@@ -1751,7 +1756,10 @@ def kick_late(store, primary):
         try:
             while again.is_set():
                 again.clear()
-                drain_late(store, primary)
+                if drain_late(store, primary) and _late_waiting(store):
+                    # A check waited for a busy slot: look again shortly, sooner when a new write kicks.
+                    again.wait(LATE_RETRY_SECONDS)
+                    again.set()
         except Exception:  # the scheduler's tick starts it again
             LOG.exception("Late rule checks failed")
         finally:
@@ -1763,6 +1771,12 @@ def kick_late(store, primary):
         threading.Thread(target=work, name="org-rule-late", daemon=True).start()
     except RuntimeError:  # no thread to be had: the scheduler's tick tries again
         running.release()
+
+
+def _late_waiting(store):
+    """Whether a late check is waiting for a busy call slot."""
+    with store.read() as c:
+        return c.execute("SELECT 1 FROM org_rule_late WHERE tries>0 LIMIT 1").fetchone() is not None
 
 
 def drain_late(store, primary):
@@ -1835,7 +1849,7 @@ def run_late(store, primary, row):
         # (backend/task_rule_gate.py `held_locally`).
         verdict = {**verdict, "outcome": "too_large", "local": "day_cap", "broken": [r["id"] for r in verdict["rules"]]}
     busy = bool(verdict) and verdict.get("error") == "busy"
-    if busy and row["tries"] + 1 < LATE_TRIES:
+    if busy and row["created_at"] > H.shift(H.now(), seconds=-LATE_BUSY_SECONDS):
         with store.transaction() as c:
             c.execute("UPDATE org_rule_late SET tries=tries+1 WHERE id=?", (row["id"],))
         return None
@@ -1876,7 +1890,7 @@ def _warn_saved(c, target, gate):
             c.execute("UPDATE answers SET notes=? WHERE id=?", (warned_text(gate, found[0] or ""), target["answer"]))
     elif kind == "task_note":
         found = c.execute("SELECT note FROM tasks WHERE id=?", (target["task"],)).fetchone()
-        if found is not None:
+        if found is not None and (found[0] or "") == target.get("note", found[0] or ""):
             c.execute(
                 "UPDATE tasks SET note=?, updated_at=? WHERE id=?",
                 (warned_note(gate, found[0] or ""), ts, target["task"]),

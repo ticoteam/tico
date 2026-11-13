@@ -166,19 +166,58 @@ def test_a_judge_that_fails_after_the_write_keeps_it_and_records_it_unchecked(ru
     assert events(api, "rules.warned") == []
 
 
-def test_a_busy_judge_leaves_the_check_for_a_later_pass(ruled, monkeypatch):
-    """No free call slot: the check waits for the next pass instead of going unchecked at once."""
+def test_a_busy_burst_never_uses_up_a_late_check(ruled, monkeypatch):
+    """Every call slot busy while other writes keep coming: each write starts a drain pass, but a waiting check is kept
+    until a slot frees, then checked, and its warning line lands. Nothing is recorded unchecked meanwhile."""
     api, judge = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
     made = comment(api, task, BROKEN)
-    settle(api)
-    assert sql(api, "SELECT tries FROM org_rule_late")[0]["tries"] >= 1
+    for n in range(6):
+        comment(api, task, f"Safe note {n}.")
+        settle(api)
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 7
+    assert events(api, "rules.unchecked") == []
     monkeypatch.undo()
     api.app.state.judge = judge
     settle(api)
     assert body_of(api, made["comment"]["id"]).startswith("Warning:")
+    assert events(api, "rules.unchecked") == []
+
+
+def test_a_late_check_busy_past_a_minute_is_recorded_unchecked(ruled, monkeypatch):
+    """A check that found no free slot for LATE_BUSY_SECONDS after its write gives up: the write stays as saved, with
+    the same `rules.unchecked` (reason `busy`) a check that cannot run records."""
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
+    made = comment(api, task, BROKEN)
+    settle(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_late SET created_at=?", (K.H.shift(K.H.now(), seconds=-K.LATE_BUSY_SECONDS - 1),))
+    settle(api)
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
+    assert body_of(api, made["comment"]["id"]) == BROKEN
+    [unchecked] = detail(events(api, "rules.unchecked"))
+    assert unchecked["reason"] == "busy" and unchecked["late"] is True
+
+
+def test_a_late_warning_skips_a_task_note_changed_since_the_ask(ruled):
+    """An ask's line goes before the task's note it saved; a note changed before the check ends keeps no line."""
+    api, judge = ruled
+    everyone_rule(api)
+    task = task_for_ops(api)
+    judge.hold = threading.Event()  # the check answers only once the note has changed
+    try:
+        post(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "Is our favorite color is red okay?", "version": 1})
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET note='Rewritten since.' WHERE id=?", (task["id"],))
+    finally:
+        judge.hold.set()
+    settle(api)
+    assert sql(api, "SELECT note FROM tasks WHERE id=?", (task["id"],))[0]["note"] == "Rewritten since."
 
 
 def test_two_hundred_comments_with_retries_are_saved_once_each_in_order(ruled):
