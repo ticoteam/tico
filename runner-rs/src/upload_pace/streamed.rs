@@ -622,23 +622,27 @@ async fn control_behind_a_stalled_ack(bounds: Bounds) -> Duration {
         let (runner, aid) = (runner.clone(), aid.clone());
         async move { runner.flush(&aid).await }
     });
+    // Lets the second flush queue behind the first before the stall can begin.
     tokio::time::sleep(Duration::from_millis(50)).await;
     let state = runner.state.clone();
     let stall = std::thread::spawn(move || {
         state.with(|_| {
+            let began = Instant::now();
             // Stores a permit if the hub is not waiting yet.
             stalled.notify_one();
             std::thread::sleep(Duration::from_secs(1));
-            Ok(())
+            Ok(began)
         })
     });
     first.await.unwrap().unwrap();
     second.await.unwrap().unwrap();
-    stall.join().unwrap().unwrap();
+    let stall_began = stall.join().unwrap().unwrap();
     let kept = hub.kept.lock().unwrap();
     assert!(kept.refused.is_empty(), "{:?}", kept.refused);
     assert_eq!(kept.stored[&aid], local(&runner, &aid));
-    let late = arrival(&kept, &aid, seq).saturating_duration_since(written);
+    // The hub holds its first answer until the stall begins, so a late stall thread would count against the new
+    // order too: measure from whichever came last.
+    let late = arrival(&kept, &aid, seq).saturating_duration_since(written.max(stall_began));
     std::fs::remove_dir_all(dir).ok();
     late
 }
