@@ -807,6 +807,18 @@ function decideTypedHTML(typed: NonNullable<TaskReq['typed']>, choices: string[]
 /** What Give to…'s suggestions read: the whole task the screen loads (its body and area tags), else the item's brief
     while that read is on its way or failed. */
 const decideGiveTask = (it: NeedsEntry): GiveToTask | null => decideAboutOf(it)?.task || it.task || null;
+/** Draws the right side again once the task's read arrives, without losing Give to…: while its picker is open the side
+    stays (redrawing would take the picker's button away, and a pick would land nowhere) and the field's next opening
+    reads the whole task; a pick not yet given is kept on the new field. */
+const decideGiveBtn = () => $('.decide button[data-give-to]') as HTMLButtonElement | null;
+function decidePaintSideKeepGive(st: DecState, it: NeedsEntry) {
+  const btn = decideGiveBtn();
+  if (btn?.getAttribute('aria-expanded') === 'true') { GIVE_TO_TASKS.set(btn.dataset.giveTo || '', decideGiveTask(it)); return; }
+  const to = decideTo();
+  decidePaintSide(st);
+  const now = decideGiveBtn(), e = to ? giveToEntries(to).find(x => giveToIs(x, to)) : undefined;
+  if (now && e) giveToFieldSet(now, e);
+}
 /** Snooze, Give to… and Move back open their choices under the buttons. */
 function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   const busy = st.busy ? ' disabled' : '';
@@ -1230,6 +1242,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       return;
     case 'down':
       st.sheet = st.sheet ? null : {step: 'why', chip: '', note: '', feedbackId: '', rule: '', allBots: false};
+      // An OK's task is not read for its left side; the sheet's Give to… suggests from it, so read it now (once).
+      if (st.sheet) decideAboutLoad(decideTaskId(it));
       decidePaintHead(st); decidePaintSide(st); return;
     case 'why-back': await decideDo(st, it, 'Sent back', () => taskThumbs(taskId, rid, false, decideWhy(st.sheet))); return;
     case 'why-give': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskGiveAsk(taskId, rid, to, ver)); return; }

@@ -13,6 +13,7 @@ declare function giveToMatch(q: string, entries: unknown[]): {name: {name: strin
 declare function giveToSuggest(entries: unknown[], task: unknown, recent: string[]): {entry: {name: string}; why: string}[];
 declare function openTaskCreate(owner?: string, opts?: Record<string, unknown>): void;
 declare function decideOpen(id?: string, items?: unknown[]): boolean;
+declare const DEC_ABOUT: Map<string, {state: string}>;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {open} = require('./task-code.cts') as {open: (browser: Browser, opts?: Record<string, unknown>) => Promise<{page: Page; errors: string[]; data: {tasks: Record<string, unknown>[]}}>};
@@ -308,6 +309,71 @@ async function needsYou(browser: Browser): Promise<void> {
   await whyGive.click();
   for (let i = 0; i < 50 && !given.length; i++) await page.waitForTimeout(100);
   assert.deepEqual(given.map(b => (b as {to: string}).to), ['human:sam']);
+
+  // 👎 on a bot's OK ask: an OK shows its own content, so the task is read only when 👎 opens; Suggested then has the
+  // bot its body names. The read lands while the picker is open: the picker stays and its pick is the one given.
+  const okAsk = {...ask, id: 'r-ok', requirement_id: 'r-ok', task_id: 't-ok', line: 'OK to start the beta?',
+    task: {...ask.task, id: 't-ok', number: 10, title: 'Start the beta'},
+    ask: {...ask.ask, requirement_id: 'r-ok', kind: 'ok', line: 'OK to start the beta?', may: ['ok', 'no', 'give', 'thumbs']}};
+  let okReads = 0, release: () => void = () => {};
+  const held = new Promise<void>(r => { release = r; });
+  await page.route('**/api/v2/tasks/t-ok', async route => { okReads++; await held; return route.fulfill({json: {task: {...okAsk.task, body: 'API Engineer has the dates.'}}}); });
+  const okGiven: unknown[] = [];
+  await page.route('**/api/v2/tasks/t-ok/asks/r-ok/give', route => { okGiven.push(route.request().postDataJSON()); return route.fulfill({json: {task: okAsk.task}}); });
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [okAsk]}}));
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ok'));
+  assert.equal(await page.evaluate(i => decideOpen('r-ok', [i]), okAsk), true);
+  await page.locator('.decide [data-dc="down"]').click();
+  for (let i = 0; i < 50 && !okReads; i++) await page.waitForTimeout(100);
+  assert.equal(okReads, 1, '👎 on an OK reads its task');
+  await page.locator('.decide [data-dc-chip="person"]').click();
+  await why.click();
+  await pop.waitFor();
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 0, 'before the read lands: the brief only');
+  release();
+  await page.waitForFunction(() => DEC_ABOUT.get('t-ok')?.state === 'ready');
+  await page.waitForTimeout(200);
+  assert.equal(await pop.isVisible(), true, 'the read landing does not close the open picker');
+  await page.keyboard.type('sam');
+  await page.keyboard.press('Enter');
+  await pop.waitFor({state: 'detached'});
+  assert.equal(await why.locator('.gt-name').textContent(), 'Sam', 'the pick is on the field on screen');
+  await why.click();
+  await pop.waitFor();
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 1, 'opened again: a bot only the body names is suggested');
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
+  await whyGive.click();
+  for (let i = 0; i < 50 && !okGiven.length; i++) await page.waitForTimeout(100);
+  assert.deepEqual(okGiven.map(b => (b as {to: string}).to), ['human:sam'], 'the pick made while the read was on its way is given');
+  assert.equal(okReads, 1, 'one read for the task');
+
+  // The read lands after a pick, with the picker closed: the side draws again and keeps the pick, Give still on.
+  const ok2 = {...okAsk, id: 'r-ok2', requirement_id: 'r-ok2', task_id: 't-ok2', task: {...okAsk.task, id: 't-ok2', number: 11},
+    ask: {...okAsk.ask, requirement_id: 'r-ok2'}};
+  let release2: () => void = () => {};
+  const held2 = new Promise<void>(r => { release2 = r; });
+  await page.route('**/api/v2/tasks/t-ok2', async route => { await held2; return route.fulfill({json: {task: {...ok2.task, body: 'API Engineer has the dates.'}}}); });
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [ok2]}}));
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ok2'));
+  assert.equal(await page.evaluate(i => decideOpen('r-ok2', [i]), ok2), true);
+  await page.locator('.decide [data-dc="down"]').click();
+  await page.locator('.decide [data-dc-chip="person"]').click();
+  await why.click();
+  await pop.waitFor();
+  await page.keyboard.type('sam');
+  await page.keyboard.press('Enter');
+  await pop.waitFor({state: 'detached'});
+  await page.evaluate(() => { document.querySelector('.decide button[data-give-to]')!.setAttribute('data-before-read', ''); });
+  release2();
+  await page.waitForFunction(() => DEC_ABOUT.get('t-ok2')?.state === 'ready');
+  await page.waitForFunction(() => !document.querySelector('.decide [data-before-read]'));
+  assert.equal(await why.locator('.gt-name').textContent(), 'Sam', 'the pick survives the side drawing again');
+  assert.equal(await whyGive.isDisabled(), false, 'Give stays on');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('give-to: needs you ok');
