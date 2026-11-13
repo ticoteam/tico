@@ -252,3 +252,40 @@ def test_a_jev_outage_does_not_use_up_the_release_sweep(company, monkeypatch):
     assert SR.sweep_snoozes(company) == [row["id"]]
     assert len(up.calls) == 1
     assert SR.sweep_snoozes(company) == []
+
+
+def test_tell_or_move_back_on_an_action_when_is_refused_until_action_events_carry_them_out(c):
+    # Only timers carry out Tell and Move back in step 1 (owner_check and snooze_rules read Block alone), so a rule
+    # "enters -> Tell the manager" would save and never act.
+    for event in ("enters", "owner_changes", "bot_snoozes", "enters,owner_changes"):
+        for then in ("tell_manager", "tell_owner", "move_back"):
+            with pytest.raises(Problem) as refused:
+                SR.add(c, ANA, {"name": "Never acts", "event": event, "then": then})
+            assert refused.value.status == 422 and str(refused.value.detail) == SR.NEEDS_TIMER
+    # An edit to that shape is refused too, and a bot cannot suggest it.
+    with pytest.raises(Problem):
+        SR.edit(c, ANA, SR.REAL_WAIT, {"then": "tell_manager"})
+    with pytest.raises(Problem):
+        SR.add(c, "bot:ops", {"name": "Never acts", "event": "enters", "then": "tell_owner"})
+    # Timers keep every Then but Block (a timer has no write to refuse).
+    for then in ("tell_manager", "tell_owner", "move_back"):
+        made = SR.add(c, ANA, {"name": then, "event": "timer", "timer": {"kind": "quiet", "hours": 6}, "then": then})
+        assert made["not_acting"] == ""
+
+
+def test_a_saved_rule_that_never_acts_is_listed_as_not_acting_and_can_still_be_retired(c):
+    ts = H.now()
+    c.execute(
+        "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, reason, "
+        "status, suggests, created_by, created_at, updated_at) VALUES ('sr_old', 'Old', '', '[]', 'enters', '{}', '{}', "
+        "'', 'tell_owner', '{}', '', 'active', '', ?, ?, ?)",
+        (ANA, ts, ts),
+    )
+    listed = {r["id"]: r for r in SR.listed(c)}
+    assert listed["sr_old"]["not_acting"] == SR.NEEDS_TIMER
+    assert listed[SR.REAL_WAIT]["not_acting"] == ""
+    # A bot may suggest retiring it, and a person retires it.
+    asked = SR.retire(c, "bot:ops", "sr_old", "Never acts")
+    assert asked["status"] == "suggested"
+    SR.accept(c, ANA, asked["id"])
+    assert SR.get(c, "sr_old")["retired_at"]
