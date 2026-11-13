@@ -10,7 +10,7 @@ from backend import growth_computed as GX
 from backend import growth_customers as GC
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.company import bot
-from backend.tests.test_growth_computed import TODAY, as_csv, customer, september
+from backend.tests.helpers.growth_computed import TODAY, as_csv, customer, september
 
 
 @pytest.fixture(autouse=True)
