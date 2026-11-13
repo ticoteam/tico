@@ -48,13 +48,20 @@ def detail(rows):
     return [json.loads(r["detail"]) for r in rows]
 
 
-def test_writes_under_a_warn_rule_answer_without_waiting_for_the_judge(ruled):
+def test_writes_under_a_warn_rule_answer_without_waiting_for_the_judge(ruled, monkeypatch):
     """AC-1 and AC-6: a comment, a bot's done note and a person's ask each answer while the judge has not answered."""
     api, judge = ruled
     everyone_rule(api)
     task = task_for_ops(api)  # a new task is not left for later yet: checked before it is made
     before = len(judge.calls)
     judge.hold = threading.Event()  # the judge answers only when released (or after 5 s, the check's deadline)
+    asked_on, ask = [], K._ask
+
+    def asking(*args, **kwargs):
+        asked_on.append(threading.current_thread().name)  # the thread that waits for the answer
+        return ask(*args, **kwargs)
+
+    monkeypatch.setattr(K, "_ask", asking)
     try:
         started = time.monotonic()
         comment(api, task, SAFE)
@@ -72,7 +79,9 @@ def test_writes_under_a_warn_rule_answer_without_waiting_for_the_judge(ruled):
         judge.hold.set()
     settle(api)
     assert len(judge.calls) - before == 3  # each write checked once, after it was saved
-    assert not any(judge.locked)
+    # Waited for on the drain thread (or by `settle` here), never in a request: the write was answered first.
+    # `judge.locked` is no guide here: the next request's write may be queued while the drain thread asks.
+    assert set(asked_on) <= {"org-rule-late", threading.main_thread().name}, asked_on
     assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
 
 
