@@ -113,8 +113,8 @@ function giveToSuggest(entries: readonly GiveToEntry[], task: GiveToTask | null 
   if (task) {
     add(task.requester_id, 'Asked for it');
     const text = `${task.title || ''}\n${task.body || ''}`;
-    entries.filter(e => e.kind === 'bot').map(e => ({e, at: giveToNamedAt(text, e)})).filter(x => x.at >= 0)
-      .sort((a, b) => a.at - b.at).forEach(x => add(x.e.actor, 'Named in the task'));
+    const named = entries.filter(e => e.kind === 'bot').map(e => ({e, at: giveToNamedAt(text, e)})).filter(x => x.at >= 0);
+    for (const x of named.sort((a, b) => a.at - b.at)) add(x.e.actor, 'Named in the task');
     for (const tag of task.tags || []) add(tag?.owner, 'Owns its area');
   }
   for (const actor of recent) add(actor, 'Recent');
@@ -229,6 +229,8 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
 }
 
 // ---- the field: a button that opens the picker, with a hidden input that holds the pick for its form or screen
+/** A field's hidden input, just before its button. */
+const giveToInput = (btn: HTMLButtonElement) => btn.previousElementSibling as HTMLInputElement | null;
 const GIVE_TO_TASKS = new Map<string, GiveToTask | null>();
 function giveToButtonInner(e: GiveToEntry | undefined, placeholder: string): string {
   return e ? `<span class="gt-face" aria-hidden="true">${actorFace(e.actor, 18)}</span><span class="gt-name">${esc(e.name)}</span>` : `<span class="gt-name">${esc(placeholder)}</span>`;
@@ -244,7 +246,7 @@ function giveToFieldHTML({name = '', id = '', attrs = '', label = 'Give to', pla
     + `<button type="button" class="gt-btn${cur ? '' : ' empty'}" data-give-to="${key}" data-give-label="${esc(label)}" data-give-placeholder="${esc(placeholder)}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(label)}: ${esc(cur?.name || 'nobody chosen')}">${giveToButtonInner(cur, placeholder)}</button></span>`;
 }
 function giveToFieldSet(btn: HTMLButtonElement, e: GiveToEntry): void {
-  const input = btn.previousElementSibling as HTMLInputElement | null;
+  const input = giveToInput(btn);
   btn.classList.remove('empty');
   btn.innerHTML = giveToButtonInner(e, '');
   btn.setAttribute('aria-label', `${btn.dataset.giveLabel || 'Give to'}: ${e.name}`);
@@ -255,7 +257,7 @@ function giveToFieldSet(btn: HTMLButtonElement, e: GiveToEntry): void {
 }
 /** Opens a field's picker, as a click on it does (a form that is sent with nobody chosen). */
 function giveToFieldOpen(btn: HTMLButtonElement): void {
-  const input = btn.previousElementSibling as HTMLInputElement | null;
+  const input = giveToInput(btn);
   giveToOpen(btn, {label: btn.dataset.giveLabel || 'Give to', task: GIVE_TO_TASKS.get(btn.dataset.giveTo || '') || null, selected: input?.value || '', onPick: e => giveToFieldSet(btn, e)});
 }
 /** The click whose press closed the picker does not open it again (once, and only soon after that press). */
