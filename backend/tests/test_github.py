@@ -614,6 +614,104 @@ def test_a_fresh_read_ties_a_cancelled_suite_to_its_workflow_by_its_runs(api):
         assert G.apply_checks(c, link_id, 'a' * 40, read('test')) == 'passing'  # CI re-run in a newer suite
 
 
+def _merge_ok(api, conclusion, suite=9, sha='a' * 40):
+    """Tico's own `tico/merge-ok` run, posted completed by the company's App (`AppGitHub.post_check`)."""
+    hook(
+        api,
+        'check_run',
+        {
+            'repository': {'full_name': 'ticoteam/tico'},
+            'check_run': {
+                'name': 'tico/merge-ok',
+                'status': 'completed',
+                'conclusion': conclusion,
+                'head_sha': sha,
+                'app': {'slug': 'example-app'},
+                'check_suite': {'id': suite, 'status': 'completed'},
+                'pull_requests': [{'number': 412}],
+            },
+        },
+    )
+
+
+def test_ticos_own_merge_gate_is_not_a_ci_check(api):
+    """Nov 13: a task listed its PR as checks failing when the only red check was `tico/merge-ok` ("Not queued by
+    Tico"), Tico's own gate, red because the task had not reached Merge. Bots read it as broken CI and re-ran it. The
+    gate and its App's suite are left out of a head's checks state and of what a finished head names; a real failure
+    beside it still fails, and a head with nothing but the gate is not green."""
+    gate = {'suite:example-app#9': ['tico/merge-ok']}
+    ci = {'python': 'passing', 'suite:github-actions#1': 'passing'}
+    assert G._overall({**ci, 'tico/merge-ok': 'failing', 'suite:example-app#9': 'failing'}, gate) == 'passing'
+    assert G._overall({**ci, 'tico/merge-ok': 'failing'}) == 'passing'
+    assert G._overall({**ci, 'python': 'failing', 'tico/merge-ok': 'passing'}, gate) == 'failing'
+    assert G._overall({'tico/merge-ok': 'passing', 'suite:example-app#9': 'passing'}, gate) == 'pending'
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gate is not CI', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _run(api, 'python', 1, 'completed', 'success', suite_status='completed')
+    _suite(api, 'github-actions', 'completed', 'success', id=1)
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
+    # The company App's suite can report before its run: it is still the gate's.
+    _suite(api, 'example-app', 'completed', 'failure', id=9)
+    _merge_ok(api, 'failure')
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert link['checks'] == 'passing'
+    assert all('failed' not in item for item in _burst(api, task['id']))
+    # A fresh read from GitHub decides the same.
+    answers = {
+        '/check-suites': {
+            'check_suites': [
+                {'id': 1, 'status': 'completed', 'conclusion': 'success', 'app': {'slug': 'github-actions'}},
+                {'id': 9, 'status': 'completed', 'conclusion': 'failure', 'app': {'slug': 'example-app'}},
+            ]
+        },
+        '/check-runs': {
+            'check_runs': [
+                {
+                    'name': 'python',
+                    'status': 'completed',
+                    'conclusion': 'success',
+                    'check_suite': {'id': 1},
+                    'app': {'slug': 'github-actions'},
+                },
+                {
+                    'name': 'tico/merge-ok',
+                    'status': 'completed',
+                    'conclusion': 'failure',
+                    'check_suite': {'id': 9},
+                    'app': {'slug': 'example-app'},
+                },
+            ]
+        },
+        '/status': {'statuses': []},
+    }
+
+    def call(method, path, headers=None, params=None):
+        body = next(v for k, v in answers.items() if path.endswith(k))
+        return SimpleNamespace(status_code=200, json=lambda: body)
+
+    read = G.read_checks(SimpleNamespace(_call=call), {}, 'ticoteam/tico', 'a' * 40)
+    with api.app.state.store.transaction() as c:
+        assert G.apply_checks(c, link['id'], 'a' * 40, read) == 'passing'
+
+
+def test_a_queued_gate_suite_does_not_hold_a_green_head_unfinished(api):
+    """GitHub queues a suite of the company App on every head, and it never runs unless the Merge stage posts the
+    gate. Left out of the state, it must be left out of "still going" too, or a green head reads passing but never
+    finishes: no "Checks finished", and nothing waiting on the checks is woken."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gate queued', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _suite(api, 'example-app', 'queued', id=9)
+    _suite(api, 'github-actions', 'queued', id=1)
+    _run(api, 'python', 1, 'in_progress')
+    _run(api, 'python', 1, 'completed', 'success', suite_status='completed')
+    _suite(api, 'github-actions', 'completed', 'success', id=1)
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert link['checks'] == 'passing'
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
+
+
 def test_an_all_skipped_head_reads_pending_never_green(api):
     """A draft pull request's run skips every job; nothing on main requires a check, so a head whose every check was
     skipped has not been checked. It reads pending and finishes nothing; one real pass beside the skips is green."""
