@@ -568,25 +568,22 @@ def test_a_handoff_nobody_can_file_files_nothing_and_the_move_goes_through(c):
     assert (standing.state, standing.on, standing.line) == (R.NOT_MET, "bot:pm", "No task filed yet")
 
 
-def test_a_private_product_task_whose_handoff_builder_cannot_read_tells_the_product_manager_why(c):
-    """The engine never adds a reader: the private Engineering task is not filed, the stage waits on the Product
-    Manager, and their one wake for it says why."""
+def test_a_private_product_tasks_handoff_is_filed_and_read_by_the_builder_while_it_holds_on_deck(c):
+    """The engine never adds a reader: the Engineering task is filed private, with the Product task's readers, and the
+    Builder (the bot the pipeline names for On deck) reads it while it holds that stage (spec: a private task's stage
+    bot can read it while it holds the stage). It used to stop here, with nothing filed."""
     row = _product_task(c)
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
     readers = c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0]
     moved = E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
-    assert moved["stage_id"] == "product-in-development" and _filed(c, row["id"]) == []
-    standing = R.standings(c, moved)[0]
-    assert (standing.state, standing.on) == (R.NOT_MET, "bot:pm")
+    ((filed, kind),) = _filed(c, row["id"])
+    eng = E.task(c, filed)
+    assert (kind, moved["stage_id"], eng["stage"]["name"]) == ("handoff", "product-in-development", "On deck")
+    assert H.task_private(c, eng) and H.task_private_readable(c, eng["owner_id"], H.task(c, filed))
     assert c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0] == readers
-    wakes = c.execute(
-        "SELECT m.body FROM messages m JOIN jobs j ON j.message_id = m.id WHERE m.wake_key LIKE ? AND j.state='queued'",
-        (f"{row['id']}:{moved['visit']['id']}:%",),
-    ).fetchall()
-    assert len(wakes) == 1, wakes
-    assert wakes[0][0].startswith(
-        "No Engineering task was filed: builder owns On deck and cannot read this private task.\n"
-    ), wakes[0][0]
+    assert eng["owner_id"] not in H.task_readers(H.task(c, filed))
+    lines = c.execute("SELECT note FROM history_events WHERE subject_id=? AND kind='stage_read'", (filed,)).fetchall()
+    assert [n for (n,) in lines] == [f"{H.actor_name(c, eng['owner_id'])} can read this while it holds On deck"]
 
 
 def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):

@@ -359,6 +359,8 @@ def task_reassign(
     if owner:
         H._botops_only(conn, actor, H.resolve_actor(conn, owner))
         target = H._reach(conn, actor, owner)
+    if target != row.get("owner_id"):
+        H.refuse_stage_reader(conn, actor, row)  # a bot that reads it only while it holds the stage gives it to nobody
     if target and target != row.get("owner_id"):
         if actor == H.GENERAL_MANAGER:
             from . import general_manager

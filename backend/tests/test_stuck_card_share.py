@@ -13,13 +13,16 @@ from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post
 
 ANA, BEN = "human:ana", "human:ben"
-BUILDER, MANAGER, REVIEWER = "bot:builder", "bot:manager", "bot:reviewer"
+BUILDER, MANAGER = "bot:builder", "bot:manager"
+# Review 1 is a person's: a bot the pipeline names for a stage reads a private task while it holds it and never stops
+# it (test_private_stage_reads.py), so the stuck card is for a stage holder the pipeline does not name.
+REVIEWER = "human:cara"
 
 
 @pytest.fixture
 def c(company):
     with company.transaction() as conn:
-        for slug in ("builder", "manager", "reviewer", "other"):
+        for slug in ("builder", "manager", "reviewer", "other"):  # reviewer: private by default below
             X.bot(conn, slug)
         stages = (
             {"name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
@@ -50,7 +53,7 @@ def test_a_stuck_card_says_who_cannot_see_the_task_in_plain_words_and_names_them
     task_id = _held(c)
     _to_person(c, task_id)
     (item,) = [n for n in W.needs(c, ANA) if n.get("task_id") == task_id]
-    assert item["line"] == "Stuck in Build: reviewer can't see this task", item
+    assert item["line"] == "Stuck in Build: Cara can't see this task", item
     turn = H.task_view(c, task_id, ANA)["turn"]
     assert turn["share"] == [REVIEWER] and turn["line"] == item["line"], turn
     said = json.dumps(H.task_view(c, task_id, ANA))
@@ -76,7 +79,7 @@ def test_a_card_drawn_for_someone_else_adds_nobody_and_says_who_it_is_now(c):
     _to_person(c, task_id)
     with pytest.raises(H.Refused, match="task_changed") as refused:
         H.task_let_see(c, ANA, task_id, ["bot:other"], _version(c, task_id))
-    assert "reviewer" in refused.value.detail and "Nobody was added" in refused.value.detail
+    assert "Cara" in refused.value.detail and "Nobody was added" in refused.value.detail
     assert H.task_readers(H.task(c, task_id)) == []
     assert E.task(c, task_id)["stage"]["name"] == "Build"
 
@@ -86,7 +89,7 @@ def test_a_bot_never_lets_anyone_see_a_task_and_its_refused_move_says_to_ask_a_p
     with pytest.raises(H.Refused, match="task_not_shared") as refused:
         H.task_move(c, BUILDER, task_id, "next", None, _version(c, task_id))
     detail = refused.value.detail
-    assert detail == "reviewer does the next step but can't see this private task. Ask Ana to let them see it.", detail
+    assert detail == "Cara does the next step but can't see this private task. Ask Ana to let them see it.", detail
     assert refused.value.extra["fix"] == "Ask Ana to let them see it"
     assert "Who can see" not in json.dumps(refused.value.extra) and "reader" not in json.dumps(refused.value.extra)
     with pytest.raises(H.Refused):
@@ -98,7 +101,7 @@ def test_a_person_moving_it_by_hand_is_told_the_same_cause_in_plain_words(c):
     task_id = _held(c)
     with pytest.raises(H.Refused, match="task_not_shared") as refused:
         H.task_move(c, ANA, task_id, "next", None, _version(c, task_id))
-    assert refused.value.detail.startswith("reviewer does the next step but can't see this private task."), refused
+    assert refused.value.detail.startswith("Cara does the next step but can't see this private task."), refused
 
 
 def test_the_move_route_lets_the_named_person_see_it_and_moves_it_on(api):
@@ -137,7 +140,7 @@ def test_a_next_stage_that_shuts_out_two_names_both_and_one_press_lets_both_in_a
     _to_person(c, task_id)
     turn = H.task_view(c, task_id, ANA)["turn"]
     assert turn["share"] == [REVIEWER, "bot:other"], turn
-    assert turn["line"] == "Stuck in Build: reviewer and other can't see this task", turn
+    assert turn["line"] == "Stuck in Build: Cara and other can't see this task", turn
     with pytest.raises(H.Refused, match="task_changed"):
         H.task_let_see(c, ANA, task_id, [REVIEWER], _version(c, task_id))  # only one of them: nobody added
     assert H.task_readers(H.task(c, task_id)) == []
@@ -168,6 +171,7 @@ def test_a_company_task_that_turns_private_at_the_next_step_offers_no_reader_but
     from backend import bot_settings as BS
 
     BS.write(c, "reviewer", {**BS.read(c, "reviewer"), "private_tasks_default": True})
+    c.execute("UPDATE stages SET owner='bot:reviewer' WHERE id=?", (_stage_id(c, "Review 1"),))
     X.requirement(c, _stage_id(c, "Review 1"), "ok", person="bot:other", line="OK it", position=1)
     row = H.task_create(c, ANA, "Fix the card", "x", BUILDER, pipeline="eng", private=False, lint=False)
     H.task_done(c, BUILDER, row["id"], "Built.", H.task(c, row["id"])["version"])
