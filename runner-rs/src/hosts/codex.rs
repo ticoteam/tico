@@ -1545,7 +1545,7 @@ mod tests {
         }];
         let sha = crate::company_skills::bundle_sha(&files);
         let (staged, _) =
-            crate::company_skills::stage(&state, "a-1", &[("acme-brief".into(), sha, files)])
+            crate::company_skills::stage(&state, "ops", &[("acme-brief".into(), sha, files)])
                 .unwrap();
         let settings = Settings {
             company_skills: Some(staged.display().to_string()),
@@ -1564,7 +1564,7 @@ mod tests {
         assert!(roots[0].starts_with(
             &state
                 .join("skill-sessions")
-                .join("a-1")
+                .join("ops-")
                 .display()
                 .to_string()
         ));

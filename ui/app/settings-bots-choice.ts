@@ -33,7 +33,7 @@ type SettingsPanelRow = {value: string; label: string; on: boolean; off?: boolea
 // The harness a pick runs on: the Gateway's picks run on pi.
 const settingsRealHarness = (harness: string | null | undefined) => harness === 'tico' ? 'pi' : harness || '';
 // Whether a harness compacts at a size we set (its manifest says `compaction`).
-// One that compacts on its own default (`own_compaction`: Claude Code, as for a person) takes no size either.
+// One that compacts on its own default (`own_compaction` in its manifest) takes no size either.
 function settingsCompacts(harness: string | null | undefined) {
   const id = settingsRealHarness(harness), caps = id ? settingsHarness(id)?.capabilities || harnessCaps(id) : null;
   return !!caps && !!caps.compaction && !caps.own_compaction;
@@ -155,7 +155,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   const runModel = () => picked.model || (mode === 'task' && bot ? settingsTaskRunsOn(bot, '') : '');
   // Bulk change with no model picked sets a window alone, each bot keeping its model: every size is offered.
   // The Compact row shows for every pick, so the panel keeps one shape; only a harness that compacts at a size we set
-  // offers sizes (one that compacts on its own, such as Claude Code, offers Default alone and says so).
+  // offers sizes (one that compacts on its own offers Default alone and says so).
   const compactShown = () => !!mode && (mode === 'bulk' || !!runModel());
   const compactable = () => !!mode && (mode === 'bulk' && !picked.model ? true : !!runModel() && settingsCompacts(runHarness()));
   // A fallback on a harness that does not compact keeps no window of its own.

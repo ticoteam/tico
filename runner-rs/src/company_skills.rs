@@ -2,8 +2,9 @@
 //!
 //! At a turn's start the runner asks the server for the bot's installed skills (`GET attempts/{aid}/skills`), fetches
 //! each bundle once into an immutable cache keyed by its sha (`<state>/skill-bundles/<sha>.json`, checked against
-//! the sha on every read), stages them in a fresh folder of the turn's own (`<state>/skill-sessions/<aid>`, laid out
-//! as `.claude/skills/<name>/...`) and hands that folder to the harness: Claude gets it in its `--add-dir` list (Claude
+//! the sha on every read), stages them in the bot's folder (`<state>/skill-sessions/<bot>-<digest of its skills>`, laid
+//! out as `.claude/skills/<name>/...`, the same path every turn while the skills stay the same and its contents written
+//! fresh each turn: see `stage`) and hands that folder to the harness: Claude gets it in its `--add-dir` list (Claude
 //! Code loads the skills in an added directory's `.claude/skills`); Codex gets its `.claude/skills` (`skills_root`)
 //! as the app server's extra skill root (hosts/codex.rs), never a folder under the operator's CODEX_HOME. It then
 //! reports what it staged (`POST attempts/{aid}/skills/receipt`) and remembers the staged skills for the bot's `/`
@@ -36,7 +37,7 @@ pub const MAX_SKILLS: usize = 100;
 const SESSIONS: &str = "skill-sessions";
 const BUNDLES: &str = "skill-bundles";
 const MENUS: &str = "skill-menus";
-/// A turn's staged folder outlives any run; older ones are removed when a later turn stages.
+/// A staged folder outlives any run; one no turn has used for this long is removed when a later turn stages.
 const KEEP_SESSION: Duration = Duration::from_secs(2 * 24 * 3600);
 /// The whole of staging, fetches included: past it the turn starts without company skills.
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -214,12 +215,15 @@ fn keep(state_dir: &Path, sha: &str, files: &[File]) -> std::io::Result<()> {
     std::fs::rename(&temp, dir.join(format!("{sha}.json")))
 }
 
-/// Removes staged folders older than KEEP_SESSION.
-fn prune(sessions: &Path) {
+/// Removes staged folders older than KEEP_SESSION, all but `keep` (the folder this turn is about to use).
+fn prune(sessions: &Path, keep: &str) {
     let Ok(entries) = std::fs::read_dir(sessions) else {
         return;
     };
     for entry in entries.flatten() {
+        if entry.file_name() == keep {
+            continue;
+        }
         let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
             continue;
         };
@@ -243,14 +247,66 @@ pub fn skills_root(staged: &Path) -> PathBuf {
     staged.join(".claude").join("skills")
 }
 
-/// A fresh `<state>/skill-sessions/<aid>` with `.claude/skills/<name>/...` for each bundle that writes whole; the
-/// folder and the (name, sha) of what it holds. None when nothing could be staged.
+/// The staged folder's name for `owner` (the bot) and the skills it is given: the same for every turn of the bot while
+/// its installed skills stay the same, so Claude's system prompt (which names each `--add-dir`) and Codex's skill root
+/// do not change between turns and a resumed session keeps its prompt cache.
+fn folder_name(owner: &str, bundles: &[(String, String, Vec<File>)]) -> String {
+    let mut pairs: Vec<String> = bundles.iter().map(|(n, s, _)| format!("{n}:{s}")).collect();
+    pairs.sort();
+    let digest = hex::encode(Sha256::digest(pairs.join("\n").as_bytes()));
+    // A bot id that is not safe as a file name is named by its digest.
+    let owner = if id_ok(owner) {
+        owner.to_string()
+    } else {
+        hex::encode(Sha256::digest(owner.as_bytes()))[..16].to_string()
+    };
+    format!("{owner}-{}", &digest[..16])
+}
+
+/// Every entry under `root` as (relative path, file content or None for a folder); None when anything in it is
+/// neither a plain file nor a folder (a link), or cannot be read.
+fn tree(root: &Path) -> Option<Vec<(PathBuf, Option<Vec<u8>>)>> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, Option<Vec<u8>>)>) -> Option<()> {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let path = entry.ok()?.path();
+            let meta = std::fs::symlink_metadata(&path).ok()?;
+            let rel = path.strip_prefix(root).ok()?.to_path_buf();
+            if meta.is_dir() {
+                out.push((rel, None));
+                walk(root, &path, out)?;
+            } else if meta.is_file() {
+                out.push((rel, Some(std::fs::read(&path).ok()?)));
+            } else {
+                return None;
+            }
+        }
+        Some(())
+    }
+    let mut out = vec![];
+    walk(root, root, &mut out)?;
+    out.sort();
+    Some(out)
+}
+
+/// Marks a reused folder as in use, so a later turn's prune keeps it.
+fn touch(dir: &Path) {
+    if let Ok(f) = std::fs::File::open(dir) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// `<state>/skill-sessions/<owner>-<digest>` holding `.claude/skills/<name>/...` for each bundle that writes whole;
+/// the folder and the (name, sha) of what it holds. None when nothing could be staged.
+///
+/// The folder is the same for every turn of the bot while its skills stay the same (folder_name), and its contents
+/// are fresh on every turn: they are written anew beside it and compared, and the folder is replaced when anything in
+/// it differs (a skill changed on the server, or a session edited a staged file).
 pub fn stage(
     state_dir: &Path,
-    aid: &str,
+    owner: &str,
     bundles: &[(String, String, Vec<File>)],
 ) -> Option<(PathBuf, Vec<(String, String)>)> {
-    if !id_ok(aid) || bundles.is_empty() {
+    if owner.is_empty() || bundles.is_empty() {
         return None;
     }
     let sessions = state_dir.join(SESSIONS);
@@ -263,36 +319,60 @@ pub fn stage(
     }
     // Others may pass through to a turn's folder by name but not list them; the runner's restart narrows it again.
     let _ = std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o711));
-    prune(&sessions);
-    let dir = sessions.join(aid);
-    if std::fs::symlink_metadata(&dir).is_ok() {
-        let _ = std::fs::remove_dir_all(&dir).or_else(|_| std::fs::remove_file(&dir));
-        // a retried start stages again
-    }
-    let skills = skills_root(&dir);
-    for d in [&dir, &dir.join(".claude"), &skills] {
+    let name = folder_name(owner, bundles);
+    prune(&sessions, &name);
+    let dir = sessions.join(&name);
+    // Written whole beside it first, under a name prune and Claude never see as a turn's folder.
+    let fresh = sessions.join(format!(".{name}.{}", uuid::Uuid::new_v4().simple()));
+    let skills = skills_root(&fresh);
+    for d in [&fresh, &fresh.join(".claude"), &skills] {
         if let Err(e) = make_dir(d) {
             log(&format!(
                 "Tico runner: company skills: cannot make the turn's folder: {e}"
             ));
+            let _ = std::fs::remove_dir_all(&fresh);
             return None;
         }
     }
     let mut staged = vec![];
-    for (name, sha, files) in bundles {
-        match write_skill(&skills, name, files) {
-            Ok(()) => staged.push((name.clone(), sha.clone())),
+    for (skill, sha, files) in bundles {
+        match write_skill(&skills, skill, files) {
+            Ok(()) => staged.push((skill.clone(), sha.clone())),
             Err(e) => {
                 log(&format!(
-                    "Tico runner: company skills: left out {name}: {e}"
+                    "Tico runner: company skills: left out {skill}: {e}"
                 ));
-                let _ = std::fs::remove_dir_all(skills.join(name));
+                let _ = std::fs::remove_dir_all(skills.join(skill));
             }
         }
     }
     if staged.is_empty() {
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh);
         return None;
+    }
+    let same = std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir())
+        && tree(&dir).is_some_and(|held| tree(&fresh).is_some_and(|new| held == new));
+    if same {
+        let _ = std::fs::remove_dir_all(&fresh);
+        touch(&dir);
+        return Some((dir, staged));
+    }
+    // Replaced in place: the old folder steps aside and the fresh one takes its name.
+    if std::fs::symlink_metadata(&dir).is_ok() {
+        let aside = sessions.join(format!(".{name}.old.{}", uuid::Uuid::new_v4().simple()));
+        if std::fs::rename(&dir, &aside).is_ok() {
+            let _ = std::fs::remove_dir_all(&aside).or_else(|_| std::fs::remove_file(&aside));
+        }
+    }
+    if let Err(e) = std::fs::rename(&fresh, &dir) {
+        let _ = std::fs::remove_dir_all(&fresh);
+        // Another turn of the same bot put the same skills there a moment before.
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            log(&format!(
+                "Tico runner: company skills: cannot place the turn's folder: {e}"
+            ));
+            return None;
+        }
     }
     Some((dir, staged))
 }
@@ -426,7 +506,7 @@ async fn prepare_within(
         };
         bundles.push((name, sha, files));
     }
-    let staged = stage(state_dir, aid, &bundles);
+    let staged = stage(state_dir, bot, &bundles);
     remember_menu(
         state_dir,
         bot,
@@ -592,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn staging_lays_out_claude_skills_in_a_fresh_folder_per_attempt() {
+    fn staging_lays_out_claude_skills_in_one_folder_per_bot_and_skill_set() {
         let state = temp("stage");
         let files = brief();
         let sha = bundle_sha(&files);
@@ -606,16 +686,22 @@ mod tests {
                 content: "y".into(),
             },
         ];
-        let (dir, staged) = stage(
-            &state,
-            "a-1",
-            &[
-                ("acme-brief".into(), sha.clone(), files.clone()),
-                ("acme-bad".into(), "0".repeat(64), bad),
-            ],
-        )
-        .unwrap();
-        assert_eq!(dir, state.join("skill-sessions").join("a-1"));
+        let given = [
+            ("acme-brief".to_string(), sha.clone(), files.clone()),
+            ("acme-bad".to_string(), "0".repeat(64), bad),
+        ];
+        let (dir, staged) = stage(&state, "ops", &given).unwrap();
+        assert_eq!(
+            dir,
+            state
+                .join("skill-sessions")
+                .join(folder_name("ops", &given))
+        );
+        assert!(dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("ops-"));
         assert_eq!(
             staged,
             vec![("acme-brief".to_string(), sha.clone())],
@@ -635,15 +721,49 @@ mod tests {
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&root.join("acme-brief").join("SKILL.md")), 0o644);
         assert_eq!(mode(&root.join("acme-brief")), 0o755);
-        // A retried start stages again from nothing: a file left from before is gone.
+        // The next turn of the bot, with the same skills, gets the same folder: nothing in it is written again.
+        let written = std::fs::metadata(root.join("acme-brief").join("SKILL.md"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        let (same, again_staged) = stage(&state, "ops", &given).unwrap();
+        assert_eq!(same, dir);
+        assert_eq!(again_staged, staged);
+        assert_eq!(
+            std::fs::metadata(root.join("acme-brief").join("SKILL.md"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            written
+        );
+        // What a session changed in it is put back on the next turn, in the same folder.
         std::fs::write(root.join("acme-brief").join("stale.md"), "old").unwrap();
-        let (again, _) = stage(
-            &state,
-            "a-1",
-            &[("acme-brief".into(), sha.clone(), files.clone())],
-        )
-        .unwrap();
+        std::fs::write(root.join("acme-brief").join("SKILL.md"), "edited").unwrap();
+        let (again, _) = stage(&state, "ops", &given).unwrap();
+        assert_eq!(again, dir);
         assert!(!again.join(".claude/skills/acme-brief/stale.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(again.join(".claude/skills/acme-brief/SKILL.md")).unwrap(),
+            files[0].content
+        );
+        // Another bot, or the same bot once a skill changes, gets a folder of its own.
+        let (other, _) = stage(&state, "sales", &given).unwrap();
+        assert_ne!(other, dir);
+        let mut newer = files.clone();
+        newer[0].content.push_str("More.\n");
+        let changed = [("acme-brief".to_string(), bundle_sha(&newer), newer.clone())];
+        let (moved, _) = stage(&state, "ops", &changed).unwrap();
+        assert_ne!(moved, dir);
+        assert_eq!(
+            std::fs::read_to_string(moved.join(".claude/skills/acme-brief/SKILL.md")).unwrap(),
+            newer[0].content
+        );
+        // Nothing half-written is left beside the folders.
+        let names: Vec<String> = std::fs::read_dir(state.join("skill-sessions"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.starts_with('.')), "{names:?}");
         // The bot's menu reads the staged folder as Claude does.
         remember_menu(&state, "ops", Some(&again));
         let offered = menu(&state, "ops");
@@ -655,7 +775,10 @@ mod tests {
         );
         remember_menu(&state, "ops", None);
         assert!(menu(&state, "ops").is_empty());
-        assert!(stage(&state, "../a", &[("acme-brief".into(), sha, files)]).is_none());
+        // A bot id that is not a safe file name is named by its digest, inside the sessions folder.
+        let (odd, _) = stage(&state, "../a", &[("acme-brief".into(), sha, files)]).unwrap();
+        assert_eq!(odd.parent().unwrap(), state.join("skill-sessions"));
+        assert!(!odd.file_name().unwrap().to_string_lossy().contains(".."));
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -689,6 +812,7 @@ mod tests {
         // The next turn reads the bundle from the cache: no second bundle fetch.
         let again = prepare(&client, &state, "a-8", "ops").await.unwrap();
         assert!(again.join(".claude/skills/acme-brief/SKILL.md").is_file());
+        assert_eq!(again, dir, "the bot's next turn adds the same folder");
         let seen = seen.lock().unwrap();
         let heads: Vec<&str> = seen.iter().map(|r| r.lines().next().unwrap()).collect();
         let bundle_head = format!("GET /api/v2/skills/bundles/{sha} HTTP/1.1");

@@ -179,16 +179,18 @@ pub const DEFAULT_COMPACT_AT: i64 = 250_000;
 
 /// A bot's "Compact at" in tokens: its own whole number, else DEFAULT_COMPACT_AT.
 pub fn compact_at(value: &Value) -> i64 {
+    compact_at_set(value).unwrap_or(DEFAULT_COMPACT_AT)
+}
+
+/// The "Compact at" the turn was given, in tokens; None when it carries none (a harness then keeps its own default).
+pub fn compact_at_set(value: &Value) -> Option<i64> {
     let n = match value {
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
         Value::String(s) => s.trim().parse::<i64>().ok(),
         Value::Bool(b) => Some(*b as i64),
         _ => None,
     };
-    match n {
-        Some(t) if t > 0 => t,
-        _ => DEFAULT_COMPACT_AT,
-    }
+    n.filter(|t| *t > 0)
 }
 
 #[derive(Clone, Debug, Default)]

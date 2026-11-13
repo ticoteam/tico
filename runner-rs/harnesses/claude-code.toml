@@ -58,8 +58,8 @@ mcp_transports = ["http", "sse"]
 # An expired stored token is refreshed by the first turn, so turns wait for one to land before the rest start.
 serial_cold_start = true
 compaction = true
-# Claude Code compacts on its own default, as it does for a person (no --autocompact): Settings shows no Compact at.
-own_compaction = true
+# Claude Code compacts at the bot's Compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW, hosts/claude.rs turn_env), so Settings
+# offers it as for Codex.
 # Every compaction, manual or automatic, is a `compact_boundary` system message in stream-json.
 compaction_events = true
 # A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).

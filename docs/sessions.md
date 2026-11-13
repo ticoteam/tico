@@ -84,6 +84,10 @@ told to check what the interrupted turn already did before repeating a step.
 
 When a turn runs on a fallback harness or model, it runs in a side session of its own, started from the checkpoint. It
 never replaces the saved session; the next turn on the usual harness resumes that one and is told a side session ran.
+A task-model fallback's side session is kept apart, one per task and model: the task's next fallback turn on the same
+model resumes it (so its prompt cache is read, not written again), given the checkpoint and the conversation since its
+last turn. One that cannot be resumed is begun again from the checkpoint. A Clear drops it with the conversation's own.
+A usage-limit hop inside a turn still starts a new side session each time.
 
 When a run fails because the session ran out of room, the next claim for it carries `compact_first`: the saved session
 is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, pi's RPC `compact`,
