@@ -2169,7 +2169,27 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             if item["ask"] and item["ask"]["kind"] == "ok":
                 item["line"] = item["ask"]["line"]
                 item["missing"] = [item["ask"]["line"]]
+            elif item["ask"] and item["ask"]["kind"] == "page":
+                item["line"] = page_ask_line(item["ask"]["line"], (item.get("task") or {}).get("title"), item["line"])
     return sorted(items, key=needs_key)
+
+
+# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)"): the list says who it is for
+# already, so they go; what comes before or after them (Jev's reason, a send back, a merge conflict) stays.
+_PAGE_OK_WORDS = re.compile(r"\s*\bOK [^()]*? \(version \d+\)\.?")
+_PAGE_WORD = re.compile(r"\s+page$", re.IGNORECASE)
+
+
+def page_ask_line(name, title, waiting):
+    """A page OK in Needs you, in plain words: what it is, which task, and the decision, "Spec for Share Assistant
+    chat, ready for your OK", then anything the stage said about it. The requirement's name alone ("Spec page") said
+    neither the task nor what was asked (#330)."""
+    name = (name or "").strip() or "Page"
+    what = _PAGE_WORD.sub("", name) or name
+    title = (title or "").strip()
+    head = f"{what} for {title}, ready for your OK" if title else f"{name}, ready for your OK"
+    said = _PAGE_OK_WORDS.sub(" ", waiting or "").strip()
+    return f"{head}. {said}" if said else head
 
 
 def needs_key(x):

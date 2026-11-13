@@ -1552,3 +1552,27 @@ def test_a_failed_grouped_call_counts_a_try_on_each_page(store, seeded, monkeypa
     assert len(jev.calls) == 1
     got = list(_verdicts(store).values())
     assert len(got) == 5 and all(v["verdict"] is None and v["tries"] == 1 and v["next_try_at"] for v in got)
+
+
+def test_needs_you_names_a_page_ok_by_its_task_and_decision_not_the_requirement(api):
+    """#330: Needs you read "Spec page" or "OK Ana (version 1)" for a stage's page OK, saying neither which task nor
+    what was asked. It reads what it is, the task and the decision; what the stage said besides (Jev's reason) stays."""
+    from backend import views
+
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as conn:
+        for slug in ("writer", "manager"):
+            X.bot(conn, slug)
+        rid = _pipeline(conn, person=ANA)
+        row = _task(conn)
+        fid, _ = _page(conn, store)
+        _say(conn, _attach(conn, row, "page:" + fid), "met")
+    r = api.get("/api/v2/needs-you", headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    (item,) = [i for i in r.json()["items"] if i.get("requirement_id") == rid]
+    assert item["line"] == "Spec for Importer spec, ready for your OK", item["line"]
+    assert views.page_ask_line("Review page", "Share chat", 'Jev is unsure: no checks. OK Ana (version 2)') == (
+        "Review for Share chat, ready for your OK. Jev is unsure: no checks."
+    )
+    assert views.page_ask_line("Results page", "", "OK someone (version 1)") == "Results page, ready for your OK"
