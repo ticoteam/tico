@@ -36,7 +36,9 @@ const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs', 'letters'];
 const LIVE: LiveState = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
               handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: '', waiting: false};
 // The first reads that may add a topic (liveTopicAdd), still on their way: the first stream waits for them, up to
-// LIVE_PROBE_WAIT_MS, so it opens once with every topic rather than once without and again with.
+// LIVE_PROBE_WAIT_MS, so it opens once with every topic rather than once without and again with. A read that hangs
+// holds the first stream (and every live update) for that long; if it is the rail, the stream then opens from now, not
+// from the rail's seq, and the rail's late liveTopicAdd('threads') reconnects it once more, as before probes.
 const LIVE_PROBES = new Set<Promise<unknown>>();
 const LIVE_PROBE_WAIT_MS = 5000;
 function liveProbe(read: Promise<unknown>): void {

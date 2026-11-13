@@ -343,6 +343,15 @@ def test_a_bundled_file_is_its_minified_copy_while_that_is_current(tmp_path):
     assert ui_bundle.where(bundle, f"app.bundle.js:{start + 1}:20") == "app/b.js:2:1"
     assert ui_bundle.where(bundle, f"https://x.example/tico/ui/app.bundle.js:{start + 1}:1") == "app/b.js:1:1"
     assert ui_bundle.where(bundle, "app.bundle.js:3:1") is None  # a's line: not minified
+    # The same files built elsewhere, written at another time (another server, a rebuilt image), name the same map.
+    import shutil
+
+    other = tmp_path / "copy"
+    shutil.copytree(ui, other / "ui")
+    shutil.copytree(out, other / "build/ui")
+    for f in (other / "build/ui").rglob("*"):
+        os.utime(f, ns=(f.stat().st_atime_ns, f.stat().st_mtime_ns + 5_000_000_000))
+    assert ui_bundle.build(other / "ui")[0].parts[ui_bundle.JS_PATH] == bundle.parts[ui_bundle.JS_PATH]
     # b.js edited after the build: the copy is old, so the file is bundled as it is now, without a map.
     edited = ui / "app/b.js"
     before = edited.stat()

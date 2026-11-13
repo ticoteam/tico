@@ -98,10 +98,12 @@ def map_path(kind, n):
     return part_path(kind, n) + ".map"
 
 
-def _parts(kind, chunks, prefix=lambda n: b""):
+def _parts(kind, chunks, prefix=lambda n: b"", digests=None):
     """The parts of one bundle and, per part, its map's sections [(line, map file)]: `chunks` are (text, the lines
     before the file's own code, its map file or None). A part with any section ends by naming its map, `?v=` a hash of
-    what the sections are, so the map's URL changes with them."""
+    where each section is and its map's sha256 (`digests`, from the manifest), so the map's URL changes with them and
+    is the same on every server built from the same files."""
+    digests = digests or {}
     texts = [c[0] for c in chunks]
     parts, sections = [], []
     for n, indexes in enumerate(pack(texts)):
@@ -114,7 +116,7 @@ def _parts(kind, chunks, prefix=lambda n: b""):
             line += text.count(b"\n")
         body = head + b"".join(texts[i] for i in indexes)
         if found:
-            key = hashlib.sha256(repr([(at, str(path), path.stat().st_mtime_ns) for at, path in found]).encode())
+            key = hashlib.sha256(repr([(at, digests.get(path, path.name)) for at, path in found]).encode())
             url = map_path(kind, n).rsplit("/", 1)[1] + "?v=" + key.hexdigest()[:16]
             body += (f"//# sourceMappingURL={url}\n" if kind == "js" else f"/*# sourceMappingURL={url} */\n").encode()
         parts.append(body)
@@ -204,13 +206,14 @@ def build(ui_dir):
         raise BundleError("index.html has no bundle regions")
     # Each file as its current minified copy (with its map), or as it is: (name, text, map file or None).
     minified = ui_build.minified_entries(ui_dir)
-    sources = {}
+    sources, digests = {}, {}
     for kind in ("js", "css"):
         sources[kind] = []
         for name, path in files[kind]:
             found = ui_build.minified(ui_dir, name, minified)
             if found:
                 text, map_file = found[0].read_text(), found[1]
+                digests[map_file] = minified[name]["map"]
             elif name.endswith(".ts"):
                 # A compiled file's last line names its source map, which maps the file served alone, not a bundle part.
                 text, map_file = ui_build.without_map_line(path.read_bytes()).decode(), None
@@ -228,9 +231,9 @@ def build(ui_dir):
     css = [(f"/* file: {name} */\n{text.rstrip()}\n\n".encode(), 1, m) for name, text, m in sources["css"]]
     # Each part is a script of its own, so each opens with the directive; the first also marks where the run starts.
     js_parts, js_sections = _parts(
-        "js", js, lambda n: b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n"
+        "js", js, lambda n: b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n", digests
     )
-    css_parts, css_sections = _parts("css", css)
+    css_parts, css_sections = _parts("css", css, digests=digests)
     sections = {part_path("js", n): s for n, s in enumerate(js_sections)}
     sections |= {part_path("css", n): s for n, s in enumerate(css_sections)}
     version = {"js": _etag(b"".join(js_parts))[1:17], "css": _etag(b"".join(css_parts))[1:17]}
