@@ -14,7 +14,8 @@ outside any transaction, and opens the task:
 It fails open: no model (Decide off, rehearsal, the month's spend cap), an error or a timeout, the bot's daily call
 budget, a set that does not load, an unreadable answer, a bug here, or an answer under the threshold all open the bot's
 task as before. A message or HQ's close that arrives while a ticket waits becomes a quiet note on its task. Each ticket
-is opened on its own, so a paused bot's ticket waits for it and holds up no other; after WAIT_HOURS the hourly
+is opened on its own (up to GROUP of one bot's tickets share a call, backend/decide_groups.py, each read from its own
+answers), so a paused bot's ticket waits for it and holds up no other; after WAIT_HOURS the hourly
 `sweep` gives any ticket still waiting to a person, so no copy is kept here indefinitely. Each call is a `judge.call`
 row like every other set's, written straight after the call, with an error's code and never its text; the verdict is
 kept in `watcher_triage` (never the text). Code decides at the threshold; the model only answers the questions.
@@ -25,6 +26,7 @@ import logging
 import threading
 
 from clients import judge as J
+from . import decide_groups as DG
 from .store import H
 
 log = logging.getLogger("tico.support_triage")
@@ -34,6 +36,9 @@ WATCHER = "hq-tickets"  # the Support Agent's HQ ticket watcher (templates/catal
 KEY_PREFIX = "hq:"
 # The longest a ticket's copy waits here (its bot paused or its task refused): then `sweep` hands it to a person.
 WAIT_HOURS = 1
+# Tickets asked about in one call (backend/decide_groups.py), all of one bot. One until the replay through real Jev
+# shows grouped verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
  bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -182,38 +187,93 @@ def _audit(qset, result, error):
 
 
 def ask(store, primary, row):
-    """Ask the set about one waiting ticket, once: (found, why). The `judge.call` row and the answer are written in
-    their own transaction straight after the call, so a later failure to open the task keeps both, and a ticket
-    retried (its bot paused meanwhile) is not asked again."""
+    """Ask the set about one waiting ticket, once: (found, why). See `ask_many`."""
+    return ask_many(store, primary, [row])[0]
+
+
+def _why(exc):
+    """What a ticket's task says when its call failed."""
+    if isinstance(exc, J.JudgeError):
+        return "the month's spend cap" if exc.code == "spend_cap" else f"the decision model: {exc.code}"
+    return "the answer could not be read"
+
+
+def _read(qset, reply):
+    """(found, why, error) from one ticket's reply: its own result, or the exception its call ended in."""
+    if isinstance(reply, BaseException):
+        return None, _why(reply), reply
+    try:
+        return verdict(qset, reply["answers"]), "", None
+    except Exception as exc:  # noqa: BLE001 an answer that cannot be read fails open
+        if not isinstance(exc, J.JudgeError):
+            log.warning("Support triage answer could not be read: %s", type(exc).__name__)
+        return None, _why(exc), exc
+
+
+def _call_audit(qset, call, errors):
+    """The `judge.call` row of one call: a call about one ticket is audited as it always was (`_audit`, with the
+    error its answer was read with); a grouped call keeps each ticket's answers and the count of tickets it held."""
+    if len(call.items) == 1:
+        return _audit(qset, call.result, call.error if call.error is not None else errors.get(call.items[0]))
+    types = sorted({q["type"] for q in qset["questions"].values()})
+    try:
+        return DG.audit_row(call, qset["label"], caller="support-triage", types=types)
+    except Exception:  # noqa: BLE001 the audit row is kept whatever came back
+        return {
+            "label": qset["label"],
+            "questions": call.questions,
+            "caller": "support-triage",
+            "types": types,
+            "items": len(call.items),
+            "answers": {"unreadable": True},
+        }
+
+
+def ask_many(store, primary, rows):
+    """Ask the set about waiting tickets of one bot, GROUP at most per call (backend/decide_groups.py), each once:
+    [(found, why)] in order. Each call's `judge.call` row and each ticket's answer are written in their own transaction
+    straight after that call, so a later failure to open a task keeps both, and a ticket retried (its bot paused
+    meanwhile) is not asked again. A failed call fails each of its tickets as one failed call does: it opens untriaged."""
     from .judge import daily_cap, used_today
 
-    if row.get("found"):
-        kept = json.loads(row["found"])
-        return kept.get("found"), kept.get("why", "")
+    out: list[tuple[dict | None, str]] = [(None, "")] * len(rows)
+    todo = []
+    for n, row in enumerate(rows):
+        if row.get("found"):
+            kept = json.loads(row["found"])
+            out[n] = (kept.get("found"), kept.get("why", ""))
+        else:
+            todo.append(n)
+    if not todo:
+        return out
+    bot = rows[todo[0]]["bot"]
     with store.read() as c:
         engine = engine_for(store, c, primary)
-        over = engine is not None and used_today(c, "bot:" + row["bot"]) >= daily_cap(store.settings, "bot")
-    if engine is None:
-        return None, "Decide is off or at its monthly cap"
-    if over:
-        return None, "the bot's daily decision budget is used"
+        over = engine is not None and used_today(c, "bot:" + bot) >= daily_cap(store.settings, "bot")
+    if engine is None or over:
+        why = "Decide is off or at its monthly cap" if engine is None else "the bot's daily decision budget is used"
+        for n in todo:
+            out[n] = (None, why)
+        return out
     qset = question_set()
-    found, why, result, error = None, "", None, None
-    try:
-        result = engine({"title": row["title"], "body": row["body"]}, qset["questions"], qset["label"])
-        found = verdict(qset, result["answers"])
-    except J.JudgeError as exc:
-        error, why = exc, ("the month's spend cap" if exc.code == "spend_cap" else f"the decision model: {exc.code}")
-    except Exception as exc:  # noqa: BLE001 an answer that cannot be read fails open
-        error, why = exc, "the answer could not be read"
-        log.warning("Support triage answer could not be read: %s", type(exc).__name__)
-    with store.transaction() as c:
-        H.event(c, "bot:" + row["bot"], "judge.call", qset["label"], _audit(qset, result, error))
-        c.execute(
-            "UPDATE watcher_pending SET found=? WHERE bot=? AND key=?",
-            (json.dumps({"found": found, "why": why}), row["bot"], row["key"]),
-        )
-    return found, why
+    items = [({"title": rows[n]["title"], "body": rows[n]["body"]}, qset["questions"]) for n in todo]
+    for run in DG.packs(items, GROUP):
+        calls = []
+        replies = DG.ask_run(engine, [items[p] for p in run], qset["label"], calls, run)
+        read = {p: _read(qset, reply) for p, reply in zip(run, replies, strict=True)}
+        errors = {p: err for p, (_found, _why, err) in read.items() if err is not None}
+        with store.transaction() as c:
+            for call in calls:
+                if call.sent:
+                    H.event(c, "bot:" + bot, "judge.call", qset["label"], _call_audit(qset, call, errors))
+            for p, (found, why, _err) in read.items():
+                row = rows[todo[p]]
+                c.execute(
+                    "UPDATE watcher_pending SET found=? WHERE bot=? AND key=?",
+                    (json.dumps({"found": found, "why": why}), row["bot"], row["key"]),
+                )
+                out[todo[p]] = (found, why)
+    return out
 
 
 def deliver_one(store, auth, row, found, why):
@@ -354,36 +414,52 @@ def sweep(store, at=None):
             log.error("A waiting support ticket for %s could not be handed over: %s", row["bot"], type(exc).__name__)
 
 
-def waiting(store, skip):
-    """The oldest waiting ticket of an active bot not yet tried in this pass, or None. A paused bot's tickets wait for
-    it: its watcher reports again only once it is active, and that report starts the next pass."""
+def waiting(store, skip, most=1):
+    """The oldest waiting tickets of an active bot not yet tried in this pass, up to `most`, all of the oldest one's bot;
+    [] when none. A paused bot's tickets wait for it: its watcher reports again only once it is active, and that report
+    starts the next pass."""
+    found = []
     with store.read() as c:
         for row in c.execute(
             "SELECT p.* FROM watcher_pending p JOIN bots b ON b.id=p.bot AND b.state='active' "
             "ORDER BY p.created_at, p.bot, p.key"
         ):
-            if (row["bot"], row["key"]) not in skip:
-                return dict(row)
-    return None
+            if (row["bot"], row["key"]) in skip or (found and row["bot"] != found[0]["bot"]):
+                continue
+            found.append(dict(row))
+            if len(found) >= most:
+                break
+    return found
+
+
+def _deliver(store, auth, row, found, why):
+    try:
+        deliver_one(store, auth, row, found, why)
+    except H.Refused as exc:  # names only: a refusal's text can quote the ticket
+        log.warning("Support ticket %s for %s waits: refused (%s)", row["key"], row["bot"], exc.rule)
+    except Exception as exc:  # noqa: BLE001 never leave a ticket waiting on a bug here
+        log.error("Support triage failed for %s (%s); opening it as before", row["key"], type(exc).__name__)
+        try:
+            deliver_one(store, auth, row, None, "triage failed")
+        except Exception as again:  # noqa: BLE001 `sweep` hands it to a person
+            log.error("Support ticket %s for %s waits (%s)", row["key"], row["bot"], type(again).__name__)
 
 
 def drain(store, auth, primary):
-    """Triage every waiting ticket, oldest first, each on its own: one that cannot be opened is left waiting, one that
-    trips a bug here is opened untriaged, and neither stops the rest."""
+    """Triage every waiting ticket, oldest first, GROUP of one bot's at a time: one that cannot be opened is left
+    waiting, one that trips a bug here is opened untriaged, and neither stops the rest."""
     skip = set()
-    while (row := waiting(store, skip)) is not None:
-        skip.add((row["bot"], row["key"]))
+    while rows := waiting(store, skip, GROUP):
+        skip.update((row["bot"], row["key"]) for row in rows)
         try:
-            found, why = ask(store, primary, row)
-            deliver_one(store, auth, row, found, why)
-        except H.Refused as exc:  # names only: a refusal's text can quote the ticket
-            log.warning("Support ticket %s for %s waits: refused (%s)", row["key"], row["bot"], exc.rule)
+            answered = ask_many(store, primary, rows)
         except Exception as exc:  # noqa: BLE001 never leave a ticket waiting on a bug here
-            log.error("Support triage failed for %s (%s); opening it as before", row["key"], type(exc).__name__)
-            try:
-                deliver_one(store, auth, row, None, "triage failed")
-            except Exception as again:  # noqa: BLE001 `sweep` hands it to a person
-                log.error("Support ticket %s for %s waits (%s)", row["key"], row["bot"], type(again).__name__)
+            log.error(
+                "Support triage failed for %s tickets (%s); opening them as before", len(rows), type(exc).__name__
+            )
+            answered = [(None, "triage failed")] * len(rows)
+        for row, (found, why) in zip(rows, answered, strict=True):
+            _deliver(store, auth, row, found, why)
 
 
 _RUNNING, _AGAIN = threading.Lock(), threading.Event()

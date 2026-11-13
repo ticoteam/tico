@@ -25,6 +25,8 @@ none of them and never reuses another destination's result.
 
 services:
   judge(state, questions, label, level) -> {"answers": {...}, "cost_usd": n}, or None while Decide is off
+  judge_many([(state, questions), ...], label) -> [result or exception, ...] in order, or None while Decide is off:
+    several find items' Decide calls at once (backend/decide_groups.py), optional; each result is the item's own
   question_set(ref) -> questions, and state_fields(ref) -> the set's `state` fields
   act(do, args, ctx) -> {"ok": bool, "detail": str, ...}
   start_turn(who, prompt, ctx, wait) -> {"ref": str, "turn": {bot, task, session}}, or None when the spend cap stops it
@@ -331,8 +333,90 @@ def _act(services, do, args, values, step, key, producer=None):
     return {"do": do, **result}
 
 
-def _decide(flow, state, thread, step, services):
+# Find items asked about in one Decide call (backend/decide_groups.py, through `services.judge_many`). One until the
+# replay through real Jev shows grouped verdicts match the ones given alone (no more than 2 in 100 changed); then
+# DG.MOST (10).
+GROUP = 1
+
+
+def _asks(flow, state, thread, step, services, after):
+    """(judged, questions, parts, later) for this thread's call at `step`: the object as judged, the questions (merged
+    with the later Decide steps on the same object when they fit in one call, each under its step's id), each step's
+    own questions, and the later steps merged in ({} when none). `after` is the place in the list after `step`."""
     values = values_of(state, thread)
+    questions = step.get("questions") or services.question_set(step["set"])
+    judged = F.judge_state(values, services.state_fields(step["set"]) if step.get("set") else None)
+    later = _same_object(flow, thread, values, judged, services, after)
+    parts = {step["id"]: questions, **later}
+    merged = {f"{sid}:{qid}": q for sid, qs in parts.items() for qid, q in qs.items()}
+    if later and J.fits(judged, merged):  # one call asks every step's questions, each under its step's id
+        return judged, merged, parts, later
+    return judged, questions, parts, {}
+
+
+def _mark(judged, questions):
+    """What a sibling's stashed answer was asked about, short enough to keep on the run: a hash of the call."""
+    import hashlib
+
+    return hashlib.sha256(json.dumps([judged, questions], sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _siblings(flow, state, thread, step):
+    """The other find items' threads ready at this same step, in order, up to GROUP - 1: asked in this thread's call."""
+    out = []
+    for other in state["threads"]:
+        if len(out) >= GROUP - 1:
+            break
+        if other is thread or other["state"] != READY or other["item"] is None or other.get("choice") is not None:
+            continue
+        if other["trail"] != thread["trail"] or other["next"] != thread["next"] - 1:
+            continue
+        if other["batched"] != thread["batched"] or other.get("grouped", {}).get(step["id"]) is not None:
+            continue
+        steps = steps_at(flow, other["trail"])
+        if other["next"] < len(steps) and steps[other["next"]] is step:
+            out.append(other)
+    return out
+
+
+def _judge(flow, state, thread, step, services, judged, questions):
+    """The call's result for this thread (None while Decide is off). A find item's thread asks in one call with the
+    other items ready at the same step (`_siblings`, GROUP at most), each keeping only its own answers: theirs are
+    kept on their threads (`grouped`) for when they reach the step. A failed call fails each item, as its own would."""
+    label = f"automation.{step['id']}"
+    many = getattr(services, "judge_many", None)
+    if GROUP <= 1 or thread["item"] is None or many is None:
+        return services.judge(judged, questions, label)
+    pairs, others = [(judged, questions)], []
+    for other in _siblings(flow, state, thread, step):
+        asked = (other.get("decided") or {}).get(step["id"])
+        own = step.get("questions") or services.question_set(step["set"])
+        if asked is not None and asked["questions"] == own:
+            continue  # an earlier step's call already asked this one
+        try:
+            o_judged, o_questions, _parts, _later = _asks(flow, state, other, step, services, other["next"] + 1)
+        except Exception:  # noqa: BLE001 - that item asks on its own when it runs, and fails there if it must
+            continue
+        pairs.append((o_judged, o_questions))
+        others.append(other)
+    if not others:
+        return services.judge(judged, questions, label)
+    replies = many(pairs, label)
+    if replies is None:  # Decide is off for all of them
+        return None
+    for other, (o_judged, o_questions), reply in zip(others, pairs[1:], replies[1:], strict=True):
+        kept = (
+            {"error": (str(reply) or type(reply).__name__)[:300]}
+            if isinstance(reply, BaseException)
+            else {"result": {"answers": reply.get("answers") or {}, "cost_usd": float(reply.get("cost_usd") or 0)}}
+        )
+        other["grouped"] = {**(other.get("grouped") or {}), step["id"]: {"mark": _mark(o_judged, o_questions), **kept}}
+    if isinstance(replies[0], BaseException):
+        raise replies[0]
+    return replies[0]
+
+
+def _decide(flow, state, thread, step, services):
     asked = thread.get("decided") or {}
     questions = step.get("questions") or services.question_set(step["set"])
     early = asked.pop(step["id"], None)
@@ -342,15 +426,15 @@ def _decide(flow, state, thread, step, services):
         thread["outputs"][step["out"]] = early["answers"]
         _record(state, thread, step, "ok", early["answers"])
         return
-    judged = F.judge_state(values, services.state_fields(step["set"]) if step.get("set") else None)
-    later = _same_object(flow, thread, values, judged, services)
-    parts = {step["id"]: questions, **later}
-    merged = {f"{sid}:{qid}": q for sid, qs in parts.items() for qid, q in qs.items()}
-    if later and J.fits(judged, merged):  # one call asks every step's questions, each under its step's id
-        questions = merged
+    judged, questions, parts, later = _asks(flow, state, thread, step, services, thread["next"])
+    kept = (thread.get("grouped") or {}).pop(step["id"], None)
+    if kept is not None and kept["mark"] == _mark(judged, questions):
+        # Another find item's call asked this thread's questions too (`_judge`); what it asked is what this step asks.
+        if "error" in kept:
+            raise RuntimeError(kept["error"])
+        result = kept["result"]
     else:
-        later = {}
-    result = services.judge(judged, questions, f"automation.{step['id']}")
+        result = _judge(flow, state, thread, step, services, judged, questions)
     if result is None:
         # Decide is off (no decision model, or the month's cap): carry on as callers elsewhere do, with no answers,
         # so a path on them falls to Otherwise.
@@ -367,13 +451,13 @@ def _decide(flow, state, thread, step, services):
     _record(state, thread, step, "ok", answers, float(result.get("cost_usd") or 0))
 
 
-def _same_object(flow, thread, values, judged, services):
-    """{step id: questions} for the Decide steps after this one in its list that judge the same object the same way, so
-    this step's call asks theirs too and the object is read once. The look stops at a step that could change the
-    object: a find (its items become the object), a fork (its paths are other lists), or a step whose output is named
-    like an object."""
+def _same_object(flow, thread, values, judged, services, after=None):
+    """{step id: questions} for the Decide steps after this one in its list (from `after`, the thread's cursor by
+    default) that judge the same object the same way, so this step's call asks theirs too and the object is read once.
+    The look stops at a step that could change the object: a find (its items become the object), a fork (its paths
+    are other lists), or a step whose output is named like an object."""
     out = {}
-    for later in steps_at(flow, thread["trail"])[thread["next"] :]:
+    for later in steps_at(flow, thread["trail"])[thread["next"] if after is None else after :]:
         if later["type"] in ("find", "paths") or later.get("out", later["id"]) in F.OBJECTS:
             break
         if later["type"] != "decide" or later.get("enabled", True) is False:

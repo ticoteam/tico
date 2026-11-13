@@ -2,7 +2,7 @@
 """Jev's verdicts on pages: one per page version and rubric (docs/pipelines-v3.md "The nine requirement kinds", 3).
 
 A page attached to a page requirement (backend/task_pages.py) is owed a verdict. The Jev step on the Heartbeat (`run`)
-judges what is owed through `pipeline_judges.judge_once`, with no write transaction held during the model call, and
+judges what is owed through `pipeline_judges.judge_many`, with no write transaction held during the model call, and
 records each answer here. The page requirement reads the verdict (`task_requirements._page`); it never asks Jev.
 
 - The key is (file id, version, `rubric_hash`). `rubric_hash` covers the rubric and everything else Jev is shown beside
@@ -295,8 +295,9 @@ def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str)
 
 
 def run(store: Any, now: str | None = None) -> int:
-    """The Jev step on the Heartbeat: read what is `owed` in a short read, judge each with no transaction held
-    (pipeline_judges.judge_outside, Decide's cap checked), then `record` each in its own short write and nudge its tasks
+    """The Jev step on the Heartbeat: read what is `owed` in a short read, judge them with no transaction held
+    (pipeline_judges.judge_many: a page owed for several requirements read once, small pages sharing a call; Decide's
+    cap checked), then `record` each in its own short write and nudge its tasks
     (task_engine.advance, else changed). A verdict no open task waits on any more is put off ORPHAN_WAIT_H, not judged.
     Returns how many verdicts it gave."""
     from . import pipeline_judges as PJ
@@ -319,8 +320,9 @@ def run(store: Any, now: str | None = None) -> int:
             for verdict_id in orphans:
                 c.execute("UPDATE page_verdicts SET next_try_at=? WHERE id=? AND verdict IS NULL", (later, verdict_id))
     given = 0
-    for row, asked, attachment in jobs:
-        result = PJ.judge_outside(store, asked, attachment)
+    # One page owed against several requirements is read once, and small pages share a call (PJ.judge_many).
+    results = PJ.judge_many(store, [(asked, attachment) for _row, asked, attachment in jobs])
+    for (row, _asked, _attachment), result in zip(jobs, results, strict=True):
         with store.transaction() as c:
             again = _one(c, "SELECT verdict FROM page_verdicts WHERE id=?", (row["id"],))
             if not again or again["verdict"] is not None:

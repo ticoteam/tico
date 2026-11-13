@@ -13,6 +13,7 @@ import math
 import pytest
 
 from backend import automation_engine as E
+from backend import decide_groups as DG
 from backend import learnings as L
 from backend.tests.automation_fakes import Services
 from clients import judge as J
@@ -51,6 +52,35 @@ class Jev:
             "ms": 1,
             "answers": J.check_answers({qid: answer(state, q) for qid, q in questions.items()}, questions),
         }
+
+
+class FairJev(Jev):
+    """A Jev that answers each item of a grouped call as if it were asked about that item alone (`answer` on the
+    item's own state and question), so a grouped item's answers must equal its answers alone; `drop` names items
+    whose answers it leaves out of a grouped call, and `fail` fails every grouped call."""
+
+    def __init__(self, drop=(), fail=False):
+        super().__init__()
+        self.drop, self.fail = set(drop), fail
+
+    def __call__(self, state, questions, label=None):
+        held = DG.split(state, questions)
+        if held is None:
+            return super().__call__(state, questions, label)
+        if self.fail:
+            raise J.JudgeError("timeout", "The decision model took too long", retryable=True)
+        J.validate(state, questions, label)
+        self.calls.append({"state": state, "questions": dict(questions), "label": label, "items": len(held)})
+        answers = {}
+        for name, one, ids in held:
+            if name in self.drop:
+                continue
+            lead = f"About {name} only (state.items.{name}): "
+            for _own, key in ids.items():
+                q = dict(questions[key])
+                q["instructions"] = q["instructions"].removeprefix(lead)
+                answers[key] = answer(one, q)
+        return {"model": J.MODEL, "usage": {}, "ms": 1, "answers": answers}
 
 
 def nouls(count, text="Is this about item {n}?"):
@@ -190,6 +220,77 @@ def test_a_learning_whose_recipients_do_not_fit_in_one_call_is_split_once_per_ne
     assert len(scores) == 80
 
 
+def small_items(count):
+    return [
+        {"key": f"chat:{n}", "audience": None, "source": "chat", "label": f"Lesson {n}", "text": f"Lesson number {n}."}
+        for n in range(count)
+    ]
+
+
+def scored_alone(qset, items, team):
+    jev = Jev()
+    return [L.score(jev, qset, dict(item), team) for item in items]
+
+
+def test_ten_small_learnings_items_are_scored_in_one_call_each_with_all_its_recipients(monkeypatch):
+    """AC-8 for nightly learnings: 10 small items for 3 bots (4 questions each) go in one call, and each item gets the
+    learnable and relevance it gets alone."""
+    monkeypatch.setattr(L, "GROUP", DG.MOST)
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n} looks after area {n}."} for n in range(3)}
+    items = small_items(10)
+    jev = FairJev()
+    assert L.route(jev, qset, items, team) == {}
+    assert len(jev.calls) == 1 and jev.calls[0]["items"] == 10 and len(jev.calls[0]["questions"]) == 40
+    assert [(i["learnable"], i["scores"]) for i in items] == scored_alone(qset, small_items(10), team)
+    assert not any(i["failed"] for i in items)
+
+
+def test_learnings_items_ship_one_per_call_until_the_replay_check():
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(3)}
+    jev = FairJev()
+    L.route(jev, qset, small_items(4), team)
+    assert L.GROUP == 1 and len(jev.calls) == 4 and "items" not in jev.calls[0]
+
+
+def test_a_learnings_item_whose_answers_are_missing_is_asked_again_alone(monkeypatch):
+    """AC-9: the item missing from the grouped answer is asked again on its own and never gets another's scores."""
+    monkeypatch.setattr(L, "GROUP", DG.MOST)
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(3)}
+    items = small_items(5)
+    jev = FairJev(drop={"item3"})
+    assert L.route(jev, qset, items, team) == {}
+    assert [c.get("items") for c in jev.calls] == [5, None], "one grouped call, then item3 alone"
+    assert jev.calls[1]["state"]["item"]["text"] == items[2]["text"]
+    assert [(i["learnable"], i["scores"]) for i in items] == scored_alone(qset, small_items(5), team)
+
+
+def test_a_failed_grouped_learnings_call_fails_each_of_its_items_as_one_failed_call_does(monkeypatch):
+    """AC-10: a timeout on the grouped call skips each item, counted under its error, and the night goes on."""
+    monkeypatch.setattr(L, "GROUP", DG.MOST)
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(3)}
+    items = small_items(6)
+    assert L.route(FairJev(fail=True), qset, items, team) == {"timeout": 6}
+    assert all(i["failed"] and i["learnable"] is None and i["scores"] == {} for i in items)
+
+
+def test_a_learnings_item_too_big_to_share_keeps_its_own_split_beside_grouped_small_ones(monkeypatch):
+    """An item for 80 recipients needs 3 calls alone and keeps them; items for 3 recipients share one call."""
+    monkeypatch.setattr(L, "GROUP", DG.MOST)
+    qset = J.load_set(L.QUESTION_SET)
+    team = {f"bot-{n}": {"profile": f"Bot {n}."} for n in range(80)}
+    few = {f"bot-{n}" for n in range(3)}
+    items = [{**item, "audience": few} for item in small_items(4)]
+    items.insert(2, {**small_items(1)[0], "key": "big", "text": "For everyone."})
+    jev = FairJev()
+    assert L.route(jev, qset, items, team) == {}
+    assert sorted(c.get("items") or 0 for c in jev.calls) == [0, 0, 0, 4]
+    assert len(items[2]["scores"]) == 80 and all(len(i["scores"]) == 3 for i in items if i["key"] != "big")
+
+
 # ------------------------------------------------------------------------------------------- automations
 class JudgingServices(Services):
     """The automation fakes with a judge that answers each question from its content (`Jev`)."""
@@ -283,6 +384,111 @@ def test_a_decide_step_edited_while_its_run_waited_asks_its_new_questions():
     run = E.advance(flow(first, llm, {**second, "questions": edited}), run, services)
     assert run["status"] == "ok" and len(services.jev.calls) == 2
     assert services.jev.calls[1]["questions"] == edited and run["steps"][-1]["outputs"] == alone(edited)
+
+
+# ------------------------------------------------------------------------------------------- Decide after a Find
+class GroupingServices(JudgingServices):
+    """JudgingServices that also asks several find items at once, as the hub does (`judge_many`)."""
+
+    def __init__(self, jev=None, items=()):
+        super().__init__()
+        self.jev, self.items, self.off = jev or FairJev(), list(items), False
+
+    def judge_many(self, items, label):
+        if self.off:
+            return None
+        replies, _calls = DG.ask(lambda s, q, lb: {**self.jev(s, q, lb), "cost_usd": 0.01}, items, label, E.GROUP)
+        return replies
+
+    def judge(self, values, questions, label):
+        return None if self.off else super().judge(values, questions, label)
+
+
+FOUND = [{"id": f"t{n}", "title": f"Task {n}", "status": "open", "body": f"Body {n}"} for n in range(10)]
+FIND = {"id": "find", "type": "find", "source": "tasks", "query": "", "limit": 100}
+
+
+def item_alone(item, questions):
+    return J.check_answers({qid: answer(dict(item), q) for qid, q in questions.items()}, questions)
+
+
+def test_a_decide_step_after_a_find_asks_ten_items_in_one_call_each_its_own_answers(monkeypatch):
+    """AC-8 for the Decide step after a Find: 10 small items, one call, each item's answers what it gets alone."""
+    monkeypatch.setattr(E, "GROUP", DG.MOST)
+    services = GroupingServices(items=FOUND)
+    step = {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}
+    run = E.execute(flow(FIND, step, note("after")), {}, services)
+    assert run["status"] == "ok" and len(services.jev.calls) == 1 and services.jev.calls[0]["items"] == 10
+    decided = [r for r in run["steps"] if r["id"] == "triage"]
+    assert [r["outputs"] for r in decided] == [item_alone(item, TRIAGE) for item in FOUND]
+    assert all(r["status"] == "ok" for r in decided) and round(run["cost"], 6) == 0.01
+    assert len([r for r in run["steps"] if r["id"] == "after"]) == 10
+
+
+def test_a_decide_step_after_a_find_ships_one_item_per_call_until_the_replay_check():
+    services = GroupingServices(items=FOUND[:3])
+    E.execute(flow(FIND, {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}), {}, services)
+    assert E.GROUP == 1 and len(services.jev.calls) == 3 and "items" not in services.jev.calls[0]
+
+
+def test_two_decide_steps_after_a_find_ask_every_item_and_both_steps_in_one_call(monkeypatch):
+    """AC-4 and AC-8 together: both steps' questions for all 5 items in one call; each step gets its own answers."""
+    monkeypatch.setattr(E, "GROUP", DG.MOST)
+    services = GroupingServices(items=FOUND[:5])
+    first = {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}
+    second = {"id": "tone", "type": "decide", "questions": TONE, "out": "d2"}
+    run = E.execute(flow(FIND, first, second), {}, services)
+    assert run["status"] == "ok" and len(services.jev.calls) == 1 and len(services.jev.calls[0]["questions"]) == 20
+    for item, (one, two) in zip(FOUND, zip(*[[r for r in run["steps"] if r["id"] == s] for s in ("triage", "tone")])):
+        merged = item_alone(
+            item, {f"{sid}:{qid}": q for sid, qs in (("triage", TRIAGE), ("tone", TONE)) for qid, q in qs.items()}
+        )
+        assert one["outputs"] == {qid: merged[f"triage:{qid}"] for qid in TRIAGE}
+        assert two["outputs"] == {qid: merged[f"tone:{qid}"] for qid in TONE}
+
+
+def test_a_find_item_missing_from_the_grouped_answer_is_asked_again_alone(monkeypatch):
+    """AC-9: item3 is asked again on its own and gets its own answers, never another item's."""
+    monkeypatch.setattr(E, "GROUP", DG.MOST)
+    services = GroupingServices(jev=FairJev(drop={"item3"}), items=FOUND[:5])
+    run = E.execute(flow(FIND, {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}), {}, services)
+    assert [c.get("items") for c in services.jev.calls] == [5, None] and services.jev.calls[1]["state"] == FOUND[2]
+    assert [r["outputs"] for r in run["steps"] if r["id"] == "triage"] == [item_alone(i, TRIAGE) for i in FOUND[:5]]
+
+
+def test_a_failed_grouped_decide_call_fails_each_find_item_as_its_own_failed_call_does(monkeypatch):
+    """AC-10: a timeout fails each item's Decide step with the call's error; the next steps do not run."""
+    monkeypatch.setattr(E, "GROUP", DG.MOST)
+    services = GroupingServices(jev=FairJev(fail=True), items=FOUND[:4])
+    run = E.execute(
+        flow(FIND, {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}, note("n")), {}, services
+    )
+    decided = [r for r in run["steps"] if r["id"] == "triage"]
+    assert run["status"] == "failed" and [r["status"] for r in decided] == ["failed"] * 4
+    assert len({r["outputs"]["error"] for r in decided}) == 1 and not [r for r in run["steps"] if r["id"] == "n"]
+
+
+def test_decide_off_skips_each_find_item_when_asked_together(monkeypatch):
+    monkeypatch.setattr(E, "GROUP", DG.MOST)
+    services = GroupingServices(items=FOUND[:3])
+    services.off = True
+    run = E.execute(flow(FIND, {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}), {}, services)
+    assert [r["status"] for r in run["steps"] if r["id"] == "triage"] == ["skipped"] * 3
+
+
+def test_a_find_item_whose_step_changed_after_the_grouped_call_asks_again(monkeypatch):
+    """An answer kept for a later item stands only for what it was asked: a run resumed on an edited flow asks again."""
+    monkeypatch.setattr(E, "GROUP", DG.MOST)
+    services = GroupingServices(items=FOUND[:2])
+    services.on_hold = lambda: len(services.jev.calls) >= 1 and not getattr(services, "resumed", False)
+    step = {"id": "triage", "type": "decide", "questions": TRIAGE, "out": "d1"}
+    run = E.execute(flow(FIND, step), {}, services)
+    assert run["status"] == "running" and len(services.jev.calls) == 1
+    services.resumed = True
+    edited = {"urgent": TRIAGE["urgent"]}
+    run = E.advance(flow(FIND, {**step, "questions": edited}), run, services)
+    assert run["status"] == "ok" and len(services.jev.calls) == 2
+    assert [r["outputs"] for r in run["steps"] if r["id"] == "triage"][-1] == item_alone(FOUND[1], edited)
 
 
 # ------------------------------------------------------------------------------------------- the bots' mail tool

@@ -2370,6 +2370,38 @@ class HubServices:
         )
         return result
 
+    def judge_many(self, items, label):
+        """Several find items' Decide calls (backend/automation_engine.py `_judge`): `items` are (values, questions)
+        pairs, asked in as few calls as fit (backend/decide_groups.py), one `judge.call` row per call. Each item's
+        reply is its own result, or the exception its call ended in; None when Decide is off."""
+        from . import decide_groups as DG
+        from .judge import server_engine
+
+        store = self.hub.store
+        with store.read() as c:
+            engine = server_engine(store, c, self.hub.app.state.judge)
+        if engine is None:  # no decision model, or the month's decision cap is reached
+            return None
+        pairs = [(_trim(values), questions) for values, questions in items]
+        replies, calls = DG.ask(engine, pairs, label, E.GROUP)
+        sent = [call for call in calls if call.sent]
+        if sent:
+            self.dirty = True
+
+            def audit(c):
+                who = A.acts_as(c, self.auto) or H.KEEPER
+                for call in sent:
+                    H.event(
+                        c,
+                        who,
+                        "judge.call",
+                        label,
+                        DG.audit_row(call, label, automation=self.row["id"], run=self.run_id),
+                    )
+
+            self._write(audit)
+        return replies
+
     def _screened(self, bot, values):
         """A webhook run's call, screened for prompt injection before a bot gets work from it (backend/screening.py);
         None for any other run. Outside every transaction: it may wait on the decision model."""

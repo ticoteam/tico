@@ -11,8 +11,13 @@ unsure or failed passes work.
 The judge model is Jev alone: Decide Low (`tico-decide-low`), by Chris's decision on Nov 9. No pipeline picks another
 model. Jev goes through judge.server_engine, so its spend counts against the team's Decide cap.
 
-A page requirement's verdicts call it (backend/page_verdicts.py, through `judge_outside`), and the eval
+A page requirement's verdicts call it (backend/page_verdicts.py, through `judge_many`), and the eval
 (evals/pipeline_judge). The model is never asked while a write transaction is open.
+
+`judge_many` asks about several (requirement, attachment) pairs at once: one page attached to several requirements is
+read once, one call with a `met` question per requirement (the same input asked every question once, as the rule check
+does), and up to GROUP pages share one call (backend/decide_groups.py). Each pair gets back only its own answer, read
+exactly as `judge_once` reads one.
 """
 
 import hashlib
@@ -24,6 +29,7 @@ from typing import Any, TYPE_CHECKING, cast
 
 from clients import judge as clients_judge
 
+from . import decide_groups as DG
 from . import file_library
 from . import hubdb
 from . import judge as server_judge
@@ -74,6 +80,15 @@ SPEC_CUT = "The judge saw only the start of this work's spec, so a person decide
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
 # latency_ms}. None, with no installed store, asks no one, so every call fails until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
+# The raw engine a test may set for `judge_many`: (state, questions, label) -> the decision answer ({answers, cost_usd,
+# provider, model, ms}), as judge.server_engine gives it. None asks the installed store's Jev.
+ASK: "Callable[[dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
+# Pages asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped verdicts
+# match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
+# A page attached to several requirements read once, with one question per requirement. Off until the same replay shows
+# the merged call gives each requirement the verdict it gets alone: the state and question wording differ from today's.
+SAME_PAGE = False
 # The store the server installed (install): judge_once asks the production engine on it when no engine is given.
 _installed_store: Any = None
 
@@ -229,28 +244,46 @@ def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], d
     return live_engine(_installed_store) if _installed_store is not None else None
 
 
-def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
-    """The engine the server asks: Jev, through judge.server_engine."""
+def raw_engine(store: "Store") -> "Callable[[dict[str, Any], dict[str, Any], str], dict[str, Any]]":
+    """Jev through judge.server_engine, answering the decision as it comes (`answers` by question id)."""
 
     db: Any = store
 
-    def engine(model: str, state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
+    def ask(state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
         with db.read() as c:
             asks = judge.server_engine(store, c, judge.primary_engine(store.settings, store))
         if asks is None:
             raise JudgeError("unconfigured", "no decision model is configured on this server")
-        result = asks(state, questions, label)
-        p = _probability(result["answers"]["met"]["noul"])
-        if p is None:
-            raise JudgeError("shape", "the decision model's answer has no probability")
-        return {
-            "p": p,
-            "reason": "",
-            "provider": result.get("provider") or "",
-            "model": result.get("model") or MODELS[model],
-            "cost_usd": result.get("cost_usd") or 0.0,
-            "latency_ms": result.get("ms") or 0,
-        }
+        return cast("dict[str, Any]", asks(state, questions, label))
+
+    return ask
+
+
+def _read(result: dict[str, Any], qid: str, model: str, cost: object = None) -> dict[str, Any]:
+    """The engine's answer to `qid` as judge_once's engines give it: {p, reason, provider, model, cost_usd,
+    latency_ms}. Raises JudgeError("shape") when it has no probability."""
+    answers: Any = result.get("answers")
+    answer: Any = cast("dict[str, Any]", answers).get(qid) if isinstance(answers, dict) else None
+    p = _probability(cast("dict[str, Any]", answer).get("noul") if isinstance(answer, dict) else None)
+    if p is None:
+        raise JudgeError("shape", "the decision model's answer has no probability")
+    return {
+        "p": p,
+        "reason": "",
+        "provider": result.get("provider") or "",
+        "model": result.get("model") or MODELS[model],
+        "cost_usd": (result.get("cost_usd") if cost is None else cost) or 0.0,
+        "latency_ms": result.get("ms") or 0,
+    }
+
+
+def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
+    """The engine the server asks: Jev, through judge.server_engine."""
+
+    ask = raw_engine(store)
+
+    def engine(model: str, state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
+        return _read(ask(state, questions, label), "met", model)
 
     return engine
 
@@ -340,11 +373,29 @@ def _ask(
     state = _state(requirement, attachment)
     try:
         result = ask(chosen, state, _questions(), QUESTION_SET)
-    except JudgeError as exc:
-        return _failed(base, judge.FAILED.get(J.error_code(exc), exc.detail))
-    except Exception as exc:  # noqa: BLE001 - any other error in the call is a judge failure, retried, never a verdict
-        LOG.warning("The judge call failed: %s", type(exc).__name__)
-        return _failed(base, "The judge call failed")
+    except Exception as exc:  # noqa: BLE001 - any error in the call is a judge failure, retried, never a verdict
+        return _call_failed(base, exc)
+    return _finish(base, requirement, attachment, state, result)
+
+
+def _call_failed(base: dict[str, Any], exc: BaseException) -> dict[str, Any]:
+    """The pair's result when its call ended in `exc`."""
+    if isinstance(exc, JudgeError):
+        failed: Any = exc
+        return _failed(base, judge.FAILED.get(J.error_code(exc), failed.detail))
+    LOG.warning("The judge call failed: %s", type(exc).__name__)
+    return _failed(base, "The judge call failed")
+
+
+def _finish(
+    base: dict[str, Any],
+    requirement: dict[str, Any],
+    attachment: dict[str, Any],
+    state: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """The verdict from the engine's answer about one pair, `state` being what one call about it alone is shown."""
+    chosen = base["model"]
     p = _probability(result.get("p"))
     if p is None:
         return _failed(base, "The judge's answer could not be read")
@@ -371,6 +422,89 @@ def _ask(
         "latency_ms": int(result.get("latency_ms") or 0),
         "reason": reason,
     }
+
+
+NAME = "requirement{}"
+ONE_OF = (
+    "Here `requirement` means `requirements.{name}`: this question is about that one requirement alone, and the other "
+    "requirements are not part of it."
+)
+
+
+def _page_item(states: "list[dict[str, Any]]") -> "tuple[dict[str, Any], dict[str, Any], list[str]] | None":
+    """One call about one page and several requirements: (state, questions, the question id of each requirement), the
+    page and the work shown once and each requirement's `met` asked about its own. None when it does not fit one call;
+    then each requirement is its own item."""
+    met = _questions()["met"]
+    first = states[0]
+    held: dict[str, Any] = {}
+    questions: dict[str, Any] = {}
+    qids: list[str] = []
+    for n, one in enumerate(states, start=1):
+        name = NAME.format(n)
+        held[name] = one["requirement"]
+        qid = f"met{n}"
+        questions[qid] = {**met, "instructions": ONE_OF.format(name=name) + " " + str(met["instructions"])}
+        qids.append(qid)
+    state = {"requirements": held, "work": first["work"], "attachment": first["attachment"]}
+    return (state, questions, qids) if J.fits(state, questions) else None
+
+
+def judge_many(store: Any, pairs: "list[tuple[dict[str, Any], dict[str, Any]]]") -> list[dict[str, Any]]:
+    """`judge_outside` for each (requirement, attachment) pair, in order, in as few calls as fit: the pairs that show
+    Jev the same page and work (one page attached to several requirements) are one item, read once with a question per
+    requirement; up to GROUP items share a call (backend/decide_groups.py). Each pair's result is judge_once's, read
+    from its own answer only; a pair whose answer is missing is asked again alone, and a failed call fails each pair
+    in it as its own call failing would (`failed`, retried by page_verdicts). With ENGINE set (a test or harness's
+    judge_once engine) each pair is asked on its own, as before."""
+    if ENGINE is not None or (ASK is None and _installed_store is None):
+        return [judge_outside(store, requirement, attachment) for requirement, attachment in pairs]
+    ask = ASK or raw_engine(_installed_store if _installed_store is not None else store)
+    with store.read() as c:
+        capped = judge.over_spend_cap(c, store.settings) is not None
+        bases = [_base(r, a, judge_model_of(c, r.get("pipeline_id"))) for r, a in pairs]
+    out: list[dict[str, Any] | None] = [None] * len(pairs)
+    states: dict[int, dict[str, Any]] = {}
+    pages: dict[str, list[int]] = {}
+    for n, (requirement, attachment) in enumerate(pairs):
+        if not attachment.get("id"):
+            out[n] = _ask(bases[n], requirement, attachment, None)
+        elif capped:
+            out[n] = _failed(bases[n], "Decide has reached the team's monthly spend cap")
+        else:
+            states[n] = _state(requirement, attachment)
+            seen = json.dumps([states[n]["work"], states[n]["attachment"]], sort_keys=True, default=str)
+            pages.setdefault(seen, []).append(n)
+    # Each item: (state, questions) and, for each pair it holds, (its place, its question id).
+    items: list[DG.Item] = []
+    holds: list[list[tuple[int, str]]] = []
+    for members in pages.values():
+        merged = _page_item([states[n] for n in members]) if SAME_PAGE and len(members) > 1 else None
+        if merged is not None:
+            items.append((merged[0], merged[1]))
+            holds.append(list(zip(members, merged[2], strict=True)))
+            continue
+        for n in members:
+            items.append((states[n], _questions()))
+            holds.append([(n, "met")])
+    for run in DG.packs(items, GROUP):
+        replies = DG.ask_run(ask, [items[i] for i in run], QUESTION_SET, None, run)
+        for i, reply in zip(run, replies, strict=True):
+            share = None
+            if isinstance(reply, dict):
+                share = round(float(reply.get("cost_usd") or 0) / len(holds[i]), 6)
+            for n, qid in holds[i]:
+                requirement, attachment = pairs[n]
+                if not isinstance(reply, dict):
+                    out[n] = _call_failed(bases[n], reply)
+                    continue
+                try:
+                    result = _read(reply, qid, bases[n]["model"], share)
+                except JudgeError as exc:
+                    out[n] = _call_failed(bases[n], exc)
+                    continue
+                out[n] = _finish(bases[n], requirement, attachment, states[n], result)
+    return [r if r is not None else _failed(bases[n], "The judge call failed") for n, r in enumerate(out)]
 
 
 def _cannot_see_why(attachment: dict[str, Any], state: dict[str, Any]) -> str:

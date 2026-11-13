@@ -24,6 +24,7 @@ A letter's text is outside text: the reader's prompt and the Decide question bot
 Legal mail reaches the owner at any confidence, even when a chosen bot handles it.
 """
 
+from typing import Any
 import asyncio
 import base64
 import json
@@ -65,6 +66,9 @@ MAX_ATTEMPTS = 5  # then the letter stays failed until a person retries it
 BACKOFF = (60, 300, 1800, 7200)  # seconds before attempt 2, 3, 4, 5
 SCHEDULE = O.Waits(BACKOFF, repeat_last=True)
 BATCH = 10  # letters per drain
+# Letters asked about in one Decide call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 READS_PER_DAY = 100  # letters read (one Gateway call each) in any 24 hours; more wait for the next hour
 SENDERS = 20  # addresses or @domains the email-in address takes scans from
 MAX_BYTES = 25 * 1024 * 1024  # a scan larger than this is refused at fetch
@@ -526,8 +530,9 @@ class PostalMail:
             return 0
         try:
             due = self.due()
-            for ident in due:
-                self.process(ident)
+            size = max(1, int(GROUP))
+            for start in range(0, len(due), size):
+                self.process_many(due[start : start + size])
             return len(due)
         finally:
             self.lock.release()
@@ -556,6 +561,21 @@ class PostalMail:
                 waited += 5
 
     def process(self, ident):
+        self.process_many([ident])
+
+    def process_many(self, idents):
+        """Fetch and read each letter, ask Decide about all of them together (`GROUP` to a call), then file each on
+        its own. A letter that fails before Decide keeps its own error; the others go on."""
+        ready = [got for got in (self.prepare(ident) for ident in idents) if got is not None]
+        if not ready:
+            return
+        decided = self.decide_many([got["reading"] for got in ready])
+        for got, kind in zip(ready, decided, strict=True):
+            self.finish(got, kind)
+
+    def prepare(self, ident):
+        """The letter fetched, stored and read, ready for Decide: a dict, or None when it failed (its error kept) or is
+        not due."""
         with self.store.read() as c:
             row = c.execute("SELECT * FROM mail_items WHERE id=?", (ident,)).fetchone()
         if not row or row["status"] not in ("new", "failed"):
@@ -584,7 +604,21 @@ class PostalMail:
             if not last:
                 return self.fail(row, "read_failed:" + type(error).__name__)
             reading = None
-        kind = classify(reading, self.decide(reading), self.thresholds(), bool(row["contains_checks"]))
+        return {
+            "ident": ident,
+            "row": row,
+            "reading": reading,
+            "digest": digest,
+            "data": data,
+            "mime": mime,
+            "name": name,
+        }
+
+    def finish(self, got, decided):
+        """File one prepared letter with Decide's word on it (or None)."""
+        ident, row, reading = got["ident"], got["row"], got["reading"]
+        digest, data, mime, name = got["digest"], got["data"], got["mime"], got["name"]
+        kind = classify(reading, decided, self.thresholds(), bool(row["contains_checks"]))
         try:
             with self.store.transaction() as c:
                 self.file(c, ident, kind, reading, digest, len(data), mime, name)
@@ -712,45 +746,64 @@ class PostalMail:
             return {"kind": 0.6, "junk": 0.85}
 
     def decide(self, reading):
-        """Decide's (kind, confidence), or None when Decide is off, over budget or did not answer. One `judge.call` row
-        per call, never the letter's text."""
-        if not reading:
-            return None
+        """Decide's (kind, confidence) about one letter, or None (decide_many)."""
+        return self.decide_many([reading])[0]
+
+    def decide_many(self, readings):
+        """Decide's (kind, confidence) for each reading, in order; None where the reading is empty or Decide is off,
+        over budget or did not answer. Several letters go in one call (`GROUP`, backend/decide_groups.py), each read
+        from its own answer only; the daily cap is checked before every call. One `judge.call` row per call, never a
+        letter's text."""
+        out: list[Any] = [None] * len(readings)
+        places = [n for n, reading in enumerate(readings) if reading]
+        if not places:
+            return out
         from clients import judge as J
-        from .judge import audit_detail, daily_cap, server_engine, used_today
+        from . import decide_groups as DG
+        from .judge import daily_cap, server_engine, used_today
 
         try:
             qset = J.load_set(QUESTION_SET)
         except J.JudgeError:
-            return None
-        engine = self.engine
-        if engine is None:
-            with self.store.read() as c:
-                engine = server_engine(self.store, c, getattr(self.app.state, "judge", None))
-                if engine is not None and used_today(c, H.KEEPER) >= daily_cap(self.settings, "bot"):
-                    engine = None
-        if engine is None:
-            return None
+            return out
+        label = qset["label"]
         questions = {"kind": qset["questions"]["kind"]}
-        state = {
-            "letter": {
-                "sender": reading["sender"],
-                "summary": reading["summary"],
-                "deadline": reading["deadline"],
-                "text": reading["text"],
-            }
-        }
-        decided, detail = None, {"label": qset["label"], "questions": 1, "types": ["choice"]}
-        try:
-            result = engine(state, questions, qset["label"])
-            answers = J.check_answers(result.get("answers"), questions)
-            decided = J.choice(answers, "kind")
-            detail.update(audit_detail(result), answers=J.summary(answers))
-        except Exception as error:  # noqa: BLE001 - Decide never stops a letter: the reader's word stands
-            detail["error"] = getattr(error, "code", type(error).__name__)
-        with self.store.transaction() as c:
-            H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
-        return decided
+        pairs = [
+            (
+                {
+                    "letter": {
+                        "sender": readings[n]["sender"],
+                        "summary": readings[n]["summary"],
+                        "deadline": readings[n]["deadline"],
+                        "text": readings[n]["text"],
+                    }
+                },
+                questions,
+            )
+            for n in places
+        ]
+        for run in DG.packs(pairs, GROUP):
+            engine = self.engine
+            if engine is None:
+                with self.store.read() as c:
+                    engine = server_engine(self.store, c, getattr(self.app.state, "judge", None))
+                    if engine is not None and used_today(c, H.KEEPER) >= daily_cap(self.settings, "bot"):
+                        engine = None
+            if engine is None:
+                return out
+            calls = []
+            replies = DG.ask_run(engine, [pairs[k] for k in run], label, calls, run)
+            with self.store.transaction() as c:
+                for call in calls:
+                    H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, types=["choice"]))
+            for k, reply in zip(run, replies, strict=True):
+                if isinstance(reply, BaseException):
+                    continue  # Decide never stops a letter: the reader's word stands
+                try:
+                    out[places[k]] = J.choice(J.check_answers(reply.get("answers"), questions), "kind")
+                except Exception as error:  # noqa: BLE001 - an unreadable answer: the reader's word stands
+                    LOG.warning("Physical mail Decide answer unreadable: %s", type(error).__name__)
+        return out
 
     # ------------------------------------------------------------------------- filing, in one transaction
     def file(self, c, ident, kind, reading, digest, size, mime, name):

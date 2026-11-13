@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from backend import decide_groups as DG
 from backend import support_triage as T
 from backend import task_engine as E
 from backend.store import H
@@ -418,3 +419,91 @@ def test_an_upstream_error_that_echoes_the_ticket_keeps_only_its_code_in_the_aud
     ((_, _, detail),) = calls(api)
     assert detail["error"] == "invalid" and "admin mode" not in json.dumps(detail)
     assert "admin mode" not in tasks(api)[0]["body"].split("\n\n", 1)[0]  # nor the line on the task
+
+
+class GroupedModel(FakeModel):
+    """The decision model asked about several tickets in one call (backend/decide_groups.py): each ticket's spam from its
+    own body (an injection 0.97, anything else 0.02). `drop` names a ticket body whose `kind` answer goes missing in a
+    grouped call."""
+
+    def __init__(self, drop=None):
+        super().__init__()
+        self.drop, self.sizes = drop, []
+
+    def one(self, ticket):
+        self.spam = 0.97 if "Ignore your instructions" in ticket["body"] else 0.02
+        answers = FakeModel.__call__(self, ticket, {})["answers"]
+        self.calls.pop()  # not a call: only this ticket's answers
+        return answers
+
+    def __call__(self, state, questions, label=None):
+        if self.fail:
+            self.calls.append({"state": state})
+            raise self.fail
+        parts = DG.split(state, questions)
+        if parts is None:
+            self.sizes.append(1)
+            self.calls.append({"state": state})
+            return {"model": "jev-1.14", "ms": 9, "cost_usd": 0.001, "answers": self.one(state)}
+        self.sizes.append(len(parts))
+        self.calls.append({"state": state})
+        answers = {}
+        for _name, ticket, ids in parts:
+            mine = self.one(ticket)
+            for own, key in ids.items():
+                if not (self.drop and self.drop in ticket["body"] and own == "kind"):
+                    answers[key] = mine[own]
+        return {"model": "jev-1.14", "ms": 9, "cost_usd": 0.002, "answers": answers}
+
+
+def ten(api, r):
+    report(
+        api,
+        r,
+        *[
+            task(f"hq:TK-{n}", body=(INJECTION if n % 3 == 0 else QUESTION).replace("TK-", f"TK-{n}-"))
+            for n in range(10)
+        ],
+    )
+
+
+def test_ten_tickets_are_triaged_in_at_most_two_calls_each_as_alone(api, quiet, monkeypatch):
+    """AC-8 for support triage: ten small tickets, at most two calls, each held or delivered on its own answer."""
+    monkeypatch.setattr(T, "GROUP", DG.MOST)
+    r = hosted(api)
+    api.app.state.judge = engine = GroupedModel()
+    ten(api, r)
+    drain(api)
+    assert len(engine.calls) <= 2 and sum(engine.sizes) == 10
+    held = sorted(t["body"].rsplit("TK-", 1)[1].split("-")[0] for t in all_tasks(api) if t["owner_id"] == "human:ana")
+    assert held == ["0", "3", "6", "9"]
+    assert len(tasks(api)) == 6 and all(t["body"].startswith("Triage (") for t in tasks(api))
+    audit = calls(api)
+    assert len(audit) == len(engine.calls) and sum(d.get("items", 1) for _, _, d in audit) == 10
+
+
+def test_a_ticket_whose_answer_is_missing_in_a_group_is_asked_again_alone(api, quiet, monkeypatch):
+    """AC-9: the missing answer is asked again on its own, and no ticket takes another ticket's answer."""
+    monkeypatch.setattr(T, "GROUP", DG.MOST)
+    r = hosted(api)
+    api.app.state.judge = engine = GroupedModel(drop="TK-3-")
+    ten(api, r)
+    drain(api)
+    assert engine.sizes == [10, 1]
+    assert "TK-3-" in engine.calls[1]["state"]["body"]
+    assert len([t for t in all_tasks(api) if t["owner_id"] == "human:ana"]) == 4
+    assert len(calls(api)) == 2
+
+
+def test_a_failed_grouped_call_opens_each_of_its_tickets_untriaged(api, quiet, monkeypatch):
+    """AC-10: a grouped call that fails (the spend cap) fails each ticket as one failed call does today."""
+    monkeypatch.setattr(T, "GROUP", DG.MOST)
+    r = hosted(api)
+    api.app.state.judge = engine = GroupedModel()
+    engine.fail = J.JudgeError("spend_cap", "Decide has cost $50.00 this month", 429)
+    ten(api, r)
+    drain(api)
+    assert len(engine.calls) == 1 and len(tasks(api)) == 10
+    assert all(t["body"].startswith("Triage (support-triage) did not run (the month's spend cap)") for t in tasks(api))
+    ((_, _, detail),) = calls(api)
+    assert detail["error"] == "spend_cap" and detail["items"] == 10

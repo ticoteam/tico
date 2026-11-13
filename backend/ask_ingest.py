@@ -364,9 +364,9 @@ def _judged_text(refs, message_text, task):
     return "" if body.strip() == str(first.get("question") or "").strip() else body
 
 
-def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False, asked=None):
-    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error).
-    `asked` is the item's structured questions as stored (refs.questions), or None."""
+def _call(qset, own, items, asker, person_name, title, text, asked=None):
+    """(state, questions, criteria) of the one call about one item. `asked` is the item's structured questions as
+    stored (refs.questions), or None."""
     criteria = _criteria(own)
     questions = {qid: qset["questions"][qid] for qid in ("clear", "kind", "urgency", "recommends")}
     if criteria:
@@ -378,6 +378,13 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
         "asker": asker,
         "person": person_name,
     }
+    return state, questions, criteria
+
+
+def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False, asked=None):
+    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error).
+    `asked` is the item's structured questions as stored (refs.questions), or None."""
+    state, questions, criteria = _call(qset, own, items, asker, person_name, title, text, asked)
     result, error = _ask(calls_for(store), engine, state, questions, qset["label"])
     if error in REFUSED:
         return None, None, error  # no call was made: no judge.call row, and the day's count is kept
@@ -844,6 +851,9 @@ def outcome_counts(c, start, end):
 
 
 REPLAY_PAGE = 25
+# Replayed items asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+REPLAY_GROUP = 1
 
 
 def _reads(auth, c, who, task):
@@ -1023,22 +1033,9 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
             )
             for it in page
         ]
+    verdicts = _replay_judge(store, engine, qset, own, person_name, prepared)
     out = []
-    for it, plate, items, asker, shown in prepared:
-        answers, _, error = _judge(
-            store,
-            engine,
-            qset,
-            own,
-            items,
-            asker,
-            person_name,
-            it["title"],
-            it["text"],
-            it["kind"],
-            replay=True,
-            asked=it["asked"],
-        )
+    for (it, plate, _items, asker, shown), (answers, error) in zip(prepared, verdicts, strict=True):
         would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], plate)
         out.append(
             {
@@ -1056,6 +1053,69 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         )
     nxt = offset + len(page)
     return {"items": out, "total": len(everything), "next_offset": nxt if nxt < len(everything) else None}
+
+
+def _replay_judge(store, engine, qset, own, person_name, prepared):
+    """Each replayed item's (answers, error), several items to a call (`REPLAY_GROUP`, backend/decide_groups.py), each
+    read from its own answers only; an item whose answer is missing is asked again alone, and a failed call is each
+    item's failure (`failed_open`), as one item's own failed call was. One judge.call row per call made, `mode`
+    replay, never an item's text; a call the pool refused at once (busy, breaker) made none and writes none."""
+    from . import decide_groups as DG
+
+    calls_pool = calls_for(store)
+    label = qset["label"]
+    asked = [
+        (it, items, *_call(qset, own, items, asker, person_name, it["title"], it["text"], it["asked"]))
+        for it, _plate, items, asker, _shown in prepared
+    ]
+    pairs = [(state, questions) for _it, _items, state, questions, _criteria in asked]
+
+    def timed(state, questions, label):
+        result, error = _ask(calls_pool, engine, state, questions, label)
+        if error:
+            raise J.JudgeError(error, "ask ingest replay call")
+        if not isinstance(result, dict):
+            raise J.JudgeError("shape", "not a map")
+        return result
+
+    out = []
+    for run in DG.packs(pairs, REPLAY_GROUP):
+        calls = []
+        replies = DG.ask_run(timed, [pairs[n] for n in run], label, calls, run)
+        with store.transaction() as c:
+            for call in calls:
+                code = getattr(call.error, "code", None)
+                if call.error is not None and (code in REFUSED or not call.sent):
+                    continue  # no call was made: no judge.call row, and the day's count is kept
+                held = [asked[n] for n in call.items]
+                one = len(held) == 1
+                options = [len(items) for _it, items, *_ in held]
+                criteria = [len(crit) for *_, crit in held]
+                kinds = [it["kind"] for it, *_ in held]
+                detail = DG.audit_row(
+                    call,
+                    label,
+                    options=options[0] if one else options,
+                    criteria=criteria[0] if one else criteria,
+                    kind=kinds[0] if one else kinds,
+                    mode="replay",
+                )
+                if call.error is not None:
+                    detail["error"] = code if isinstance(code, str) and code else "error"
+                H.event(c, H.KEEPER, "judge.call", label, detail)
+        for n, reply in zip(run, replies, strict=True):
+            _it, items, _state, questions, criteria = asked[n]
+            if isinstance(reply, BaseException):
+                code = getattr(reply, "code", None)
+                out.append((None, code if isinstance(code, str) and code else "error"))
+                continue
+            try:
+                answers = read(J.check_answers(reply.get("answers"), questions), qset["thresholds"], criteria, items)
+            except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError):
+                out.append((None, "shape"))
+                continue
+            out.append((answers, None))
+    return out
 
 
 def install(app, store, auth):

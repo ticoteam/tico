@@ -17,6 +17,7 @@ reviewer keeps the last word. A month of `gate` audit lines beside the reviewer'
 how that stays or changes (docs/mail-service.md).
 """
 
+from typing import Any
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ HUB = Path(__file__).resolve().parents[2]
 if str(HUB) not in sys.path:  # `python -m connectors.mail` already has it
     sys.path.insert(0, str(HUB))
 from clients import judge as J
+from backend import decide_groups as DG  # stdlib and clients/judge.py only: safe on a bot's computer
 from . import db
 
 ENV_VAR = "MAIL_DECISIONS"
@@ -38,6 +40,10 @@ SNIPPET_CHARS = 400
 THREAD_CHARS = 6000
 DRAFT_CHARS = 6000
 ENGINE = None  # the test seam: a callable, or None
+# Messages asked about in one call (backend/decide_groups.py), for the listing's triage and the rules' sets. One until
+# the replay through real Jev shows grouped verdicts match the ones given alone (no more than 2 in 100 changed); then
+# DG.MOST.
+GROUP = 1
 
 
 def engine(env=None):
@@ -137,7 +143,7 @@ def _cache_key(m, chosen, mailbox):
 
 def _run(msgs, chosen, engine, mailbox, conn=None):
     """Read SQLite on this thread, call the judge in parallel for misses, then write on this thread."""
-    results = [None] * len(msgs)
+    results: list[Any] = [None] * len(msgs)
     misses = []
     for idx, m in enumerate(msgs):
         key = _cache_key(m, chosen, mailbox) if conn is not None else None
@@ -147,25 +153,45 @@ def _run(msgs, chosen, engine, mailbox, conn=None):
         else:
             misses.append((idx, m, key))
 
-    def one(item):
-        _idx, m, _key = item
-        try:
-            return engine(message_state(m, mailbox), chosen["questions"], chosen["label"]), None
-        except J.JudgeError as exc:
-            return None, exc
-
+    pairs = [(message_state(m, mailbox), chosen["questions"]) for _idx, m, _key in misses]
+    fresh = _grouped(engine, pairs, chosen["label"])
     if misses:
-        with ThreadPoolExecutor(min(PARALLEL, len(misses))) as pool:
-            fresh = list(pool.map(one, misses))
-        for (idx, _m, key), (result, error) in zip(misses, fresh):
+        for (idx, _m, key), (result, error) in zip(misses, fresh, strict=True):
             results[idx] = (result, error, False)
             if result is not None and key:
                 db.put_judgment(conn, key, result["answers"])
     return results
 
 
+def _grouped(engine, pairs, label):
+    """(result, None) or (None, JudgeError) for each `(state, questions)`, in order: `GROUP` messages to a call
+    (backend/decide_groups.py), several calls at a time. Each message gets only its own answers; one whose answer is
+    missing is asked again alone; a failed call is each of its messages' failure. Anything but a JudgeError raises, as
+    one message's own call did."""
+    runs = DG.packs(pairs, GROUP)
+
+    def one(run):
+        return DG.ask_run(engine, [pairs[n] for n in run], label, None, run)
+
+    out: list[tuple[Any, Any]] = [(None, None)] * len(pairs)
+    if not runs:
+        return out
+    with ThreadPoolExecutor(min(PARALLEL, len(runs))) as pool:
+        answered = list(pool.map(one, runs))
+    for run, replies in zip(runs, answered, strict=True):
+        for n, reply in zip(run, replies, strict=True):
+            if isinstance(reply, J.JudgeError):
+                out[n] = (None, reply)
+            elif isinstance(reply, BaseException):
+                raise reply
+            else:
+                out[n] = (reply, None)
+    return out
+
+
 def triage(msgs, engine, mailbox="", conn=None):
-    """Judge every message of a listing, several at a time, and put `judgment` on each.
+    """Judge every message of a listing, several to a call (`GROUP`) and several calls at a time, and put `judgment`
+    on each.
     Returns the summary the audit and the JSON carry."""
     chosen = J.load_set(TRIAGE)
     results = _run(msgs, chosen, engine, mailbox, conn)
@@ -231,14 +257,9 @@ def judge_sets(msgs, set_ids, engine, mailbox="", conn=None):
         if missing:
             todo.append((m, missing))
 
-    def one(entry):
-        m, missing = entry
-        return _ask_sets(engine, message_state(m, mailbox), {sid: sets[sid] for sid in missing})
-
-    fresh = []
-    if todo:
-        with ThreadPoolExecutor(min(PARALLEL, len(todo))) as pool:
-            fresh = list(pool.map(one, todo))
+    fresh = _ask_many_sets(
+        engine, [(message_state(m, mailbox), {sid: sets[sid] for sid in missing}) for m, missing in todo]
+    )
     for (m, missing), answered in zip(todo, fresh):
         for sid, key in missing.items():
             answers, error = answered[sid]
@@ -251,6 +272,51 @@ def judge_sets(msgs, set_ids, engine, mailbox="", conn=None):
             if key:
                 db.put_judgment(conn, key, answers)
     return stats
+
+
+def _ask_many_sets(engine, wanted):
+    """`_ask_sets` for each `(state, sets)` in `wanted`, in order, with messages that need the same sets asked several
+    to a call (`GROUP`, `_grouped`): each message's sets in one call about it, as `_ask_sets` asks them, under
+    `<set id>/<question id>` when there are several. A message whose sets do not fit one call together is asked as
+    `_ask_sets` does."""
+    out: list[Any] = [None] * len(wanted)
+    alone = []
+    same = {}  # set ids -> [(place, state)]
+    for place, (state, sets) in enumerate(wanted):
+        if len(sets) > 1 and not J.fits(state, _merged(sets)):
+            alone.append(place)
+        else:
+            same.setdefault(tuple(sets), []).append((place, state))
+    for sids, held in same.items():
+        sets = wanted[held[0][0]][1]
+        if len(sids) == 1:
+            (sid,) = sids
+            questions, label = sets[sid]["questions"], sets[sid]["label"]
+        else:
+            questions, labels = _merged(sets), "+".join(chosen["label"] for chosen in sets.values())
+            label = labels if len(labels) <= J.MAX_LABEL else next(iter(sets.values()))["label"]
+        replies = _grouped(engine, [(state, questions) for _place, state in held], label)
+        for (place, _state), (result, error) in zip(held, replies, strict=True):
+            if error is not None:
+                out[place] = {sid: (None, error) for sid in sets}
+            elif len(sids) == 1:
+                out[place] = {sids[0]: (result["answers"], None)}
+            else:
+                answers = result["answers"]
+                out[place] = {
+                    sid: ({qid: answers[f"{sid}/{qid}"] for qid in chosen["questions"]}, None)
+                    for sid, chosen in sets.items()
+                }
+    if alone:
+        with ThreadPoolExecutor(min(PARALLEL, len(alone))) as pool:
+            done = list(pool.map(lambda place: _ask_sets(engine, *wanted[place]), alone))
+        for place, answered in zip(alone, done, strict=True):
+            out[place] = answered
+    return out
+
+
+def _merged(sets):
+    return {f"{sid}/{qid}": q for sid, chosen in sets.items() for qid, q in chosen["questions"].items()}
 
 
 def _ask_sets(engine, state, sets):
