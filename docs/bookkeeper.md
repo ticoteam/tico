@@ -23,6 +23,11 @@ line. Revoking that view in Finance → Access sticks; no later start gives it b
 view at its next start, unless an Everything view for the Finance Owner was revoked before, and the owner's old
 "Let the Finance Owner see the books" to-do is closed for them. A paused or archived Finance Owner gets no view.
 
+Its payments ask a finance admin by default: one Finance rule, "A bot's payment asks a finance admin" (any amount,
+any recipient, any bot), is added once per install, before its view, and an install from before gets it at its next
+start. The owner may edit it or turn it off on purpose in Finance; no later start puts it back. It never pays
+against a private payroll line it has no full detail of.
+
 It touches the books only through the [Finance tools](finance-tools.md), as itself. Approvals follow the company's
 rules; it never approves its own action. The owner approves a month's close and each import of a spreadsheet's history.
 
