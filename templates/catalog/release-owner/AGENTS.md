@@ -78,9 +78,10 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
 - `reports/YYYY-MM-DD-delivery.md`: the weekly report, listed with `tico file publish`.
 - `reports/YYYY-MM-DD-release-notes.md`: each release-notes draft, listed the same way.
 - `reports/releases/<version>-readiness.md`: the readiness checklist and go or no-go for a named release.
-- `reports/releases/<name>.html`: the release report, one page for a batch that ships together and the one page its OK
-  is given on: the changelog first, then why we are confident, the plan and the biggest risks
-  (`playbooks/write-the-release-report.md`).
+- `reports/releases/YYYY-MM-DD.N.html`: the release report, one page for a batch that ships together. Ready tasks are
+  labelled `release:next`; your release routine cuts the batch to `release:YYYY-MM-DD.N` and files one release task
+  carrying the report (the changelog first, then why we are confident, the plan and the biggest risks) for a person's
+  one OK (`playbooks/write-the-release-report.md`).
 - `knowledge/delivery-practice.md`: what each measure means (merge wait, merge to production, cadence, failed deploy, rollback),
   how it is measured and over which window, with its sources.
 - `knowledge/thresholds.md`: what counts as slow, stalled and too often here. Starting defaults until setup replaces them.

@@ -108,7 +108,7 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
 
 ## Steps
 
-1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/<name>.html` or
+1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/YYYY-MM-DD.N.html` or
    `reports/YYYY-MM-DD-checked-<slug>.html`.
    Replace every `{{...}}`. Keep its styles: they use only Tico's colour tokens, so the page follows light and dark.
 2. Take the screenshots and set the arrows.

@@ -1,33 +1,45 @@
 # Write the release report
 
-Triggered when the release task for a batch asks for its report: the tasks that ship together wait on one release
-task, and one person's OK on its one report starts the release. Budget 60 minutes. The outcome is one page,
-`reports/releases/<name>.html`, on the release task, and one ask for that OK. Nothing is tagged or deployed before it.
+Work that is ready to ship is released in batches. Each task in a batch carries the batch's label; one release task
+carries the batch's one report; one person's OK on that report starts the release. The outcome is one page,
+`reports/releases/YYYY-MM-DD.N.html`, on the release task. Nothing is tagged or deployed before the OK.
 
 Work across the batch from what each task already holds: its Spec page, its approved QA page and its pull request.
-Never open a task's own session or thread to learn what it did. If its pages do not say, it is pulled (step 2), not
+Never open a task's own session or thread to learn what it did. If its pages do not say, it is pulled (step 5), not
 guessed into the report.
 
 ---
 
-## 1. Read the batch
+## 1. A task becomes ready to release
 
-    tico task show <release task id>
+You are woken when a task enters the stage where work waits to be released. Read it (`tico task show <id>`): its QA
+page must carry a person's OK at the commit that ships. If it does, label it for the next batch:
 
-The batch is the tasks the release task names (where it names none, every Engineering task waiting in Release for
-that repository). For each, `tico task show <id>` lists its Spec page and QA page under "From earlier stages": read
-both (`tico file read <file id>`) and its pull request (`gh pr view <n> -R <repo> --json title,body,mergeCommit,files,url`).
+    tico task label <id> --add release:next --version N
+
+If it does not, send it back with why: `tico task move <id> "QA" -m "<what is missing>" --version N`.
+
+## 2. Cut the release
+
+On your release routine (for example, once a day on release days):
+
+    tico task list --label release:next --status open --brief
+
+None: end the run. Otherwise name the release `YYYY-MM-DD.N` (N is 1, or one more than the releases already cut
+today) and move each task from the next batch to this one:
+
+    tico task label <id> --remove release:next --add release:YYYY-MM-DD.N --version N
+
+Tasks that become ready after this wait for the next cut.
+
+## 3. Read the batch and check across it
+
+For each task, `tico task show <id>` lists its Spec page and QA page under "From earlier stages": read both
+(`tico file read <file id>`) and its pull request (`gh pr view <n> -R <repo> --json title,body,mergeCommit,files,url`).
 Note what each pull request body says a release needs: data changes, settings, flags, a deploy order.
 
-## 2. Keep only what is ready
-
-A task whose QA page was not approved at the commit that ships is pulled from the batch: say why under Pulled and on
-its task. A task added or pulled after you ask is a new version of the report, and the OK starts over.
-
-## 3. Check across the batch
-
-Look for the same files or screens changed twice, one change undoing another, an order one needs (a back end before
-the screen that calls it), and a data change that locks a large table or cannot be undone
+Then look across the batch for the same files or screens changed twice, one change undoing another, an order one
+needs (a back end before the screen that calls it), and a data change that locks a large table or cannot be undone
 (`skills/find-hidden-breaking-changes/SKILL.md`, `skills/judge-whether-a-release-can-roll-back/SKILL.md`). Write
 "None found" only after checking.
 
@@ -50,24 +62,28 @@ Below the line: the tasks (title, repository, pull request, QA page version), wh
 watched after the release and for how long, and what was pulled. The opening names the batch, its state and the
 suggested version with its reason (`knowledge/versioning.md`); a person records the version.
 
-## 5. Build, publish and ask once
+## 5. File the release task and ask once
 
-    python3 skills/build-the-page/page.py build reports/releases/<name>-draft.html --out reports/releases/<name>.html
-    python3 skills/build-the-page/page.py check reports/releases/<name>.html --kind release
-    tico page publish reports/releases/<name>.html --task <release task id> --title "Release <name>"
+    tico task create --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --body "<the tasks, one line each>"
+    python3 skills/build-the-page/page.py build reports/releases/YYYY-MM-DD.N-draft.html --out reports/releases/YYYY-MM-DD.N.html
+    python3 skills/build-the-page/page.py check reports/releases/YYYY-MM-DD.N.html --kind release
+    tico page publish reports/releases/YYYY-MM-DD.N.html --task <release task id> --title "Release YYYY-MM-DD.N"
     python3 skills/build-the-page/page.py render <file id> --kind release
 
-Look at both pictures `render` names before anyone sees it. Where the release task has a page requirement, attach the
-page to it (`tico task attach <release task id> page:<file id> --req "<requirement>" --version N`) and the stage asks
-the person. Where it has none, ask once, showing the page:
+Look at both pictures `render` names before anyone sees the page. Then ask the person once, on the release task,
+showing it:
 
-    tico task ask <release task id> "Start release <name> at <commit>?" --to <owner> --kind ok --show page:<file id> -m "<the batch in a few words>" --version N
+    tico task ask <release task id> "Start release YYYY-MM-DD.N?" --to <owner> --kind ok --show page:<file id> -m "<the batch in a few words>" --version N
 
-Never ask once per task: the one OK covers the batch.
+One OK covers the batch: never ask on each task. **A task pulled after the cut** (its QA OK no longer holds, or a
+person asks): remove its label (`--remove release:YYYY-MM-DD.N`), say why on that task, publish a new version of the
+report with it under Pulled, and ask for the OK again. An OK on an older version does not count.
 
 ## 6. After the OK
 
-Follow the plan, step by step, and nothing else. A step that fails stops the release and goes to the owner as a
-question; something that must be undone follows `playbooks/rollback.md`. Publishing the changelog where customers
-read it is a person's step (AGENTS.md, Sending): the approved text is the text that goes out. Then update
-`knowledge/versioning.md` and say on the release task what shipped, with the release link.
+Move every task labelled `release:YYYY-MM-DD.N` on to its next stage
+(`tico task move <id> next -m "In release YYYY-MM-DD.N" --version N`), then follow the plan, step by step, and nothing
+else. A step that fails stops the release and goes to the owner as a question; something that must be undone follows
+`playbooks/rollback.md`. Publishing the changelog where customers read it is a person's step (AGENTS.md, Sending): the
+approved text is the text that goes out. Then update `knowledge/versioning.md`, say on the release task what shipped,
+with the release link, and close it.
