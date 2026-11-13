@@ -1893,12 +1893,6 @@ class ReportOrder(Contract):
     reports: list[ID] = Field(min_length=1, max_length=200)
 
 
-# Where a bot's conversation compacts, in tokens: the twelve sizes offered (backend/providers.py COMPACT_SIZES).
-CompactAt = Literal[
-    100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
-]
-
-
 class BotDefinitionCreate(Contract):
     private_tasks_default: StrictBool = False
     slug: Slug | None = None  # left out, picked from the display name
