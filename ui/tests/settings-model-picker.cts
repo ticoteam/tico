@@ -233,6 +233,8 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     calls = [];
     await page.locator('#bot-editor button[type=submit]:not([data-choice-apply])').click();
     await page.waitForFunction(() => !(document.querySelector('#bot-editor') as HTMLDialogElement).open);
+    // The editor closes, reloads the bots, then says so: wait for that, so its reload cannot land after the reset below.
+    await page.locator('.toast', {hasText: 'Added'}).waitFor();
     assert.equal(calls[0]!.what, 'create');
     assert.deepEqual([calls[0]!.body.model, calls[0]!.body.effort, calls[0]!.body.harness, calls[0]!.body.compact_at], ['claude-haiku-5-5', 'medium', 'claude', 700_000]);
 
