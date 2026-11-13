@@ -19,6 +19,8 @@ are on it:
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
+- A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
+  (`_ready_snoozes`).
 
 A pass is one write transaction, opened by the caller. Each task is done on its own inside it: a task the check cannot
 work out is left as it was and named in `failures`, and the pass goes on to the next one. Doing a pass twice is
@@ -123,6 +125,7 @@ def check(
     done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
     seen: dict[str, str | None] = {}
     live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
+    _ready_snoozes(conn, done, failures)
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -184,6 +187,40 @@ def check(
         if conn.in_transaction:
             conn.execute("RELEASE never_stuck_room")
     return done
+
+
+# ----------------------------------------------------------------------------- a bot's snooze on a ready task
+# Open tasks on the engine, in a stage that is not by hand, set aside by a snooze their owner bot set itself.
+_OWN_SNOOZES = (
+    "SELECT t.id FROM tasks t JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL AND z.by_id = t.owner_id "
+    "JOIN stages s ON s.id = t.stage_id "
+    "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
+    "AND t.owner_id LIKE 'bot:%' ORDER BY z.created_at, z.id"
+)
+
+
+def _ready_snoozes(
+    conn: "sqlite3.Connection", done: dict[str, int], failures: "list[tuple[str, Exception]] | None"
+) -> None:
+    """A snooze the owner bot set on its own task does not hold it once everything the stage asks is met and the next
+    stage has room: the bot was waiting for that (its PR's checks), so the snooze ends and the task moves on
+    (`task_engine.move_on_past_own_snooze`). This catches what no event ended: checks that finished before the snooze
+    was written, a result that was lost. A person's snooze, another bot's, or a task still missing something stays.
+    *Nov 12: Tico Team's Build tasks sat for hours, snoozed "until checks pass", with their checks passed.*"""
+    for (task_id,) in conn.execute(_OWN_SNOOZES).fetchall():
+        _keeping_reads(conn, "SAVEPOINT never_stuck_snoozed")
+        try:
+            if E.move_on_past_own_snooze(conn, str(task_id), "Everything this stage asks is met"):
+                done["snoozes_ended"] += 1
+                done["moved"] += 1
+        except Exception as error:
+            if failures is None or not conn.in_transaction or storage_error(error):
+                raise
+            conn.execute("ROLLBACK TO never_stuck_snoozed")
+            failures.append((str(task_id), error))
+        finally:
+            if conn.in_transaction:
+                conn.execute("RELEASE never_stuck_snoozed")
 
 
 # ----------------------------------------------------------------------------- room after a by-hand stage
