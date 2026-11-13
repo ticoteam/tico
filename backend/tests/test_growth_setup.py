@@ -251,6 +251,7 @@ def test_a_support_session_reads_growth_without_recording_the_teams_dates():
                 "CREATE TABLE gtm_sources (id TEXT, retired_at TEXT, created_at TEXT)",
                 "CREATE TABLE growth_cohorts (channel_id TEXT, spend REAL, new_customers INTEGER)",
                 "CREATE TABLE growth_setup (id INTEGER PRIMARY KEY, first_opened_at TEXT, done_at TEXT)",
+                "CREATE TABLE growth_setup_shown (id INTEGER PRIMARY KEY, done_shown_at TEXT)",
             ):
                 c.execute(ddl)
             yield c

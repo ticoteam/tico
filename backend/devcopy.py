@@ -629,6 +629,7 @@ KEEP = (
             "growth_settings",
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
+            "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",
