@@ -164,7 +164,7 @@ def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
     ident, token = bot(api)
     grant(api, ident)
     theirs, bens = (send(api, quote(api, token=token), token=token) for _ in range(2))
-    with pytest.raises(H.Refused, match="Cara cannot read this private task"):
+    with pytest.raises(H.Refused, match="Cara can't see this private task"):
         with api.app.state.store.transaction() as c:
             H.task_give(
                 c, "human:ana", task_asks.task_of(c, theirs["approval_id"]), theirs["approval_id"], "human:cara"
