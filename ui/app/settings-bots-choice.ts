@@ -80,8 +80,10 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
   }
   const compacts = !!spec.mode && settingsCompacts(c.harness);
   const size = compacts ? compact || (spec.mode === 'bot' ? settingsCompactDefault(c.model) : null) : null;
-  return {short: [settingsModelShort(c.model), settingsEffortShort(c.effort), settingsSizeWords(size)].filter(Boolean).join(' '),
-    long: [settingsHarnessShort(c.harness), settingsModelShort(c.model), c.effort ? `${settingsEffortName(c.effort)} effort` : '',
+  // The model's default effort is not named: "Opus 5.5 400K" is Opus at its default.
+  const ownEffort = !!c.effort && c.effort === settingsModel(c.model)?.default_effort;
+  return {short: [settingsModelShort(c.model), ownEffort ? '' : settingsEffortShort(c.effort), settingsSizeWords(size)].filter(Boolean).join(' '),
+    long: [settingsHarnessShort(c.harness), settingsModelShort(c.model), c.effort ? (ownEffort ? 'default effort' : `${settingsEffortName(c.effort)} effort`) : '',
       size ? `compacts at ${settingsSizeWords(size).toLowerCase()}` : compacts && spec.mode !== 'bot' ? 'compacts as the bot does' : ''].filter(Boolean).join(', ')};
 }
 // The spec a box was drawn from, read back from its attributes.
@@ -151,14 +153,17 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   const runHarness = () => picked.harness ? real().harness : mode === 'task' && bot ? settingsBotHarness(bot) : '';
   const runModel = () => picked.model || (mode === 'task' && bot ? settingsTaskRunsOn(bot, '') : '');
   // Bulk change with no model picked sets a window alone, each bot keeping its model: every size is offered.
-  const compactShown = () => !!mode && (mode === 'bulk' && !picked.model ? true : !!runModel() && settingsCompacts(runHarness()));
+  // The Compact row shows for every pick, so the panel keeps one shape; only a harness that compacts at a size we set
+  // offers sizes (one that compacts on its own, such as Claude Code, offers Default alone and says so).
+  const compactShown = () => !!mode && (mode === 'bulk' || !!runModel());
+  const compactable = () => !!mode && (mode === 'bulk' && !picked.model ? true : !!runModel() && settingsCompacts(runHarness()));
   // A fallback on a harness that does not compact keeps no window of its own.
-  const compactOut = () => compactShown() ? compact : mode === 'fallback' ? null : savedCompact;
+  const compactOut = () => compactable() ? compact : mode === 'fallback' ? null : savedCompact;
   // A model change: a saved window past the new model's lowers to fit it; the default follows the model.
   const followModel = (before: string) => {
     note = '';
     const now = runModel();
-    if (!compactShown() || !now || now === before) return;
+    if (!compactable() || !now || now === before) return;
     const window = settingsModelWindow(now), name = settingsModelShort(now);
     if (compact && window && compact > window) {
       const to = settingsFitCompact(compact, window);
@@ -174,14 +179,19 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   const option = (value: string | number, label: string, selected: boolean, disabled = false) => `<option value="${esc(value)}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
   const part = (selector: string) => form.querySelector<HTMLElement>(selector)!;
   const paintHarness = () => {
-    // Only the harnesses the team's providers run: an external agent (Hermes, OpenClaw) is not picked here, and a
-    // provider that is off is turned on in Settings > Models, so neither crowds the row unless the bot is on it.
-    const harnesses = [...new Set(choices.map(row => row.harness))].filter(id => !settingsHarness(id)?.external || id === picked.harness);
+    // The harnesses the team offers, always in the catalog's order: one whose provider is off shows greyed with its
+    // way in (Settings > Models); an external agent (Hermes, OpenClaw) or one the catalog marks `offered: false` is
+    // not picked here unless the bot is on it.
+    const have = new Set(choices.map(row => row.harness)), catalog = SETTINGS_DATA.harnesses || [];
+    const offered = (h: HarnessRow | undefined) => !!h && !h.external && h.offered !== false;
+    const harnesses = [...new Set([...catalog.filter(offered).map(h => h.id), ...[...have].filter(id => offered(settingsHarness(id)))])]
+      .filter((id): id is string => !!id);
     const rows: SettingsPanelRow[] = [];
     if (spec.none) rows.push({value: '', label: spec.none, on: !picked.harness});
     if (picked.harness && picked.harness !== 'tico' && !harnesses.includes(picked.harness)) rows.push({value: picked.harness, label: settingsHarnessShort(picked.harness), on: true, off: true});
-    harnesses.forEach(id => { const why = block(id), name = settingsHarnessShort(id || '');
-      rows.push({value: id || '', label: why ? `${name} (${why.short})` : name, on: id === picked.harness, off: !!why && id !== picked.harness, title: why?.reason}); });
+    harnesses.forEach(id => { const why = block(id), name = settingsHarnessShort(id), on = have.has(id);
+      if (!on) { rows.push({value: id, label: `${name} (off)`, on: id === picked.harness, off: true, title: 'Turn its provider on in Settings > Models'}); return; }
+      rows.push({value: id, label: why ? `${name} (${why.short})` : name, on: id === picked.harness, off: !!why && id !== picked.harness, title: why?.reason}); });
     if (viaTier) { const why = block('tico');
       rows.push({value: 'tico', label: why ? `Tico AI Gateway (${why.short})` : 'Tico AI Gateway', on: picked.harness === 'tico', off: !!why && picked.harness !== 'tico', title: why?.reason}); }
     part('[data-choice-harness] .mp-seg').innerHTML = radios('h', rows);
@@ -216,21 +226,30 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
           ${option('auto', 'Auto (always latest)', !legacy && t.version === 'auto')}</select></label></div>
       <p class="settings-tier-line" data-tier-line>${esc(settingsTierLine(picked.model))}</p>`;
   };
+  const defaultEffort = () => inTier() ? tierEfforts(shown()).def : settingsModel(picked.model)?.default_effort || '';
   const efforts = () => inTier() ? tierEfforts(shown()).list
     : choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
   const paintEffort = () => {
     const list = efforts(), current = picked.effort, row = part('[data-choice-effort]');
     row.hidden = !!spec.noEffort || !picked.model;
     const rows: SettingsPanelRow[] = current && !list.includes(current) ? [{value: current, label: `${settingsEffortName(current)} (current)`, on: true, off: true}] : [];
-    list.forEach(id => { rows.push({value: id, label: id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), on: id === current, off: list.length <= 1 && id !== current}); });
+    // The model's own default comes first as Default; the closed button then names no effort.
+    const def = defaultEffort(), order = list.includes(def) ? [def, ...list.filter(id => id !== def)] : list;
+    order.forEach(id => { rows.push({value: id, label: id === def ? 'Default' : id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), on: id === current, off: list.length <= 1 && id !== current}); });
     row.querySelector<HTMLElement>('.mp-seg')!.innerHTML = radios('e', rows);
   };
   const paintCompact = () => {
     const row = part('[data-choice-compact-row]'), select = part('[data-choice-compact]') as HTMLSelectElement;
     row.hidden = !compactShown();
-    part('[data-choice-note]').textContent = note;
+    const sized = compactable();
+    part('[data-choice-note]').textContent = sized || row.hidden ? note : `${settingsHarnessShort(runHarness())} compacts on its own.`;
     if (row.hidden) return;
-    const model = runModel(), window = settingsModelWindow(model), def = mode === 'bot' ? settingsCompactDefault(model) : null;
+    const model = runModel(), window = settingsModelWindow(model), def = mode === 'bot' && sized ? settingsCompactDefault(model) : null;
+    if (!sized) {
+      select.innerHTML = option('', mode === 'bot' ? 'Default' : mode === 'bulk' ? "Keep each bot's" : 'Same as bot', true);
+      select.disabled = true;
+      return;
+    }
     // Only the sizes the model can hold; a size saved before, off the list, stays where it fits.
     const sizes = SETTINGS_COMPACT_SIZES.filter(size => !window || size <= window);
     if (compact && !sizes.includes(compact) && (!window || compact <= window)) sizes.push(compact);
@@ -297,8 +316,10 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     const row = settingsModel(id);
     const list = choices.filter(choice => choice.harness === picked.harness && choice.model === id).map(choice => choice.effort);
     const own = row?.default_effort;
+    // An effort left on the old model's Default follows to the new model's.
+    const wasDefault = !picked.effort || picked.effort === settingsModel(picked.model)?.default_effort;
     picked = {harness: picked.harness, model: id,
-      effort: list.includes(picked.effort) ? picked.effort : (own !== undefined && list.includes(own) ? own : list[0] || '')};
+      effort: list.includes(picked.effort) && !wasDefault ? picked.effort : (own !== undefined && list.includes(own) ? own : list[0] || '')};
   }
   // Enter applies from any row; a button keeps its own Enter.
   form.addEventListener('keydown', event => {

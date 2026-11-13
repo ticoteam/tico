@@ -192,6 +192,12 @@ def test_the_model_list_marks_each_models_default_window(api):
     assert all(row["compact_default"] in SIZES for row in rows.values())
 
 
+def test_the_model_list_says_which_harnesses_the_picker_offers(api):
+    harnesses = {row["id"]: row for row in get(api, "models")["harnesses"]}
+    assert {h for h, row in harnesses.items() if row.get("offered") is False} == {"gemini", "cursor"}
+    assert all(row.get("offered", True) for h, row in harnesses.items() if h in ("claude", "codex", "pi", "grok", "antigravity", "musecode"))
+
+
 def test_the_bot_list_carries_only_a_chosen_window(api):
     ops_on_sonnet(api)
     on_model(api, "claude-opus-5-5")

@@ -1,7 +1,8 @@
 import type {Route} from 'playwright';
-// The picker offers only the harnesses the team's providers run: with only OpenAI and Anthropic enabled, Muse Code
-// and the external agents (Hermes) stay out, for owners and members alike; enabling Meta (Settings > Models) brings
-// Muse Code in with the Wonder models in its model list; a bot already on an off harness keeps its own row.
+// The picker always lists the harnesses the team offers: with only OpenAI and Anthropic enabled, Muse Code shows
+// greyed as "(off)" (its provider is turned on in Settings > Models), for owners and members alike; one the catalog
+// does not offer (gemini here) and an external agent (Hermes) stay out. Enabling Meta makes Muse Code pickable with the
+// Wonder models in its model list; a bot already on an off harness keeps one row for it.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -39,7 +40,7 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
         {id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'},
         {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'},
         {id: 'musecode', label: 'Muse Code (Meta)', runtime: 'musecode'},
-        {id: 'gemini', label: 'gemini', runtime: 'gemini'},
+        {id: 'gemini', label: 'gemini', runtime: 'gemini', offered: false},
         {id: 'hermes', label: 'hermes', runtime: 'hermes', external: true},
       ],
       default: {runtime: 'codex', model: 'gpt-6-luna'},
@@ -96,8 +97,11 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     let options = await harnessOptions();
     assert.ok(options.some(o => o.value === 'codex' && !o.disabled), 'Codex is offered');
     assert.ok(options.some(o => o.value === 'claude' && !o.disabled), 'Claude Code is offered');
-    assert.ok(!options.some(o => o.value === 'musecode'), 'Muse Code stays out while Meta is off');
-    assert.ok(!options.some(o => o.value === 'gemini'), 'a harness with no models stays out');
+    const muse = options.find(o => o.value === 'musecode')!;
+    assert.ok(muse, 'Muse Code is listed while Meta is off');
+    assert.equal(muse.disabled, true, 'Muse Code is not pickable while Meta is off');
+    assert.match(muse.text, /Muse Code \(off\)/, 'Muse Code says it is off');
+    assert.ok(!options.some(o => o.value === 'gemini'), 'a harness the catalog does not offer stays out');
     assert.ok(!options.some(o => o.value === 'hermes'), 'an external agent is not picked here');
     assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'no off line');
     await page.evaluate(() => (document.querySelector('#bot-editor') as HTMLDialogElement).close());
@@ -115,15 +119,15 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     assert.ok(models.includes('muse-spark-1.3'), 'Spark is listed under Muse Code');
     assert.ok(models.includes('muse-wonder-1.0'), 'Wonder is listed under Muse Code');
     assert.ok(models.includes('muse-wonder-full-1.0'), 'Wonder Full is listed under Muse Code');
-    // A member gets no way in, just the clean list: no off harness, no off line.
+    // A member sees the same list: the harness row always has the same harnesses.
     await settle();
     enabled = ['openai', 'anthropic'];
     await page.evaluate(() => (document.querySelector('#bot-editor') as HTMLDialogElement).close());
     await page.evaluate(() => { S.me.role = 'member'; return loadSettings(); });
     await openAdd();
     options = await harnessOptions();
-    assert.ok(!options.some(o => o.value === 'musecode'), 'members never see a provider-off harness');
-    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'members get no off line');
+    assert.ok(options.some(o => o.value === 'musecode' && o.disabled), 'members see the off harness greyed too');
+    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'no off line');
     await page.evaluate(() => { S.me.role = 'owner'; });
     // A bot already on a switched-off harness keeps one row for it, not a current+off pair.
     await settle();
@@ -140,7 +144,7 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     const solo = await page.locator('#sb-choice-pop [data-choice-harness] input').evaluateAll((inputs: HTMLInputElement[]) =>
       inputs.map(o => ({value: o.value, text: o.closest('label')!.textContent!.trim(), disabled: o.disabled, selected: o.checked})));
     assert.equal(solo.filter(o => o.value === 'musecode').length, 1, 'one Muse Code row for a bot on it');
-    assert.deepEqual(solo.find(o => o.value === 'musecode'), {value: 'musecode', text: 'Muse Code',
+    assert.deepEqual(solo.find(o => o.value === 'musecode'), {value: 'musecode', text: 'Muse Code (off)',
       disabled: true, selected: true}, 'it keeps the current row selected');
     assert.deepEqual(errors, []);
     console.log('ok');

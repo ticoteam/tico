@@ -16,7 +16,7 @@ type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransiti
 type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; own_compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
 // GET /v2/operations `agents`: an external agent (a Hermes or OpenClaw profile) and what it last reported (settings-devices.ts).
 type SettingsAgentRow = {bot: string; display_name?: string; harness?: string; profile?: string; version?: string; platform?: string; model?: string; provider?: string; online?: boolean; revoked_at?: string | null; last_seen_at?: string | null};
-type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; capabilities?: HarnessCaps};
+type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; offered?: boolean; capabilities?: HarnessCaps};
 // What a bot's computer cannot run, per bot and harness (backend/readiness.py `can_run`, /v2/operations `runnable`).
 type SettingsRunAnswer = {can_run?: boolean; problem?: string; short?: string; computer?: {id?: string} | null;
   sign_in?: {runner_id?: string; computer?: string} | null; move?: {id: string; label: string} | null};

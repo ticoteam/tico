@@ -92,9 +92,12 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await pick.inputValue(), '500000', 'lowered to fit the 500K model');
     assert.deepEqual(await compactTexts(pop), ['Same as bot', ...SIZES.slice(0, 7)]);
     assert.match(await pop.locator('[data-choice-note]').innerText(), /lowered to 500K/);
-    // A harness that does not compact shows no Compact row.
+    // A harness that does not compact at a size keeps the Compact row, with Same as bot alone and a line saying why.
     await choose(pop, 'harness', 'codex');
-    assert.equal(await pop.locator('[data-choice-compact-row]').isHidden(), true, 'Codex here does not compact');
+    assert.equal(await pop.locator('[data-choice-compact-row]').isVisible(), true, 'the row stays');
+    assert.deepEqual(await compactTexts(pop), ['Same as bot'], 'Codex here does not compact');
+    assert.equal(await pick.isDisabled(), true);
+    assert.equal(await pop.locator('[data-choice-note]').innerText(), 'Codex compacts on its own.');
     await choose(pop, 'harness', 'claude');
     await choose(pop, 'model', 'small-5');
     await pick.selectOption('300000');

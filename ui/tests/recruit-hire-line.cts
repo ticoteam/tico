@@ -78,7 +78,7 @@ const hires: Record<string, unknown>[] = [];
     await panel.locator('[data-choice-harness] label:has(input[value="claude"])').click();
     await panel.locator('[data-choice-compact]').selectOption('600000');
     await panel.locator('[data-choice-apply]').click();
-    assert.equal((await box.locator('.sb-pick-text').innerText()).trim(), 'Opus 5.5 MED 600K');
+    assert.equal((await box.locator('.sb-pick-text').innerText()).trim(), 'Opus 5.5 600K', 'the default effort is not named');
     await page.locator('.rc-hire-go').click();
     await page.waitForFunction(() => location.hash.startsWith('#/bot/'));
     assert.deepEqual(hires.map(h => ({model: h.model, harness: h.harness, effort: h.effort, compact_at: h.compact_at})),
