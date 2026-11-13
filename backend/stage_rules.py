@@ -622,7 +622,7 @@ def sweep_owners(conn: Any) -> list[str]:
             manager,
             first["visit"],
             f"Stage rules: {len(found)} tasks have no owner now. Pick one for each and reassign it.\n{lines}",
-            wake_key=f"stage-rules-sweep:{OWNER_ON_TEAM}:{manager}",
+            wake_key=f"{first['id']}:stage-rules-sweep:{OWNER_ON_TEAM}:{manager}",
         )
     return [t["id"] for found in changed.values() for t in found]
 
@@ -689,7 +689,7 @@ def sweep_snoozes(store: Any) -> list[str]:
                 first["visit"],
                 f"Stage rules: {len(found_rows)} snoozed tasks were blocked, not waiting, and are back with their "
                 f"bots.\n{lines}",
-                wake_key=f"stage-rules-sweep:{REAL_WAIT}:{manager}",
+                wake_key=f"{first['id']}:stage-rules-sweep:{REAL_WAIT}:{manager}",
             )
         if unjudged:
             # Jev gave no answer on some (down, or not set up yet): the sweep is not used up, so the next start

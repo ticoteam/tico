@@ -92,3 +92,38 @@ def test_a_wake_key_is_filed_under_the_task_its_first_part_names():
     assert task_wakes.filed_under(task_wakes.key("t1", "v1"), "t1")
     assert not task_wakes.filed_under("room:product-spec:t1@now", "t1")
     assert not task_wakes.filed_under("t10:v1:owner:0", "t1")
+
+
+def test_every_written_out_wake_key_in_the_backend_starts_with_a_task_id():
+    """Each `wake_key=f"..."` passed to `task_wakes.add` starts with an expression (the task id) and then ":". The
+    guard in `add` only logs when it refuses a key, so a new caller with a fixed prefix (as "room:" and the Stage rules
+    sweeps' "stage-rules-sweep:" were) would wake nobody; this finds it before it merges."""
+    import ast
+    from pathlib import Path
+
+    root = Path(execution.__file__).parent
+    bad = []
+    for path in root.rglob("*.py"):
+        if "tests" in path.relative_to(root).parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(), str(path))):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add"):
+                continue
+            if not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("task_wakes", "TW")):
+                continue
+            for kw in node.keywords:
+                if kw.arg != "wake_key":
+                    continue
+                key = kw.value
+                if isinstance(key, ast.Constant):
+                    bad.append(f"{path.relative_to(root)}:{key.lineno}")
+                elif isinstance(key, ast.JoinedStr):
+                    head, *rest = key.values
+                    after = rest[0] if rest else None
+                    if not (
+                        isinstance(head, ast.FormattedValue)
+                        and isinstance(after, ast.Constant)
+                        and str(after.value).startswith(":")
+                    ):
+                        bad.append(f"{path.relative_to(root)}:{key.lineno}")
+    assert not bad, bad

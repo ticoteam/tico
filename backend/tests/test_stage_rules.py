@@ -211,7 +211,7 @@ def test_once_at_release_blocked_bot_snoozes_end_and_each_manager_gets_one_wake(
         assert [bool(E.task(c, t["id"]).get("snooze")) for t in tasks] == [False, False, True, True]
         wakes = c.execute(
             "SELECT j.bot_id, m.body FROM messages m JOIN jobs j ON j.message_id = m.id WHERE m.wake_key LIKE ?",
-            ("stage-rules-sweep:%",),
+            ("%:stage-rules-sweep:%",),
         ).fetchall()
     assert [bot for bot, _ in wakes] == ["lead"]
     assert wakes[0][1].startswith("Stage rules: 2 snoozed tasks were blocked, not waiting")
