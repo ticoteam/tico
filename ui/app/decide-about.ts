@@ -211,21 +211,23 @@ function decideReplyHTML(st: DecState, it: NeedsEntry): string {
     ${decideFilesHTML(st)}<div class="dc-reply-row">${decideBtn('reply', 'Send', false, ` data-dc-needs="#dc-reply" disabled${off}`)}`
     + `${DEC_SENT === it.id ? '<span class="dc-sent" role="status">Sent</span>' : ''}</div>${decideHeldHTML(it, '#dc-reply')}</div>`;
 }
-/** Reply and Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked.
-    The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words stay. */
-async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other') {
+/** Reply, Ask back and Write to <bot>: the words (and the files added with 📎) as a comment on the task that
+    @mentions whoever asked, or, given `ask` (a bot's question), that names the question, which the server writes to the
+    bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
+    stay. */
+async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other', ask = '') {
   const words = decideNote(box), taskId = decideTaskId(it);
   if (!words || !taskId || st.busy || DEC_SENDING.has(it.id)) return;
   const files = await decideFilesReady(st, it.id);
   if (!files) { if (DEC === st) decidePaintSide(st); return; }
   if (DEC !== st || st.at !== it.id) return;
   const to = decideReplyTo(it), handle = to ? decideHandle(to) : '';
-  const named = handle && new RegExp(`(?<![\\w@])@${decideReEsc(handle)}(?![\\w-])`, 'i').test(words);
+  const named = !!ask || handle && new RegExp(`(?<![\\w@])@${decideReEsc(handle)}(?![\\w-])`, 'i').test(words);
   const text = decideWithFiles(handle && !named ? `@${handle} ${words}` : words, files);
   st.busy = true; st.error = ''; DEC_SENT = ''; DEC_HELD.delete(it.id); DEC_SENDING.add(it.id);
   decidePaintSide(st);
   try {
-    const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text}) as {held?: RuleHold | null};
+    const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, ask ? {text, ask} : {text}) as {held?: RuleHold | null};
     if (DEC !== st) return;
     // A hold is kept by item: the card shows on this item now, or when the walk comes back to it.
     if (r?.held) DEC_HELD.set(it.id, {item: it.id, box, hold: r.held, words});

@@ -180,7 +180,9 @@ const needsYou = (() => {
       assert.ok(rid, `${where}: ${what} is recorded`);
       return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
     };
-    const question = await ask('Plan the beta', {line: QUESTION, choices: ['Yes', 'No']}, 'the bot asks a question');
+    // A bot's question to a person says why it matters, what each choice does and which it recommends (backend/ask_shape.py).
+    const question = await ask('Plan the beta', {line: QUESTION, why: 'The beta invitations go out on Friday.', choices: ['Yes', 'No'],
+      details: ['The beta opens to the waiting list on Friday.', 'The beta waits a week for the fixes.'], recommend: 'Yes'}, 'the bot asks a question');
     const ok = await ask('Set the beta budget', {line: OK, kind: 'ok'}, 'the bot asks for an OK');
 
     const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});

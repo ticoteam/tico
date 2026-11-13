@@ -257,6 +257,11 @@ tico task comment <id> "Use the August numbers." --steer
 tico task comment <id> "For later." --defer 4h
 ```
 
+A comment that names a bot's open question on the task (`ask`: its requirement id, in `POST
+/api/v2/tasks/{id}/comments`) is a reply to it: it is written to the bot that asked and wakes it, even when that bot is
+not the one the task's comments go to first, and the question stays open. The person the question waits on may wake
+the bot this way. The decision view's "Write to <bot>" box sends it.
+
 A comment is talk. It is not progress: a bot that only comments has still stopped early.
 
 ## Choosing the model a task runs on

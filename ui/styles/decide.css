@@ -82,6 +82,23 @@
   .dc-acts-row button{min-height:36px;padding:0 14px;border-radius:10px;white-space:nowrap}
 }
 .dc-more{padding-top:4px}
+/* a bot's question (decideBotAskHTML): why it matters, a card per choice with its line, the recommended one outlined;
+   Send under the box at its right edge; then a hairline and one row: I don't know, Give it back, and Skip at the end */
+.dc-why{margin:0;overflow-wrap:anywhere}
+.dc-choice-list{display:flex;flex-direction:column;gap:8px}
+.dc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.dc-choice:hover:not(:disabled){border-color:var(--muted)}
+.dc-choice.dc-rec{border:2px solid var(--ink);padding:9px 13px}
+.dc-choice:disabled{opacity:.6;cursor:default}
+.dc-choice-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.dc-choice-name{font-weight:600;overflow-wrap:anywhere}
+.dc-rec-tag{padding:2px 8px;border-radius:999px;background:var(--line);font-size:var(--t-sm);font-weight:600}
+.dc-choice-line{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-send{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.dc-send button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
+.dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
+.dc-acts.dc-fixed button{white-space:nowrap}
+.dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
 .dc-chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;cursor:pointer}
 .dc-chip[aria-pressed="true"]{border-color:var(--wait-ink,var(--ink));background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink))}
 .dc-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
@@ -147,6 +164,9 @@ button.dc-jev{cursor:pointer}
   .dc-side{scroll-padding-bottom:72px;max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
   .dc-q{font-size:var(--t-lg)}
   .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
+  /* one row at 390 px: I don't know, explain · Give it back · Skip */
+  .dc-acts.dc-fixed{gap:6px}
+  .dc-acts.dc-fixed button{padding:0 12px}
   .dc-jev,.dc-more-btn{min-height:44px}
   .dc-step .dc-jev{min-height:20px}
   .dc-switch{min-height:44px}
