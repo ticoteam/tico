@@ -457,10 +457,19 @@ def _skip(c, job, at):
 
 
 def _close_task(c, job, why):
-    """Close the open task a dropped run was filed as (a routine run's own task), so nothing works it later."""
+    """Close the open task a dropped run was filed as (a routine run's own task), so nothing works it later. Only a task
+    the run made itself, i.e. one whose first job is this one: a run that names an existing task (a person's, a
+    pipeline's) never closes it."""
     refs = H._json(job["refs"], {}) or {}
     task = H.task(c, H._task_ref(refs.get("task")) or "") if refs.get("task") else None
-    if task and task.get("status") == "open":
+    if not task or task.get("status") != "open":
+        return
+    first = c.execute(
+        "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.conversation_id=? "
+        "AND j.bot_id=? ORDER BY j.rowid LIMIT 1",
+        (task["conversation_id"], job["bot_id"]),
+    ).fetchone()
+    if first and first[0] == job["id"]:
         H.attempt(c, H.task_close, H.KEEPER, task["id"], why)
 
 

@@ -579,3 +579,51 @@ def test_a_continue_latest_run_never_forks_a_private_task_or_a_chat(api):
     tick(api, H.now())
     attempt = claim(api, machine)
     assert attempt["job_id"] == routine["id"] and attempt["fork_thread"] == "shared-thread"
+
+
+def test_a_dropped_run_never_closes_a_task_it_did_not_make(api):
+    """Skip and the repeat guard close a run's own routine task; a run that names an existing task leaves it open."""
+    task = new_task(api, "a person's task")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-6)
+    with api.app.state.store.transaction() as c:
+        H._wake(
+            c,
+            H.task(c, task["id"]),
+            "bot:ops",
+            "A routine looks at this task.",
+            {
+                "release": W.policy(wait=3600, warm=True, deadline=W.SKIP),
+                "automation": "auto-look",
+                "wake": "task_turn",
+            },
+        )
+        row = c.execute(
+            "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.held=1 "
+            "AND json_extract(m.refs,'$.task')=? ORDER BY j.rowid DESC LIMIT 1",
+            (task["id"],),
+        ).fetchone()
+    assert row, "the routine's wake on the existing task is held"
+    queued_at(api, row[0], t0)
+    tick(api, t0)
+    tick(api, H.shift(t0, hours=2))
+    assert job(api, row[0])["state"] == "canceled"  # skipped at its deadline
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "open"
+
+
+def test_a_turn_that_never_reached_the_model_does_not_restart_the_idle_count(api):
+    task = new_task(api, "idle")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-6)
+    routine = held(api, task, wait=DAY, warm=True)
+    queued_at(api, routine["id"], t0)
+    last_turn(api, H.shift(t0, minutes=-50))  # its last model request, 50 minutes before
+    with api.app.state.store.transaction() as c:  # a turn that failed before any request, 5 minutes before
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq) VALUES(?,?,?,?,?,?,0)",
+            (H.new_id(), "ops", "failed", H.shift(t0, minutes=-6), H.shift(t0, minutes=-5), "default"),
+        )
+    tick(api, t0)
+    row = job(api, routine["id"])
+    assert row["held"] == 0 and released(row)["warm"] is True
