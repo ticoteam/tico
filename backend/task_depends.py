@@ -36,7 +36,7 @@ Snooze stays for "look again on a date". A PR, main or a release is reached thro
 
 import logging
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import read_cache
 
@@ -288,7 +288,7 @@ def release(conn: "sqlite3.Connection", ended_id: str, by: str) -> int:
     named = ref({"id": ended_id, "number": found[0] if found else None})
     said = (DONE if done else CLOSED).format(ref=named)
     waiting = dependents(conn, ended_id)
-    held = set(_until_released(conn, ended_id)) if done else set()
+    held: set[str] = set(_until_released(conn, ended_id)) if done else set()
     shipped = in_production(conn, ended_id) if held else None
     if shipped is None:  # they stay blocked until production runs its release (on_release)
         waiting = [task_id for task_id in waiting if task_id not in held]
@@ -328,8 +328,10 @@ def running(conn: "sqlite3.Connection") -> tuple[str, str]:
         value: Any = json.loads(found[0]) if found else {}
     except ValueError:
         value = {}
-    value = value if isinstance(value, dict) else {}
-    return str(value.get("version") or ""), str(value.get("repo") or "")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    if not isinstance(value, dict):
+        return "", ""
+    saved: dict[str, Any] = cast("dict[str, Any]", value)
+    return str(saved.get("version") or ""), str(saved.get("repo") or "")
 
 
 def in_production(conn: "sqlite3.Connection", task_id: str) -> str | None:
