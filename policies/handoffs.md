@@ -10,7 +10,7 @@ to leave. Every command that changes a task carries `--version N`, the version y
 
 ## Starting a task
 
-1. Read `state.md`, then `tico task show <task-id>` and its conversation. It prints the version, the
+1. Read `tico task show <task-id>` and its conversation. It prints the version, the
    stage, whose turn it is and what is missing to leave the stage.
 2. There is no status to set. Your run shows that you are working; keep `tico bot status set` to one
    line about what you are doing now.

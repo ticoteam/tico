@@ -30,7 +30,7 @@ Do each fix as the human, with their rights. Do not ask first.
 | A Hermes bot that is not reporting in, or archived and still reporting | `playbooks/connect-a-hermes-profile.md` |
 | A computer is offline | nothing you can do: say which one, and that its bots wait for it |
 | A computer low on disk | never delete by hand: the section below |
-| A computer is holding work to update | nothing to fix: it updates by itself once the turns Health names end. Say which turns, read it once and end the run (`AGENT.md` rule 10); never watch it or stop a turn for the person |
+| A computer is holding work to update | nothing to fix: it updates by itself once the turns Health names end. Say which turns, read it once and end the run (`AGENTS.md` rule 10); never watch it or stop a turn for the person |
 | Waiting on a usage limit, and the person says the plan is renewed | `tico api POST /api/v2/bots/<bot>/limit/retry` (clears every bot limited on that runtime and computer) |
 | Stopped after refusing something | `tico api POST /api/v2/bots/<bot>/quarantine/clear` only after you read why |
 
@@ -43,7 +43,7 @@ A fix the server refuses for their rights is not a failure: name it in the list 
 
 ### A planned bot Health says is still being set up
 
-Only when the requester asked you to take it live (`AGENT.md`: turning a bot on is theirs to ask for).
+Only when the requester asked you to take it live (`AGENTS.md`: turning a bot on is theirs to ask for).
 
 1. Read `tico bot status history <bot>` first. If its newest reason says a person kept it off, do not turn it on: say so in one line.
 2. Otherwise run `tico bot go-live <bot>` as the requester, and read the answer:
@@ -68,12 +68,12 @@ caches in the home folder): one Needs you item naming the computer and what Heal
 When a human asks you to fix it, do the clone yourself if you run on the computer Health names.
 Read the bot's definition (`tico api GET bots/<bot>`) and, for a branch, its `shared_from` original's
 repository. Check the destination first: use an existing sibling checkout with that repository
-name if it has `AGENT.md`; never overwrite files or create an empty repository for a branch.
+name if it has `AGENTS.md`; never overwrite files or create an empty repository for a branch.
 Otherwise run Health's `gh repo clone <owner/repo> <path>` command with the person's own git
 access. If `gh` is unavailable or signed out, use `git clone <repository-url> <path>` with the
 computer's existing git credentials. Do not borrow BotOps' repository-scoped GitHub App token.
-Check that `AGENT.md` exists, then run `tico bot check <bot>` and `tico health check` again after
-the computer reports readiness. Do not turn a missing `AGENT.md` into new instructions for a branch.
+Check that `AGENTS.md` exists, then run `tico bot check <bot>` and `tico health check` again after
+the computer reports readiness. Do not turn a missing `AGENTS.md` into new instructions for a branch.
 
 If the computer is someone else's or you cannot reach it, say which computer needs the exact
 command. Never clone onto your own computer as a substitute. If the original repository address

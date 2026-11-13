@@ -23,7 +23,7 @@ interpretation, labelled:
    run `playbooks/keep-proof-current.md` first, then add one line: how old it is, and that a proposal is in Needs you,
    one was already waiting, or nothing new was found. At level 2, one line on
    the recoveries waiting and what the approved ones changed. At level 3, one
-   line per decision you made this week (from `state.md`: the goal, what you did, why), and that each has an Undo in
+   line per decision you made this week (from `memory/decisions.md`: the goal, what you did, why), and that each has an Undo in
    the Strategy Owner log.
 7. The level-3 offer, at level 2 only when `level3_offer.due` in `tico goal strategy-bot` is true (10 recoveries approved
    in a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner

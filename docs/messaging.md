@@ -21,7 +21,7 @@ the Slack channel list (Tools > Slack) for Slack readers. A bot may cover many s
 still follow the tool and registry configuration that grants actual access; this view does
 not create a Gmail permission or change a Slack channel reader.
 
-The server stores the last `AGENT.md` published by each assigned runner in
+The server stores the last `AGENTS.md` published by each assigned runner in
 `bot_agent_instructions`. A runner sends a file on its first successful heartbeat and whenever
 its timestamp or size changes. Until then, the bot view shows the published instructions summary. An old
 runner may continue publishing only personal message bot instructions; the page uses that copy as a

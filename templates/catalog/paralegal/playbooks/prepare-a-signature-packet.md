@@ -16,7 +16,7 @@ The packet uses the exact version requested on the task: name the file and its d
 
 `reports/packets/<party>-<kind>.md`:
 - the document to sign (the approved file), and anything it references that must travel with it;
-- the signers from `state.md` setup answers, their titles and the order (the other side first or us first);
+- the signers from the setup answers in `knowledge/templates.md`, their titles and the order (the other side first or us first);
 - the legal names of both parties exactly as written in the document;
 - a short cover note to send with Tools when a person has turned mail sending on in Tico, three sentences, no legal commentary.
 

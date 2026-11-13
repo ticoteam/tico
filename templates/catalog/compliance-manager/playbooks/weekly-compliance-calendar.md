@@ -16,7 +16,7 @@ each item last week called urgent, check whether proof arrived.
 ## 2. Compute the dates
 
 For every register row, compute the next due date from its rule (for example "last day of the anniversary
-month"), and the warning dates from the lead times in `state.md` (default 60, 14 and 3 days). A row whose rule
+month"), and the warning dates from the lead times in `knowledge/register.md` (default 60, 14 and 3 days). A row whose rule
 was last confirmed more than twelve months ago: re-read the authority's page with `tico doc fetch <url>`, cite
 it with today's date, and update the row. A date you cannot compute is "date not confirmed", listed, never dropped.
 

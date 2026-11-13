@@ -1,11 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, a first brief on the task from the customers you can read, and the first routine checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, a first brief on the task from the customers you can read, and the first routine checked.
 
 Inputs: the task, `tico team show`, any CRM entry, support mailbox or imported calls in your access.
 
-Done when: the five answers are in `state.md`, the first draft is on the task, the routine is checked, and `tico bot setup-done` has run.
+Done when: the five answers are in `knowledge/`, the first draft is on the task, the routine is checked, and `tico bot setup-done` has run.
 
 ---
 
@@ -35,7 +34,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/renewals.md` (account, renewal date, notice deadline, owner, value) and `knowledge/health-rules.md` (signals, what green, yellow and red mean, which cannot be read) as present-tense statements.
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/renewals.md` (account, renewal date, notice deadline, owner, value) and `knowledge/health-rules.md` (signals, what green, yellow and red mean, which cannot be read) as present-tense statements.
 
 ## 5. Produce the first result now
 
@@ -47,7 +46,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you this every Tuesday at 09:00, with a drafted next touch for anyone at risk." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

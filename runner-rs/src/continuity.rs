@@ -27,7 +27,7 @@ pub fn retry_pause() -> Duration {
 
 /// Whether the bot keeps nothing from one task to the next (`stateless` in its config, set by the server:
 /// backend/hubdb.py stateless). Its turns resume no session of another task or of the chat, read and keep no memory/
-/// or state.md, and copy no harness memory into its repository.
+/// and copy no harness memory into its repository.
 pub fn stateless(config: &Value) -> bool {
     crate::util::truthy(config.get("stateless"))
 }
@@ -115,7 +115,7 @@ impl Session {
         let read = if stateless {
             "Read the task"
         } else {
-            "Read state.md and memory/"
+            "Read the task and memory/"
         };
         let because = match self.why {
             Some(NOT_FOUND) => "was not on this computer",
@@ -260,7 +260,10 @@ mod tests {
                 && n.contains("where the task stood"),
             "{n}"
         );
-        assert!(n.contains("Read state.md and memory/ before acting"), "{n}");
+        assert!(
+            n.contains("Read the task and memory/ before acting") && !n.contains("state.md"),
+            "{n}"
+        );
         assert!(Session::new(COMPACT_FAILED, None)
             .prompt_note(false, false)
             .unwrap()

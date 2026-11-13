@@ -5,7 +5,7 @@
 // ----------------------------------------------------------------- the bot templates, as cards
 // One card component, shared by the first-run wizard (#/welcome) and by Settings → Bots →
 // "Add from template". A card is a whole bot to read before choosing it: what it owns, what it
-// will never do, what it runs on, and the AGENT.md it would be created with - editable here,
+// will never do, what it runs on, and the AGENTS.md it would be created with - editable here,
 // because the words a bot is created with are the only thing that makes it this team's bot.
 
 // A template card, as the template list gives it (the fields this file reads).

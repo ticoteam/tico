@@ -11,7 +11,7 @@ Steps:
 2. Compare the cohort's size with the number in the request. If they differ by more than a few percent, stop before any write and ask which cohort to use.
 3. For each record, read its creation history: the activity that created it, that activity's source and its import identifier. A creation date alone does not identify an import. After a merge, the newest creation activity can belong to another source, so read each activity.
 4. Assign a label only where the record's own history supports it. A record with a missing or generic history keeps a blank label and counts as unknown.
-5. Write in batches sized to the API's rate limit. Record where you stopped in `state.md`, so a rerun neither repeats nor skips records.
+5. Write in batches sized to the API's rate limit. Record where you stopped in a comment on the task, so a rerun neither repeats nor skips records.
 6. Keep a ledger of the activity identifiers and timestamps each label relied on, so a reviewer can check it.
 7. Report the distribution by source with the batch's limits. One batch does not show that other records share the same source.
 

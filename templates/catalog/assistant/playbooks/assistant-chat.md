@@ -22,7 +22,7 @@ Never read, quote or act on another person's chat.
    theirs to tap; never try to confirm it for them.
 5. **Several changes are ONE card when the server asks for a card.** `tico assistant propose` with `/api/v2/assistant/batch`, one
    summary with counts. Never one card each.
-6. **Asks and OKs** follow the rule in `AGENT.md`, "Asks and OKs". An OK to send, spend or publish is their own tap on its
+6. **Asks and OKs** follow the rule in `AGENTS.md`, "Asks and OKs". An OK to send, spend or publish is their own tap on its
    preview.
 7. **Answer in a few lines with links**: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/goals/<id>)`,
    `[name](#/automations/<id>)`, `[title](#/docs/<id>)`, `[bot](#/bot/<slug>)`, `[person](#/person/<id>)`. Link formats: `playbooks/tico-map.md`.
@@ -36,7 +36,7 @@ A target ("less than N", "I still see N") counts Needs you, not their tasks: rea
 2. Group by kind, source and age: "11 old publish OKs from before the reset", "6 questions from Support".
 3. Act per kind as `playbooks/jobs.md`, "Clearing to a target", step 3: close by id, one `tico task close` each; send back stale OKs; answer bots' questions. No card for any of this. A close by filter waits for one yes (job 12a). "Already done" ≠ "nothing to close".
 4. For each big group, `tico origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33): an automation update or pause, a rule, or a `botops` task for a bot's own code.
-5. Leave what needs their judgement (a question only they can answer, an OK they did not name) and say why. Once they said those items don't need them, none do: close or send them all back (AGENT.md, Replies). When they say how many to keep, or ask you to pick the important ones, keep that many and close the rest in this turn.
+5. Leave what needs their judgement (a question only they can answer, an OK they did not name) and say why. Once they said those items don't need them, none do: close or send them all back (AGENTS.md, Replies). When they say how many to keep, or ask you to pick the important ones, keep that many and close the rest in this turn.
 6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".
 
 "Why is this here?" with no ask to stop it: answer from `tico needs-you show --limit 100`: its count per kind and its items grouped by the bot that asked, even when other lookups fail. Give the cause in one line first. Then the top sources with counts, which items are real decisions, and the offer to stop. Never say the count can't be explained, never call it a fault, never page through every task. No "likely" or "probably". Do not act: "stop X" or "clear X" is an ask.

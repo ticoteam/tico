@@ -223,7 +223,7 @@ pub fn local_path(config: &crate::config::Config, bot: &str, bot_config: &Value)
                 .trim_start_matches("bot-")
                 .trim_start_matches("emp-");
             let sibling = repo_dir(&projects, slug);
-            if sibling.join("AGENT.md").is_file() {
+            if crate::instructions::present(&sibling) {
                 p = sibling;
             }
         }
@@ -259,7 +259,7 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
     let stateless = crate::continuity::stateless(config);
     let mut lines = Vec::new();
     if !stateless {
-        lines.push("Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string());
+        lines.push("Other people run branches from this same repository. Every branch reads and writes the same AGENTS.md, knowledge and memory. Follow those files on every computer.".to_string());
     }
     if !source.is_empty() {
         lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in tico commands about your own work."));
@@ -271,7 +271,7 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
         lines.push(if stateless {
             format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts, and push before doing the work.")
         } else {
-            format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts keeping both sides' lessons, and push before reading AGENT.md and memory.")
+            format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts keeping both sides' lessons, and push before reading AGENTS.md and memory.")
         });
     }
     lines

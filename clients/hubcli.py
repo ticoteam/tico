@@ -2171,7 +2171,7 @@ def parser():
     )
     s.add_argument("bot", help="the copy")
     s.add_argument(
-        "--paths", nargs="+", metavar="PATH", help="only these files or folders, like AGENT.md or skills/triage"
+        "--paths", nargs="+", metavar="PATH", help="only these files or folders, like AGENTS.md or skills/triage"
     )
     s.add_argument("--title")
     s.set_defaults(fn="bot suggest-to-original")

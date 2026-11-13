@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 20 minutes. The outcome is five recorded answers, a draft digest of the queue as it is
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, a draft digest of the queue as it is
 now, and the first routine checked.
 
 ---
@@ -39,7 +38,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write the immediate list to
+Record each answer, dated, in the `knowledge/` file it belongs to. Write the immediate list to
 `knowledge/escalation.md`, the voice to `knowledge/voice.md` and the nudge rule to
 `knowledge/follow-ups.md`. Do not write standing answers: the Librarian and the docs hold them. Check the
 Librarian is reachable with one `tico doc ask` about a refund window; if the answer is "Not in the docs",
@@ -58,7 +57,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you a queue digest with a draft for every ticket every weekday at 09:00 and never reply to anyone myself." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

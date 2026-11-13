@@ -17,7 +17,7 @@ Steps:
    must meet to keep a right is an obligation too.
 4. Skip what binds only the other party, and definitions, background, recitals and marketing.
 5. Note each obligation as one line: its section, the duty in plain words, and any date. Then go on to the quotes
-   (`skills/check-a-quote-before-you-cite/SKILL.md`) and to the rules already in force for this From (AGENT.md,
+   (`skills/check-a-quote-before-you-cite/SKILL.md`) and to the rules already in force for this From (AGENTS.md,
    Documents, step 3).
 
 Checks before you finish:

@@ -23,7 +23,8 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type Call = {what: string | undefined; body: Record<string, unknown>};
 declare const S: {emps: {id: string; name: string; slug?: string; revision?: number; fallback?: {model: string}}[]};
-declare const SETTINGS_DATA: {models?: unknown[]};
+declare const SETTINGS_DATA: {models?: unknown[]; harnesses?: {id: string; capabilities: Record<string, unknown>}[]};
+declare function settingsCompactRow(row: never): string;
 declare const SETTINGS_TRANSITION_TIMER: number;
 declare function settingsEditBot(id: string, edit?: boolean): void;
 declare function loadSettings(): void;
@@ -257,6 +258,11 @@ declare function loadSettings(): void;
     // Archive bot asks first and names who gets the work; Cancel archives nothing and leaves the editor open.
     await open();
     assert.equal(await editor.locator('[data-bot-compact]').inputValue(), '100000', 'reloads with 100k selected');
+    // A harness that compacts on its own default (Claude Code's manifest: own_compaction) has no Compact at.
+    assert.equal(await page.evaluate(() => {
+      SETTINGS_DATA.harnesses!.push({id: 'own-compactor', capabilities: {compaction: true, own_compaction: true}});
+      return settingsCompactRow({id: 'scout', harness: 'own-compactor', display_name: 'Scout'} as never);
+    }), '', 'no Compact at for a harness that compacts on its own');
     await editor.locator('[data-bot-remove]').click();
     const ask = page.locator('dialog.settings-confirm');
     await ask.waitFor();

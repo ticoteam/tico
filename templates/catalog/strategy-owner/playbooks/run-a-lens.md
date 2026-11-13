@@ -38,6 +38,6 @@ It waits up to a minute and prints the run. If it is still running, `tico lens s
 
 If the run filed a proposal, its id is on the run (`proposal_id`) and the owner's proposal says it came from the
 lens. If it did not, the lens found nothing to change, and that is a finding. Finish with
-`tico task done <id> -m "<lens, run id, proposal id or none>" --version N` and one line in `state.md`.
+`tico task done <id> -m "<lens, run id, proposal id or none>" --version N`.
 
 **Done when:** the run's result is read, its proposal (if any) is named in the note, and the task is done.

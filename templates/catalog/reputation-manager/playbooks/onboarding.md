@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 40 minutes. The outcome is five recorded answers, a first read of every surface on
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 40 minutes. The outcome is five recorded answers, a first read of every surface on
 the task, and the first routine checked.
 
 ---
@@ -31,7 +30,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Fill `knowledge/surfaces.md` with the
+Record each answer, dated, in the `knowledge/` file it belongs to. Fill `knowledge/surfaces.md` with the
 listings, and check each rule against the platform's current policy page, dated.
 
 ## 5. Read now
@@ -47,7 +46,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will read your review listings every Monday at 09:00 and bring you one batch per surface ready to act on." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

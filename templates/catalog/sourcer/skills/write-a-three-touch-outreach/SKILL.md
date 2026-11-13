@@ -14,7 +14,7 @@ Steps:
    - the role, in one line: what the person would do first;
    - the pay range and the location or remote rule, where the team allows them;
    - one easy question, such as "open to a 20-minute call next week?".
-   Sign as the sender named in `state.md`. No flattery, no "exciting opportunity", no pressure.
+   Sign as the sender named in `knowledge/sourcing-practice.md`. No flattery, no "exciting opportunity", no pressure.
 3. Touch two, on day 5, under 60 words: something new. A line from the hiring manager on the problem, a detail about the team,
    or a link the team published. Never "just bumping this".
 4. Touch three, on day 12, under 40 words: close the loop politely and leave the door open ("If the timing is wrong, no reply

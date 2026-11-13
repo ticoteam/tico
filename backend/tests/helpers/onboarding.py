@@ -106,13 +106,13 @@ SUPPORT_AGENT = "# {{bot_name}}\n\nYou answer {{company_name}}'s support inbox.\
 
 
 def write_catalog(root, cards):
-    """One catalog on disk: a folder, a card, and the AGENT.md a person reviews."""
+    """One catalog on disk: a folder, a card, and the AGENTS.md a person reviews."""
     root.mkdir(parents=True, exist_ok=True)
     for card, instructions in cards:
         folder = root / card["template"]
         folder.mkdir()
         (folder / "card.yaml").write_text(yaml.safe_dump(card))
-        (folder / "AGENT.md").write_text(instructions)
+        (folder / "AGENTS.md").write_text(instructions)
     return root
 
 

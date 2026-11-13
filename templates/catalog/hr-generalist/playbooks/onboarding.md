@@ -1,11 +1,11 @@
 # Setup
 
-Schedule: runs once, on the first message or task you receive, while `state.md` says onboarding has not finished. Budget 25 minutes.
+Schedule: runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
 Inputs: the handbook and policies in the docs, the roster, the calendar and any current onboarding list the team pastes. Outcome: five
 recorded answers, a handbook index, a base checklist and a hand-off list, a first real checklist for the next person starting, and the
 first routine checked.
 
-Done when the five answers are in `state.md`, the three knowledge files are written, the first result is attached to the task labelled
+Done when the five answers are in `knowledge/`, the three knowledge files are written, the first result is attached to the task labelled
 as a first draft, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
@@ -44,7 +44,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` the moment it arrives, under `## Answers`, dated. Write `knowledge/stale-pages.md` (pages called out
+Write each answer, dated, the moment it arrives, into the `knowledge/` file it belongs to. Write `knowledge/stale-pages.md` (pages called out
 of date), `knowledge/onboarding-base.md` and `knowledge/hand-offs.md`. Record people by name or reference and role only: no salary, no
 medical or family detail, no id, no home address.
 
@@ -60,7 +60,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 and tell the human in one line what it does: "I will write an onboarding tracker every Monday at 09:00 for you, and put anything for a
 new hire up for review." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off,
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off,
 adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

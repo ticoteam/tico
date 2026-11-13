@@ -161,6 +161,8 @@ pub struct Capabilities {
     /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
     pub isolated_user: bool,
     pub compaction: bool,
+    /// The harness compacts on its own default and takes no Compact at (Settings hides it).
+    pub own_compaction: bool,
     /// The harness says in its stream when it compacts a session, so a resumed turn can leave out what it holds.
     pub compaction_events: bool,
     pub resume_command: String,
@@ -202,6 +204,7 @@ impl Default for Capabilities {
             one_turn_per_login: false,
             isolated_user: false,
             compaction: false,
+            own_compaction: false,
             compaction_events: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -805,6 +808,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "isolated_user" => c.isolated_user = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
+            "own_compaction" => c.own_compaction = flag(k, v)?,
             "compaction_events" => c.compaction_events = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,

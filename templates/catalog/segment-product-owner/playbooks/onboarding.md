@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not finished. Budget 25
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25
 minutes. The outcome is six recorded answers, `knowledge/segment.md`, `knowledge/spec-format.md` and
 `knowledge/launch-checklist.md` written, a first review on the task from a real export, and the first routine checked.
 
@@ -40,7 +40,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/segment.md`: the segment or "all customers",
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/segment.md`: the segment or "all customers",
 its label (`segment:<slug>`, lowercase with dashes; none for the whole product), the counting rule, the activation event
 and window, the retention windows, the target and its source, and the human who answers escalations. Write
 `knowledge/spec-format.md` and `knowledge/launch-checklist.md` from answer 5. Create `knowledge/problems.md` and
@@ -58,7 +58,7 @@ Setup switched your routine on. Check it with `tico automation list` (if it show
 and tell the human in one line what it does: "I will review these customers each Monday at 08:00 from the exports you
 attach." They can change it or turn it off at any time. Nothing needs approval.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. Last, once the answers and the first review
+Record it in `memory/decisions.md`. Last, once the answers and the first review
 are recorded, and not before, run:
 
     tico bot setup-done

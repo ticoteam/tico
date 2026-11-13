@@ -24,7 +24,7 @@
 
 ## Rules and the log
 
-`AGENT.md` and `policies/*.md` hold only current rules: present tense, no dates, no history, no
+`AGENTS.md` and `policies/*.md` hold only current rules: present tense, no dates, no history, no
 measurements. When a rule changes, replace it rather than appending an exception. Every dated
 decision and its reason goes to the log: `memory/decisions.md` for one bot, the decision log for shared rules; newest first, one line each, `YYYY-MM-DD — <decision> — <reason>`. A number
 that justifies a rule goes in the log; the rule states the threshold.

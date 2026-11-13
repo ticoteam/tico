@@ -151,7 +151,7 @@ def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(ap
 
 
 def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(api):
-    """The Bookkeeper's follow-up after a refused write, scripted in the order AGENT.md's Each Books check gives it: the
+    """The Bookkeeper's follow-up after a refused write, scripted in the order AGENTS.md's Each Books check gives it: the
     row stays, one plain sentence goes on the task, and the run goes on. The steps are scripted, not a live model, so
     this pins what the product allows and what those steps leave behind; a model's wording is not tested here."""
     token, made, _ = private_run(api, carried=("books",))

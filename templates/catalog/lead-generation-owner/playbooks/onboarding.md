@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, a first lead report attached to the task as a draft, and the first routine checked.
 
 ---
@@ -41,7 +41,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write the profile, the not-qualified reasons and the hand-off
+Write each answer, dated, into the `knowledge/` file it belongs to. Write the profile, the not-qualified reasons and the hand-off
 times into `knowledge/lead-method.md`, and the sources with their tags into `knowledge/sources.md`. Keep the profile and the
 segment list fixed from here on: a change to either is a proposal for the owner.
 
@@ -58,7 +58,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`. Then tell the human in one line: "I will send the lead report every Monday at 09:00."
 They can change it or turn it off at any time; nothing waits for approval.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different time or to leave it
+Record it in `memory/decisions.md`. If they asked for a different time or to leave it
 off, change it with `tico automation update <id>`, using `--disable` to turn it off.
 
 ## 7. Finish

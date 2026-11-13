@@ -259,7 +259,7 @@ not need a blanket OK. A bot may ask a person to OK an uncertain action.
 
 1. **First message: setup.** On its first task the bot introduces itself in three lines, asks the
    template's `onboarding` questions in one message (each with its why), records the answers in
-   `state.md`, and does not ask what Tico already answers.
+   its `knowledge/` files, and does not ask what Tico already answers.
 2. **A first result in the same session.** It produces a real draft of its `first_routine` output from
    the team's own data, labelled "First draft, not yet reviewed". A human reacts to something real.
 3. **A routine that starts with setup.** It checks the first routine and tells the human what it does. The routine is declared in
@@ -376,7 +376,7 @@ team_templates: [finance-owner, accounts-receivable-specialist, accounts-payable
 
 Same layout as every template, plus what makes a starter reviewable:
 
-- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `tico`, quality
+- `AGENTS.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `tico`, quality
   standards and how it escalates. A head's also has `## Hiring`.
 - `playbooks/`: one for the first routine, one for the most common request, and `onboarding.md`.
 - `knowledge/examples/`: one sample of excellent output for the fictional team Acme. Never a real

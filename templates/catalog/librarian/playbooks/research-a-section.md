@@ -74,4 +74,4 @@ Finish the task: `tico task done <id> -m "<note>" --version N`. The note, in at 
 2. What you could not find or left out, and why.
 3. Conflicts with what the page already said, each with both sources.
 
-The doc's history shows the exact change, and **Restore** takes it back. Then rewrite `state.md` and commit.
+The doc's history shows the exact change, and **Restore** takes it back. Then note progress on the task and commit.

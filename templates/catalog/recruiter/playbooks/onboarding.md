@@ -1,13 +1,13 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
 
 Inputs: the first message or task, the team docs, past job posts if any, and the hiring mailbox if it is connected.
 
 Outcome: five recorded answers, a role file with the criteria written down, a first real artefact (a job post draft or the
 summaries of the applications you were given) on the task, and the first routine checked.
 
-Done when `state.md` says `Setup: finished`, the first artefact is attached, and `tico bot setup-done` has run.
+Done when the first artefact is attached and `tico bot setup-done` has run.
 
 ---
 
@@ -45,7 +45,7 @@ those and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roles/<role>.md` with the required and preferred
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/roles/<role>.md` with the required and preferred
 criteria as the manager wrote them (not as you would), the process, and the interview questions with a scoring guide. Write
 `knowledge/wording.md` from answer 5. Start `knowledge/pipeline.md` with references, not full profiles.
 
@@ -62,7 +62,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 Friday at 10:00 and put each owed reply up for review." They can change it or turn it off any time. There is nothing to
 approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
+Record it in `memory/decisions.md`. If they asked for a different schedule or to
 leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

@@ -2352,6 +2352,16 @@ impl Runner {
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
+            // The instruction file the harness loads by itself, AGENTS.md with Tico's standing section, before the
+            // turn starts (crate::instructions): an older AGENT.md and state.md are moved over in one commit.
+            if !packet_only {
+                let app = self.names().await.app;
+                match crate::instructions::ensure(&execution_path, &env, &app, stateless).await {
+                    Ok(true) => log(&format!("Tico runner: {bot}: brought its instruction file up to date ({})", crate::instructions::FILE)),
+                    Ok(false) => {}
+                    Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
+                }
+            }
             memory_before = redact::head(&execution_path);
             if packet_only {
                 if !crate::harness_tools::caps_of(&config).packet_only {
@@ -2482,6 +2492,7 @@ impl Runner {
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 packet_only,
+                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || packet_only || p.private),
             };
             let mut resumed = false;
             if side_run {
@@ -2631,7 +2642,7 @@ impl Runner {
                 self.state.repo_rules(&key, Some(""))?;
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
-            let agent = match crate::regular_file::read(execution_path.join("AGENT.md"), crate::regular_file::CONTENT) {
+            let agent = match crate::regular_file::read(crate::instructions::path(&execution_path).unwrap_or_else(|| execution_path.join(crate::instructions::FILE)), crate::regular_file::CONTENT) {
                 Ok(bytes) => crate::gitrun::sha256_hex(&bytes),
                 Err(_) => {
                     // A failed hash (including a symlink) cannot establish that the rules are unchanged.
@@ -3025,6 +3036,7 @@ impl Runner {
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     packet_only: false,
+                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
@@ -6528,7 +6540,7 @@ for line in sys.stdin:
         for (n, prompt) in prompts.iter().enumerate() {
             assert!(
                 !prompt.contains(crate::prompt::STANDING_SEEN)
-                    && prompt.contains("Read AGENT.md and state.md"),
+                    && prompt.contains("an AI teammate at"),
                 "turn {n}: {prompt}"
             );
             assert_eq!(completions[n]["outcome"], "completed");
@@ -6579,12 +6591,9 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
         let held =
-            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI");
-        let full = |p: &str| {
-            !p.contains(crate::prompt::STANDING_SEEN)
-                && p.contains("Use the tico CLI")
-                && p.contains("Read AGENT.md and state.md")
-        };
+            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("an AI teammate at");
+        let full =
+            |p: &str| !p.contains(crate::prompt::STANDING_SEEN) && p.contains("an AI teammate at");
         // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
         // 5 compact_first (a /compact process, then the turn), 6 unchanged again.
         let turns = [
@@ -6603,8 +6612,7 @@ for line in sys.stdin:
         // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
         assert!(
             injected[2].contains(crate::prompt::RESTORED)
-                && injected[2].contains("Use the tico CLI")
-                && injected[2].contains("Read AGENT.md and state.md"),
+                && injected[2].contains("an AI teammate at"),
             "{}",
             injected[2]
         );
@@ -6642,15 +6650,15 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn a_session_near_its_compact_at_or_of_unknown_size_gets_the_whole_prompt() {
-        // Each fake turn uses 350 tokens. With the whole prompt (well over 3,400 characters, 850 tokens) that is under
-        // 60% of a 100,000-token Compact at, but over 60% of 2,000, though 350 alone is not; a first turn's size is unknown.
+        // Each fake turn uses 350 tokens. With the whole prompt (over 900 characters, counted as tokens) that is under
+        // 60% of a 100,000-token Compact at, but over 60% of 1,000, though 350 alone is not; a first turn's size is unknown.
         let (_, prompts, _) = claude_turns(&[
             json!({"compact_at": 100_000}),
             json!({"compact_at": 100_000}),
         ])
         .await;
         assert!(
-            prompts[0].len() > 3_400 && !prompts[0].contains(crate::prompt::STANDING_SEEN),
+            prompts[0].len() > 900 && !prompts[0].contains(crate::prompt::STANDING_SEEN),
             "{}",
             prompts[0]
         );
@@ -6660,14 +6668,14 @@ for line in sys.stdin:
             prompts[1]
         );
         let (_, prompts, _) = claude_turns(&[
-            json!({"compact_at": 2_000}),
-            json!({"compact_at": 2_000}),
-            json!({"compact_at": 2_000}),
+            json!({"compact_at": 1_000}),
+            json!({"compact_at": 1_000}),
+            json!({"compact_at": 1_000}),
         ])
         .await;
         for p in &prompts {
             assert!(
-                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the tico CLI"),
+                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("an AI teammate at"),
                 "{p}"
             );
         }
@@ -6699,7 +6707,7 @@ for line in sys.stdin:
         assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
         let rule = "Repo rules for acme/app";
         assert!(
-            prompts[0].contains(rule) && prompts[0].contains("Use the tico CLI"),
+            prompts[0].contains(rule) && prompts[0].contains("an AI teammate at"),
             "{}",
             prompts[0]
         );
@@ -6708,7 +6716,7 @@ for line in sys.stdin:
         let restored = &prompts[2];
         assert!(
             restored.contains(rule)
-                && restored.contains("Use the tico CLI")
+                && restored.contains("an AI teammate at")
                 && restored.contains("Question 1"),
             "{restored}"
         );
@@ -6796,20 +6804,20 @@ for line in sys.stdin:
             injected[1]
         );
         assert_eq!(injected[1].matches(rule).count(), 2, "{}", injected[1]);
-        assert!(injected[1].contains("Use the tico CLI"), "{}", injected[1]);
+        assert!(injected[1].contains("an AI teammate at"), "{}", injected[1]);
         // With no room the prompt is whole but for the unchanged rules: a compaction gives back those alone.
-        let tight = json!({"compact_at": 2_000});
+        let tight = json!({"compact_at": 1_000});
         let (_, prompts, _, injected) =
             claude_rig(&[tight.clone(), tight], &[1], &[], &[], extra, rules).await;
         assert!(
-            prompts[1].contains("Use the tico CLI") && !prompts[1].contains(rule),
+            prompts[1].contains("an AI teammate at") && !prompts[1].contains(rule),
             "{}",
             prompts[1]
         );
         assert!(
             injected[1].contains(crate::prompt::RESTORED)
                 && injected[1].contains(rule)
-                && !injected[1].contains("Use the tico CLI"),
+                && !injected[1].contains("an AI teammate at"),
             "{}",
             injected[1]
         );
@@ -6894,13 +6902,13 @@ for line in sys.stdin:
         );
         assert!(
             !ran.prompts[0].contains(crate::prompt::STANDING_SEEN)
-                && ran.prompts[0].contains("Use the tico CLI"),
+                && ran.prompts[0].contains("an AI teammate at"),
             "{}",
             ran.prompts[0]
         );
         for p in &ran.prompts[1..] {
             assert!(
-                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI"),
+                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("an AI teammate at"),
                 "{p}"
             );
         }

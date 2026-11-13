@@ -7,7 +7,7 @@ minutes.
 You act **as the human who wrote to you**. The server checks every command with *their* rights and records it as theirs, "via BotOps". If
 it refuses, say so in one line, and who can change it, and stop.
 
-What a copy is: an ordinary bot **owned by the person who asked**, reporting to them, with the original's instructions (`AGENT.md`),
+What a copy is: an ordinary bot **owned by the person who asked**, reporting to them, with the original's instructions (`AGENTS.md`),
 `skills/`, `playbooks/`, `knowledge/` and `tools:` list, in a fresh repository with one commit, "Copied from <original> at <commit>".
 Nothing is shared and nothing stays linked: the copy and the original change on their own. The only thing kept is where the copy came
 from, so the two explicit requests below can work. A branch follows its original and shares its repository; this copy stays independent: anyone who may read a bot may ask
@@ -21,8 +21,7 @@ Done when: the copy exists as an ordinary bot the asker owns, or the update or s
 
     tico bot copy <original> [--name "<Display>"] [--slug <slug>] [--with-memory] [--computer <label>]
 
-- Ask about memory only if they raised it. The default leaves out the original's memory, notes, state and reports, and the copy starts
-  with a blank `state.md`. `--with-memory` brings them too; use it only when they asked for the original's history.
+- Ask about memory only if they raised it. The default leaves out the original's memory, notes and reports. `--with-memory` brings them too; use it only when they asked for the original's history.
 - No credential, `.env`, key file or `secrets/` is ever copied. Routines are not copied either (the copy starts with none).
 - They need to be allowed to add bots and to be within their limit; a copy counts like any bot they add. If the server says they are at
   their limit, offer to archive one they no longer need, or say an admin can raise it, and stop.
@@ -50,7 +49,7 @@ The answer's `credentials` lists what the original's tools need:
 
 ## 3. Make it theirs
 
-Read the copy's `AGENT.md` and `bot.yaml` once for what belonged to the original's people, not the role: a person's name, a mailbox or
+Read the copy's `AGENTS.md` and `bot.yaml` once for what belonged to the original's people, not the role: a person's name, a mailbox or
 address, a channel, a customer, a file path. List what you found in your report and change it only as they tell you; a message bot's
 mailbox is one person's, so never keep the original's. Then `tico bot check <copy>` and fix what it fails on, and commit in the copy's
 repository.
@@ -62,7 +61,7 @@ say so.
 
 Only when they ask. `tico bot update-from-original <copy>`.
 
-It compares the original's `AGENT.md`, `skills/` and `playbooks/` at the commit the copy was made from and now, with the copy's files, and
+It compares the original's `AGENTS.md`, `skills/` and `playbooks/` at the commit the copy was made from and now, with the copy's files, and
 merges file by file with git. The answer's `status`:
 
 - **`updated_at`**: one commit on the copy's repository took what the original changed and kept what the copy changed. Say in a line
@@ -76,7 +75,7 @@ If it says the copy has changes that are not committed, commit or discard them f
 
 ## 5. "Suggest this to the original"
 
-Only when they ask. `tico bot suggest-to-original <copy> [--paths AGENT.md skills/<name> ...]`.
+Only when they ask. `tico bot suggest-to-original <copy> [--paths AGENTS.md skills/<name> ...]`.
 
 It takes the copy's own changes to its instructions and skills. If they may write to the original and GitHub is connected, it opens a pull
 request on the original's repository and answers its link; otherwise it files a task for the original's owner with the diff. Say which

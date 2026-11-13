@@ -191,7 +191,7 @@ pub async fn clone_repository(
 /// The heal without the checkout lock, for tests; the readiness check uses heal_free_checkout.
 #[cfg(test)]
 pub async fn heal_checkout(path: &Path, env: &Env) -> String {
-    if path.join("AGENT.md").is_file() {
+    if crate::instructions::present(&path) {
         return String::new();
     }
     let env = crate::safegit::environment(env);
@@ -210,7 +210,7 @@ pub async fn heal_free_checkout(
     path: &Path,
     env: &Env,
 ) -> String {
-    if path.join("AGENT.md").is_file() {
+    if crate::instructions::present(&path) {
         return String::new();
     }
     let busy = || "its checkout is busy with a turn; it is healed at a later check".to_string();
@@ -241,12 +241,12 @@ async fn fetch_origin(path: &Path, env: &Env) -> Result<(), String> {
 
 /// The locked part of a heal, against the upstream as it is now: "" when AGENT.md is there afterwards.
 async fn finish_heal(path: &Path, env: &Env) -> String {
-    if path.join("AGENT.md").is_file() {
+    if crate::instructions::present(&path) {
         return String::new();
     }
     match fast_forward(path, env).await {
-        Ok(()) if path.join("AGENT.md").is_file() => String::new(),
-        Ok(()) => "fast-forwarded, but still has no AGENT.md".into(),
+        Ok(()) if crate::instructions::present(&path) => String::new(),
+        Ok(()) => "fast-forwarded, but still has no AGENTS.md".into(),
         Err(why) => why,
     }
 }
@@ -259,16 +259,19 @@ async fn fast_forward(path: &Path, env: &Env) -> Result<(), String> {
         return Err("it has no upstream branch to fast-forward from".into());
     }
     let tip = tip.stdout.trim().to_string();
-    let has_file = gitrun::git_as_bot(
-        path,
-        env,
-        &["cat-file", "-e", &format!("{tip}:AGENT.md")],
-        15,
-    )
-    .await
-    .map_err(|f| fault_text(&f))?;
-    if !has_file.ok() {
-        return Err("GitHub's branch has no AGENT.md either".into());
+    let mut has_file = false;
+    for name in [crate::instructions::FILE, crate::instructions::OLD] {
+        let found =
+            gitrun::git_as_bot(path, env, &["cat-file", "-e", &format!("{tip}:{name}")], 15)
+                .await
+                .map_err(|f| fault_text(&f))?;
+        if found.ok() {
+            has_file = true;
+            break;
+        }
+    }
+    if !has_file {
+        return Err("GitHub's branch has no AGENTS.md either".into());
     }
     let ancestor = gitrun::git_as_bot(
         path,
@@ -388,12 +391,12 @@ impl Runner {
             };
             if healed.is_empty() {
                 log(&format!(
-                    "Tico runner: {bot}'s checkout at {} got its AGENT.md back from GitHub",
+                    "Tico runner: {bot}'s checkout at {} got its AGENTS.md back from GitHub",
                     path.display()
                 ));
                 String::new()
             } else {
-                format!("{repository} is checked out here but has no AGENT.md: {healed}")
+                format!("{repository} is checked out here but has no AGENTS.md: {healed}")
             }
         } else if personal {
             let detail =
@@ -404,10 +407,10 @@ impl Runner {
                     "Tico runner: {bot} cloned from {repository} to {}",
                     path.display()
                 ));
-                if path.join("AGENT.md").is_file() {
+                if crate::instructions::present(&path) {
                     String::new()
                 } else {
-                    format!("{repository} was cloned but has no AGENT.md")
+                    format!("{repository} was cloned but has no AGENTS.md")
                 }
             } else {
                 let named = if repository.is_empty() {
@@ -426,10 +429,10 @@ impl Runner {
                             path.display()
                         ));
                         self.publish_notes.lock().unwrap().remove(bot);
-                        if path.join("AGENT.md").is_file() {
+                        if crate::instructions::present(&path) {
                             String::new()
                         } else {
-                            format!("{repository} was cloned but has no AGENT.md")
+                            format!("{repository} was cloned but has no AGENTS.md")
                         }
                     }
                     (_, detail) => format!("Could not clone {repository}: {detail}"),
@@ -521,7 +524,7 @@ impl Runner {
                 continue;
             }
             let path = crate::sessions::local_path(&self.config, &bot, &entry["config"]);
-            if path.join("AGENT.md").is_file() {
+            if crate::instructions::present(&path) {
                 continue;
             }
             self.fetch_repository(&bot, entry, &path).await;

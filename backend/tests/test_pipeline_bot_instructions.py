@@ -24,12 +24,12 @@ def texts(template):
     folder = CATALOG / template
     for path in sorted(folder.rglob("*")):
         if path.is_file() and path.suffix in (".md", ".yaml") and "software" not in path.relative_to(folder).parts:
-            if path.name != "state.md" and "examples" not in path.parts:
+            if "examples" not in path.parts:
                 yield path, path.read_text()
 
 
 def agent(template):
-    return " ".join((CATALOG / template / "AGENT.md").read_text().split())
+    return " ".join((CATALOG / template / "AGENTS.md").read_text().split())
 
 
 def settings(template):

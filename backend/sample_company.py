@@ -142,7 +142,7 @@ def load(onboarding, c, who):
             )
             tasks.append(made["id"])
     record = O.load(c)
-    setup = {slugs[b["id"]]: state(name, b, H.now()[:10]) for b in draft["bots"] if b is not assistant}
+    setup = {slugs[b["id"]]: setup_note(name, b, H.now()[:10]) for b in draft["bots"] if b is not assistant}
     record["sample"] = {
         "loaded": H.now(),
         "by": who.actor,
@@ -156,15 +156,16 @@ def load(onboarding, c, who):
     return onboarding.view(c, who)
 
 
-def state(name, bot, today):
-    """The state.md sections a role bot's repository is made with (clients/catalog.materialize): its setup done from
-    the sample's answers, so it works its starter task instead of asking the setup questions, and its routine off."""
+def setup_note(name, bot, today):
+    """The sections a role bot's `knowledge/company.md` is made with (clients/catalog.materialize): its setup done from
+    the sample's answers (Tico does not mark it Needs setup), so it works its starter task instead of asking the setup
+    questions, and its routine off."""
     return {
         "Setup": (
             f"Done {today}. You are the {bot['title']} at {name}, Tico's sample company: a made-up team for "
             "trying Tico. The sample's own answers stood in for the setup questions, so do not ask them."
         ),
-        "Answers": f"- {today}: {bot['reason']}\n- {today}: The company is in `knowledge/company.md`.",
+        "Answers": f"- {today}: {bot['reason']}",
         "Routine": (
             "Your first routine is off. The sample company keeps it off until a person turns it on in Tico; "
             "do not turn it on yourself."

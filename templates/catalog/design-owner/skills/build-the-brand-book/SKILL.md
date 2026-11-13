@@ -4,8 +4,8 @@ description: Build the company's brand book with the owner in a coached conversa
 ---
 # Build the brand book
 
-When to use: your setup (the first message while `state.md` says setup has not finished), a task that asks for the
-brand book, or the owner asking to redo or extend it. Also to resume a run (`state.md` → `## Brand book run`).
+When to use: your setup (the first message while Tico marks you Needs setup), a task that asks for the
+brand book, or the owner asking to redo or extend it. Also to resume a run (the brand book run noted on the task).
 
 ## In Tico
 
@@ -16,7 +16,7 @@ brand book, or the owner asking to redo or extend it. Also to resume a run (`sta
 - **Checks.** `python3 skills/build-the-brand-book/audit.py contrast '#FFFFFF' '#F4B942'` for every ratio;
   `python3 skills/build-the-brand-book/audit.py check reports/brand-book.json reports/brand-book-transcript.json`
   for the rest. Paste its output; never a number worked out by eye.
-- **Pause and resume.** When the owner stops, write `## Brand book run` in `state.md`: the stage, the next question,
+- **Pause and resume.** When the owner stops, note the brand book run on the task: the stage, the next question,
   open threads. On their next message, pick up there in one line.
 - **Teammates.** A needs-teammate item is one `tico task ask <task> --to <person> "<question>" --version N` each,
   quoting the section and what the answer unlocks. When answers arrive, follow **Resume: teammate answers** below.

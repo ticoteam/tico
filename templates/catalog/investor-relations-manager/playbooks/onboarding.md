@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes. The outcome is five recorded answers, a real
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, a real
 draft update on the task with any missing figure marked, and the first routine checked.
 
 ---
@@ -31,7 +31,7 @@ saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/metrics.md` (each metric, its definition, source and order), `knowledge/exclusions.md` and the recipient list as
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/metrics.md` (each metric, its definition, source and order), `knowledge/exclusions.md` and the recipient list as
 present-tense statements. Note the finance figures' owner and due day in `knowledge/finance-inputs.md`.
 
 ## 5. Produce the first result now
@@ -44,7 +44,7 @@ Follow `playbooks/monthly-investor-update.md` on the real record for the month j
 Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`) and tell the human in one line:
 "I will have a draft ready on the 3rd of every month at 09:00 for you to review and send." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off, adjust `knowledge/` and the routine
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off, adjust `knowledge/` and the routine
 to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

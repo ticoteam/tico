@@ -1,6 +1,6 @@
 # Credentials
 
-Read this before you handle any credential. The rules in AGENT.md always hold: a bot never uses a credential that was not
+Read this before you handle any credential. The rules in AGENTS.md always hold: a bot never uses a credential that was not
 granted to it, and no value is printed, logged, committed, copied between bots, read, or rotated when it already exists.
 
 Inputs: the bot that needs the credential, the variable's name, and whether the value already exists in Credentials or in another bot's file.

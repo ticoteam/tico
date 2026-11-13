@@ -27,7 +27,7 @@ def test_a_task_is_opened_once_per_key_and_a_message_wakes_the_bot_once_per_ref(
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE body LIKE 'It still fails%'").fetchone()[0] == 1
     # Hostile text is stored as text, and a protected path is redacted without losing the event.
-    body = "<script>alert(1)</script> read secrets/prod.env and emp-botops/AGENT.md"
+    body = "<script>alert(1)</script> read secrets/prod.env and emp-botops/AGENTS.md"
     report(api, r, task("hq:TK-9", title="Support: <b>hi</b>", body=body))
     hostile = tasks(api)[-1]
     assert "<script>alert(1)</script>" in hostile["body"] and "secrets/prod.env" not in hostile["body"]

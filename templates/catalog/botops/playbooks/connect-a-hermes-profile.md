@@ -31,7 +31,7 @@ Done when: the profile is paired and its bot reports a heartbeat, and the human 
 ## 2. Register the bot if it is new
 
 Skip this when the bot exists (`tico api GET bots`). Otherwise do not ask: name it after the profile, describe it from what
-they said, and have it report to them (AGENT.md, Defaults, not questions), then:
+they said, and have it report to them (AGENTS.md, Defaults, not questions), then:
 
     tico bot create --record-only --model hermes --name "<Name>" --description "<what it does>" --reports-to <bot or human:id>
 

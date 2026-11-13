@@ -644,7 +644,7 @@ def test_a_manager_bot_files_an_instruction_change_as_a_task_for_its_report_and_
         {
             "owner": "counsel",
             "title": "Change the NDA steps",
-            "body": "Update your AGENT.md: ask for the counterparty's name first.",
+            "body": "Update your AGENTS.md: ask for the counterparty's name first.",
         },
         token=lead,
     )

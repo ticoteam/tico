@@ -1,10 +1,9 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 15 minutes. The outcome is five recorded answers, one real write-up on the task,
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 15 minutes. The outcome is five recorded answers, one real write-up on the task,
 and the first routine checked.
 
-Done when: all five answers are in `state.md` under `## Answers`, `knowledge/coverage.md` holds them as rules, the first write-up is attached and labelled, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
+Done when: all five answers are in `knowledge/`, `knowledge/coverage.md` holds them as rules, the first write-up is attached and labelled, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
@@ -37,7 +36,7 @@ Numbered, each with its one-line why. Offer the default so a human can answer "f
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Turn coverage, recipients and the
+Record each answer, dated, in the `knowledge/` file it belongs to. Turn coverage, recipients and the
 restricted list into present-tense rules in `knowledge/coverage.md`.
 
 ## 5. Write up a real meeting now
@@ -52,7 +51,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; a recap to anyone outside the team stays a draft for a person to send." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/coverage.md` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

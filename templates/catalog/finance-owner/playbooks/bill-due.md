@@ -8,7 +8,7 @@ Done when: the bill is scheduled or paid, or the task says what it waits on and 
 one line.
 
 1. Read the bill with `tico api GET finance/bills/<bill id>`. Already paid, scheduled or void: finish with one line.
-2. A draft: check and approve it first (AGENT.md, Each Books check, step 2), or ask one person if unsure.
+2. A draft: check and approve it first (AGENTS.md, Each Books check, step 2), or ask one person if unsure.
 3. Schedule it per its terms: `tico finance act bill_schedule --payload '{"bill_id":"<bill id>","pay_on":"<due date>",
    "money_account_id":"<bank id>"}' --operation-id bill-due:<bill id>:<stage>`. `pay_on` is the due date or the day the
    company's rules say; `money_account_id` is the bank it is paid from. If the vendor has no payee, the action says so:

@@ -17,7 +17,7 @@ Steps:
    received, the date it arrived, and the reference of the person who asked. Add no opinion, no summary and no suggested answer.
 5. Tell the requester in one line that the question has gone to the named human. Give no other detail.
 6. Keep nothing else about the question. Delete any copy you made in the working tree at the end of the run.
-7. Record the hand-off in `state.md` by topic and date, without the question's content.
+7. Note the hand-off on your task by topic and date, without the question's content.
 
 Checks before you finish:
 - The question on the task is copied exactly, not paraphrased.
@@ -27,4 +27,4 @@ Checks before you finish:
 
 Example (invented, for illustration): "A question about a leave request came in on 2026-10-14 from a new hire. The topic is leave in
 hand-offs.md, owner: the HR owner. Created one task for the HR owner with the question copied as received, and told the new hire
-it had gone to the HR owner. No answer given. Recorded in state.md as 'leave, 2026-10-14, routed'."
+it had gone to the HR owner. No answer given. Noted on the task as 'leave, 2026-10-14, routed'."

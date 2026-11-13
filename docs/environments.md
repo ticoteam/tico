@@ -405,8 +405,8 @@ to start: read `scripts/tico-computer -e <slug> server logs`, change `port` and 
 re-run `server install` (the plist carries the port), and rebuild the Mac app if it was built
 against the old URL.
 
-**`doctor` says NOT READY.** The problem strings are literal: *Missing bot repository or AGENT.md*
-(no `bot-<slug>/AGENT.md` in the workspace; the assistant and `botops` are the exception, since the
+**`doctor` says NOT READY.** The problem strings are literal: *Missing bot repository or AGENTS.md*
+(no `bot-<slug>/AGENTS.md` in the workspace; the assistant and `botops` are the exception, since the
 runner materializes those two from the templates on the computer they are assigned to),
 *Runtime executable is not on PATH*, *Antigravity CLI
 is not on PATH*, *`<profile>`: ...* (that subscription is signed out or its check failed),

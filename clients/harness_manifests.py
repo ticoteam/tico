@@ -39,6 +39,7 @@ FIELDS = {
     "one_turn_per_login": (bool, False),
     "isolated_user": (bool, False),
     "compaction": (bool, False),
+    "own_compaction": (bool, False),
     "compaction_events": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),

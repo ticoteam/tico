@@ -51,7 +51,7 @@ Whether it is a first message, a task or a change to what a bot does:
 - **Name the limits.** Who may be contacted, which topics are off limits (pay, legal, HR matters), what needs your OK.
 - **One request at a time.** Ask for a second thing after the first is right.
 
-If a bot gets it wrong twice, change its instructions, not your message: ask BotOps to tailor it, or edit its `AGENT.md` and playbooks.
+If a bot gets it wrong twice, change its instructions, not your message: ask BotOps to tailor it, or edit its `AGENTS.md` and playbooks.
 
 ## Sending and access
 

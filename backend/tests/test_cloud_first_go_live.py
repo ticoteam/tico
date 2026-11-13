@@ -33,7 +33,7 @@ def _report(api, computer, present=()):
             "runtime": "codex",
             "repository_present": row["bot"] in have,
             "configuration_valid": True,
-            "problems": [] if row["bot"] in have else ["Missing bot repository or AGENT.md"],
+            "problems": [] if row["bot"] in have else ["Missing bot repository or AGENTS.md"],
         }
         for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?", (computer["runner_id"],))
     }

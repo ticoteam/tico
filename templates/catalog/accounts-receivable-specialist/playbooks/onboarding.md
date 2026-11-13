@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes. The outcome is five recorded
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded
 answers, a real pack of reminder drafts from the aging list, and the first routine checked.
 
 ---
@@ -29,7 +29,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/ladder.md`, `knowledge/voice.md` and `knowledge/customers.md` as
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/ladder.md`, `knowledge/voice.md` and `knowledge/customers.md` as
 present-tense rules. Start `knowledge/customers.md` with the disputes and do-not-chase names given. Never write a bank or card number.
 
 ## 5. Draft the first pack now
@@ -43,7 +43,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 human in one line: "I will draft this pack every Monday at 09:00, and a person sends any reminder." They can change it or turn it off any time; there
 is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off, adjust
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off, adjust
 `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

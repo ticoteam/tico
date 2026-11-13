@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes.
 The outcome is three recorded answers, `knowledge/standards.md`, and the test commands found for each repository.
 
 ---
@@ -28,7 +28,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/standards.md`: the repositories and their base
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/standards.md`: the repositories and their base
 branches, the test commands, and the risky paths with the person who must look at each. Start
 `knowledge/patterns.md` empty.
 

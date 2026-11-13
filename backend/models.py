@@ -1243,7 +1243,7 @@ class BotReadiness(GoalReadiness):
     published: bool | None = None
     configuration_valid: bool = False
     problems: list[str] = Field(default_factory=list, max_length=20)
-    # Soft guidance that does not block claiming work (for example a long AGENT.md).
+    # Soft guidance that does not block claiming work (for example a long AGENTS.md).
     warnings: list[str] = Field(default_factory=list, max_length=20)
     # Runners before 0.5.4 reported the routines they read from a repository manifest. Routines
     # are the hub's own rows now (backend/routines.py); these are accepted and dropped.
@@ -1524,9 +1524,9 @@ class Heartbeat(Contract):
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
-    # Actual AGENT.md text for assigned personal inbox bots, read from their runner checkout.
+    # Actual AGENTS.md text for assigned personal inbox bots, read from their runner checkout.
     mail_agent_instructions: dict[str, str] = Field(default_factory=dict, max_length=20)
-    # Changed AGENT.md files for assigned bots. The runner sends each file on first heartbeat
+    # Changed AGENTS.md files for assigned bots. The runner sends each file on first heartbeat
     # and when it changes; the server keeps the last published copy for Messaging.
     agent_instructions: dict[str, str] = Field(default_factory=dict, max_length=100)
     # The runner's own checkout against origin/main (runner-rs/src/follow.rs), #492.
@@ -1664,7 +1664,7 @@ class TeammateAccess(Contract):
     on_behalf_of: ID | None = None
 
 
-# A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
+# A bot's instructions (its AGENTS.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
 # adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
 # backend/tests/test_onboarding.py checks every one against it.
 INSTRUCTIONS_MAX = 50_000

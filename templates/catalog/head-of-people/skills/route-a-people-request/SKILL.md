@@ -9,7 +9,7 @@ When to use: when a people request arrives on a task or in the weekly summary an
 Steps:
 1. Read what the request asks, not who sent it. Name the kind of work: hiring a role, finding people who have not applied,
    interview logistics, onboarding or handbook questions, offboarding and records, review cycles, benefits, pay bands or offer
-   checks, surveys and recognition, or training. Use the route list in `AGENT.md` ("The people team's lines").
+   checks, surveys and recognition, or training. Use the route list in `AGENTS.md` ("The people team's lines").
 2. Check the owner in `tico team show` now, and read `knowledge/routing.md`. If no bot holds the work, the request goes to the
    human named in `knowledge/team.md`.
 3. Check whether the request decides something about a named person: a hire, a rating, a pay change, discipline or a

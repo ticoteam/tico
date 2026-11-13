@@ -190,7 +190,7 @@ declare function settingsEditInstructions(slug: string): void;
     await page.locator('#bot-instructions-editor [type=submit]').click();
     await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent.');
     assert.equal(await page.locator('dialog[open]').count(), 0);
-    assert.match((writes.find(row => row.p === '/api/v2/assistant/messages')!.body.text as string), /Instructions \(AGENT.md\).*Helper/);
+    assert.match((writes.find(row => row.p === '/api/v2/assistant/messages')!.body.text as string), /Instructions \(AGENTS.md\).*Helper/);
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

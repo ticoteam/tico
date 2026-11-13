@@ -35,8 +35,8 @@ one line, the date, the options as the record states them, and the lawyer to cal
 
 ## 5. Routing and hiring proposals
 
-For each request with no owner: the owner from the team lines in `AGENT.md`, with the reason. Create tasks for requested follow-through with your Tools. If one kind of request recurred with no bot to take it (three or more in four weeks), add a hiring
-proposal as `AGENT.md` "Hiring" describes; it is asked on the task, never acted on here.
+For each request with no owner: the owner from the team lines in `AGENTS.md`, with the reason. Create tasks for requested follow-through with your Tools. If one kind of request recurred with no bot to take it (three or more in four weeks), add a hiring
+proposal as `AGENTS.md` "Hiring" describes; it is asked on the task, never acted on here.
 
 ## 6. Write and hand over
 

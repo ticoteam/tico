@@ -572,7 +572,8 @@ impl Watchers {
                 continue;
             }
             let path = crate::readiness::local_path(config, &bot);
-            if !path.join("AGENT.md").is_file() || !crate::manifest::manifest_path(&path).is_file()
+            if !crate::instructions::present(&path)
+                || !crate::manifest::manifest_path(&path).is_file()
             {
                 continue;
             }

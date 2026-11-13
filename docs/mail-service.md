@@ -21,7 +21,7 @@ logged in one place.
   libraries in a small venv that `scripts/mail.sh` creates on first use. No daemon: a daemon adds
   a process and gives no real isolation, because every bot runs as the same Unix user anyway. The
   rules are enforced inside the CLI, and state lives in one SQLite file, `runtime/mail/mail.db`.
-- **Bots never call the Gmail or Calendar API directly.** AGENT.md for every bot with mail
+- **Bots never call the Gmail or Calendar API directly.** AGENTS.md for every bot with mail
   access says so; the audit log is how we notice if one does.
 - **Auth: one Google service account with domain-wide delegation.** Key at
   `~/tico-work/secrets/google-sa.json`, mode 600. It is never loaded into a bot's environment;

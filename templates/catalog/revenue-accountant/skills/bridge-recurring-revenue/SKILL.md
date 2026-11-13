@@ -7,7 +7,7 @@ description: Build the recurring revenue bridge for a month (opening, new, expan
 When to use: each month at close, or when someone asks why recurring revenue moved.
 
 Steps:
-1. Use the team's definition from `state.md`: which items count, and whether a contract counts at signing or at invoice. Do not change
+1. Use the team's definition from `knowledge/revenue-policy.md`: which items count, and whether a contract counts at signing or at invoice. Do not change
    the definition to make a number move.
 2. Start with the opening figure, which is last month's closing.
 3. For each contract whose recurring amount changed, classify the movement as new, expansion, contraction or churn. A contract that
@@ -24,4 +24,4 @@ Checks before you finish:
 
 Example (invented, for illustration): "Opening 210,000; new 12,000 (contract C-120, signed 10-08); expansion 3,500 (C-091, added
 seats, order 10-14); contraction 0; churn 6,000 (C-077, notice 09-30); closing 219,500. Definition: contracts counted from their
-start date (state.md)."
+start date (knowledge/revenue-policy.md)."

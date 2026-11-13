@@ -22,9 +22,9 @@ async function loadDocs(slug: string) {
   try {
     const f = await get(`/employees/${encodeURIComponent(slug)}/files`);
     if (BOT?.slug !== slug) return;
-    if ($('#agent')) $('#agent').innerHTML = f['AGENT.md'] ? md(f['AGENT.md'].replace(/^# .*\n/, '')) : '<div class="empty">Instructions have not been published by the computer yet.</div>';
+    if ($('#agent')) $('#agent').innerHTML = f['AGENTS.md'] ? md(f['AGENTS.md'].replace(/^# .*\n/, '')) : '<div class="empty">Instructions have not been published by the computer yet.</div>';
     for (const [n, t] of Object.entries<string>(f.playbooks || {})) { const el = document.getElementById('pb-' + n); if (el) el.innerHTML = md(t); }
-    const tabs: [string, string | undefined][] = [['Status note', f['state.md']], ['Learnings', f['memory/learnings.md']], ['Decisions', f['memory/decisions.md']]];
+    const tabs: [string, string | undefined][] = [['Learnings', f['memory/learnings.md']], ['Decisions', f['memory/decisions.md']]];
     for (const [n, t] of Object.entries<string>(f.playbooks || {})) if (n !== 'README.md') tabs.push(['Playbook: ' + n.replace(/\.md$/, ''), t]);
     tabs.push(['Manifest', '```yaml\n' + (f['bot.yaml'] || f['employee.yaml'] || '') + '\n```']);
     const tb = $('#tabs'), doc = $('#doc'); if (!tb) return;

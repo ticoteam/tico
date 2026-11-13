@@ -44,4 +44,4 @@ owner's section of the audit.
 
 Write `reports/YYYY-MM-expense-audit.md` and publish it with `tico file publish` (finance only). Commit. Then
 `tico task done <id> -m "..." --version N` with the headline and the path. Owner notes leave the audit only as the
-sending rules in AGENT.md allow.
+sending rules in AGENTS.md allow.

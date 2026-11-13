@@ -51,6 +51,6 @@ in one run. Any other version or commit asks again. A failed step stops the roll
 
 ## 7. Finish
 
-Update `knowledge/versioning.md` with the release, its date and commit, and record the release in `state.md`. The task gets one
+Update `knowledge/versioning.md` with the release, its date and commit. The task gets one
 comment: the version and commit, the release link, the notes' path, the readiness outcome, and per install before and after with
 its outcome. Then `tico task done <id> -m "..." --version N`, with the version in the first line.
