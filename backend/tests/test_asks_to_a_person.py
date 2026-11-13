@@ -317,3 +317,65 @@ def test_a_reply_names_a_bots_question_on_that_task(ruled, which):
     )
     assert r.status_code == 422, r.text
     assert sql(api, "SELECT count(*) AS n FROM messages WHERE body='Hello'")[0]["n"] == 0
+
+
+def test_a_reply_cannot_name_a_question_already_answered(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    rid = ask(api, task, GOOD).json()["requirement_id"]
+    answered = api.post(
+        f"/api/v2/tasks/{task['id']}/asks/{rid}/answer",
+        json={"value": "Plain", "version": version(api, task)},
+        headers=headers("ana-test"),
+    )
+    assert answered.status_code == 200, answered.text
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments", json={"text": "One more thing", "ask": rid}, headers=headers("ana-test")
+    )
+    assert r.status_code == 422, r.text
+    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body='One more thing'")[0]["n"] == 0
+    # Undone, the question is open again, and a reply may name it.
+    [answer] = sql(api, "SELECT id FROM answers WHERE requirement_id=?", (rid,))
+    undone = api.post(f"/api/v2/answers/{answer['id']}/undo", json={}, headers=headers("ana-test"))
+    assert undone.status_code == 200, undone.text
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments", json={"text": "One more thing", "ask": rid}, headers=headers("ana-test")
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_the_person_a_bots_question_waits_on_may_wake_that_bot_and_no_one_else_may(ruled):
+    """Ben is not on Ana's task: the question to him is his way to wake the bot; Cara, not asked, cannot."""
+    api, _ = ruled
+    task = task_for_ops(api)
+    rid = ask(api, task, GOOD, to="ben").json()["requirement_id"]
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments",
+        json={"text": "Plain, but warmer", "ask": rid, "delivery": "steer"},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert [j["state"] for j in jobs_for(api, "ops", r.json()["comment"]["id"])] == ["queued"]
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments",
+        json={"text": "Playful", "ask": rid, "delivery": "steer"},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_a_reply_reaches_the_bot_that_asked_when_it_does_not_own_the_task(ruled):
+    """Finance asked for the task Ops owns, and asks Ana on it: her reply goes to Finance, not to the owner."""
+    api, _ = ruled
+    task = post(api, "tasks", {"owner": "ops", "title": "Price the launch", "body": "Set it."}, token="finance-test")
+    rid = ask(api, task, GOOD, token="finance-test").json()["requirement_id"]
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments",
+        json={"text": "Plain, please", "ask": rid},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 200, r.text
+    said = r.json()["comment"]
+    assert said["recipient_id"] == "bot:finance"
+    assert [j["state"] for j in jobs_for(api, "finance", said["id"])] == ["queued"]
+    assert jobs_for(api, "ops", said["id"]) == []

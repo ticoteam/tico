@@ -30,14 +30,17 @@ def register(
 ):
     def replying_to(c, who, task_id, body):
         """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
-        (None, False) for a plain comment. 422 when `ask` is not a bot's question on this task's open visit."""
+        (None, False) for a plain comment. 422 when `ask` is not a bot's unanswered question on this task's open visit."""
         if not body.ask:
             return None, False
         if body.public or body.delivery == "goal":
             raise Problem("validation", "A reply to an ask is a plain comment: send it without public or goal", 422)
         found = c.execute(
             "SELECT r.added_by_id, r.person_id FROM requirements r JOIN visits v ON v.id=r.visit_id "
-            "WHERE r.id=? AND v.task_id=? AND v.left_at IS NULL AND r.kind='answer' AND r.withdrawn_at IS NULL",
+            "WHERE r.id=? AND v.task_id=? AND v.left_at IS NULL AND r.kind='answer' AND r.withdrawn_at IS NULL "
+            # Unanswered as hubdb counts an open ask: an undone answer, a Give to or an Ask again leaves it open.
+            "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id=r.id AND a.visit_id=r.visit_id "
+            "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))",
             (body.ask, task_id),
         ).fetchone()
         if not found or not H.is_bot(found[0]):
