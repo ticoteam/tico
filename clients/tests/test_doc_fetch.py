@@ -20,14 +20,17 @@ class Net:
     """DNS and sockets for one test: `names` maps a host to its addresses and `replies` are the raw answers,
     in order. Everything the code sent is kept in `sent` with the address it went to."""
 
-    def __init__(self, names, *replies):
+    def __init__(self, names, *replies, down=None):
         self.names, self.replies, self.sent, self.connected = names, list(replies), [], []
+        self.down = down or {}  # address -> the OSError connecting to it raises
 
     def resolver(self, host, port):
         return self.names[host]
 
     def opener(self, ip, port, tls, host, timeout):
         self.connected.append((ip, port, tls, host))
+        if ip in self.down:
+            raise self.down[ip]
         outer, raw = self, self.replies.pop(0)
 
         class Sock:
@@ -85,6 +88,34 @@ def test_the_connection_goes_to_the_address_that_was_checked():
     assert net.connected == [(PUBLIC, 443, True, "docs.example.com")]
     assert net.sent[0][1].startswith("GET /a HTTP/1.1\r\nHost: docs.example.com\r\n")
     assert result["title"] == "Hi" and result["text"] == "Hello" and not result["truncated"]
+
+
+GOOGLE_V6, GOOGLE_V4 = "2001:4860:4802:38::15", "216.239.36.21"  # syften.com's, 2026-11-13
+UNREACHABLE = OSError(101, "Network is unreachable")  # a computer with no IPv6 route
+
+
+def test_an_address_that_cannot_be_reached_falls_back_to_the_next_checked_one():
+    net = Net({"syften.com": [GOOGLE_V6, GOOGLE_V4]}, reply(body=b"<p>Hello</p>"), down={GOOGLE_V6: UNREACHABLE})
+    assert net.fetch("https://syften.com/")["text"] == "Hello"
+    assert [ip for ip, *_ in net.connected] == [GOOGLE_V6, GOOGLE_V4]
+    assert [ip for ip, _ in net.sent] == [GOOGLE_V4]
+
+
+def test_the_name_is_tried_in_the_order_the_system_resolves_it(monkeypatch):
+    infos = [(None, None, 6, "", (GOOGLE_V4, 443)), (None, None, 6, "", (GOOGLE_V6, 443, 0, 0))] * 2
+    monkeypatch.setattr(F.socket, "getaddrinfo", lambda *a, **k: infos)
+    assert F.resolve("syften.com", 443) == [GOOGLE_V4, GOOGLE_V6]  # sorted as text, IPv6 came first
+
+
+def test_a_network_failure_says_its_errno_and_reason():
+    net = Net(
+        {"syften.com": [GOOGLE_V6, GOOGLE_V4]}, down={GOOGLE_V6: UNREACHABLE, GOOGLE_V4: TimeoutError("timed out")}
+    )
+    with pytest.raises(F.FetchError) as failed:
+        net.fetch("https://syften.com/")
+    assert failed.value.code == "network"
+    assert "[Errno 101] Network is unreachable" in failed.value.message and GOOGLE_V6 in failed.value.message
+    assert "TimeoutError: timed out" in failed.value.message and GOOGLE_V4 in failed.value.message
 
 
 def test_a_redirect_to_an_internal_address_is_refused_and_never_connected_to():

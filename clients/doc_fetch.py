@@ -7,7 +7,8 @@ What it enforces, on every hop of every request:
 * the name is resolved here and every address it resolves to must be public: loopback, private,
   link-local (the cloud metadata address 169.254.169.254 among them), shared, multicast, reserved and
   unspecified addresses are refused, and so are their IPv6 counterparts and an IPv4 address wrapped in
-  IPv6. The connection then goes to the address that was checked, so the name cannot be re-resolved to
+  IPv6. The connection then goes to the addresses that were checked, in the order the system resolved
+  them (an address that cannot be reached falls back to the next), so the name cannot be re-resolved to
   something else between the check and the connection (DNS rebinding);
 * at most 5 redirects, each one checked as if it were the first request;
 * 5 MB, 20 seconds for the whole fetch, and only text, markdown, HTML, JSON, XML (a sitemap) and PDF;
@@ -91,9 +92,11 @@ def public_address(value):
 
 
 def resolve(host, port):
-    """Every address `host` resolves to. Overridden in tests."""
+    """Every address `host` resolves to, in the system's order of preference. Overridden in tests.
+    The order matters: getaddrinfo puts IPv4 first on a computer with no IPv6 route, where sorting the
+    addresses as text put syften.com's IPv6 "2001:..." before its "216..." and every read failed."""
     try:
-        return sorted({info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
+        return list(dict.fromkeys(info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)))
     except socket.gaierror as exc:
         raise FetchError("dns", f"{host} does not resolve ({exc.strerror or exc})") from None
 
@@ -110,13 +113,31 @@ def connect(ip, port, tls, host, timeout):
         raise
 
 
+def failure_words(exc):
+    """`OSError: [Errno 101] Network is unreachable`: the type, and the errno and reason when it has them."""
+    reason = str(exc) or (exc.strerror if isinstance(exc, OSError) else "") or ""
+    return f"{type(exc).__name__}: {reason}" if reason else type(exc).__name__
+
+
 class _Connection(http.client.HTTPConnection):
-    def __init__(self, host, port, ip, tls, timeout, opener):
-        super().__init__(host, port, timeout=timeout)
-        self._ip, self._tls, self._opener = ip, tls, opener
+    """Connects to each checked address in turn until one answers. A TLS certificate failure is not
+    retried on another address: it is the name's certificate that failed, not the route."""
+
+    def __init__(self, host, port, ips, tls, left, opener):
+        super().__init__(host, port, timeout=min(left(), TIMEOUT_S))
+        self._ips, self._tls, self._opener, self._left = ips, tls, opener, left
+        self.failures = []  # (address, exception) for each address that could not be reached
 
     def connect(self):
-        self.sock = self._opener(self._ip, self.port, self._tls, self.host, self.timeout)
+        for ip in self._ips:
+            try:
+                self.sock = self._opener(ip, self.port, self._tls, self.host, min(self._left(), TIMEOUT_S))
+                return
+            except ssl.SSLError:
+                raise
+            except OSError as exc:
+                self.failures.append((ip, exc))
+        raise self.failures[-1][1]
 
 
 def credential_headers(host, env):
@@ -163,8 +184,8 @@ class Fetcher:
             raise FetchError("port", f"Port {port} is not fetched")
         return parts, host, port
 
-    def address(self, host, port):
-        """A public address for the host, or a refusal. Every address it resolves to must be public."""
+    def addresses(self, host, port):
+        """The host's addresses in the order to try them, or a refusal. Every one must be public."""
         try:
             literal = ipaddress.ip_address(host.strip("[]"))
             found = [str(literal)]
@@ -178,13 +199,13 @@ class Fetcher:
                 "private_address",
                 f"{host} points to a private or internal address; only public web addresses are fetched",
             )
-        return found[0]
+        return found
 
     def get(self, url, accept="*/*", extra=None):
         """(final_url, content_type, body bytes, truncated) after following at most 5 redirects."""
         for hop in range(MAX_REDIRECTS + 1):
             parts, host, port = self.check_url(url)
-            ip = self.address(host, port)
+            ips = self.addresses(host, port)
             tls = parts.scheme == "https"
             headers = {
                 "Host": parts.netloc.rsplit("@", 1)[-1],
@@ -196,14 +217,16 @@ class Fetcher:
                 **(extra or {}),
             }
             target = urlunsplit(("", "", parts.path or "/", parts.query, ""))
-            conn = _Connection(host, port, ip, tls, min(self.left(), TIMEOUT_S), self.opener)
+            conn = _Connection(host, port, ips, tls, self.left, self.opener)
             try:
                 self.requests += 1
                 try:
                     conn.request("GET", target, headers=headers)
                     response = conn.getresponse()
                 except (OSError, http.client.HTTPException) as exc:
-                    raise FetchError("network", f"Could not read {host}: {type(exc).__name__}") from None
+                    tried = conn.failures or [(None, exc)]
+                    why = "; ".join(f"{ip}: {failure_words(e)}" if ip else failure_words(e) for ip, e in tried)
+                    raise FetchError("network", f"Could not read {host}: {why}") from None
                 if response.status in (301, 302, 303, 307, 308):
                     where = response.getheader("Location")
                     if not where:
