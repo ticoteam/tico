@@ -478,13 +478,13 @@ function pageGoals() {
   if (was) { was._state = null; if (was.open) was.close(); }
   const sheet = document.getElementById('goal-sheet') as GkDialog | null; if (sheet?.open) sheet.close();
   const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null, q: ''};
-  // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
+  // Goals is a Strategy tab: the tree is the page and "New goal" heads it. Talking about goals is the Ask panel's.
   $('#main').classList.add('strategy-layout', 'rd-goals');
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><input type="search" id="goal-search" class="goal-search" aria-label="Search goals or people" autocomplete="off" placeholder="Search goals or people…"><div id="goal-body"><p class="muted">Loading…</p></div>
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   const actions = $('#strat-actions');
   if (actions && (mePerson() || S.me?.role === 'owner')) {
-    actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
+    actions.innerHTML = '<button class="primary ph-go" type="button" id="goal-new">New goal</button>';
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
