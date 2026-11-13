@@ -420,15 +420,16 @@ function ruDrawHead() {
   const human = S.me?.role !== 'bot';
   // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
   if (ru.tab === 'internal' && head.querySelector('.ph-tools .rr-q')) return;
+  type ByTab = Partial<Record<RuleTab, string>>;
   const tools = ({
     internal: `<div class="rr-find"><input class="rr-q" type="search" placeholder="Search people, bots and teams" aria-label="Search people, bots and teams" autocomplete="off">
       <div class="rr-results" role="listbox" aria-label="Matches" hidden></div></div>`,
     external: human ? '<button class="ghost" type="button" data-ru-add>Add rule</button>' : '',
-  } as Partial<Record<RuleTab, string>>)[ruTab()] || '';
+  } as ByTab)[ruTab()] || '';
   const primary = ({
     external: human ? '<button class="primary ph-go" type="button" data-ru-add-doc>Add document</button>' : '',
     due: human ? '<button class="primary ph-go" type="button" data-ru-add-due>Add due date</button>' : '',
-  } as Partial<Record<RuleTab, string>>)[ruTab()] || '';
+  } as ByTab)[ruTab()] || '';
   pageHeadSet(head, 'tools', tools);
   pageHeadSet(head, 'primary', primary);
 }

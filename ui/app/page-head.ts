@@ -3,24 +3,24 @@
 // Styles: ui/styles/page-head.css, linked after every page stylesheet so it wins ties with the old page rules.
 'use strict';
 
-type PageTab = {label: string; href?: string; count?: number | string; cur?: boolean; attrs?: string};
+type PageTab = {label: string; href?: string | undefined; count?: number | string | undefined; cur?: boolean | undefined; attrs?: string | undefined};
 type PageHeadPart = 'title' | 'tabs' | 'tools' | 'more' | 'primary';
 type PageHeadOptions = {
   title: string;                           // plain text, escaped here
-  back?: {href: string; label: string};    // a sub-page's parent, drawn first as "Updates ›"
-  hook?: string;                           // the old header class, kept only as a test hook (au-ph, ru-ph…)
-  pad?: boolean;                           // .ph-pad: the 28px gutter on layouts that zero #main's padding
-  id?: string;                             // the header's id, where a page reads it back
-  after?: string;                          // HTML right after the title (Tasks' scope menu)
-  tabs?: PageTab[];
-  tabsHook?: string;                       // the old nav class kept as a hook (ru-tabs, use-tabs…)
-  tabsAttrs?: string;                      // extra attributes on the nav (aria-label, data-*)
-  tools?: string;                          // search, ghost and icon buttons, chips
-  more?: string;                           // the ⋯ menu's items (buttons and links)
-  moreId?: string;                         // ids of the ⋯ button and its menu, where a page already names them
-  menuId?: string;
-  primary?: string;                        // the filled button: <button class="primary ph-go" …>Words</button>
-  actId?: string;                          // id of the .ph-act holder, where a page fills it later (#strat-actions)
+  back?: {href: string; label: string} | undefined;    // a sub-page's parent, drawn first as "Updates ›"
+  hook?: string | undefined; // the old header class, kept only as a test hook (au-ph, ru-ph…)
+  pad?: boolean | undefined; // .ph-pad: the 28px gutter on layouts that zero #main's padding
+  id?: string | undefined; // the header's id, where a page reads it back
+  after?: string | undefined; // HTML right after the title (Tasks' scope menu)
+  tabs?: PageTab[] | undefined;
+  tabsHook?: string | undefined; // the old nav class kept as a hook (ru-tabs, use-tabs…)
+  tabsAttrs?: string | undefined; // extra attributes on the nav (aria-label, data-*)
+  tools?: string | undefined; // search, ghost and icon buttons, chips
+  more?: string | undefined; // the ⋯ menu's items (buttons and links)
+  moreId?: string | undefined; // ids of the ⋯ button and its menu, where a page already names them
+  menuId?: string | undefined;
+  primary?: string | undefined; // the filled button: <button class="primary ph-go" …>Words</button>
+  actId?: string | undefined; // id of the .ph-act holder, where a page fills it later (#strat-actions)
 };
 
 let PAGE_HEAD_SEQ = 0;
