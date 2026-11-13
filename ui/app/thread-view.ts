@@ -181,6 +181,9 @@ interface ThvOpts {
   empty?: string;
   from?: () => PageChatFrom | null;  // a page's chat (page-chat.ts): each message names the page and what is open on it
   keyDrop?: {tools: () => string[]};      // the Tools owner's chat (tools-key-drop.ts): keys are caught and saved, never sent
+  // What goes with each message, as a chip above the box that ✕ removes (pipeline-ask.ts: the board on screen).
+  context?: {label: () => string; refs: () => ThvRefs | null};
+  autofocus?: boolean;               // the box takes the focus when the composer first draws
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -232,6 +235,7 @@ interface ThvView extends ThvConv {
   key: number;
   host: HTMLElement;
   opts: ThvOpts;
+  contextOff?: boolean;             // ✕ on the context chip: messages stop carrying opts.context
   follow: (() => void) | null;
   gone: boolean;
   el: HTMLElement;
@@ -1190,13 +1194,24 @@ liveOn('bots', (d: {bot?: string}) => { for (const view of THV_VIEWS) if (view.c
 liveOn('reset', () => { for (const view of THV_VIEWS) if (view.goals && !view.gone) void thvRunRead(view); });
 
 // ----------------------------------------------------------------- the composer
+/** The chip above the box naming what goes with each message (opts.context); ✕ stops sending it. */
+function thvContextDraw(view: ThvView) {
+  const host = view.el.querySelector<HTMLElement>('.thv-ctx'), ctx = view.opts.context;
+  if (!host) return;
+  host.hidden = !ctx || !!view.contextOff;
+  if (host.hidden || !ctx) return;
+  const label = ctx.label();
+  host.innerHTML = `<span class="thv-ctx-chip"><span class="thv-ctx-l">${esc(label)}</span>`
+    + `<button type="button" class="thv-ctx-x" aria-label="${esc(`Don't send ${label}`)}" title="Don't send this">✕</button></span>`;
+  (host.querySelector('.thv-ctx-x') as HTMLElement).onclick = () => { view.contextOff = true; thvContextDraw(view); view.composer?.el.querySelector<HTMLTextAreaElement>('.p-text')?.focus(); };
+}
 function thvComposerDraw(view: ThvView) {
   const host = view.el.querySelector('.thv-composer') as HTMLElement;
   const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);
   // Hidden, not removed, while posting is closed (archived, loading): unarchiving shows it again with its draft.
   if (!can) { host.hidden = true; return; }
   host.hidden = false;
-  if (view.composer) { thvReplyingDraw(view); thvComposerLabel(view); return; }
+  if (view.composer) { thvReplyingDraw(view); thvComposerLabel(view); thvContextDraw(view); return; }
   // One line, as the bot chat's pill was: (a bot's Home or DM: the bot, on a phone) the words, Attach, the ways to send
   // and Send, which Stop replaces while the bot runs. `pill-thread` keeps the task question card's frame (.ask,
   // ui/styles/task-files.css) off it. A bot's composer takes the old chat's "/" commands (slash-commands.js) through the
@@ -1209,7 +1224,7 @@ function thvComposerDraw(view: ThvView) {
     newChat: view.opts.dm ? () => thvNewDm(view) : null} as ThvComposer;
   // Above the box: the message being answered.
   // Files waiting to be sent sit above the box, an image as its thumbnail (#138).
-  host.innerHTML = `<div class="thv-replying" hidden></div><div class="ask pill-thread thv-ask"><div class="p-chips"></div><div class="p-pill">
+  host.innerHTML = `<div class="thv-replying" hidden></div><div class="thv-ctx" hidden></div><div class="ask pill-thread thv-ask"><div class="p-chips"></div><div class="p-pill">
       ${bot ? pillBotHTML(bot) : ''}
       ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
@@ -1230,6 +1245,8 @@ function thvComposerDraw(view: ThvView) {
     mode: () => C.ways ? thvWayMode(view) : '', text: () => (C.el.querySelector('.p-text') as HTMLTextAreaElement).value, reply: () => view.replyTo});
   (host.querySelector('.thv-replying') as HTMLElement).onclick = ev => { if (eventElement(ev)?.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text') as HTMLTextAreaElement, file = C.el.querySelector('.p-file') as HTMLInputElement, menu = C.el.querySelector('.thv-attach-menu') as HTMLElement;
+  thvContextDraw(view);
+  if (view.opts.autofocus) box.focus({preventScroll: true});
   const grow = () => pillGrow(box);
   box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); thvDraftTextKeep(view, box.value); });
   // The Tools chat catches a paste first and keeps it out of the box (tools-key-drop.ts).
@@ -1602,6 +1619,9 @@ async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, r
   view.pending.push(p);
   thvDraw(view, {stick: true});
   const from = view.opts.from?.() || null;
+  const extra = view.opts.context && !view.contextOff ? view.opts.context.refs() : null;
+  if (extra) thvContextDraw(view);   // the chip says what this message carries (the count can have changed)
+  if (extra) more = {...extra, ...more};
   const refs = lib.length || more || from ? {...more, ...(lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : {}), ...(from ? {from_page: from} : {})} : null;
   const body = {text, ...(refs ? {refs} : {}), ...(replyTo ? {in_reply_to: replyTo.id} : {}), ...(way || {}), ...(unmarked.length ? {unmarked} : {})};
   try {

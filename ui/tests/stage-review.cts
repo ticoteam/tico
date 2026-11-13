@@ -2,6 +2,8 @@
 // (tasks-page.cts). Checks, as the spec's acceptance criteria give them:
 //  - a pipeline shows "▶ n" on each stage with items waiting on the person, and no ▶ on a stage with none (columns, the
 //    list's group headers, and beside a phone's stage tabs);
+//  - nothing moves when Needs you arrives after the board draws: ▶ keeps its 40 px slot at the right of a stage's
+//    header (columns and list alike), and a phone's tabs keep their widths, a stage with items getting a dot;
 //  - ▶ opens the review screen full screen on a phone, "Spec · 1 of 3", with only Spec's items in the walk;
 //  - an answer, a send back with a note, or an OK is saved and the next item shows without leaving the screen;
 //  - a clear stage says "Spec is clear" and offers "▶ Review · 2", which walks Review's items;
@@ -68,6 +70,64 @@ async function playOnStages(browser: Browser) {
   assert.deepEqual(errors, []);
   await page.close();
   console.log('▶ n on each stage with items, none on a stage without: ok');
+}
+
+/** Where each stage header's parts sit, and each phone tab's width. */
+const layoutOf = (page: Page) => page.evaluate(() => {
+  const box = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? [Math.round(r.left), Math.round(r.right)] : null; };
+  return {
+    heads: [...document.querySelectorAll('.pv-col-head, .pv-group-head')].map(h => [box(h.querySelector('.pv-stage-n')), box(h.querySelector('.pv-play'))]),
+    tabs: [...document.querySelectorAll('.pv-tab')].map(t => Math.round(t.getBoundingClientRect().width)),
+    strip: Math.round(document.querySelector('.pv-tabs')?.getBoundingClientRect().width ?? 0),
+  };
+});
+
+/** Needs you held back until `let go()`: the board draws first, as it does on a slow network. */
+async function heldNeeds(page: Page): Promise<() => void> {
+  let go = () => {};
+  const held = new Promise<void>(r => { go = r; });
+  await page.route('**/api/v2/needs-you**', async route => { await held; await route.fallback(); });
+  return () => go();
+}
+
+async function nothingMoves(browser: Browser) {
+  for (const layout of ['columns', 'list']) {
+    let release = () => {};
+    const {page, errors} = await opened(browser, {hash: `#/tasks?pipeline=product&layout=${layout}`, beforeGoto: async pg => { await noGrant(pg); release = await heldNeeds(pg); }});
+    await page.locator('.pv-stage-n').first().waitFor();
+    assert.equal(await page.locator('[data-pv-play]').count(), 0, 'no ▶ before Needs you');
+    const before = await layoutOf(page);
+    release();
+    await page.locator('[data-pv-play]').first().waitFor();
+    assert.deepEqual(await layoutOf(page), before, `${layout}: the counts and ▶'s slot stay where they were`);
+    const right = await page.locator('.pv-play').evaluateAll(els => els.map(e => {
+      const h = e.parentElement!.getBoundingClientRect(), r = e.getBoundingClientRect();
+      return {gap: Math.round(h.right - r.right - parseFloat(getComputedStyle(e.parentElement!).paddingRight)), w: Math.round(r.width)};
+    }));
+    assert.ok(right.every(x => x.gap === 0 && x.w >= 40), `${layout}: ▶ at the header's right edge, 40 px or more: ${JSON.stringify(right)}`);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    let release = () => {};
+    const {page, errors} = await opened(browser, {viewport: PHONE, hash: '#/tasks?pipeline=product', beforeGoto: async pg => { await noGrant(pg); release = await heldNeeds(pg); }});
+    await page.locator('.pv-tab[data-pv-tab="build"]').click();
+    const before = await layoutOf(page);
+    release();
+    await page.locator('.pv-tab-dot').first().waitFor();
+    const after = await layoutOf(page);
+    assert.deepEqual([after.tabs, after.strip], [before.tabs, before.strip], 'the tabs keep their widths when the dots arrive');
+    assert.deepEqual(await page.locator('.pv-tab:has(.pv-tab-dot)').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.pvTab)), ['spec', 'review']);
+    assert.equal(await page.locator('.pv-tab[data-pv-tab="spec"]').getAttribute('aria-label'), 'Spec 3, 3 wait on you');
+    for (const id of ['spec', 'review', 'build']) {
+      await page.locator(`.pv-tab[data-pv-tab="${id}"]`).click();
+      const now = await layoutOf(page);
+      assert.deepEqual([now.tabs, now.strip], [before.tabs, before.strip], `the tabs do not move on ${id}`);
+    }
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('Needs you arriving late moves nothing: ▶ keeps its slot, a phone\'s tabs keep their widths: ok');
 }
 
 async function walkOnAPhone(browser: Browser) {
@@ -223,6 +283,6 @@ async function phonePolish(browser: Browser) {
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [playOnStages, walkOnAPhone, chipsOnYou, deepLink, phonePolish]) await run(browser);
+    for (const run of [playOnStages, nothingMoves, walkOnAPhone, chipsOnYou, deepLink, phonePolish]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

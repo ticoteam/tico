@@ -141,7 +141,7 @@ function taskFilterMatch(t: TaskAny, q: string, f: TaskFilters = {}): boolean {
 /** How a pipeline is drawn on the Tasks page (task-pipelines.ts sets it as it loads). The page (tasks-page.ts) owns the
     header, reading the pipeline and its open tasks, search, filter, the archive and opening a task (any [data-task]);
     it calls `html` again whenever it has read again. `bind` wires the root once drawn, `rail` draws the manager's rail
-    into its host, `ask` the phone's Ask bar into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
+    into its host, `ask` the phone's floating face into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
 interface PipelineViewHooks {
   html(p: PipelineRec, tasks: TaskAny[], opts: {layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters}): string;
   bind?(root: HTMLElement, p: PipelineRec): void;
