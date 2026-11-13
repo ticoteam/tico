@@ -208,7 +208,7 @@ const scenarios = {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]'});
     await page.locator('[data-tl-add] > summary').click();
-    assert.deepEqual(await page.locator('[data-tl-add-item]').allTextContents(), ['API', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address', 'Outgoing webhook']);
+    assert.deepEqual(await page.locator('[data-tl-add-item]').allTextContents(), ['API', 'Website', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address', 'Outgoing webhook']);
     await page.locator('[data-tl-add-item="kind:mailbox"]').click();
     const dialog = page.locator('dialog.mb-dialog');
     await dialog.locator('[name=address]').fill('ana@acme.example');
