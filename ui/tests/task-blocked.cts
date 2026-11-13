@@ -35,6 +35,8 @@ type Route = import('playwright').Route;
       await page.setViewportSize({width, height: 844});
       await page.evaluate(() => { location.hash = '#/tasks'; });
       await page.evaluate(() => { location.hash = '#/task/t-307'; });
+      // A phone shows one tab at a time; the dependency lives under Info.
+      if (width < 600) await page.locator('#task-modal[open]').getByRole('tab', {name: 'Info'}).click();
       const blocked = page.locator('#task-modal[open][data-task="t-307"] .task-depends');
       await blocked.waitFor();
       assert.deepEqual(await text('#task-modal[open] .task-depends'),
@@ -62,6 +64,7 @@ type Route = import('playwright').Route;
     // The task others wait for.
     await page.evaluate(() => { location.hash = '#/tasks'; });
     await page.evaluate(() => { location.hash = '#/task/t-304'; });
+    await page.locator('#task-modal[open]').getByRole('tab', {name: 'Info'}).click();
     await page.locator('#task-modal[open][data-task="t-304"] .task-blocks').waitFor();
     const blocks = await text('#task-modal[open] .task-blocks');
     assert.equal(blocks.length, 1);
