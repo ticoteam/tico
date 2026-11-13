@@ -1,3 +1,4 @@
+# pyright: strict
 """Stage rules whose When is a timer (backend/stage_rules.py, event `timer`), on the never-stuck pass.
 
 A timer is one of:
@@ -26,11 +27,21 @@ Each Tell and Move back is written on the task's history (kind `stage_rule`, "Ru
 `stage_rule.told` or `stage_rule.moved_back`.
 """
 
+import importlib
 import logging
+from typing import Any
 
-from . import hubdb as H
+from . import hubdb as _hubdb
 
 log = logging.getLogger(__name__)
+Row = dict[str, Any]
+# hubdb and the modules read lazily below are untyped: they get `Any` here, as never_stuck does.
+H: Any = _hubdb
+
+
+def _mod(name: str) -> Any:
+    return importlib.import_module(f".{name}", __package__)
+
 
 KINDS = ("in_stage", "quiet", "waiting_person")
 THENS = ("tell_manager", "tell_owner", "move_back")
@@ -50,21 +61,20 @@ _TASKS = (
 )
 
 
-def rules(conn):
+def rules(conn: Any) -> list[Row]:
     """The timer rules in force: active, not retired, with a timer this module knows."""
-    from . import stage_rules as SR
-
+    SR = _mod("stage_rules")
     if not SR.has_table(conn):
         return []
-    out = []
+    out: list[Row] = []
     for row in conn.execute(
         "SELECT * FROM stage_rules WHERE event='timer' AND status='active' AND retired_at IS NULL ORDER BY created_at, id"
     ).fetchall():
-        rule = SR.view(row)
-        timer = rule["timer"]
+        rule: Row = SR.view(row)
+        timer: Row = rule["timer"]
         try:
-            hours = float(timer.get("hours"))
-        except (TypeError, ValueError):
+            hours = float(timer["hours"])
+        except (KeyError, TypeError, ValueError):
             continue
         if timer.get("kind") not in KINDS or hours <= 0 or rule["then"] not in THENS:
             continue
@@ -72,13 +82,13 @@ def rules(conn):
     return out
 
 
-def sweep(conn, at=None):
+def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
     """One pass over every timer rule, then the managers' batched wakes. Returns counts of what it did."""
-    at = at or H.now()
+    at = str(at or H.now())
     done = {"told": 0, "moved": 0, "wakes": 0}
     found = rules(conn)
     if found:
-        tasks = [dict(r) for r in conn.execute(_TASKS).fetchall()]
+        tasks: list[Row] = [dict(r) for r in conn.execute(_TASKS).fetchall()]
         for rule in found:
             for task in tasks:
                 if _in_scope(rule, task):
@@ -87,41 +97,43 @@ def sweep(conn, at=None):
     return done
 
 
-def _in_scope(rule, task):
+def _in_scope(rule: Row, task: Row) -> bool:
     if rule.get("pipeline_id") and rule["pipeline_id"] != task["pipeline_id"]:
         return False
     return not rule["stages"] or task["stage_id"] in rule["stages"]
 
 
-def _started(conn, rule, task, at):
+def _started(conn: Any, rule: Row, task: Row) -> str | None:
     """When this task's timer started, or None when it has none now (it waits on no person)."""
     kind = rule["timer_kind"]
     if kind == "quiet":
-        return task["active_at"]
+        return str(task["active_at"])
     if kind == "in_stage":
-        return task["entered_at"]
-    from . import task_engine as E, waiting_on as W
-
+        return str(task["entered_at"])
+    E, W = _mod("task_engine"), _mod("waiting_on")
     row = E.task(conn, task["id"])
-    waits = W.of(conn, row) if row else []
+    waits: list[Any] = W.of(conn, row) if row else []
     if not waits or waits[0].state != W.PERSON:
         return None
     return max(str(waits[0].since or ""), task["entered_at"])
 
 
-def _due(conn, rule, task, started, at):
+def _due(conn: Any, rule: Row, task: Row, started: str, at: str) -> bool:
     seconds = rule["hours"] * 3600
     if rule["timer_kind"] == "in_stage":
-        from . import never_stuck as NS
-
-        return NS._spent(conn, {"id": task["visit_id"], "task_id": task["id"], "entered_at": started}, at) >= seconds
+        spent = _mod("never_stuck")._spent(
+            conn, {"id": task["visit_id"], "task_id": task["id"], "entered_at": started}, at
+        )
+        return float(spent) >= seconds
     start = H.parse_ts(started)
     now = H.parse_ts(at)
-    return bool(start and now) and (now - start).total_seconds() >= seconds
+    if not start or not now:
+        return False
+    return float((now - start).total_seconds()) >= seconds
 
 
-def _judge(conn, rule, task, at, done):
-    started = _started(conn, rule, task, at)
+def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> None:
+    started = _started(conn, rule, task)
     if not started or not _due(conn, rule, task, started, at):
         return
     mark = f"{task['visit_id']}@{started}"
@@ -129,15 +141,14 @@ def _judge(conn, rule, task, at, done):
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark=?", (rule["id"], task["id"], mark)
     ).fetchone():
         return
-    from .store import Problem
-
+    problem: Any = _mod("store").Problem
     outcome = "no"
     conn.execute("SAVEPOINT stage_rule_timer")
     try:
         if _matches(conn, rule, task):
-            outcome = _then(conn, rule, task, at, done)
+            outcome = _then(conn, rule, task, done)
         conn.execute("RELEASE stage_rule_timer")
-    except (H.Refused, Problem, ValueError, KeyError):
+    except (H.Refused, problem, ValueError, KeyError):
         # A move Tico refuses, or a rule it cannot carry out: undone, marked failed, and the pass goes on.
         conn.execute("ROLLBACK TO stage_rule_timer")
         conn.execute("RELEASE stage_rule_timer")
@@ -151,40 +162,37 @@ def _judge(conn, rule, task, at, done):
 
 
 # ----------------------------------------------------------------------------- If
-def _matches(conn, rule, task):
+def _matches(conn: Any, rule: Row, task: Row) -> bool:
     """The rule's If: `turn` is read here (whose turn the task is, as the never-stuck ladder reads it: a bot's, or a
     person's when the first thing it waits on is a person); every other key by stage_rules.matches."""
-    from . import stage_rules as SR, task_engine as E, waiting_on as W
-
+    SR, E, W = _mod("stage_rules"), _mod("task_engine"), _mod("waiting_on")
     row = E.task(conn, task["id"])
     if not row:
         return False
     turn = rule["cond"].get("turn")
     if turn:
-        waits = W.of(conn, row)
-        who = W.turn(conn, row, waits) or (waits[0].who if waits and waits[0].state == W.PERSON else None)
+        waits: list[Any] = W.of(conn, row)
+        who: str | None = W.turn(conn, row, waits) or (waits[0].who if waits and waits[0].state == W.PERSON else None)
         if _kind(who) != turn:
             return False
-    return SR.matches(conn, rule, row)[0]
+    return bool(SR.matches(conn, rule, row)[0])
 
 
-def _kind(actor):
+def _kind(actor: str | None) -> str | None:
     return "bot" if H.is_bot(actor) else "person" if H.is_human(actor) else None
 
 
 # ----------------------------------------------------------------------------- Then
-def _said(rule, task):
+def _said(rule: Row, task: Row) -> str:
     """What the history says: "Rule <name>: <reason>", the reason being the rule's own or its timer."""
-    from . import stage_rules as SR
-
-    hours = rule["hours"]
+    hours = float(rule["hours"])
     span = f"{hours:g} h"
     what = {"quiet": "quiet", "in_stage": f"in {task['stage_name']}", "waiting_person": "waiting on a person"}
-    return SR._line(rule, f"{span} {what[rule['timer_kind']]}")
+    return str(_mod("stage_rules")._line(rule, f"{span} {what[rule['timer_kind']]}"))
 
 
-def _then(conn, rule, task, at, done):
-    then = rule["then"]
+def _then(conn: Any, rule: Row, task: Row, done: dict[str, int]) -> str:
+    then = str(rule["then"])
     said = _said(rule, task)
     if then == "move_back":
         _move_back(conn, rule, task, said)
@@ -199,26 +207,25 @@ def _then(conn, rule, task, at, done):
     return "pending" if _manager(conn, task) else "no_manager"
 
 
-def _move_back(conn, rule, task, said):
-    from . import rules as R, stage_rules as SR, task_engine as E, task_trigger_rules as TTR
-
+def _move_back(conn: Any, rule: Row, task: Row, said: str) -> None:
+    R, SR, E, TTR = _mod("rules"), _mod("stage_rules"), _mod("task_engine"), _mod("task_trigger_rules")
     stage = str(rule["then_params"].get("stage") or "")
     if not stage:
         raise ValueError("Move back names no stage")
     with TTR.from_action(rule["id"]):
         R.TASK_RUNNERS["move"](conn, task["id"], {"stage": stage}, said)
-        if H.task(conn, task["id"]).get("owner_id"):
+        now: Row = H.task(conn, task["id"]) or {}
+        if now.get("owner_id"):
             E.reassign(conn, task["id"], None, H.KEEPER, said)
-    moved = H.task(conn, task["id"])
+    moved: Row = H.task(conn, task["id"]) or {}
     task.update(stage_id=moved.get("stage_id"), late_told_at=None)
     SR.record(
         conn, task["id"], rule, said, H.KEEPER, "moved_back", {"from": task["stage_name"], "to": moved.get("stage_id")}
     )
 
 
-def _tell_owner(conn, rule, task, said):
-    from . import stage_rules as SR, task_engine as E, task_wakes
-
+def _tell_owner(conn: Any, rule: Row, task: Row, said: str) -> None:
+    SR, E, task_wakes = _mod("stage_rules"), _mod("task_engine"), _mod("task_wakes")
     owner = task["owner_id"]
     row = E.task(conn, task["id"])
     if not owner or not row:
@@ -232,23 +239,23 @@ def _tell_owner(conn, rule, task, said):
     SR.record(conn, task["id"], rule, said, H.KEEPER, "told", {"to": owner})
 
 
-def _manager(conn, task):
+def _manager(conn: Any, task: Row) -> str | None:
     """The pipeline's manager, when it may read the task."""
     found = conn.execute("SELECT manager_id FROM pipelines WHERE id=?", (task["pipeline_id"],)).fetchone()
-    manager = found[0] if found else None
+    manager: str | None = found[0] if found else None
     row = H.task(conn, task["id"])
     return manager if manager and row and H.task_private_readable(conn, manager, row) else None
 
 
 # ----------------------------------------------------------------------------- the managers' wakes
-def flush(conn, at=None):
+def flush(conn: Any, at: str | None = None) -> int:
     """One wake per manager with tells waiting, unless it had one in the last hour. Returns the wakes sent."""
-    at = at or H.now()
+    at = str(at or H.now())
     if not H._has_table(conn, "stage_rule_marks"):
         return 0
     since = H.shift(at, hours=-BATCH_HOURS)
     sent = 0
-    managers = [
+    managers: list[str] = [
         r[0]
         for r in conn.execute(
             "SELECT DISTINCT manager_id FROM stage_rule_marks WHERE outcome='pending' AND manager_id IS NOT NULL "
@@ -265,15 +272,14 @@ def flush(conn, at=None):
     return sent
 
 
-def _named(row):
+def _named(row: Row) -> str:
     return f"#{row['number']} {row.get('title')}" if row.get("number") else str(row.get("title"))
 
 
-def _wake_manager(conn, manager, at):
+def _wake_manager(conn: Any, manager: str, at: str) -> bool:
     """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager, each once."""
-    from . import rules as R, stage_rules as SR
-
-    pending = conn.execute(
+    R, SR = _mod("rules"), _mod("stage_rules")
+    pending: list[Any] = conn.execute(
         "SELECT k.rule_id, k.task_id, k.mark FROM stage_rule_marks k LEFT JOIN tasks t ON t.id = k.task_id "
         "WHERE k.outcome='pending' AND k.manager_id=? ORDER BY k.matched_at, t.number, k.task_id",
         (manager,),
@@ -282,10 +288,10 @@ def _wake_manager(conn, manager, at):
         "UPDATE stage_rule_marks SET outcome='told', told_at=? WHERE rule_id=? AND task_id=? AND mark=?",
         [(at, rule_id, task_id, mark) for rule_id, task_id, mark in pending],
     )
-    listed = []
+    listed: list[tuple[Row, Row]] = []
     for rule_id, task_id, _mark in pending:
-        row = H.task(conn, task_id)
-        rule = SR.get(conn, rule_id)
+        row: Row | None = H.task(conn, task_id)
+        rule: Row | None = SR.get(conn, rule_id)
         if (
             not row
             or not rule
@@ -304,13 +310,13 @@ def _wake_manager(conn, manager, at):
         body.append(f"- and {n - LISTED} more")
     body.append("Look at each: do it, reassign it, ask a person, snooze it or close it.")
     text = "\n".join(body)
-    refs = {"wake": "stage_rules", "tasks": [row["id"] for row, _ in listed]}
+    refs: Row = {"wake": "stage_rules", "tasks": [row["id"] for row, _ in listed]}
     if H.is_bot(manager):
         ok = R._tell_bot(conn, "stage-rules", H.actor_id(manager), text, refs, wake=True)[0]
     else:
         conv = H._pair_conversation(conn, H.KEEPER, manager, "notice", allow_held=True)
         ok = bool(H._write_message(conn, H.KEEPER, manager, text, conv, "notice", refs, None, None))
-    name = H.actor_name(conn, manager)
+    name = str(H.actor_name(conn, manager))
     for row, rule in listed:
         SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.KEEPER, "told", {"to": manager})
     return bool(ok)
