@@ -5644,6 +5644,11 @@ def create_app(settings=None):
     from .learned import install as install_learned
 
     install_learned(app, store, auth, mutate)
+    from . import assistant_share
+
+    assistant_share.install(
+        app, store, auth, mutate
+    )  # bots a person lets view their Assistant chat (docs/assistant.md)
     from .mcp import install_mcp
 
     install_mcp(app, settings)

@@ -262,6 +262,9 @@ AUDIENCE = {
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
     "tico_assistant_learn": HUMANS_AND_ASSISTANT,
     "tico_assistant_learned": HUMANS_AND_ASSISTANT,
+    # A chat a person shared with a bot they chose (backend/assistant_share.py): only that bot, in its own run.
+    "tico_assistant_shared": BOTS,
+    "tico_assistant_shared_read": BOTS,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "tico_brief": HUMANS_AND_ASSISTANT,
     "tico_bot_recent": HUMANS_AND_ASSISTANT,

@@ -411,6 +411,8 @@ UNTYPED = frozenset(
         "kpi_readings",
         "kpis",
         "learned_entries",
+        "assistant_shares",
+        "assistant_share_settings",
         "learning_cursors",
         "learning_deliveries",
         "learning_items",

@@ -2052,6 +2052,21 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
     client.get.assert_called_with("assistant/proposals")
 
 
+def test_assistant_shared_read_reads_the_chat_a_person_shared(monkeypatch):
+    """`tico assistant shared-read human:ana --before m1` runs `tico_assistant_shared_read`: GET that person's page."""
+    from clients import remotecli
+    from unittest.mock import Mock
+
+    client = Mock()
+    client.get.return_value = {"messages": []}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "shared-read", "human:ana", "--before", "m1"]))
+    client.get.assert_called_with("assistant/shared/human:ana", before="m1")
+    remotecli.run(hubcli.parser().parse_args(["assistant", "shared"]))
+    client.get.assert_called_with("assistant/shared")
+
+
 def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
     """`tico tool index --limit 5 --cursor c2` runs `tico_tool_index`: GET tool-index with the page."""
     from clients import remotecli

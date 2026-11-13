@@ -121,7 +121,20 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 The DM is a personal thread (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
 Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
-chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
+chat routes still refuse it (`403`).
+
+You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
+**Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is
+on it at first, and only you change it, on your own click in Tico: not your Assistant, not BotOps acting for you, not a
+personal API token, not the owner or an admin (`GET`/`POST /api/v2/assistant/viewers`, `DELETE /api/v2/assistant/viewers/{bot}`). A bot on your list
+reads your messages, the Assistant's replies and its cards (what each proposed and what became of it, never its
+request or result) with `tico assistant shared` and `tico assistant shared-read <person>` (`GET
+/api/v2/assistant/shared/{person}`). It can never post, react or act on a card there: those routes still refuse it.
+**Remove** refuses its next read at once. What it has learned about you stays out unless you also tick **Include what
+it has learned about me** (`PUT /api/v2/assistant/viewers/learned`), which goes back to off when you remove the last
+bot; the company layer is never shared. If you leave the team or your sign-in is turned off, every read is refused. Each bot's
+last read shows beside it, and every read is in the audit log (`assistant.shared_read`, naming the bot and you). The
+list is never shared with people or another team, and no team-wide switch shares everyone's chat. Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
@@ -317,7 +330,8 @@ Tell it how you like things ranked and summarised ("launches matter more than hi
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your DM
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
 asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
-Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
+Assistant, and not a bot doing other work for you, BotOps included; a bot you let view your chat reads it only if you
+tick **Include what it has learned about me** ([Private to you](#private-to-you)). The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
 
 Each turn in your DM is handed the layer as it is when the turn starts, so a line you delete is not used from the
 next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant

@@ -674,7 +674,18 @@ def run(args, who=None):
     if args.cmd == "assistant":
         from clients import hubtools
 
-        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change", "morning"):
+        if args.sub in (
+            "read",
+            "send",
+            "learn",
+            "learned",
+            "withdraw",
+            "proposals",
+            "change",
+            "morning",
+            "shared",
+            "shared-read",
+        ):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
