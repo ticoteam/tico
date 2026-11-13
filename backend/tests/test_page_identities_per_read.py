@@ -245,9 +245,11 @@ def references(pages, versions):
     return out, identities
 
 
-def answers(api, refs, identities, task):
+def answers(api, refs, identities, task, primed=False):
     auth = api.app.state.auth
     with api.app.state.store.read() as c:
+        if primed:
+            files.prime_page_references(c, refs)  # as a list read does before checking each item
         return {
             "references": [sorted(files.page_references(ref, c)) for ref in refs],
             "blobs": [sorted(r["id"] for r in files.page_blobs(c, bid)) for bid in identities],
@@ -279,6 +281,31 @@ def test_every_reader_gets_the_same_answers_as_reading_the_whole_page_graph(api,
         assert files.page_references(twin, c) == {pages["twin_here"]}  # the live file in the same context wins
         alone = [v["digest"] for v in versions if v["file_id"] == pages["gone_alone"]][0]
         assert files.page_references(alone, c) == {pages["gone_alone"]}  # a purged page keeps its alias
+
+
+def test_priming_first_gives_every_reader_the_same_answers(api):
+    """A read that primes its values first (a task, the inbox, threads) checks them through the record priming keeps,
+    and every form, reader and label comes out as without it."""
+    pages, versions, task, _ = company(api)
+    refs, identities = references(pages, versions)
+    assert answers(api, refs, identities, task, primed=True) == answers(api, refs, identities, task)
+
+
+def test_a_page_named_only_by_its_bytes_stays_hidden_after_priming(api):
+    pages, versions, _, _ = company(api)
+    version = next(v for v in versions if v["file_id"] == pages["restricted"])
+    refs = [
+        {"text": "see ", "ref": name, "title": "Secret"}
+        for name in (version["blob_id"], version["digest"], "blob:" + version["blob_id"])
+    ]
+    cara = Identity("human:cara", "human", "cara@acme.example")
+    with api.app.state.store.read() as c:
+        files.prime_page_references(c, refs)
+        for ref in refs:
+            assert files.readable_page_refs(c, api.app.state.auth, cara, ref) == {
+                "removed": True,
+                "label": "A page you can't open",
+            }, ref
 
 
 def test_page_checks_read_no_whole_page_table_and_a_fixed_number_of_statements(api):
