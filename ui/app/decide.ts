@@ -704,31 +704,9 @@ function decideBotAskHTML(st: DecState, it: NeedsEntry, asker: string): string {
   };
   return `${why}${choices.length ? `<div class="dc-choice-list">${choices.map(choice).join('')}</div>` : ''}
     <label class="dc-notes"><span>Write to ${esc(actorLabel(asker))}</span><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" placeholder="Something else, or tell it what's wrong"></textarea></label>
-    ${decideFilesHTML(st)}<div class="dc-send">${decideBtn('write', 'Send', false, ' data-dc-needs="#dc-other" disabled')}</div>
+    ${decideFilesHTML(st)}<div class="dc-send">${DEC_SENT === it.id ? `<span class="dc-sent" role="status">Sent to ${esc(actorLabel(asker))}</span>` : ''}${
+      decideBtn('write', 'Send', false, ' data-dc-needs="#dc-other" disabled')}</div>${decideHeldHTML(it, '#dc-other')}
     <div class="dc-acts dc-fixed">${decideBtn('dont-know', DEC_DONT_KNOW, false, busy)}${decideBtn('give-back', DEC_GIVE_BACK, false, busy)}</div>`;
-}
-/** Send under "Write to <bot>": a comment on the task written to the bot that asked, which wakes it; the question
-    stays open and on screen, with the box emptied. */
-async function decideWrite(st: DecState, it: NeedsEntry) {
-  const text = decideNote('#dc-other');
-  if (!text || st.busy) return;
-  const files = await decideFilesReady(st, it.id);
-  if (!files) { if (DEC === st) decidePaintSide(st); return; }
-  if (DEC !== st || decideCurrent(st)?.id !== it.id) return;
-  st.busy = true; st.error = ''; decidePaintSide(st);
-  try {
-    await post(`/v2/tasks/${encodeURIComponent(decideTaskId(it))}/comments`, {text: decideWithFiles(text, files), ask: decideRid(it)});
-    if (DEC !== st) return;
-    st.busy = false; st.files = [];
-    const box = $('.decide #dc-other') as HTMLTextAreaElement | null;
-    if (box) box.value = '';
-    decidePaintSide(st);
-    decideBar(`Sent to ${actorLabel(decideAsker(it))}`, null);
-  } catch (e) {
-    if (DEC !== st) return;
-    st.busy = false; st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not sent.');
-    decidePaintSide(st);
-  }
 }
 /** A file added or finished redraws only the files row, so the note keeps its focus, caret and text. */
 function decideFilesPaint(st: DecState) {
@@ -1225,7 +1203,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     }
     case 'reply': await decideReplySend(st, it, '#dc-reply'); return;
     case 'askback': await decideReplySend(st, it, '#dc-other'); return;
-    case 'write': await decideWrite(st, it); return;
+    case 'write': await decideReplySend(st, it, '#dc-other', decideRid(it)); return;
     case 'dont-know': await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, DEC_DONT_KNOW, ver), decideUndoAnswer); return;
     case 'give-back': await decideDo(st, it, 'Given back', () => taskAnswer(taskId, rid, DEC_GIVE_BACK, ver), decideUndoAnswer); return;
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;

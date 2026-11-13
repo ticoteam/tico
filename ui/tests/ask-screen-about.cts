@@ -138,7 +138,8 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A long question: a short heading, the full question once under it, never on the left; Ask back keeps it open.
+    // A long question: a short heading, the full question once under it, never on the left. A bot's question has
+    // Write to <bot> (ask-screen-bot-ask.cts): the text names the question and it stays open.
     {
       const {tasks, needs} = world();
       const {page, errors, posts} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}});
@@ -155,16 +156,11 @@ function world(over: {title?: string} = {}) {
         assert.equal(await card(page).locator('.dc-thing .dc-md strong').innerText(), 'load test', 'the task text is the background');
         assert.equal(await card(page).locator('[data-dc="go"]').count(), 0, 'no place named, no Go to');
         await card(page).locator('#dc-other').fill('What do you mean by validation?');
-        await card(page).locator('[data-dc="askback"]').click();
+        await card(page).locator('[data-dc="write"]').click();
         await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#dc-other')?.value);
-        assert.equal(posts.find(x => x.p === '/api/v2/tasks/t-2/comments')!.body.text, '@pm What do you mean by validation?');
-        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'Ask back answers nothing');
+        assert.deepEqual(posts.find(x => x.p === '/api/v2/tasks/t-2/comments')!.body, {text: 'What do you mean by validation?', ask: 'r2'});
+        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'Write to the bot answers nothing');
         assert.equal(await card(page).locator('.dc-full').innerText(), LONG, 'the question stays on screen');
-        // Send answer answers it as before.
-        await card(page).locator('#dc-other').fill('300 ms');
-        await card(page).locator('[data-dc="other"]').click();
-        await page.waitForFunction(() => document.querySelector('#need-card .dc-full') === null, null, {timeout: 5000});
-        assert.equal(posts.find(x => x.p === '/api/v2/tasks/t-2/asks/r2/answer')!.body.value, '300 ms');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }

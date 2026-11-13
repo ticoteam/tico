@@ -5,6 +5,8 @@ import type {Route} from 'playwright';
 //   then "I don't know, explain" and "Give it back" on one row with Skip;
 // - AC-13: "Write to <bot>" and Send on every bot question, with or without choices; Send lines up with the box's right
 //   edge; a sent text is a comment on the task naming the ask, and the question stays on screen, open;
+// - Send goes the way the reply box's does: a text a team rule stops says so and keeps the words, never "Sent"; and
+//   moving on while it is sent leaves the next question's box as typed;
 // - AC-4, AC-5: "I don't know, explain" and "Give it back" answer the ask with those words;
 // - a person's question keeps "Something else", which answers it.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -48,9 +50,11 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
         question(2, Q[1]!, null, 'bot:strategy', {why: 'Every bot plans its work from it.', details: null, recommend: null}),
         question(3, Q[2]!, ['Blue', 'Green'], 'human:ben', null),
       ];
+      // How the comment route answers: sent, or held by a rule that stops it; `gate` holds the answer back until released.
+      let commentHeld = false, gate: Promise<void> | null = null;
       const page = await browser.newPage({viewport, serviceWorkers: 'block'});
       page.on('pageerror', (error: Error) => errors.push(error.message));
-      await page.route('**/*', (route: Route) => {
+      await page.route('**/*', async (route: Route) => {
         const r = route.request(), url = new URL(r.url()), p = url.pathname;
         const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         if (url.origin !== 'http://tico-ui.test') return route.abort();
@@ -67,7 +71,11 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
           if (m) { needs = needs.filter(n => n.id !== m[2]); return json({task: brief(m[1]!, 'Task'), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
-          if (/^\/api\/v2\/tasks\/t\d\/comments$/.test(p)) return json({comment: {id: 'c1'}, comments: []});
+          if (/^\/api\/v2\/tasks\/t\d\/comments$/.test(p)) {
+            if (gate) await gate;
+            return json(commentHeld ? {held: {id: 'h1', outcome: 'blocked', state: 'held', author: 'human:ana', text: 'x',
+              rules: [{id: 'ru1', kind: 'internal', text: 'No talk of hosted pricing'}], can_withdraw: true}} : {comment: {id: 'c1'}, comments: []});
+          }
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
@@ -116,13 +124,27 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       await layout('Write to Reviewer 2');
       await page.screenshot({path: `/tmp/ask-screen-bot-ask-${label}.png`});
 
-      // AC-13: Send writes to the bot on the task, naming the ask; the question stays, the box empties.
+      // A team rule that stops the text: the screen says so and names the rule; the words stay; nothing says Sent.
       const send = dialog.locator('[data-dc="write"]');
       assert.equal(await send.isDisabled(), true, `${label}: Send waits for words`);
+      commentHeld = true;
+      await dialog.locator('#dc-other').fill('Is hosted pricing settled?');
+      await send.click();
+      const held = dialog.locator('[data-dc-held]');
+      await held.waitFor();
+      assert.equal(await held.locator('.dc-held-line').innerText(), 'Not sent: a rule stops it.', label);
+      assert.equal(await held.locator('.rh-rule').innerText(), 'No talk of hosted pricing', label);
+      assert.equal(await dialog.locator('.dc-sent').count(), 0, `${label}: a held text is not "Sent"`);
+      assert.equal(await dialog.locator('#dc-other').inputValue(), 'Is hosted pricing settled?', `${label}: the words stay`);
+      commentHeld = false;
+
+      // AC-13: Send writes to the bot on the task, naming the ask; the question stays, the box empties.
       await dialog.locator('#dc-other').fill('Why not show it on the first page instead?');
       await send.click();
-      await dialog.locator('.dc-bar:not([hidden])', {hasText: 'Sent to Reviewer 2'}).waitFor();
-      assert.deepEqual(writes, [{p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}], label);
+      await dialog.locator('.dc-sent', {hasText: 'Sent to Reviewer 2'}).waitFor();
+      assert.equal(await held.count(), 0, `${label}: the hold is gone once a text is sent`);
+      assert.deepEqual(writes.slice(1), [{p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}], label);
+      writes.splice(0, 1);
       assert.equal(await dialog.locator('.dc-q').innerText(), Q[0], `${label}: the question stays`);
       assert.equal(await dialog.locator('.dc-count').innerText(), '1 of 3', label);
       assert.equal(await dialog.locator('#dc-other').inputValue(), '', `${label}: the box is emptied`);
@@ -136,6 +158,29 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       assert.equal(await dialog.locator('.dc-choice').count(), 0, label);
       assert.equal(await dialog.locator('.dc-why').innerText(), 'Why it matters: Every bot plans its work from it.', label);
       await layout('Write to Strategy Owner');
+
+      // Send, then › before the answer comes: the next question's box keeps what is typed there, and nothing of the
+      // first text shows on it. On a phone the walk has no ›, so the desktop runs it.
+      if (label === 'desktop') {
+        let release: () => void = () => {};
+        gate = new Promise<void>(r => { release = r; });
+        await dialog.locator('#dc-other').fill('Two sentences, or one?');
+        await dialog.locator('[data-dc="write"]').click();
+        await dialog.locator('[data-dc="next"]').click();
+        await dialog.locator('.dc-q', {hasText: Q[2]!}).waitFor();
+        await dialog.locator('#dc-other').fill('typed on the next question');
+        const done = page.waitForResponse(r => r.url().endsWith('/api/v2/tasks/t2/comments'));
+        release();
+        await done;
+        gate = null;
+        await page.waitForTimeout(100);
+        assert.equal(await dialog.locator('#dc-other').inputValue(), 'typed on the next question', `${label}: the next box keeps its words`);
+        assert.equal(await dialog.locator('[data-dc-held], .dc-sent').count(), 0, `${label}: nothing of the first text shows here`);
+        assert.deepEqual(writes[2], {p: '/api/v2/tasks/t2/comments', body: {text: 'Two sentences, or one?', ask: 'r2'}}, label);
+        writes.splice(2, 1);
+        await dialog.locator('[data-dc="prev"]').click();
+        await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
+      }
 
       // AC-5: Give it back answers it with those words.
       await dialog.locator('[data-dc="give-back"]').click();

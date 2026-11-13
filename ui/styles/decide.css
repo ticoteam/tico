@@ -94,7 +94,7 @@
 .dc-choice-name{font-weight:600;overflow-wrap:anywhere}
 .dc-rec-tag{padding:2px 8px;border-radius:999px;background:var(--line);font-size:var(--t-sm);font-weight:600}
 .dc-choice-line{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
-.dc-send{display:flex;justify-content:flex-end}
+.dc-send{display:flex;align-items:center;justify-content:flex-end;gap:10px}
 .dc-send button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
 .dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
 .dc-acts.dc-fixed button{white-space:nowrap}
