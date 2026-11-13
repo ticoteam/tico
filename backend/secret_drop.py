@@ -64,16 +64,15 @@ def _placeholder(value: str) -> bool:
     return bool(_re(str(rules()["placeholder"]), "i").match(value))
 
 
-def _negative_full(value: str, keyed: bool = False) -> bool:
-    """Whether `value` is wholly an ordinary shape. After a strong context word (`keyed`) only a web address, an email
-    or a path from the root still counts: a hex string, a UUID or a relative path there is a key."""
-    return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()["negative_keyed" if keyed else "negative"]))
+def _negative_full(value: str, shapes: str = "negative") -> bool:
+    """Whether `value` is wholly one of the ordinary shapes in the rule list `shapes`."""
+    return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()[shapes]))
 
 
-def secretish(value: str, keyed: bool = False) -> bool:
+def secretish(value: str, shapes: str | None = "negative") -> bool:
     """A value that reads as a key, not a word: 6+ characters with a digit or a symbol, or mixed case past the first
-    letter, and no placeholder or ordinary shape (an address, an email, an id, a path; `keyed`: see _negative_full)."""
-    if len(value) < 6 or _placeholder(value) or _negative_full(value, keyed):
+    letter, and no placeholder or ordinary shape (an address, an email, an id, a path; `shapes`: see _shapes)."""
+    if len(value) < 6 or _placeholder(value) or (shapes is not None and _negative_full(value, shapes)):
         return False
     digit, symbol = _has(value, "[0-9]"), _has(value, "[^A-Za-z0-9]")
     mixed = _has(value[1:], "[A-Z]") and _has(value, "[a-z]")
@@ -85,9 +84,15 @@ def _has(text: str, cls: str) -> bool:
     return bool(_re(cls).search(text))
 
 
-def _strong(name: str) -> bool:
+def _shapes(rule: dict[str, Any], name: str) -> str | None:
+    """Which ordinary shapes still cancel a value after the context word `name`: every one with no strong word; after a
+    strong one only a web address, an email or a path from /, ~/, ./ or ../ (a hex string, a UUID or a relative path
+    there is a key); after a password word none, since a password can take any shape. pass and pw are plain English
+    too, so after a space they are not strong (spec Scope 4b: hex is negative only with no context word)."""
     word = _word(name) if name else None
-    return bool(word and word["strong"])
+    if not word or not word["strong"] or (rule.get("spaced") and word.get("spaced") is False):
+        return "negative"
+    return None if word["type"] == "password" else "negative_keyed"
 
 
 def _word(name: str) -> dict[str, Any] | None:
@@ -144,16 +149,16 @@ def _certain(text: str, rule: dict[str, Any]) -> list[Item]:
             rule["type"],
         )
         named = m.group(int(rule["name_group"])) if rule.get("name_group") else ""
-        strong = _strong(m.group(int(rule["word_group"])) if rule.get("word_group") else named)
+        shapes = _shapes(rule, m.group(int(rule["word_group"])) if rule.get("word_group") else named)
         if check == "not_placeholder" and _placeholder(value):
             continue
-        if check == "secretish" and not secretish(value, strong):
+        if check == "secretish" and not secretish(value, shapes):
             continue
         if check in ("env", "context"):
             word = _word(named)
-            if strong and (_placeholder(value) or _negative_full(value, keyed=True)):
+            if shapes != "negative" and (_placeholder(value) or (shapes and _negative_full(value, shapes))):
                 continue
-            if not strong and not secretish(value):
+            if shapes == "negative" and not secretish(value):
                 continue
             if word:
                 kind, kind_of, base = str(word["kind"]), word["type"], str(word["base"]) or base

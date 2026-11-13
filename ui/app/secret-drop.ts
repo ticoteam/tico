@@ -12,9 +12,9 @@
 interface SdRule {
   id: string; re: string; flags?: string; group: number[]; kind: string; type: string;
   name?: string; base?: string; service?: string; user?: number; name_group?: number; service_group?: number; check?: string;
-  word_group?: number;
+  word_group?: number; spaced?: boolean;
 }
-interface SdWord { re: string; kind: string; base: string; type: string; strong: boolean }
+interface SdWord { re: string; kind: string; base: string; type: string; strong: boolean; spaced?: boolean }
 interface SdRules {
   version: number; zero_width: string; services: {re: string; service: string}[]; certain: SdRule[]; words: SdWord[];
   placeholder: string; negative: string[]; negative_keyed: string[]; token: string; db_schemes: string;
@@ -43,15 +43,16 @@ function sdNormalize(rules: SdRules, text: string): string {
   return (text || '').normalize('NFKC').replace(sdRe(rules.zero_width), '');
 }
 const sdPlaceholder = (rules: SdRules, value: string): boolean => sdTest(rules.placeholder, value, 'i');
-/** Wholly an ordinary shape; after a strong context word (`keyed`) only an address, an email or a root path counts. */
-const sdNegativeFull = (rules: SdRules, value: string, keyed = false): boolean =>
-  (keyed ? rules.negative_keyed : rules.negative).some(p => sdFull(p, value));
+type SdShapes = 'negative' | 'negative_keyed' | null;
+/** Wholly one of the ordinary shapes in the rule list `shapes` (secret_drop._negative_full). */
+const sdNegativeFull = (rules: SdRules, value: string, shapes: 'negative' | 'negative_keyed' = 'negative'): boolean =>
+  rules[shapes].some(p => sdFull(p, value));
 // Character classes are ASCII on both sides: a letter outside ASCII counts as a symbol in Python and JavaScript.
 const sdHas = (text: string, cls: string): boolean => sdTest(cls, text);
 
 /** A value that reads as a key, not a word (secret_drop.secretish). */
-function sdSecretish(rules: SdRules, value: string, keyed = false): boolean {
-  if (value.length < 6 || sdPlaceholder(rules, value) || sdNegativeFull(rules, value, keyed)) return false;
+function sdSecretish(rules: SdRules, value: string, shapes: SdShapes = 'negative'): boolean {
+  if (value.length < 6 || sdPlaceholder(rules, value) || (shapes !== null && sdNegativeFull(rules, value, shapes))) return false;
   const digit = sdHas(value, '[0-9]'), symbol = sdHas(value, '[^A-Za-z0-9]');
   const mixed = sdHas(value.slice(1), '[A-Z]') && sdHas(value, '[a-z]');
   return digit || symbol || (mixed && value.length >= 10);
@@ -60,7 +61,12 @@ function sdWord(rules: SdRules, name: string): SdWord | null {
   const lowered = name.toLowerCase();
   return rules.words.find(w => sdTest(w.re, lowered)) || null;
 }
-const sdStrong = (rules: SdRules, name: string): boolean => !!name && !!sdWord(rules, name)?.strong;
+/** Which ordinary shapes still cancel a value after the context word `name` (secret_drop._shapes). */
+function sdShapes(rules: SdRules, rule: SdRule, name: string): SdShapes {
+  const word = name ? sdWord(rules, name) : null;
+  if (!word?.strong || (rule.spaced && word.spaced === false)) return 'negative';
+  return word.type === 'password' ? null : 'negative_keyed';
+}
 const sdWordOnly = (rules: SdRules, named: string): boolean => !!sdWord(rules, named)?.base;
 function sdServiceNear(rules: SdRules, text: string, start: number): string {
   let window = text.slice(Math.max(0, start - 80), start).toLowerCase();
@@ -98,13 +104,13 @@ function sdCertain(rules: SdRules, text: string, rule: SdRule): SdFound[] {
     const check = rule.check || '';
     let kind = rule.kind, base = rule.base || '', type = rule.type;
     const named = rule.name_group ? m[rule.name_group] || '' : '';
-    const strong = sdStrong(rules, rule.word_group ? m[rule.word_group] || '' : named);
+    const shapes = sdShapes(rules, rule, rule.word_group ? m[rule.word_group] || '' : named);
     if (check === 'not_placeholder' && sdPlaceholder(rules, value)) continue;
-    if (check === 'secretish' && !sdSecretish(rules, value, strong)) continue;
+    if (check === 'secretish' && !sdSecretish(rules, value, shapes)) continue;
     if (check === 'env' || check === 'context') {
       const word = sdWord(rules, named);
-      if (strong && (sdPlaceholder(rules, value) || sdNegativeFull(rules, value, true))) continue;
-      if (!strong && !sdSecretish(rules, value)) continue;
+      if (shapes !== 'negative' && (sdPlaceholder(rules, value) || (shapes !== null && sdNegativeFull(rules, value, shapes)))) continue;
+      if (shapes === 'negative' && !sdSecretish(rules, value)) continue;
       if (word) { kind = word.kind; type = word.type; base = word.base || base; }
     } else if (check === 'secretish' && named) {
       const word = sdWord(rules, named);

@@ -75,6 +75,7 @@ def test_a_hex_or_uuid_value_after_a_key_word_is_refused(api):
         ('token: ' + hexed, hexed),
         ('Authorization: Bearer ' + hexed, hexed),
         ('HEROKU_API_KEY=' + keyed, keyed),
+        ('Heroku API key: ' + keyed, keyed),
     ):
         r = api.post(f"/api/v2/threads/{dm['id']}/messages", json={'text': text}, headers=headers('ana-test'))
         assert r.status_code == 422 and r.json()['error']['code'] == 'looks_like_key', text
