@@ -3284,9 +3284,9 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None):
+    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
-        for a bot wakes it."""
+        for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if body.from_private:
@@ -3531,6 +3531,7 @@ def create_app(settings=None):
             readers=body.readers or (),
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
             unassigned=unassigned,
+            wake_refs=wake_refs,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if body.for_actor:

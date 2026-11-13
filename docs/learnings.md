@@ -110,18 +110,23 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 (on a shared bot, the caller's own branch, where POST files it), or else the newest one finished in the last day, or `{dream: null}`. `state` is `starting`, `dreaming`, `asking`
 (an open question to the requester: `questions` is `{message_id, text, mine}`), `done` or `stopped`.
 
-**Auto dream** is the same dream started without a click: the **Dream** step of the [Maintenance](maintenance.md) run, once a day, on by default. It starts one for each bot whose memory changed a lot since its last dream, and only then.
-A bot is due when it is active, keeps memory, has no open dream, its last dream of either kind started at least 48
-hours ago (a bot that never dreamed must be 48 hours old), and its memory since that dream's start, or 14 days back if
-that is later, changed at least 200 lines over at least 10 memory turns. Counted: `memory/`,
-and AGENTS.md, CLAUDE.md and AGENT.md, its name before the move to AGENTS.md (the runner reports only `memory/` and `knowledge/` today, so instruction-file
-changes do not count yet). A dream's own commits do not count, nor the commits of the retired Nightly memory tidy. At most "Most bots per run" start a
-run (three by default), most changed lines first; a restart does not start them twice.
-`backend/dream_auto.py` holds the rule.
+**Auto dream** is the same dream started without a click: the **Dream** step of the [Maintenance](maintenance.md) run, once a day, on by default. It queues one for each bot most in need of a dream.
+A bot is in need when it is active, keeps memory, has no dream job waiting and no open dream, its last dream of either
+kind started at least 48 hours ago (a bot that never dreamed must be 48 hours old), and its work since that dream's start,
+or 14 days back if that is later, is at least 10: its finished turns (a dream's own left out), plus five for each
+correction by a person (a thumbs-down on its work, an org rule that applies to it added, changed or retired by a person,
+and a commit to its memory or instruction files made outside any run). Memory diffs do not count. At most "Most bots per
+run" are queued a run (three by default), most need first; a bot whose dream is still waiting is skipped, so it never
+blocks another, and a restart does not queue them twice.
+Each dream's wake is held on the release policy for runs that can wait: Prefers warm, wait 48 hours, Skip at the
+deadline, Fork. It starts the first time the bot has been idle 45 to 55 minutes, on a fork of the bot's latest session,
+so it reads that cached conversation and leaves the original untouched; it reads the bot's other conversations since its
+last dream with the hub tools. If no warm window comes in 48 hours the job is skipped and its dream closed, so the bot
+can be in need again. `backend/dream_auto.py` holds the rule.
 
 The requester is the bot's nearest human manager (the first person above it in its reporting chain, if still on the
 roster), else the company owner. The task is filed as a dream, with a `dream.auto` event under the system actor and
-its reason ("Auto dream: 412 memory lines changed in 23 turns since 2026-10-28") as the first line of its body. The
+its reason ("Auto dream: 23 turns and 2 corrections from people since 2026-10-28") as the first line of its body. The
 panel shows that reason under the status line. Its instructions say nobody is waiting: the bot applies and commits what
 it can settle, and only if it needs the requester it asks at most three business questions in one message, then makes a
 second commit when they are answered. The requester did not start the dream, so the question is what they answer, and

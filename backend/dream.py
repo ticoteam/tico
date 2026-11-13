@@ -11,8 +11,9 @@ are anyone's to edit, but only this route writes that event. A hand-labelled tas
 still goes through ask ingest. A dream's question skips ask ingest (backend/ask_ingest.py): the person started it to
 be asked.
 
-An auto dream (backend/dream_auto.py) is the same task, started by the nightly run. Its marker is a `dream.auto` event
-under the system actor, and its body opens with the reason line the run wrote. Its requester is a person who did not
+An auto dream (backend/dream_auto.py) is the same task, queued by the Maintenance pass with its wake held on the release
+policy: it starts while the bot's cache is warm, on a fork of the bot's latest session. Its marker is a `dream.auto` event
+under the system actor, and its body opens with the reason line the pass wrote. Its requester is a person who did not
 start it; the question it asks that person goes through the same exemption.
 """
 
@@ -92,7 +93,8 @@ MODES = {
         "wait": "Then stop and wait for the answer.",
     },
     True: {
-        "waiting": "Nobody is waiting: this dream started on its own.",
+        "waiting": "Nobody is waiting: this dream started on its own, on a copy of your latest session, so what you "
+        "remember from it counts as read.",
         "settle": "Apply it as you go, and commit what you have settled before any question (step 7, but do not "
         "finish the task yet).",
         "wait": "If you asked, stop and wait for the answer, apply it, and make the second commit of step 7 before you "
@@ -296,15 +298,18 @@ def creator(store):
     return getattr(store, "dream_create", None)
 
 
-def start(c, who, owner, task_create, reason=None):
+def start(c, who, owner, task_create, reason=None, wake_refs=None):
     """File a dream as POST /api/v2/tasks files one: `who` gives `owner` the task, and the marker goes on it. `reason` is
-    an auto dream's line (the nightly run's), shown first in its body and kept on its `dream.auto` event; None is a
-    person's start. Returns (the task's row, None), or (None, what task_create answered) when an org rule held it."""
+    an auto dream's line (the Maintenance pass's), shown first in its body and kept on its `dream.auto` event; None is a
+    person's start. `wake_refs` go on the bot's wake: an auto dream's release policy, which holds it for a warm window
+    (backend/dream_auto.py). Returns (the task's row, None), or (None, what task_create answered) when an org rule held
+    it."""
     name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
     text = instructions(name, since(c, owner), auto=reason is not None)
     if reason is not None:
         text = f"{reason}\n\n{text}"
-    made = task_create(c, who, M.TaskCreate(title=TITLE, body=text, owner=owner, labels=[LABEL]), lint=False)
+    body = M.TaskCreate(title=TITLE, body=text, owner=owner, labels=[LABEL])
+    made = task_create(c, who, body, lint=False, **({"wake_refs": wake_refs} if wake_refs else {}))
     task = made.get("task") if isinstance(made, dict) else None
     if not task:
         return None, made  # held by an org rule: its answer, as POST /api/v2/tasks gives it
