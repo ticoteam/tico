@@ -162,7 +162,8 @@ conversation, which is twenty runs — far past the point anyone would want it s
 The owner reads asks on a phone between meetings. Ask on the task the work belongs to:
 
 ```text
-tico task ask <task-id> --to <owner> "<one sentence>" [--choices a,b] [--show page:<id>] --version N
+tico task ask <task-id> --to <owner> "<one sentence>" --why "<why it matters>" \
+  --choice "<Label>|<what happens>" --choice "<Label>|<what happens>" --recommend <Label> [--show page:<id>] --version N
 ```
 
 It is one line in their Needs you, with buttons. The task stays in its stage until they answer, and

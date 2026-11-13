@@ -9,6 +9,7 @@ from backend import ask_ingest as A
 from backend import ask_shape as S
 from backend import org_rules as OR
 from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.counsel import store_file
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     color_rule,
@@ -63,6 +64,7 @@ def refusals(api):
         ({"recommend": None}, S.NO_RECOMMEND),
         ({"recommend": "Loud"}, S.NOT_A_CHOICE),
         ({"choices": None, "details": None}, S.STRAY),
+        ({"choices": ["Plain", "plain"], "recommend": "plain"}, S.SAME),
     ],
 )
 def test_a_badly_shaped_question_to_a_person_is_refused_before_any_call_and_writes_nothing(ruled, change, said):
@@ -72,8 +74,9 @@ def test_a_badly_shaped_question_to_a_person_is_refused_before_any_call_and_writ
     r = ask(api, task, {**GOOD, **change})
     assert r.status_code == 409, r.text
     error = r.json()
-    assert error["error"] == "task_ask_shape" and error["detail"].startswith(said), r.text
-    assert S.NEEDS in error["detail"]
+    assert error["error"] == "task_ask_shape" and error["detail"].startswith(S.NEEDS) and said in error["detail"], (
+        r.text
+    )
     assert judge.calls == [], "refused in plain code: no model call"
     assert version(api, task) == task["version"], "nothing written"
     assert sql(api, "SELECT count(*) AS n FROM requirements WHERE line=?", (GOOD["line"],))[0]["n"] == 0
@@ -81,7 +84,30 @@ def test_a_badly_shaped_question_to_a_person_is_refused_before_any_call_and_writ
     assert refused["actor"] == "bot:ops"
 
 
-@pytest.mark.parametrize("ref", ["reports/launch-note.md", "bot-ops/drafts/note.md", "the draft in my repo"])
+def test_one_refusal_names_every_part_an_ask_is_missing(ruled):
+    """A bare ask is fixed in one rewrite, not refused once per missing part."""
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = ask(api, task, {"line": GOOD["line"], "choices": GOOD["choices"]})
+    detail = r.json()["detail"]
+    assert r.status_code == 409 and all(fix in detail for fix in (S.NO_WHY, S.NO_DETAIL, S.NO_RECOMMEND)), detail
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "reports/launch-note.md",
+        "bot-ops/drafts/note.md",
+        "the draft in my repo",
+        # A path dressed as an id (Review 1): only a page, file or task that is there opens.
+        "file:reports/reviews/x.html",
+        "page:reports/x.html",
+        "task:../x",
+        "file:/etc/passwd",
+        "page:file-not-there",
+        "task:no-such-task",
+    ],
+)
 def test_a_question_that_shows_what_a_person_cannot_open_is_refused(ruled, ref):
     api, judge = ruled
     task = task_for_ops(api)
@@ -92,11 +118,14 @@ def test_a_question_that_shows_what_a_person_cannot_open_is_refused(ruled, ref):
     assert judge.calls == []
 
 
-@pytest.mark.parametrize("ref", ["page:file-abc", "page:file-abc@2", "file:file-abc@1", "https://example.com/a"])
+@pytest.mark.parametrize(
+    "ref", ["page:{file}", "page:{file}@1", "file:{file}@1", "task:{task}", "https://example.com/a"]
+)
 def test_a_question_may_show_a_page_a_file_a_task_or_a_web_address(ruled, ref):
     api, _ = ruled
     task = task_for_ops(api)
-    r = ask(api, task, {**GOOD, "show": [ref]})
+    file_id, _ = store_file(api, "The launch note, both tones.", title="Launch note drafts")
+    r = ask(api, task, {**GOOD, "show": [ref.format(file=file_id, task=task["id"])]})
     assert r.status_code == 200, r.text
 
 

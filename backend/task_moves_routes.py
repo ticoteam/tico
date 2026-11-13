@@ -455,9 +455,23 @@ def register(
             if not H.is_human(target):
                 return
             name = H.actor_name(c, target) or "They"
-        detail = ask_shape.refusal(
-            name, why=body.why, choices=body.choices, details=body.details, recommend=body.recommend, shows=body.show
-        )
+
+            def exists(kind: str, ident: str) -> bool:
+                """A page or file by its id (pages are files), a task by its id or number."""
+                if kind == "task":
+                    sql = "SELECT 1 FROM tasks WHERE id=? OR CAST(number AS TEXT)=?"
+                    return c.execute(sql, (ident, ident)).fetchone() is not None
+                return c.execute("SELECT 1 FROM bot_files WHERE id=?", (ident,)).fetchone() is not None
+
+            detail = ask_shape.refusal(
+                name,
+                why=body.why,
+                choices=body.choices,
+                details=body.details,
+                recommend=body.recommend,
+                shows=body.show,
+                exists=exists,
+            )
         if detail:
             work(
                 request,
