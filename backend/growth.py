@@ -909,7 +909,9 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "adds a source")
-            return wrote(c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None), who))
+            return wrote(
+                c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None), who)
+            )
 
         return mutate(request, body, work)
 
@@ -920,14 +922,18 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "changes a source")
-            return wrote(c, who, source_update(
+            return wrote(
                 c,
-                who.actor,
-                sid,
-                {k: getattr(body, k) for k in body.model_fields_set},
-                catalog=getattr(request.app.state, "integrations", None),
-                who=who,
-            ))
+                who,
+                source_update(
+                    c,
+                    who.actor,
+                    sid,
+                    {k: getattr(body, k) for k in body.model_fields_set},
+                    catalog=getattr(request.app.state, "integrations", None),
+                    who=who,
+                ),
+            )
 
         return mutate(request, body, work)
 
