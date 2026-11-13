@@ -313,3 +313,90 @@ def test_who_may_change_the_later_task_sets_its_order_and_need_only_read_the_ear
     assert TR.relate(c, B, b7, spec, "after") is True
     refused(lambda: TR.relate(c, B, b7, spec, "related"), "identity")
     refused(lambda: TR.relate(c, B, spec, b7, "after"), "identity")
+
+
+def _cli_sent(monkeypatch):
+    """`tico` through clients/remotecli.py, as a bot runs it, with a Client that records what it would send."""
+    from clients import hubcli, remotecli
+
+    sent = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def features(self):
+            return {}
+
+        def get(self, path, **query):
+            sent.append(("GET", path, None))
+            return {"actor": "bot:builder", "kind": "bot"} if path == "me" else {}
+
+        def post(self, path, body=None, key=None, **kwargs):
+            sent.append(("POST", path, body))
+            return {"ok": True}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {"ok": True}
+
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+    return sent, lambda *argv: remotecli.run(hubcli.parser().parse_args(list(argv)))
+
+
+def test_tico_task_after_from_the_cli_sends_the_order_and_remove_takes_it_off(monkeypatch):
+    """#76's production check, Nov 13: `tico task after` answered "not supported by the remote API" (exit 2), because
+    the remote CLI never routed it to tico_task_after."""
+    sent, cli = _cli_sent(monkeypatch)
+    cli("task", "after", "42", "#40")
+    assert sent[-1] == ("POST", "tasks/42/relations", {"task": "40", "kind": "after", "remove": False})
+    cli("task", "after", "42", "40", "--remove")
+    assert sent[-1] == ("POST", "tasks/42/relations", {"task": "40", "kind": "after", "remove": True})
+
+
+def test_every_task_command_the_cli_parses_reaches_the_remote_api(monkeypatch, tmp_path):
+    """No `tico task <sub>` falls through to "not supported by the remote API" (`task after`, `task caps` and `task cap set` did). Each
+    is run with a placeholder for each positional; what the server would say does not matter here, only that the CLI
+    sends something. `task wait` runs in hubcli itself, in a person's shell (clients/hubcli_pipelines.py)."""
+    import argparse
+
+    from clients import hubcli
+    from clients.tico import APIError
+
+    _, cli = _cli_sent(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "X").write_text("x")
+    task = next(a for a in hubcli.parser()._actions if isinstance(a, argparse._SubParsersAction)).choices["task"]
+    subs = next(a for a in task._actions if isinstance(a, argparse._SubParsersAction)).choices
+
+    def leaves(words, parser):
+        """Each runnable command under `parser`, two-word ones (`task cap set`) included."""
+        nested = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not nested:
+            yield words + ["X" for a in parser._actions if not a.option_strings and a.nargs != argparse.SUPPRESS]
+        for action in nested:
+            for word, child in sorted(action.choices.items()):
+                yield from leaves(words + [word], child)
+
+    unsupported = []
+    for name, sub in sorted(subs.items()):
+        if name == "wait":
+            continue
+        for argv in leaves(["task", name], sub):
+            try:
+                cli(*argv)
+            except APIError as e:
+                if e.code == "unsupported":
+                    unsupported.append(" ".join(argv[1:]))
+            except (SystemExit, Exception):  # a placeholder the command cannot use: not a routing gap
+                pass
+    assert unsupported == []
+
+
+def test_tico_task_cap_set_from_the_cli_sets_a_cap_and_without_per_day_removes_it(monkeypatch):
+    sent, cli = _cli_sent(monkeypatch)
+    cli("task", "cap", "set", "bot:writer", "bot:manager", "--per-day", "3")
+    assert sent[-1] == ("PUT", "task-caps", {"sender": "bot:writer", "receiver": "bot:manager", "per_day": 3})
+    cli("task", "cap", "set", "bot:writer", "bot:manager")
+    assert sent[-1] == ("PUT", "task-caps", {"sender": "bot:writer", "receiver": "bot:manager", "per_day": None})
