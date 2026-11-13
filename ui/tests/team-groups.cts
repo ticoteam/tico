@@ -358,6 +358,11 @@ async function reportFallback(browser: Browser) {
   assert.deepEqual(await chips('Reports').allTextContents(), ['bea', 'Ben', 'Cara', 'Éli', 'Zoë'], "Ana's page: the same humans' order (Ben too, in his group on the chart)");
   assert.deepEqual((await chips('Bots').allTextContents()).filter(n => ['Scout', 'Builder', 'Analyst'].includes(n)), ['Scout', 'Builder', 'Analyst'],
     "and the same bots' order");
+  // Each bot chip is the avatar and the name, no harness mark; chips sit 16px apart, rows 8px apart (#299).
+  const botList = page.locator('#main section.card', {has: page.locator('h2', {hasText: /^Bots$/})}).locator('.chip-list');
+  assert.equal(await botList.locator('.rt').count(), 0, 'no harness mark on a bot chip');
+  assert.deepEqual(await botList.evaluate(el => { const s = getComputedStyle(el); return [s.display, s.flexWrap, s.rowGap, s.columnGap]; }),
+    ['flex', 'wrap', '8px', '16px']);
   // Two of Ana's reports shown in a group of their own: a drop below the other there swaps them in her order.
   await page.goto('https://tico-ui.test/#/updates');
   groups.push({id: 'campaigns', name: 'Campaigns', parent: ''});

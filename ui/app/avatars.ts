@@ -31,17 +31,6 @@ interface NamedBot {
   temp?: unknown;
   order?: unknown;
 }
-/** What runtimeTag reads of a bot: the harness, the model and the effort, resolved or as set. */
-interface RuntimeBot {
-  harness?: string | null | undefined;
-  resolved_runtime?: string | null | undefined;
-  runtime?: string | null | undefined;
-  resolved_model?: string | null | undefined;
-  model?: string | null | undefined;
-  resolved_effort?: string | null | undefined;
-  reasoning_effort?: string | null | undefined;
-  effort?: string | null | undefined;
-}
 /** A node of the team chart as its order reads it: `{kind: 'person', person}` or a bot row. */
 interface ChartNode extends NamedBot {
   kind?: unknown;
@@ -280,26 +269,6 @@ const TEMP_FLAG = '<span class="proj" title="temporary: expected to end">\u2691<
 const shownName = (e: NamedBot) => isTempBot(e)
   ? `${TEMP_FLAG}${esc((e.display_name || '').replace(TEMP_RE, ''))}`
   : esc(e.display_name || '');
-// The harness a bot runs on, as a small muted mark beside its name (ui/tool-icons.js). One rule: the
-// harness (runtime), never the provider or model; the model rides in the tooltip. No runtime, nothing shown.
-const RUNTIME_LABELS: Record<string, string> = {codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', antigravity: 'Antigravity', grok: 'Grok',
-  cursor: 'Cursor', musecode: 'Muse Code', pi: 'OpenRouter', openrouter: 'OpenRouter', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', 'grok-bot': 'Grok Bot', dots: 'Dots', muse: 'Muse'};
-const RUNTIME_MARKS: Record<string, string> = {codex: 'openai', claude: 'anthropic', gemini: 'google', antigravity: 'google', grok: 'xai',
-  grokbot: 'xai', 'grok-bot': 'xai', cursor: 'cursor', pi: 'openrouter', openrouter: 'openrouter'};
-// Hover and screen readers say harness, model and effort in words: "Claude Code Opus 5.5 Med", "Codex GPT 6.1 Sol High".
-// The model is modelWords (ui/app/format.ts) without a first word the harness already says; no effort, nothing after.
-const EFFORT_SHORT: Record<string, string> = {low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra'};
-function runtimeTag(e: RuntimeBot | null | undefined) {
-  const raw = String(e?.harness || e?.resolved_runtime || e?.runtime || '').trim().toLowerCase();
-  if (!raw || !e) return '';
-  const label = RUNTIME_LABELS[raw] || raw.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const words = modelWords(e.resolved_model || e.model).split(' ').filter(Boolean);
-  const model = (words[0] === label.split(' ')[0] ? words.slice(1) : words).join(' ');
-  const effort = EFFORT_SHORT[String(e.resolved_effort || e.reasoning_effort || e.effort || '').toLowerCase()] || '';
-  const says = [label, model, effort].filter(Boolean).join(' ');
-  const mark = window.toolIcons?.markup({logo_key: RUNTIME_MARKS[raw], name: label}) || '';
-  return `<span class="rt" role="img" aria-label="${esc(says)}" title="${esc(says)}">${mark}</span>`;
-}
 // A bot's `order` (its definition, Settings or registry) puts a pipeline in sequence without
 // numbering the names: siblings with an order come first, lowest first; the rest keep A-Z.
 // Renaming a bot never changes where it sits: the order field decides, the name does not.

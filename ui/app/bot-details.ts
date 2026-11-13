@@ -64,7 +64,7 @@ function botInfoRefresh(slug: string): void {
   const bot = botRow(slug), host = $('#bot-setup-card');
   if (!bot || !host || botLimited(bot)) return;
   const title = $('#bot-top h1');
-  if (title) title.innerHTML = `${shownName(bot)}${runtimeTag(bot)}${botBetaPill(bot)}`;
+  if (title) title.innerHTML = `${shownName(bot)}${botBetaPill(bot)}`;
   const boss = botRow(bot.reports_to);
   const fallback = bot.fallback as BotDetailsFallback | null | undefined;
   const values: Record<string, string | null> = {

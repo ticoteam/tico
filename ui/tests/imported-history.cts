@@ -125,9 +125,8 @@ declare function renderTree(): void;
     for (const name of ['groky','grok-scout','grok-poetry']) {
       assert.equal(await node('b:' + name).count(),1);
       assert.equal(await node('b:' + name).getAttribute('draggable'),'true');
-      // The harness mark reads harness, model and effort (#749); these rows name no model or effort.
-      assert.equal(await node('b:' + name).locator('.rt[aria-label="Grok Bot"]').count(),1);
-      assert.equal(await node('b:' + name).locator('.rt').getAttribute('title'),'Grok Bot');
+      // No harness or provider mark beside the name (#299).
+      assert.equal(await node('b:' + name).locator('.rt').count(),0);
     }
     assert.equal(await page.locator('#tree a.node[href="#/bot/dots"]').count(),1);
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/grok-org-chart.png'});

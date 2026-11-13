@@ -2,7 +2,7 @@
 //  - on the setup modal, before setup is done, the app's sidebar stays whole behind it (Finish setup, the pages and
 //    the team), What's new and the usage notice wait, and the phone's bottom bar is hidden; anywhere else, and once
 //    setup is done, everything is back;
-//  - once the team exists, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
+//  - once the team exists, a team of "Head of …" bots, each with its Setup pill and no harness mark, shows each whole name
 //    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
 // TICO_SCREENSHOT_DIR=<dir> saves both screens at desktop and phone width, dark and light.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -142,11 +142,12 @@ async function wizard(browser: import('playwright').Browser, theme: string) {
 }
 
 // Each bot row: what it shows, whether its name is drawn in more than one piece, and its tooltip.
-type Row = {name: string; pieces: number; title: string; setup: boolean; mark: boolean; visible: boolean};
+type Row = {name: string; pieces: number; title: string; setup: boolean; mark: boolean; visible: boolean; display: string; overflow: string};
 const rows = (page: Page) => page.locator('#tree a.node[data-org^="b:"]').evaluateAll(els => (els as HTMLElement[]).map((a): Row => {
   const nm = a.querySelector('.nm')!;
   return {name: nm.textContent!, pieces: nm.querySelectorAll('span:not(.proj)').length, title: a.title,
-          setup: !!a.querySelector('.tree-setup'), mark: !!a.querySelector('.rt'), visible: a.checkVisibility()};
+          setup: !!a.querySelector('.tree-setup'), mark: !!a.querySelector('.rt'), visible: a.checkVisibility(),
+          display: getComputedStyle(nm).display, overflow: getComputedStyle(nm).textOverflow};
 }));
 const expand = async (page: Page) => {
   // Each click draws the tree again, so open the first closed one until none is left.
@@ -161,6 +162,9 @@ const readable = (team: Row[], where: string) => {
     assert.equal(row.visible, true, `${row.name} ${where}`);
     assert.equal(row.title, row.name, 'the tooltip has the whole name');
     assert.equal(row.pieces, 0, `${row.name} is one piece of text ${where}`);
+    assert.equal(row.mark, false, `${row.name} has no harness mark ${where}`);
+    // A block box, so a name too long for its row ends in "…" instead of being cut.
+    assert.deepEqual([row.display, row.overflow], ['block', 'ellipsis'], `${row.name} can end in an ellipsis ${where}`);
   }
 };
 
@@ -177,7 +181,19 @@ async function created(browser: import('playwright').Browser, theme: string) {
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
   assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);
-  assert.ok(heads.every(row => row.setup && row.mark), 'the harness mark and the Setup pill stay');
+  assert.ok(heads.every(row => row.setup && !row.mark), 'the Setup pill stays; no harness mark');
+  // A name longer than its row ends in "…", 8px (the row's gap) before its count. The row is redrawn with a count in
+  // place of the Setup pill, which keeps a margin of its own.
+  const cut = await page.locator('#tree a.node[data-org="b:head-of-product"]').evaluate(a => {
+    const nm = a.querySelector<HTMLElement>('.nm')!;
+    nm.textContent = 'Head of Product and Everything Else Besides That Nobody Else Does';
+    a.querySelector('.tree-setup')?.remove();
+    const count = Object.assign(document.createElement('span'), {className: 'cnt', textContent: '3'});
+    a.append(count);
+    return {cut: nm.scrollWidth > nm.clientWidth, row: a.scrollWidth <= a.clientWidth,
+            gap: Math.round(count.getBoundingClientRect().left - nm.getBoundingClientRect().right)};
+  });
+  assert.deepEqual(cut, {cut: true, row: true, gap: 8}, 'a long name is cut with an ellipsis inside its row, 8px before its count');
   assert.equal(await page.locator('#tree .nm-split, #tree .nm-lead').count(), 0, 'no name is split at shared words');
   await shot(page, `created-desktop-${theme}`);
   assert.deepEqual(errors, []);
