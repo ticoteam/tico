@@ -165,6 +165,8 @@
   .tasks-page.has-rail > .pm-rail { position: fixed; z-index: 2; top: 0; right: 0; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); width: var(--rail-w); }
   /* The board's Ask bar stays over the board's column, clear of the rail and its box (it still asks the stage's holder). */
   .tasks-page.has-rail .pa-host { right: var(--rail-w); }
+  /* While a box has the keyboard the bottom bar hides; the rail runs to the window's edge. */
+  body.mobile-composer-focus .tasks-page.has-rail > .pm-rail { bottom: 0; }
 }
 @media (max-width: 600px) {
   .tasks-page.has-rail { display: block; }

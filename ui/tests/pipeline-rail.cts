@@ -181,14 +181,25 @@ function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
         const before = await placed(page), rail = await box(page, '#task-rail');
         const moved = await page.evaluate(() => {
           const pane = document.querySelector<HTMLElement>('#tasks-pane')!;
+          // The board scrolls in the pane, the window or its own columns, depending on the layout.
+          const cols = document.querySelector<HTMLElement>('#task-body .pv-cols');
           pane.scrollTop = 2000; window.scrollTo(0, 2000);
-          return pane.scrollTop + window.scrollY;
+          if (cols) cols.scrollTop = 2000;
+          return pane.scrollTop + window.scrollY + (cols?.scrollTop ?? 0);
         });
         assert.ok(moved > 200, `${where}: the board scrolls: ${moved}`);
         const after = await placed(page), railAfter = await box(page, '#task-rail');
         assert.deepEqual(after.composer, before.composer, `${where}: the box stays in place: ${JSON.stringify({before, after})}`);
         assert.equal(Math.round(railAfter.top), Math.round(rail.top), `${where}: the rail stays in place`);
         assertPlaced(after, `${where}, board scrolled`);
+        if (viewport.width <= 760) {
+          // Typing hides the bottom bar: the rail runs to the window's edge and its box stays reachable.
+          await page.locator('#task-rail .thv-composer textarea').focus();
+          await page.waitForFunction(() => document.body.classList.contains('mobile-composer-focus'));
+          const typing = await placed(page);
+          assert.ok(Math.abs(typing.rail.bottom - typing.win.h) <= 1, `${where}: the rail reaches the window's bottom while typing: ${JSON.stringify(typing)}`);
+          assert.deepEqual(typing.reach, {box: true, last: true}, `${where}: the box is reachable while typing`);
+        }
         assert.deepEqual(errors, [], where);
         await page.close();
       }
