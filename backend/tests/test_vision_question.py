@@ -114,6 +114,20 @@ def test_a_question_back_leaves_the_question_open_and_nothing_is_saved(api):
         assert not S.vision(c, editor=True)
 
 
+def test_a_vision_written_without_spaces_is_saved_and_a_scrap_of_it_is_not(api):
+    # Japanese puts no spaces between words: the whole vision is one "word" to split(), so its characters count.
+    vision = "小さなチームが毎日もっと速く届けられるようにする"
+    goal_manager(api, level=2)
+    sync(api)
+    task = vision_row(api)
+    as_bot(api, "strategy-owner")
+    say(api, task["id"], vision)
+    post(api, "strategy/vision", {"task": task["id"], "vision": "チーム"}, token=BOT, expected=422)
+    assert post(api, "strategy/vision", {"task": task["id"], "vision": vision}, token=BOT)["vision"] == vision
+    with api.app.state.store.read() as c:
+        assert S.vision(c, editor=True) == vision and H.task(c, task["id"])["status"] == "closed"
+
+
 def test_only_the_strategy_owner_saves_and_only_on_the_vision_question(api):
     goal_manager(api, level=2)
     sync(api)

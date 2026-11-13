@@ -1042,8 +1042,15 @@ def _owner_wrote(c, task_id, person):
 
 
 # A vision the Strategy Owner saves is at least this many of the owner's words: a scrap of a question they asked back
-# ("a vision") is not one.
+# ("a vision") is not one. Chinese, Japanese, Thai, Lao, Khmer and Burmese put no spaces between words, so there a
+# vision counts its characters instead.
 VISION_MIN_WORDS = 3
+VISION_MIN_UNSPACED = 6
+_UNSPACED = re.compile(r"[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+
+def _vision_long_enough(clean: str) -> bool:
+    return len(clean.split()) >= VISION_MIN_WORDS or len(_UNSPACED.findall(clean)) >= VISION_MIN_UNSPACED
 
 
 def save_asked_vision(c, actor, task_id, text):
@@ -1068,7 +1075,7 @@ def save_asked_vision(c, actor, task_id, text):
     if not row or not task or task["status"] != "open":
         raise Problem("not_found", f"No open vision question of the {name} on that task", 404)
     clean = " ".join(str(text or "").split())
-    if len(clean.split()) < VISION_MIN_WORDS or _words(clean) not in _owner_wrote(c, task_id, row["owner"]):
+    if not _vision_long_enough(clean) or _words(clean) not in _owner_wrote(c, task_id, row["owner"]):
         who = H.actor_name(c, row["owner"]) or "the owner"
         raise Problem(
             "invalid",

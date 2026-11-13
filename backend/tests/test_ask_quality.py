@@ -68,3 +68,20 @@ def test_the_decide_readout_names_each_bots_share_and_the_guard(gate):  # noqa: 
     assert (row["asks"], row["badly_written"], row["share"], row["stuck"]) == (1, 1, 1.0, 0)
     assert "badly written (100%)" in out["text"] and "Target: missed by" in out["text"]
     assert "Guard: every refused bot asked again within a day" in out["text"]
+
+
+def test_a_thumbs_down_counts_in_the_window_its_badly_written_reason_was_given(gate):  # noqa: F811
+    api, _, _ = gate
+    now = datetime.now(timezone.utc)
+    with api.app.state.store.transaction() as c:
+        made, req = ask(c, 1)
+        H.task_thumbs(c, "human:ben", made, req, False, "Badly written: no choices")
+        # The 👎 was made ten days ago; its reason was set (or changed) to "Badly written" an hour ago.
+        c.execute(
+            "UPDATE feedbacks SET created_at=?, updated_at=? WHERE subject_type='ask'",
+            (stamp(now - timedelta(days=10)), stamp(now - timedelta(hours=1))),
+        )
+        c.execute("UPDATE requirements SET created_at=? WHERE id=?", (stamp(now - timedelta(days=2)), req))
+    with api.app.state.store.read() as c:
+        [row] = Q.per_bot(c, stamp(now - timedelta(days=7)), stamp(now + timedelta(minutes=1)))
+    assert (row["asks"], row["badly_written"]) == (1, 1)
