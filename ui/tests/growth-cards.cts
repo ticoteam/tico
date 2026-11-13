@@ -578,6 +578,13 @@ async function shot(page: Page, name: string) {
       await page.waitForFunction(() => (document.querySelector('dialog.gr-dlg[open] [name="f_spend"]') as HTMLInputElement | null)?.value === 'Spend');
       await con.locator('[name="f_new_customers"]').fill('signups');
       await shot(page, 'desktop-growth-connect');
+      // A file over the 1,000,000 characters one run takes is refused before any source is made.
+      await con.locator('[name="file"]').setInputFiles({name: 'big.csv', mimeType: 'text/csv', buffer: Buffer.from('month,channel,Spend,signups\n' + 'x'.repeat(1_000_001))});
+      await con.getByRole('button', {name: 'Connect and fill 12 months'}).click();
+      await con.locator('[data-error]:not([hidden])').waitFor();
+      assert.match(await con.locator('[data-error]').innerText(), /^That file is over 1 MB/);
+      assert.equal(fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources').length, 0, 'nothing made for a file too big');
+      await con.locator('[name="file"]').setInputFiles({name: 'signups.csv', mimeType: 'text/csv', buffer: Buffer.from(csv)});
       // The file is refused once: the source is made, the dialog says so, and saving again changes that source.
       SYNC.rowsFail = 1;
       await con.getByRole('button', {name: 'Connect and fill 12 months'}).click();

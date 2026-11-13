@@ -113,3 +113,14 @@ def test_a_number_typed_before_origins_were_kept_counts_as_typed(api):
     view = growth(api, f"?month={M}")
     assert card(view, "spend")["origin"]["typed"] == {"count": 1, "by": None, "at": None, "quality": "actual"}
     assert card(view, "kept_d30")["origin"] is None
+
+
+def test_the_cards_never_read_a_sources_stored_file(api, monkeypatch):
+    """A source keeps its last file (up to 1 MB) to run again; the cards read each source's name and health only."""
+    acme(api)
+    seen = []
+    view = GS.view
+    monkeypatch.setattr(GS, "view", lambda row: seen.append(set(row)) or view(row))
+    spend = card(growth(api, f"?month={M}"), "spend")["origin"]
+    assert spend["synced"][0]["source"] == "Spend sheet"
+    assert seen and all("last_payload" not in keys for keys in seen)

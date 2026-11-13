@@ -214,7 +214,7 @@ class Ctx:
         def make():
             from . import growth_sync as GS
 
-            rows = H._rows(self.c.execute("SELECT * FROM gtm_sources"))
+            rows = H._rows(self.c.execute(f"SELECT {GS.listed(self.c)} FROM gtm_sources"))  # never the stored files
             return {
                 r["id"]: {**GS.view(r), "owner_ref": r.get("owner_ref"), "retired": bool(r.get("retired_at"))}
                 for r in rows
