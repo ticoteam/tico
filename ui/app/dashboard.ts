@@ -274,7 +274,14 @@ async function pageDashboard(place: string, {month = ''}: {month?: string} = {})
     taskFeedFailed(state.feed, ticket);
     if (DASH !== state) return;
     if (kept) delete S.lastRead.places[key];
-    $('#dash-grid').innerHTML = `<p class="empty">${esc(!team ? errorMessage(e, '') : errorStatus(e) === 404 ? 'No such team' : errorStatus(e) === 403 ? 'This team page is not shared with you' : errorMessage(e, ''))}</p>`;
+    // A place that fails says so in plain words, never the server's text (a 404's "No such place: places are ..."),
+    // and offers to read it again.
+    const words = team && errorStatus(e) === 404 ? 'No such team' : team && errorStatus(e) === 403 ? 'This team page is not shared with you' : '';
+    const grid = $('#dash-grid');
+    grid.innerHTML = words ? `<p class="empty">${esc(words)}</p>`
+      : `<p class="empty dash-failed" role="alert">This page couldn't load. <button type="button" class="linkish" data-dash-retry>Try again</button></p>`;
+    const retry = grid.querySelector<HTMLButtonElement>('[data-dash-retry]');
+    if (retry) retry.onclick = () => { void pageDashboard(place, {month}); };
     return;
   }
   if (!Array.isArray(view?.pins)) view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};

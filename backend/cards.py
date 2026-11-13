@@ -1459,7 +1459,27 @@ def place_timing(timings):
     return ", ".join(entries)
 
 
+def view_home(ctx):
+    """A bot's read-only view (backend/app_view.py) opening My dashboard (person:me, a person's own page): one card of
+    the bot's own open tasks, headed with its name, which nobody arranges."""
+    pin = {**default_pins("person", "")[0], "place": "person:me", "size": "large"}
+    pin["card"] = {**pin["card"], "template": "my_tasks", "settings": json.dumps({"count": 10})}
+    view = pin_view(ctx, pin, {})
+    view["card"]["heading"] = f"{H.actor_name(ctx.c, ctx.who.actor)}'s tasks"
+    return {
+        "place": "person:me",
+        "kind": "person",
+        "saved": False,
+        "can_edit": False,
+        "pins": [{**view, "position": 0}],
+    }
+
+
 def place_view(ctx, place, timings=None):
+    if ctx.who.view and str(place or "").strip() == "person:me":
+        if timings is not None:
+            timings.update(prep=0.0, cards=0.0, kinds={})
+        return view_home(ctx)
     started = time.perf_counter()
     kind, ident = require_view(ctx, place)
     place = canonical(kind, ident)
