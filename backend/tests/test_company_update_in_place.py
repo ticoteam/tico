@@ -11,6 +11,7 @@ deploy does, and compares what a person would notice. Only HQ's machines API is 
 release tag when one ships, and keep the older ones: an install may skip releases.
 """
 
+import copy
 import gzip
 import json
 import shutil
@@ -143,6 +144,19 @@ def seen(path):
     }
 
 
+def intended(before):
+    """The company as this release means to leave it: the one change an update makes on purpose. The Finance Owner sees
+    the books by default, so the owner's open "Let the Finance Owner see the books" to-do is closed for them
+    (backend/bookkeeper.py grant_view) and leaves their Needs you."""
+    from backend.bookkeeper import VIEW_TITLE
+
+    after = copy.deepcopy(before)
+    for task in after["tasks"].values():
+        if task["title"] == VIEW_TITLE and task["status"] == "open":
+            task.update(status="closed", stage=task["stage"].rsplit("-", 1)[0] + "-closed", asks=[])
+    return after
+
+
 def changes(before, after, path=""):
     """Every difference between two readings, one plain line each."""
     if isinstance(before, dict) and isinstance(after, dict):
@@ -178,8 +192,12 @@ class Company:
         self.settings.company_file_data = starter.pack(employees_file(CHARTS["0.6 hotmic"]), starter.MAX_PACKED)
         self.settings.company_file_configured = True
         self.before = seen(self.db)
+        self.expected = intended(self.before)  # what the update may change on purpose
         # What the person had waiting on the last release, as its own page listed it.
         self.needs_you = set(json.loads((FIXTURES / f"company-{release}.json").read_text())["needs_you"])
+        from backend.bookkeeper import VIEW_TITLE
+
+        self.needs_you_after = self.needs_you - {VIEW_TITLE}  # closed for the owner by the update (intended)
         shared = next(m for m in self.before["cloud"] if m[0] == "_shared")
         self.hq = FakeHQ()
         self.hq.machines[shared[3]] = {
@@ -252,9 +270,9 @@ def test_a_company_updated_in_place_is_the_company_it_was(company):
     a restart). Nothing a person set or a bot was doing changes; the only work it may add is named here."""
     total, titles = company.start()
     first = company.after()
-    found = changes(company.before, first)
+    found = changes(company.expected, first)
     assert not found, "The update changed the company:\n  " + "\n  ".join(found)
-    assert titles == company.needs_you and total == len(titles), (
+    assert titles == company.needs_you_after and total == len(titles), (
         f"Needs you held {sorted(company.needs_you)} before the update and holds {sorted(titles)} after it"
     )
     # No machine is made, stopped or deleted for an update: the shared computer the company had is the one it has.
@@ -326,7 +344,7 @@ def test_a_bot_whose_template_the_new_release_no_longer_ships_keeps_working(comp
     company.settings.catalog_dir = catalog
     company.start()
     company.start()
-    found = changes(company.before, company.after())
+    found = changes(company.expected, company.after())
     assert not found, "Starting without three templates changed the company:\n  " + "\n  ".join(found)
     with TestClient(create_app(company.settings)) as api:
         for slug in ("growth-manager", "legal-owner", "creators-product-owner"):
