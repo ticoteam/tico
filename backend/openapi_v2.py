@@ -2649,7 +2649,7 @@ SCHEMAS = {
         human_id={
             "type": ["string", "null"],
             "description": "The task's Human: the person accountable for it whoever owns it, first on its ladder (asks "
-            "that name nobody go to them). Set with `human` on create and update",
+            "that name nobody go to them). Set with `human` on create and update; left out of a brief row when none",
         },
         requester_name={"type": "string", "description": "Display name of requester"},
         filer={
