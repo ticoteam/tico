@@ -456,6 +456,8 @@ KEEP = (
             "learnings",
             "lens_runs",
             "learned_entries",
+            "assistant_shares",  # who a person lets view their Assistant chat: a choice, it sends nothing
+            "assistant_share_settings",
             "linked_docs",
             "live_meeting_chat",
             "live_meeting_chat_routes",
