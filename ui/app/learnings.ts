@@ -75,7 +75,14 @@ async function learnShowNight(n: LearnNightSummary, load: number): Promise<void>
 // starts at one x. Runs again once the fonts are in: measured in the fallback font, a name would come out short.
 function learnFitNames(box: Element): void {
   for (const g of box.querySelectorAll<HTMLElement>('.lrn-grp')) {
-    const w = Math.max(0, ...[...g.querySelectorAll<HTMLElement>('.lrn-subj .nm')].map(n => { const r = document.createRange(); r.selectNodeContents(n); return Math.ceil(r.getBoundingClientRect().width); }));
+    // Unwrapped while measured: a stacked (narrow) layout wraps names, and the width must not depend on the layout.
+    const w = Math.max(0, ...[...g.querySelectorAll<HTMLElement>('.lrn-subj .nm')].map(n => {
+      n.style.whiteSpace = 'nowrap';
+      const r = document.createRange(); r.selectNodeContents(n);
+      const width = Math.ceil(r.getBoundingClientRect().width);
+      n.style.whiteSpace = '';
+      return width;
+    }));
     g.style.setProperty('--lrn-nm', `${Math.min(Math.max(w, 80), 280)}px`);
   }
 }

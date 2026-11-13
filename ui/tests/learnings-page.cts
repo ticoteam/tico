@@ -123,6 +123,23 @@ const rows = (page: Page) => page.evaluate(() => [...document.querySelectorAll('
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // Opened stacked (800px), then widened: the columns are measured from each name's own width, not its wrapped one, so
+    // the wide layout matches a night opened wide.
+    {
+      const tag = 'night 800 to 1440';
+      const {page, errors} = await open(browser, {width: 800, maint: {status: 200, can_change: true, learn: true}, nights: true});
+      await page.locator('.lrn-subj').first().waitFor();
+      await page.evaluate(() => document.fonts.ready);
+      await page.waitForTimeout(50);
+      await page.setViewportSize({width: 1440, height: 860});
+      const [bots, docs, market] = await rows(page);
+      assert.equal(bots!.some(r => r.cut), false, tag + ': no bot name is cut');
+      assert.equal(new Set(bots!.map(r => Math.round(r.first.x))).size, 1, tag + ': the second column starts at one x');
+      assert.ok(docs![0]!.first.x - docs![0]!.nm.x < 150, tag + ': a short section stays narrow');
+      assert.ok(market![0]!.first.x - market![0]!.nm.x >= 280, tag + ': a long name gets the full 280px');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
     console.log('learnings-page: ok');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
