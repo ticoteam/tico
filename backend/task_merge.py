@@ -364,7 +364,7 @@ def merge(conn, actor, task_id, into_id, *, owner=None, reassign=None, mover=Non
         H.refuse(conn, actor, "kind", "The merged task is kept by one of the two owners")
     if owner and owner != b.get("owner_id"):
         if reassign is None:
-            H.refuse(conn, actor, "kind", "A new owner needs the hand-over checks")
+            raise H.Refused("kind", "A new owner needs the hand-over checks")
         reassign(conn, b["id"], owner)
         b = H.task(conn, b["id"])
     for row in (a, b):
