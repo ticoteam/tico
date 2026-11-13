@@ -19,12 +19,13 @@ docs/dev/pipelines-v3-build.md.
 """
 
 import copy
+import json
 import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import access as Access
-from . import hubdb_core, pipeline_rights, source_actions, task_engine
+from . import hubdb_core, pipeline_rights, source_actions, stage_pick, task_engine
 from . import pipeline_presets_more as more
 from . import pipeline_seats as S
 from . import task_requirements as R
@@ -52,6 +53,7 @@ STAGE_FIELDS = (
     "expected_minutes",
     "expected_bots_only",
     "on_enter",
+    "pick",
 )
 REQUIREMENT_FIELDS = (
     "kind",
@@ -432,7 +434,19 @@ def _stage_out(conn: "sqlite3.Connection", row: Row) -> Row:
         "expected_bots_only": bool(row.get("expected_bots_only")),
         "on_enter": _loads(row.get("on_enter")) or {},
         "requirements": [_requirement_out(r) for r in R.on_stage(conn, row["id"])],
+        **_pick_out(conn, row),
     }
+
+
+def _pick_out(conn: "sqlite3.Connection", row: Row) -> Row:
+    """A stage's "One of several" (backend/stage_pick.py): `pick` with the bots, Take turns or Random, Limit each,
+    Prefer and whether the pick becomes the task's owner, each bot's model family, and `pick_next`, who gets the next
+    task in one sentence. A stage with one owner has neither."""
+    pick = stage_pick.config(row)
+    if not pick:
+        return {}
+    families = {bot: stage_pick.family_name(stage_pick.family(conn, bot)) for bot in pick.bots}
+    return {"pick": {**stage_pick.view(pick), "families": families}, "pick_next": stage_pick.next_line(conn, row)}
 
 
 def read(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
@@ -553,6 +567,7 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
         "name": name,
         "purpose": _text(item.get("purpose"), f"The purpose of {label}", problems),
         "owner": _ref(item.get("owner"), f"The owner of {label}", problems),
+        "pick": item.get("pick"),  # checked with the owner (`_check_pick`)
         "by_hand": _flag(item.get("by_hand"), f"Tasks leave by hand on {label}", problems),
         "requests_move_on": _flag(item.get("requests_move_on"), f"A person's request moves on, on {label}", problems),
         "task_limit": _count(item.get("task_limit"), f"The limit on {label} is a whole number above zero.", problems),
@@ -796,6 +811,30 @@ def _open_tasks(conn: "sqlite3.Connection", stage_id: str) -> int:
     )
 
 
+def _check_pick(conn: "sqlite3.Connection", stage: Row, label: str, problems: list[str]) -> None:
+    """A stage whose owner is "One of several": its pick, checked and put in its stored shape. A record that leaves the
+    pick out keeps the one the stage has (an older client that does not know it)."""
+    raw = stage.get("pick")
+    if raw is None and stage.get("id"):
+        raw = stage_pick.view(stage_pick.config(task_engine.stage(conn, stage["id"])) or stage_pick.Pick(()))
+    found = stage_pick.normalize(raw, label, problems)
+    if found is None:
+        return
+    for bot in found["bots"]:
+        if not is_bot(bot) or not _actor_exists(conn, bot):
+            problems.append(f"{label} picks from bots only, and {bot} is not one here.")
+    stage["pick"] = found
+
+
+def _picks(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Row | None]:
+    """Each work stage's pick as stored, by stage id: what a bot may read and not change."""
+    return {
+        str(s["id"]): (stage_pick.view(p) if (p := stage_pick.config(s)) else None)
+        for s in task_engine.stages(conn, pipeline_id)
+        if s["kind"] == "work"
+    }
+
+
 def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     """What is wrong with a parsed record, against the database."""
     problems: list[str] = []
@@ -855,8 +894,12 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
             if found and (found["pipeline_id"] != pid or found["kind"] != "work"):
                 problems.append(f"Stage {stage['id']} is not a work stage of this pipeline.")
         owner = stage["owner"]
-        if owner and owner != ASSIGNEE and not _actor_exists(conn, owner):
+        if owner == stage_pick.PICK:
+            _check_pick(conn, stage, label, problems)
+        elif owner and owner != ASSIGNEE and not _actor_exists(conn, owner):
             problems.append(f"The owner of {label} must be a bot, a person or the task's assignee, not {owner}.")
+        else:
+            stage["pick"] = None
         if position == 0 and stage["task_limit"]:
             problems.append(f"The first stage of a pipeline has no limit ({label}).")
         if stage["requests_move_on"] and not stage["by_hand"]:
@@ -1092,14 +1135,15 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             stage["expected_minutes"],
             1 if stage["expected_bots_only"] else 0,
             H._dump(stage["on_enter"]),
+            json.dumps(stage["pick"], sort_keys=True) if stage.get("pick") else None,
         )
         sid = stage["id"]
         old = old_rows.get(sid) if sid else None
         if old:
             conn.execute(
                 "UPDATE stages SET position=?, name=?, purpose=?, owner=?, by_hand=?, requests_move_on=?, "
-                "task_limit=?, expected_minutes=?, expected_bots_only=?, on_enter=?, updated_at=?, retired_at=NULL "
-                "WHERE id=?",
+                "task_limit=?, expected_minutes=?, expected_bots_only=?, on_enter=?, pick=?, updated_at=?, "
+                "retired_at=NULL WHERE id=?",
                 (*values, ts, sid),
             )
             limit, was = stage["task_limit"], old.get("task_limit")
@@ -1109,8 +1153,8 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             sid = sid or _free_stage_id(conn, f"{pid}-{_slug(stage['name'])}", taken)
             conn.execute(
                 "INSERT INTO stages (position, name, purpose, owner, by_hand, requests_move_on, task_limit, "
-                "expected_minutes, expected_bots_only, on_enter, id, pipeline_id, kind, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
+                "expected_minutes, expected_bots_only, on_enter, pick, id, pipeline_id, kind, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
                 (*values, sid, pid, ts, ts),
             )
         loosened = _write_requirements(conn, by, sid, stage["requirements"], ts) or loosened
@@ -1219,6 +1263,12 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
+    if is_bot(by):
+        # Who a stage picks from is a person's to set: a bot reads it and cannot change it.
+        had = _picks(conn, str(existing["id"])) if existing else {}
+        for stage in parsed["stages"]:
+            if stage.get("pick") != had.get(str(stage.get("id") or "")):
+                _refuse(conn, by, "task_settings", f"Only a person changes who {stage['name']} picks from.")
     before = read(conn, existing["id"]) if existing else None
     ts = _h().now()
     pid = _write_pipeline(conn, parsed, existing, ts)

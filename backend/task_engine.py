@@ -19,7 +19,7 @@ import logging
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
-from . import hubdb_core, stage_effects, task_effects
+from . import hubdb_core, stage_effects, stage_pick, task_effects
 from . import task_requirements as R
 from . import task_wakes, validate_gate
 from .hubdb_core import KEEPER as SYSTEM
@@ -285,6 +285,11 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
         return current
     if stage_row.get("owner") == "assignee":
         return assignee
+    if stage_row.get("owner") == stage_pick.PICK:
+        # One of several: a pick that becomes the task's owner keeps the assignee; otherwise the stage has nobody
+        # until the pick (`_pick`) gives it one.
+        pick = stage_pick.config(stage_row)
+        return assignee if pick and pick.owns_task else None
     return stage_row.get("owner") or None
 
 
@@ -503,9 +508,18 @@ def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
 
     if row["status"] != "open" or row.get("snooze") or (row["stage"].get("by_hand") and not handed_over(conn, row)):
         return None, ""
+    visit = _part(row, "visit")
+    if not row.get("owner_id") and visit.get("pick_state") == stage_pick.FULL:
+        return None, ""  # it waits for a free bot of the stage's list: nobody is woken
     waits = W.of(conn, row)
     target = W.turn(conn, row, waits, paused=True)
     if target and not row.get("owner_id") and target == _part(row, "pipeline").get("manager_id"):
+        if visit.get("pick_state") == stage_pick.NOBODY:
+            why = visit.get("pick_why") or "nobody it picks from could take it"
+            return (
+                target,
+                f"Nobody could be picked for this task in {row['stage']['name']}: {why}. Pick one and reassign it.",
+            )
         return target, "This task has no owner. Pick one and reassign it."
     asked = next((w for w in waits if w.who == target and w.ask), None) if target != row.get("owner_id") else None
     return target, f"You are asked: {asked.line}" if asked else ""
@@ -565,6 +579,82 @@ def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
     return task_wakes.drop(conn, task_id, keep=W.turns(conn, row))
 
 
+# ----------------------------------------------------------------------------- one of several
+def _pick(
+    conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None, unable: str
+) -> "tuple[stage_pick.Choice, stage_pick.Pick] | None":
+    """The pick for a task entering `target` when its owner is "One of several" and the task has nobody there yet (a
+    task with an owner where the pick becomes the owner keeps it: naming one always wins). None otherwise. A stage
+    rule that refused the owner leaves it to the manager, as before."""
+    pick = stage_pick.config(target) if target["kind"] == "work" else None
+    if not pick or owner or unable:
+        return None
+    return stage_pick.choose(conn, row, target, pick), pick
+
+
+def _picked(
+    conn: "sqlite3.Connection", task_id: str, visit_id: str, stage_row: Row, choice: "stage_pick.Choice"
+) -> None:
+    """Write a pick on the visit it was made for and on the task's history."""
+    conn.execute(
+        "UPDATE visits SET holder_id=?, pick_state=?, pick_why=? WHERE id=?",
+        (choice.bot, choice.state, None if choice.bot else choice.why, visit_id),
+    )
+    _event(
+        conn,
+        task_id,
+        SYSTEM,
+        "pick",
+        None,
+        choice.bot,
+        stage_pick.line(conn, stage_row, choice),
+        {"stage": stage_row["id"], "bot": choice.bot, "state": choice.state, "why": choice.why, "back": choice.back},
+    )
+
+
+def pick_again(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Pick again for a task that waits for one ("Waiting for a free Reviewer", or nobody could take it): the
+    never-stuck pass calls it on every open task, oldest first, so the first bot with room gets the oldest. Returns
+    True when a bot was given the task, which is then woken."""
+    row = task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze") or row.get("owner_id"):
+        return False
+    visit = _part(row, "visit")
+    pick = stage_pick.config(row["stage"])
+    if not pick or not visit.get("pick_state"):
+        return False
+    choice = stage_pick.choose(conn, row, row["stage"], pick)
+    if not choice.bot:
+        if choice.state != visit.get("pick_state"):
+            conn.execute(
+                "UPDATE visits SET pick_state=?, pick_why=? WHERE id=?", (choice.state, choice.why, visit["id"])
+            )
+            if choice.state == stage_pick.NOBODY:
+                _wake_turn(conn, _task(conn, task_id))  # the manager is told why, once for the visit
+        return False
+    ts = _h().now()
+    fields: Row = {"owner_id": choice.bot, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
+    if pick.owns_task:
+        fields["assignee_id"] = choice.bot
+    _write(conn, task_id, **fields)
+    _picked(conn, task_id, str(visit["id"]), row["stage"], choice)
+    _reset_ladder(conn, visit, ts, SYSTEM)
+    _owned(conn, row, _task(conn, task_id), SYSTEM)
+    moved = _task(conn, task_id)
+    if _turn_of(conn, moved)[0] == choice.bot:
+        task_wakes.add(
+            conn,
+            moved,
+            choice.bot,
+            moved["visit"],
+            task_wakes.body(
+                conn, moved, f"This task is yours now: {stage_pick.line(conn, row['stage'], choice)}.", to=choice.bot
+            ),
+            wake_key=f"{task_id}:{visit['id']}:pick:v{moved['version']}",
+        )
+    return True
+
+
 # ----------------------------------------------------------------------------- new
 def enter(
     conn: "sqlite3.Connection",
@@ -611,6 +701,11 @@ def enter(
     owner, unable, ruled = owner_ruled(conn, {**row, "pipeline_id": pipeline_id}, first, owner_for(first, assignee))
     if unable:
         assignee = None
+    picked = _pick(conn, {**row, "pipeline_id": pipeline_id, "assignee_id": assignee}, first, owner, unable)
+    if picked and picked[0].bot:
+        owner = picked[0].bot
+        if picked[1].owns_task:
+            assignee = owner
     # The rule a move into a stage keeps keeps a new task out of its first stage too: a private task never goes where
     # its owner, or someone the stage asks, cannot read it, for nobody could take it on from there.
     held = shut_out(conn, row, first, owner, new=True)
@@ -627,7 +722,9 @@ def enter(
         status="open",
         updated_at=ts,
     )
-    _open_visit(conn, task_id, first["id"], "new", ts)
+    entered_visit = _open_visit(conn, task_id, first["id"], "new", ts)
+    if picked:
+        _picked(conn, task_id, entered_visit, first, picked[0])
     if above:
         conn.execute(
             "INSERT INTO links (id, from_task_id, to_task_id, visit_id, kind, created_at) VALUES (?,?,?,?,?,?)",
@@ -979,6 +1076,11 @@ def move(
         extra["closed_by_id"] = str(by) if status == "closed" else None
     if unable:
         extra["assignee_id"] = None  # the manager picks who has it (reassign), as for a task with no assignee
+    picked = _pick(conn, row, target, owner, unable)
+    if picked and picked[0].bot:
+        owner = picked[0].bot
+        if picked[1].owns_task:
+            extra["assignee_id"] = owner  # the pick becomes the task's owner, for life
     _write(
         conn,
         task_id,
@@ -989,7 +1091,9 @@ def move(
         updated_at=ts,
         **extra,
     )
-    _open_visit(conn, task_id, target["id"], how, ts)
+    entered_visit = _open_visit(conn, task_id, target["id"], how, ts)
+    if picked:
+        _picked(conn, task_id, entered_visit, target, picked[0])
     revision = _event(
         conn,
         task_id,
@@ -1394,9 +1498,15 @@ def reassign(
     overturned = _owner_rule(conn, row, owner, by, set_anyway)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
-    if row["stage"].get("owner") == "assignee":
+    pick = stage_pick.config(row["stage"])
+    if row["stage"].get("owner") == "assignee" or (pick and pick.owns_task):
         fields["assignee_id"] = owner
     _write(conn, task_id, **fields)
+    if pick:
+        # Whoever has it now holds this stage: a task back here goes to them, and it no longer waits for a pick.
+        conn.execute(
+            "UPDATE visits SET holder_id=?, pick_state=NULL, pick_why=NULL WHERE id=?", (owner, row["visit"]["id"])
+        )
     _reset_ladder(conn, row["visit"], ts, by)  # the old owner's wakes go with its turn
     said = ". ".join(p for p in (why, f"Overturned rule {overturned['name']}" if overturned else "") if p) or why
     data: Row = {"stage": row["stage_id"], **({"overturned_rule": overturned["id"]} if overturned else {})}
@@ -1618,8 +1728,17 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
         "assignee_id": assignee,
         "updated_at": ts,
     }
+    picked = None
     if status == "open":
         fields["owner_id"] = owner_for(target, assignee)
+        # A stage that picks from several picks for a restored task as for any task that enters it.
+        picked = _pick(
+            conn, {**row, "pipeline_id": pipe["id"], "assignee_id": assignee}, target, fields["owner_id"], ""
+        )
+        if picked and picked[0].bot:
+            fields["owner_id"] = picked[0].bot
+            if picked[1].owns_task:
+                fields["assignee_id"] = picked[0].bot
     else:
         fields["owner_id"] = was.get("owner_id")
         fields["done_at"] = was.get("done_at") if status == "done" else None
@@ -1627,7 +1746,9 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
         fields["closed_by_id"] = was.get("closed_by_id") if status == "closed" else None
     _write(conn, task_id, **fields)
     how = {"open": "new", "done": "met", "closed": "closed"}[status]
-    _open_visit(conn, task_id, target["id"], how, ts)
+    restored_visit = _open_visit(conn, task_id, target["id"], how, ts)
+    if picked:
+        _picked(conn, task_id, restored_visit, target, picked[0])
     _event(conn, task_id, by, "move", None, target["id"], "Restored", {"move": "restored", "owner": fields["owner_id"]})
     if status == "open":
         _owned(conn, {**row, "owner_id": was.get("owner_id")}, _task(conn, task_id), by)

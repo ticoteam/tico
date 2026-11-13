@@ -35,7 +35,7 @@ A bot cannot close a task a person asked for. It asks that person instead.
 ## Whose turn it is
 
 What a task waits on is worked out, never stored. The first match is the line under the title; the task lists all of
-them ([the nine states](pipelines-v3.md#whose-turn-it-is-the-nine-states-of-an-open-task)):
+them ([the ten states](pipelines-v3.md#whose-turn-it-is-the-ten-states-of-an-open-task)):
 
 1. Snoozed
 2. A person's turn: an ask names them, or the task is theirs

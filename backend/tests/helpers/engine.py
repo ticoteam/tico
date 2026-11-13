@@ -180,6 +180,8 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
                 now,
             ),
         )
+        if spec.get("pick"):
+            c.execute("UPDATE stages SET pick=? WHERE id=?", (json.dumps(spec["pick"]), sid))
         out["stages"][spec["name"]] = sid
         out["requirements"][spec["name"]] = [
             requirement(c, sid, **dict(r, position=i)) for i, r in enumerate(spec.get("requirements") or ())

@@ -1,5 +1,5 @@
 # pyright: strict
-"""Whose turn a task is (docs/pipelines-v3.md, "Whose turn it is: the nine states of an open task").
+"""Whose turn a task is (docs/pipelines-v3.md, "Whose turn it is: the ten states of an open task").
 
     waiting_on(conn, task_id) -> list[Wait]
 
@@ -8,7 +8,7 @@ itself. The list is in headline order, so the first entry is what a row shows an
 never empty for an open task, and empty for one that is Done or Closed. It reads tables only: no GitHub, no Jev, no
 computer.
 
-The nine states, in headline order:
+The ten states, in headline order:
 
     snoozed   someone set the task aside
     person    a requirement names them, a bot asked them, the task is theirs, or the ladder reached them
@@ -18,6 +18,7 @@ The nine states, in headline order:
     github    checks are running, the PR is queued, or it merged and waits for a release
     tasks     tasks it filed are still open
     room      everything is met and the next stage is full
+    pick      its stage picks from several bots and every one is at its limit (backend/stage_pick.py)
     by_hand   it sits in a stage that tasks leave by hand
 """
 
@@ -43,7 +44,7 @@ human_actor: Callable[[object], str] = _core.human_actor
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
-SNOOZED, PERSON, PAUSED, BOT, JEV, SOURCE, TASKS, ROOM, BY_HAND = STATES = (
+SNOOZED, PERSON, PAUSED, BOT, JEV, SOURCE, TASKS, ROOM, PICK, BY_HAND = STATES = (
     "snoozed",
     "person",
     "paused",
@@ -52,6 +53,7 @@ SNOOZED, PERSON, PAUSED, BOT, JEV, SOURCE, TASKS, ROOM, BY_HAND = STATES = (
     "source",
     "tasks",
     "room",
+    "pick",  # a stage's "One of several" has nobody free yet: "Waiting for a free Reviewer" (backend/stage_pick.py)
     "by_hand",
 )
 _ORDER = {state: at for at, state in enumerate(STATES)}
@@ -390,6 +392,13 @@ def of(
         out.append(
             Wait(SNOOZED, snooze["by_id"], snooze.get("why") or "", None, snooze["created_at"], snooze["until_at"])
         )
+    if not row.get("owner_id") and visit.get("pick_state") == "full":
+        # Everyone the stage picks from is at their limit: the task waits for the first with room, and until then it
+        # is nobody's turn (task_engine.pick_again, on the never-stuck pass).
+        from . import stage_pick
+
+        out.append(Wait(PICK, stage["id"], stage_pick.waiting_line(conn, stage), None, entered))
+        return out
     by_hand = bool(stage.get("by_hand"))
     unmet = [s for s in (R.standings(conn, row) if standings is None else standings) if not s.met]
     # A bot that has the task may have left it waiting on something it started: a question or an OK it added, or a

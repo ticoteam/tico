@@ -191,8 +191,17 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
 
 ### Stage settings
 
-- **Owner:** a bot, a person, or "the task's assignee". If nobody is set, the pipeline's manager bot is woken to pick one
-  (C25).
+- **Owner:** a bot, a person, "the task's assignee", or "One of several" (`pick`, backend/stage_pick.py). If nobody is
+  set, the pipeline's manager bot is woken to pick one (C25).
+- **One of several:** the bots to pick from, Take turns or Random, an optional Limit each, Prefer (Anyone, New to the
+  task, or A different model family from everyone who worked on it) and whether the pick becomes the task's owner (its
+  assignee, for life: Build) or holds only this stage (`visits.holder_id`: Review). Tico picks the moment a task enters,
+  with no model call: a task it had someone here before goes back to them (a task with an owner keeps it); Prefer
+  narrows the list unless that leaves nobody free; then turns or random among bots that can run, can read the task and
+  are under their limit. Everyone full: the task waits ("Waiting for a free Reviewer", state `pick`) and nobody is
+  woken; the never-stuck pass gives the oldest to the first with room. Nobody can take it (all paused, or none can read
+  a private task): the manager is woken, told why. Each pick is a line on the task's history ("Build given to Builder 2
+  · took turns"). Only a person changes who a stage picks from; the record shows `pick_next`, who gets the next task.
 - **To leave:** a list of requirements. All must be met.
 - **Tasks leave by hand:** a switch. Tasks stay until someone moves them. Nothing there is late and nobody is chased.
 - **A person's request moves on:** a switch on a by-hand stage only (`requests_move_on`), off by default. When on, a
@@ -308,7 +317,7 @@ Every move records who, when and why, and raises the task's version. A move made
 There is no "out of date", "missing", "not passed" or "skipped". A review of an old commit is Waiting on the reviewer,
 with "new commits since the review".
 
-### Whose turn it is: the nine states of an open task
+### Whose turn it is: the ten states of an open task
 
 `waiting_on(task)` returns what the task waits on. The first match in this order is the headline you see. The task page
 lists all of them. The list is never empty for an open task. Each state's look is in [S1](#s1-a-task-row-every-look).
@@ -363,7 +372,11 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: Everything is met and the next stage is full.
    - Ends: A slot frees. Oldest first.
    - If not: It turns Late and the manager bot gets it.
-9. **A by-hand stage**
+9. **Waiting for a free bot**
+   - Starts: It entered a stage whose owner is One of several, and every bot it picks from is at its Limit each.
+   - Ends: One has room: the oldest waiting task is picked first, and its bot woken.
+   - If not: Nobody is chased; Late still applies.
+10. **A by-hand stage**
    - Starts: It enters a stage that tasks leave by hand. Where a person's request moves on, one on its first visit is
      not held: it is in state 8.
    - Ends: Someone picks it, closes it or snoozes it.

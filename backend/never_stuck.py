@@ -417,6 +417,14 @@ def _one(
     row = ahead[0] if ahead else E.task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return  # a move earlier in this pass took it
+    if not row.get("owner_id") and row["visit"].get("pick_state"):
+        # It waits for a stage's pick (One of several): the first bot with room gets the oldest such task, and it is
+        # woken then. While everyone is full, nobody is chased.
+        if E.pick_again(conn, task_id):
+            done["woken"] += 1
+            return
+        if row["visit"].get("pick_state") == "full":
+            return
     standings = ahead[1] if ahead else R.standings(conn, row)
     waits = ahead[2] if ahead else W.of(conn, row, seen, standings)
     if W.all_met(waits) and E.advance(conn, task_id):

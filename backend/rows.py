@@ -1506,6 +1506,7 @@ class StageRow(TypedDict):
     created_at: str
     updated_at: str
     retired_at: str | None
+    pick: str | None
 
 
 class VisitRow(TypedDict):
@@ -1532,6 +1533,9 @@ class VisitRow(TypedDict):
     last_change_attempt: int | None
     last_change_message: int | None
     last_change_start: int | None
+    holder_id: str | None
+    pick_state: str | None
+    pick_why: str | None
 
 
 class RequirementRow(TypedDict):

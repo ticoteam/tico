@@ -2715,7 +2715,7 @@ SCHEMAS = {
         {
             "state": {
                 "type": "string",
-                "enum": ["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand"],
+                "enum": ["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "pick", "by_hand"],
             },
             "who": "n",
             "line": "s",

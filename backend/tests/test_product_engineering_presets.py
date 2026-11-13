@@ -1035,3 +1035,52 @@ def test_no_bot_jumps_a_task_over_a_sign_off_from_any_earlier_stage(c, pipeline,
             assert c.execute("SELECT COUNT(*) FROM effects").fetchone()[0] == effects
             assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks
     assert not c.execute("SELECT 1 FROM answers WHERE answer='pushed_past'").fetchone()
+
+
+def _on_deck_picks(c, bots, last=None):
+    """On deck's owner is One of several (backend/stage_pick.py) from `bots`, the pick becoming the task's owner."""
+    pick = {"bots": bots, "how": "turns", "prefer": "anyone", "owns_task": True}
+    c.execute("UPDATE stages SET owner='pick', pick=? WHERE id='engineering-on-deck'", (json.dumps(pick),))
+    if last:
+        c.execute("INSERT OR REPLACE INTO stage_pick_turns VALUES ('engineering-on-deck', ?, ?)", (last, H.now()))
+
+
+def _picks(c, task_id):
+    rows = c.execute(
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pick'", (task_id,)
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def test_owner_on_the_team_holds_a_picked_bot_as_it_holds_a_named_one(c):
+    """One of several never gives a task to a bot a stage's Block rule refuses: Owner on the team skips the Product
+    Owner on the list, and when it refuses every bot, the manager is woken and told which rule."""
+    _engineering_with_teams(c)
+    _on_deck_picks(c, ["bot:builder", "bot:pm"], last="bot:builder")  # turns alone would give it to pm
+    picked = H.task_create(
+        c, "bot:pm", "Saved carts", "Keep a cart.", "bot:pm", pipeline="engineering", unassigned=True
+    )
+    assert (picked["owner_id"], picked["assignee_id"]) == ("bot:builder", "bot:builder")
+    assert _picks(c, picked["id"]) == ["On deck given to builder · took turns"]
+    _on_deck_picks(c, ["bot:pm"])
+    nobody = H.task_create(c, "bot:pm", "Gift cards", "Sell cards.", "bot:pm", pipeline="engineering", unassigned=True)
+    row = E.task(c, nobody["id"])
+    assert (row["owner_id"], row["visit"]["pick_state"]) == (None, "nobody")
+    assert row["visit"]["pick_why"] == "rule Owner on the team refuses every bot it picks from"
+    assert _picks(c, nobody["id"]) == ["On deck: nobody picked, rule Owner on the team refuses every bot it picks from"]
+
+
+def test_owner_on_the_team_at_release_clears_a_picked_owner_and_its_assignee(c):
+    """The release sweep in a stage whose pick becomes the task's owner clears the assignee with the owner, as in a stage
+    the assignee owns: a refused bot does not stay the task's owner for life."""
+    from backend import stage_rules as SR
+
+    _engineering_with_teams(c)
+    _on_deck_picks(c, ["bot:pm"])
+    c.execute("UPDATE stage_rules SET retired_at='x' WHERE id='sr_owner_on_team'")
+    eng = H.task_create(c, ANA, "Wish lists", "Save items.", ANA, pipeline="engineering", unassigned=True)
+    c.execute("UPDATE stage_rules SET retired_at=NULL WHERE id='sr_owner_on_team'")
+    assert eng["assignee_id"] == "bot:pm"
+    assert SR.sweep_owners(c) == [eng["id"]]
+    row = E.task(c, eng["id"])
+    assert (row["owner_id"], row["assignee_id"]) == (None, None)
