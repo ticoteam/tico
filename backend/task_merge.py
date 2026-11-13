@@ -1,3 +1,4 @@
+# pyright: strict
 """Drop one task on another on the Tasks board (docs/tasks.md, "Merge and make a subtask"): make it a subtask, or merge.
 
 `set_parent(A, B)` puts A under B after it was filed: A keeps its owner, stage and pipeline, and B waits on it as on any
@@ -17,10 +18,16 @@ board's dialog reads it before anyone confirms. People only, the route says; bot
 change.
 """
 
+from collections.abc import Callable
 from typing import Any
 
-from . import task_engine as E
-from . import task_relations as TR
+from . import task_engine as _engine
+from . import task_relations as _relations_mod
+
+# Both are untyped modules: named as Any so strict typing here does not reach into them.
+E: Any = _engine
+TR: Any = _relations_mod
+Row = dict[str, Any]
 
 SUBTASK, MERGE = "subtask", "merge"
 
@@ -31,18 +38,24 @@ def _h() -> Any:
     return hubdb
 
 
+def _followers_mod() -> Any:
+    from . import task_followers
+
+    return task_followers
+
+
 def _calls() -> Any:
     from . import task_calls
 
     return task_calls
 
 
-def _num(row) -> str:
+def _num(row: Row) -> str:
     return f"#{row['number']}" if row.get("number") is not None else str(row["id"])[:8]
 
 
 # ----------------------------------------------------------------------------- what stands in the way
-def _height(conn, task_id) -> int:
+def _height(conn: Any, task_id: str) -> int:
     """How many levels sit under a task: 0 for one with no subtasks."""
     found = conn.execute(
         "WITH RECURSIVE tree(id, level) AS (SELECT to_task_id, 1 FROM links WHERE from_task_id=? "
@@ -53,7 +66,7 @@ def _height(conn, task_id) -> int:
     return int(found[0] or 0) if found else 0
 
 
-def _open_children(conn, task_id) -> list[str]:
+def _open_children(conn: Any, task_id: str) -> list[str]:
     return [
         row[0]
         for row in conn.execute(
@@ -64,7 +77,7 @@ def _open_children(conn, task_id) -> list[str]:
     ]
 
 
-def _open_pr(conn, task_id) -> bool:
+def _open_pr(conn: Any, task_id: str) -> bool:
     """A pull request linked to the task that is still open (or a draft): its work would be lost with the duplicate."""
     from .item_sources import github as GS
 
@@ -75,7 +88,7 @@ def _open_pr(conn, task_id) -> bool:
     return any(link["metadata"] and link["metadata"].get("state") == "open" for link in GS.prs_of(conn, task_id))
 
 
-def why_not(conn, a, b, choice) -> str | None:
+def why_not(conn: Any, a: Row, b: Row, choice: str) -> str | None:
     """One line why `a` cannot be dropped on `b` as `choice`, or None when it can."""
     H = _h()
     if a["id"] == b["id"]:
@@ -102,15 +115,15 @@ def why_not(conn, a, b, choice) -> str | None:
     return None
 
 
-def _may_change(conn, actor, row, mover) -> bool:
+def _may_change(conn: Any, actor: str, row: Row, mover: Any) -> bool:
     return bool(_calls().can_work(conn, actor, row, mover))
 
 
-def _rows(conn, actor, a_id, b_id, mover):
+def _rows(conn: Any, actor: str, a_id: str, b_id: str, mover: Any) -> list[Row]:
     H = _h()
-    rows = []
+    rows: list[Row] = []
     for tid in (a_id, b_id):
-        row = H.task(conn, tid) if tid else None
+        row: Any = H.task(conn, tid) if tid else None
         if not row or not H.task_private_readable(conn, actor, row):
             H.refuse(conn, actor, "not-found", "No such task")
         if not _may_change(conn, actor, row, mover):
@@ -120,17 +133,18 @@ def _rows(conn, actor, a_id, b_id, mover):
 
 
 # ----------------------------------------------------------------------------- make it a subtask
-def _link_under(conn, actor, child, parent, ts):
+def _link_under(conn: Any, actor: str, child: Row, parent: Row, ts: str) -> str | None:
     """Put `child` under `parent`: the engine's link on the parent's open visit and the `parent` relation. Returns the
     old parent's id, or None."""
     H = _h()
     old = TR.parent_of(conn, child["id"])
-    above = E.task(conn, parent["id"]) or {}
+    above: Row = E.task(conn, parent["id"]) or {}
     conn.execute("DELETE FROM links WHERE to_task_id=?", (child["id"],))
     conn.execute("DELETE FROM task_relations WHERE from_task=? AND kind='parent'", (child["id"],))
+    visit: Row = above.get("visit") or {}
     conn.execute(
         "INSERT INTO links (id, from_task_id, to_task_id, visit_id, kind, created_at) VALUES (?,?,?,?,?,?)",
-        (H.new_id(), parent["id"], child["id"], (above.get("visit") or {}).get("id"), "sub_task", ts),
+        (H.new_id(), parent["id"], child["id"], visit.get("id"), "sub_task", ts),
     )
     TR._insert(conn, actor, child["id"], parent["id"], "parent", ts)
     H._task_event(conn, child["id"], actor, "parent_id", old, parent["id"], "")
@@ -143,7 +157,7 @@ def _link_under(conn, actor, child, parent, ts):
     return old
 
 
-def set_parent(conn, actor, task_id, parent_id, *, mover=None):
+def set_parent(conn: Any, actor: str, task_id: str, parent_id: str, *, mover: Any = None) -> Row:
     """A person puts a task under another after it was filed. Both keep their owners, stages and pipelines; the parent
     waits on it as on any subtask. Returns the task."""
     H = _h()
@@ -159,11 +173,11 @@ def set_parent(conn, actor, task_id, parent_id, *, mover=None):
 
 
 # ----------------------------------------------------------------------------- merge: what moves
-def _comments(conn, task_id) -> int:
+def _comments(conn: Any, task_id: str) -> int:
     return sum(1 for m in _h().task_comments(conn, task_id) if m.get("kind") == "say")
 
 
-def _asks(conn, task_id) -> list[dict]:
+def _asks(conn: Any, task_id: str) -> list[Row]:
     """The open asks and OKs on the task's open visit: [{line, kind, person}]."""
     return [
         {"line": row["line"], "kind": row["kind"], "person": row["person_id"]}
@@ -176,10 +190,11 @@ def _asks(conn, task_id) -> list[dict]:
     ]
 
 
-def _files(conn, task_id) -> list[dict]:
+def _files(conn: Any, task_id: str) -> list[Row]:
     """The task's files and the pages attached to it: [{id, name, version, page}]. Linked from the kept task, never
     copied."""
-    out, seen = [], set()
+    out: list[Row] = []
+    seen: set[str] = set()
     for row in conn.execute(
         "SELECT f.id, f.mime, f.current_version, v.name FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
         "AND v.version=f.current_version WHERE f.task_id=? AND NOT f.archived ORDER BY f.first_activity_at, f.id",
@@ -209,10 +224,10 @@ def _files(conn, task_id) -> list[dict]:
     return out
 
 
-def _followers(conn, a, b) -> list[str]:
-    from . import task_followers as F
+def _followers(conn: Any, a: Row, b: Row) -> list[str]:
+    F = _followers_mod()
 
-    have = {f["actor"] for f in F.listed(conn, b)}
+    have: set[str] = {f["actor"] for f in F.listed(conn, b)}
     return [
         f["actor"]
         for f in F.listed(conn, a)
@@ -220,13 +235,13 @@ def _followers(conn, a, b) -> list[str]:
     ]
 
 
-def _requesters(conn, a, b) -> list[dict]:
+def _requesters(conn: Any, a: Row, b: Row) -> list[Row]:
     """A's requesters that B does not have yet: its own requester first, then the rows of task_requesters."""
     have = {b.get("requester_id")} | {
         row[0]
         for row in conn.execute("SELECT actor FROM task_requesters WHERE task_id=? AND actor IS NOT NULL", (b["id"],))
     }
-    out = []
+    out: list[Row] = []
     if a.get("requester_id") and a["requester_id"] not in have:
         out.append({"actor": a["requester_id"], "source": "manual"})
         have.add(a["requester_id"])
@@ -242,9 +257,9 @@ def _requesters(conn, a, b) -> list[dict]:
 _MOVES = {("related", "both"), ("follow_up", "out"), ("follow_up", "in"), ("duplicate_of", "in")}
 
 
-def _relations(conn, a, b) -> list[tuple[str, str, str]]:
+def _relations(conn: Any, a: Row, b: Row) -> list[tuple[str, str, str]]:
     """(from, to, kind) rows to add for B, in place of A's."""
-    out = []
+    out: list[tuple[str, str, str]] = []
     for row in conn.execute(
         "SELECT from_task, to_task, kind FROM task_relations WHERE (from_task=? OR to_task=?) AND kind<>'parent'",
         (a["id"], a["id"]),
@@ -261,7 +276,7 @@ def _relations(conn, a, b) -> list[tuple[str, str, str]]:
     return out
 
 
-def _links(conn, a, b) -> list[dict]:
+def _links(conn: Any, a: Row, b: Row) -> list[Row]:
     have = {row[0] for row in conn.execute("SELECT url FROM task_links WHERE task_id=?", (b["id"],))}
     return [
         dict(row)
@@ -274,13 +289,13 @@ def _links(conn, a, b) -> list[dict]:
     ]
 
 
-def _labels(a, b) -> list[str]:
+def _labels(a: Row, b: Row) -> list[str]:
     H = _h()
-    kept = list(H.task_labels(b))
+    kept: list[str] = list(H.task_labels(b))
     return kept + [k for k in H.task_labels(a) if k not in kept]
 
 
-def moves(conn, a, b) -> dict:
+def moves(conn: Any, a: Row, b: Row) -> Row:
     """What a merge of `a` into `b` would move, counted from the tasks as they are."""
     H = _h()
     for row in (a, b):
@@ -299,13 +314,13 @@ def moves(conn, a, b) -> dict:
     }
 
 
-def checks(conn, actor, task_id, into_id, *, mover=None) -> dict:
+def checks(conn: Any, actor: str, task_id: str, into_id: str, *, mover: Any = None) -> Row:
     """For the board's dialog, before anyone confirms: both tasks, why each choice cannot be done (None when it can)
     and what a merge would move."""
     H = _h()
     a, b = _rows(conn, actor, task_id, into_id, mover)
 
-    def end(row):
+    def end(row: Row) -> Row:
         owner = row.get("owner_id")
         return {
             "id": row["id"],
@@ -326,15 +341,15 @@ def checks(conn, actor, task_id, into_id, *, mover=None) -> dict:
 
 
 # ----------------------------------------------------------------------------- merge: the write
-def _plural(n, word) -> str:
+def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
-def duplicate_note(b) -> str:
+def duplicate_note(b: Row) -> str:
     return f"Archiving this one as a duplicate of {_num(b)}; its details were added there."
 
 
-def _from_section(a, files) -> str:
+def _from_section(a: Row, files: list[Row]) -> str:
     """What B's description gains: A's under "From #A", with its title, and links to A's files and pages."""
     lines = [f"## From {_num(a)}: {a.get('title') or ''}".rstrip()]
     body = str(a.get("body") or "").strip()
@@ -351,7 +366,16 @@ def _from_section(a, files) -> str:
     return "\n".join(lines)
 
 
-def merge(conn, actor, task_id, into_id, *, owner=None, reassign=None, mover=None) -> dict:
+def merge(
+    conn: Any,
+    actor: str,
+    task_id: str,
+    into_id: str,
+    *,
+    owner: str | None = None,
+    reassign: Callable[[Any, str, str], Any] | None = None,
+    mover: Any = None,
+) -> Row:
     """Merge task `task_id` (A) into `into_id` (B), in the caller's one write. `owner`, when given, is A's or B's owner:
     B is given to them first with `reassign(conn, b_id, owner)`, the route's usual hand-over checks; a refusal there
     leaves everything as it was. Returns {task: B, closed: A, note}."""
@@ -377,8 +401,10 @@ def merge(conn, actor, task_id, into_id, *, owner=None, reassign=None, mover=Non
     # B: A's description and files under "From #A", and A's labels.
     body = "\n\n".join(part for part in (str(b.get("body") or "").rstrip(), _from_section(a, files)) if part)
     H.task_update(conn, actor, b["id"], body=body, labels=labels if added_labels else None, mover=mover)
-    from . import roadmaps
-    from . import task_followers as F
+    from . import roadmaps as _roadmaps
+
+    roadmaps: Any = _roadmaps
+    F = _followers_mod()
 
     tid = F.thread_id(conn, b)
     for who in followers if tid else []:
@@ -397,7 +423,7 @@ def merge(conn, actor, task_id, into_id, *, owner=None, reassign=None, mover=Non
     for link in links:
         H.task_link(conn, actor, b["id"], link["url"], link.get("title"), kind=link["kind"], mover=mover)
     # A's open subtasks go under B before A closes, so the close finds none to close.
-    moved = []
+    moved: list[str] = []
     for child in _open_children(conn, a["id"]):
         _link_under(conn, actor, H.task(conn, child), b, ts)
         moved.append(child)
