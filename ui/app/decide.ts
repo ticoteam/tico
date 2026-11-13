@@ -33,6 +33,33 @@ interface AskOkView {
   urls: string[];
   page: string;
   shows: string;
+  /** A page that comes back: its rounds (GET .../asks/{rid}/rounds), null when there are none or they did not load
+      (the right side then keeps the stage's line). `since`: the version the viewer last answered, the switch over the
+      page, and its diff. */
+  rounds: DecRound[] | null;
+  since: DecSince | null;
+}
+/** One version of a page on a page requirement, as backend/page_rounds.py gives it. */
+interface DecRound {
+  file_id: string;
+  version: number;
+  at: string;
+  by: string;
+  replaced: boolean;
+  note: string;
+  changed: string[];
+  answered: {point: string; done: boolean; why: string}[];
+  jev: {verdict: 'met' | 'not_met' | 'unsure' | 'failed' | null; reason: string};
+  answers: {by: string; answer: 'ok' | 'no'; note: string; at: string}[];
+}
+/** "Changes since vK": K, whether the switch is on (on by default when the viewer sent vK back), the line diff from vK
+    (the page viewer's own, tfDiffHTML), and how many blocks the page marks with the switch off. */
+interface DecSince {
+  version: number;
+  on: boolean;
+  same: boolean;
+  diff: string;
+  marked: number;
 }
 /** The 👎 sheet: what was wrong, then (Make a rule) the rule drafted from it. */
 interface AskSheet {
@@ -64,6 +91,9 @@ interface DecState {
   answered: number;
   /** Screenshots and files added to the note of the item on screen (pasted, dropped or picked with 📎). */
   files: DecFile[];
+  /** What was opened on the right side, per item: `<item id>:jev` (Jev's reason), `<item id>:more:<part>` (a part
+      cut to 2 lines, shown in full). */
+  open: Set<string>;
 }
 /** A file added to a note: uploaded to the task's Files at once; its name and id end the note that is sent. */
 interface DecFile {
@@ -224,7 +254,7 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), sheet: null, more: '',
-    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, answered: 0, files: []};
+    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, answered: 0, files: [], open: new Set()};
   // Opening one item from a list walks the list it is in; ▶ on a stage walks that stage, from its first item.
   if (st.stage !== stage && (stage || !id)) { st.stage = stage; st.order = []; st.gone.clear(); st.answered = 0; st.at = null; }
   decideSync(st, items);
@@ -431,7 +461,9 @@ function decidePaintBody(st: DecState) {
     const v = st.ok.get(decideOkKey(it));
     html = !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
-      : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
+      : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
+        + (v.since?.on && !v.since.same ? `<div class="dc-doc dc-diff">${v.since.diff}</div>`
+          : `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`);
   } else if (it.task) {
     html = `<div class="dc-doc"><h3 class="dc-title">${esc(it.task.title)}${lateTagHTML(it.task)}</h3>`
       + `<p class="dc-line">${taskMarkHTML(it.task, {space: false})} ${esc(taskLine(it.task))}</p>`
@@ -449,6 +481,14 @@ function decidePaintBody(st: DecState) {
   const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
+}
+/** "Changes since vK" over a page that comes back: on, the line diff from vK; off, the page with its changed blocks
+    marked. "No text changes" when the text is the same. */
+function decideSinceHTML(v: AskOkView): string {
+  const s = v.since;
+  if (!s) return '';
+  return `<div class="dc-since"><label class="dc-switch"><input type="checkbox" role="switch" data-dc-since${s.on ? ' checked' : ''}>`
+    + `<span>Changes since v${s.version}</span></label>${s.same ? '<span class="dc-since-none">No text changes</span>' : ''}</div>`;
 }
 const decideBrowserSlot = (ref: string) => ref.includes('/') ? `<div class="dc-browser" data-dc-browser="${esc(ref)}"></div>` : '';
 /** The live view of the browser an ask shows. Its Done answers the ask "Done" when that is one of its choices (a bot's
@@ -488,7 +528,11 @@ function decidePaintSide(st: DecState) {
   // Open task ↗: the task's own page, which stays open (taskModalOpen with `direct`); its Answer comes back here.
   const taskId = decideTaskId(it), num = it.task?.number;
   const open = taskId && kind !== 'mention' ? `<button type="button" class="linkish dc-open-task" data-dc="task">Open task${num ? ` #${num}` : ''} ↗</button>` : '';
-  const head = `<h3 class="dc-q">${esc(title || typed?.question || it.line)}</h3><p class="dc-sub">${sub}</p>${open}`
+  // A page with its rounds read: the right side in parts (decideRoundsHTML), and the stage's paragraph is gone.
+  const okView = kind === 'ok' && page ? st.ok.get(decideOkKey(it)) : undefined;
+  const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version) : null;
+  const head = parts ? `<h3 class="dc-q">${esc(title)}</h3>${parts.sub}${open}${parts.body}`
+    : `<h3 class="dc-q">${esc(title || typed?.question || it.line)}</h3><p class="dc-sub">${sub}</p>${open}`
     + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
@@ -538,9 +582,76 @@ function decidePaintSide(st: DecState) {
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
+  // "more" only under a part its 2 lines cut.
+  host.querySelectorAll<HTMLElement>('.dc-clamp:not(.open)').forEach(p => {
+    const more = p.nextElementSibling as HTMLElement | null;
+    if (more?.matches('[data-dc-more]')) more.hidden = p.scrollHeight <= p.clientHeight + 1;
+  });
   const back = caret ? host.querySelector<HTMLTextAreaElement>(`#${caret.id}`) : null;
   if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
   decideNeedsText($('.decide')!);
+}
+// ---- a page that comes back: the right side in parts
+const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['?', 'Unsure'], not_met: ['✗', "Doesn't"]};
+/** Jev's verdict as a chip: ✓ Meets, ? Unsure or ✗ Doesn't, never a p-value; "Jev checking", muted, while it has none.
+    `open`: a button that shows the reason under it; otherwise the reason is the chip's title. */
+function decideJevChip(jev: DecRound['jev'], open: boolean | null): string {
+  const said = jev.verdict ? DEC_JEV[jev.verdict] : undefined;
+  if (!said) return open === null ? '<span class="dc-jev dc-jev-wait dc-jev-mark" role="img" aria-label="Jev checking" title="Jev checking">…</span>'
+    : '<span class="dc-jev dc-jev-wait">Jev checking</span>';
+  const label = `<span aria-hidden="true">${said[0]}</span> ${esc(said[1])}`;
+  // In a step of the history: the mark alone, its word and reason in its label and title.
+  if (open === null) return `<span class="dc-jev dc-jev-mark" data-v="${esc(jev.verdict || '')}" role="img" aria-label="Jev: ${esc(said[1])}"`
+    + ` title="${esc(`Jev: ${said[1]}${jev.reason ? ` · ${jev.reason}` : ''}`)}">${said[0]}</span>`;
+  return `<button type="button" class="dc-jev" data-v="${esc(jev.verdict || '')}" data-dc-jev aria-expanded="${open}" aria-label="Jev: ${esc(said[1])}">${label}</button>`;
+}
+/** A person's own words, cut to 2 lines, with "more" (shown in full once opened). */
+function decideClampHTML(st: DecState, it: NeedsEntry, part: string, text: string): string {
+  const open = st.open.has(`${it.id}:more:${part}`);
+  return `<p class="dc-clamp${open ? ' open' : ''}">${esc(text)}</p>`
+    + (open ? '' : `<button type="button" class="linkish dc-more-btn" data-dc-more="${esc(part)}">more</button>`);
+}
+/** What a person did with a round: Sent back, OK'd, Replaced (a newer version came before anyone answered), or nothing
+    on the version asked about now. */
+function decideRoundAnswer(r: DecRound, last: boolean): string {
+  const a = decideAnswerOf(r, myActor(), true);
+  if (a) return a.answer === 'no' ? 'Sent back' : "OK'd";
+  return last ? '' : 'Replaced';
+}
+/** The right side of a page's OK, in parts: "Version N · date" with Jev's chip, the review history, What changed in vN,
+    Your note on vN−1, Your points. Each part is left out when it has nothing to say. */
+function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], version: number): {sub: string; body: string} {
+  let at = decideRoundAt(rounds, version);
+  if (at < 0) at = rounds.length - 1;
+  const now = rounds[at]!, me = myActor(), jevOpen = st.open.has(`${it.id}:jev`);
+  const stage = decideStageName(it.task?.stage_id), date = shortDate(now.at);
+  const sub = `<div class="dc-ver"><p class="dc-sub">${[esc(stage), `Version ${now.version}${date ? ` · ${esc(date)}` : ''}`].filter(Boolean).join(' · ')}</p>`
+    + `${decideJevChip(now.jev, jevOpen)}</div>`
+    + (jevOpen && now.jev.reason ? `<p class="dc-jev-why">${esc(now.jev.reason)}</p>` : '');
+  const parts: string[] = [];
+  if (rounds.length > 1) {
+    // One step per version: its date, Jev's chip and the answer it got. A click opens that version in the page viewer.
+    parts.push(`<nav class="dc-hist" aria-label="Review history"><ol>${rounds.map((r, i) => {
+      const answer = decideRoundAnswer(r, i === rounds.length - 1);
+      return `<li><button type="button" class="dc-step${i === at ? ' now' : ''}" data-dc-ver="${esc(r.file_id)}@${r.version}"${i === at ? ' aria-current="step"' : ''}>`
+        + `<b>v${r.version}</b><span class="dc-step-date">${esc(shortDate(r.at))}</span>${decideJevChip(r.jev, null)}`
+        + (answer ? `<span class="dc-step-ans" data-a="${esc(answer)}">${esc(answer)}</span>` : '') + '</button></li>';
+    }).join('')}</ol></nav>`);
+  }
+  if (now.changed.length) {
+    parts.push(`<section class="dc-part"><h4>What changed in v${now.version}</h4><ul class="dc-changed-list">${now.changed.slice(0, 5).map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`);
+  } else if (now.note) {
+    parts.push(`<section class="dc-part"><h4>What changed in v${now.version}</h4>${decideClampHTML(st, it, 'changed', now.note)}</section>`);
+  }
+  const before = at > 0 ? rounds[at - 1]! : null, back = before ? decideAnswerOf(before, me) : undefined;
+  if (before && back?.answer === 'no' && back.note) {
+    parts.push(`<section class="dc-part"><h4>Your note on v${before.version} <span class="dc-when">${esc(shortDate(back.at))}</span></h4>${decideClampHTML(st, it, 'note', back.note)}</section>`);
+  }
+  if (now.answered.length) {
+    parts.push(`<section class="dc-part"><h4>Your points</h4><ul class="dc-points">${now.answered.map(p =>
+      `<li data-done="${p.done}"><span class="dc-mark" aria-label="${p.done ? 'Done' : 'Not done'}">${p.done ? '✓' : '✗'}</span><span><b>${esc(p.point)}</b> ${esc(p.why)}</span></li>`).join('')}</ul></section>`);
+  }
+  return {sub, body: parts.join('')};
 }
 /** A file added or finished redraws only the files row, so the note keeps its focus, caret and text. */
 function decideFilesPaint(st: DecState) {
@@ -692,7 +803,7 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
 async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
   const rid = decideRid(it), key = decideOkKey(it);
   const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [],
-    page: decidePage(it), shows: decideShows(it)};
+    page: decidePage(it), shows: decideShows(it), rounds: null, since: null};
   const before = st.ok.get(key);
   if (before) decideOkLet(before);
   st.ok.set(key, v);
@@ -702,7 +813,8 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     const shown = await okShown(rid).catch((e: unknown) => { if (errorStatus(e) === 404) return null; throw e; });
     const [kind, ...rest] = (shown?.subject ?? '').split(':'), ref = rest.join(':');
     if (!shown) {
-      await decideShowsRead(v, it.ask?.shows || []);
+      const before = it.ask?.page ? await decideRoundsRead(v, it) : null;
+      await decideShowsRead(v, it.ask?.shows || [], before);
     } else if (kind === 'email_send') {
       // The email's own preview is the one to show; its hash is the hash of that email, as frozen.
       const mail = await get<EmailSendPreview & {shown_hash?: string | null}>(`/v2/email/sends/${encodeURIComponent(ref)}`, {fresh: true});
@@ -811,21 +923,60 @@ async function decideSupportHTML(content: unknown): Promise<string> {
 /** A page at the exact version an OK of it is for (`page:<id>@<n>`, a page requirement): its HTML read from that version
     and drawn sandboxed, as the page viewer draws it. A version that is not HTML (one attached before pages for an OK had
     to be, often Markdown) is drawn as Markdown, so it reads as a document rather than one run-on paragraph. */
-async function decidePageHTML(fid: string, version: number): Promise<string> {
+async function decidePageHTML(fid: string, version: number, mark?: (html: string) => string): Promise<string> {
   const file = await viewFile(fid, 'page.html', version);
   const text = await file.blob.text();
   if (!text.replace(/^[\uFEFF\s]+/, '').startsWith('<')) return `<div class="md dc-page-md">${md(text)}</div>`;
-  const doc = htmlPreviewDoc(text);
+  const doc = htmlPreviewDoc(mark ? mark(text) : text);
   return `<iframe class="html-view dc-page" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Version ${version}" srcdoc="${esc(doc)}"></iframe>`;
+}
+/** A page that comes back: its rounds, and, when the viewer answered an earlier version, "Changes since vK" (K the
+    last version they answered; on when they sent it back) with the page viewer's own line diff from vK. Returns vK's
+    lines, for the margin marks, or null. Rounds that do not load leave the right side as it was (the stage's line). */
+async function decideRoundsRead(v: AskOkView, it: NeedsEntry): Promise<string[] | null> {
+  const taskId = decideTaskId(it), rid = decideRid(it), page = it.ask?.page;
+  if (!taskId || !page) return null;
+  try {
+    const r = await get<{rounds?: DecRound[]}>(`/v2/tasks/${encodeURIComponent(taskId)}/asks/${encodeURIComponent(rid)}/rounds`, {fresh: true});
+    v.rounds = Array.isArray(r.rounds) && r.rounds.length ? r.rounds : null;
+  } catch { v.rounds = null; }
+  const now = decideRoundAt(v.rounds, page.version);
+  if (!v.rounds || now < 0) return null;
+  const me = myActor();
+  const base = v.rounds.slice(0, now).reverse().find(x => decideAnswerOf(x, me));
+  if (!base) return null;
+  try {
+    const [a, b] = await Promise.all([[base.file_id, base.version], [page.file_id, page.version]].map(async ([f, n]) =>
+      pageText(await (await viewFile(String(f), 'page.html', Number(n))).blob.text())));
+    v.since = {version: base.version, on: decideAnswerOf(base, me)?.answer === 'no', same: a === b,
+      diff: a === b ? '' : tfDiffHTML(a ?? '', b ?? ''), marked: 0};
+    return (a ?? '').split('\n');
+  } catch { return null; }
+}
+/** The index of the round a version is (the newest with that number), -1 when none is. */
+const decideRoundAt = (rounds: DecRound[] | null, version: number) => (rounds || []).map(x => x.version).lastIndexOf(version);
+/** A person's answer to a round: `who`'s own when given, else the newest by any person. */
+function decideAnswerOf(r: DecRound, who: string, anyPerson = false) {
+  const mine = [...r.answers].reverse().find(a => a.by === who);
+  return mine || (anyPerson ? [...r.answers].reverse().find(a => a.by.startsWith('human:')) : undefined);
 }
 /** A stage's OK shows what the requirement names: pages in full (a page requirement's at its pinned version), an email
     as frozen, a file at its version, the rest by name. One that does not load leaves Approve off (`missing`). */
-async function decideShowsRead(v: AskOkView, shows: string[]) {
+async function decideShowsRead(v: AskOkView, shows: string[], before: string[] | null = null) {
   const parts: string[] = [];
   for (const ref of shows) {
     const [kind, ...rest] = ref.split(':'), id = rest.join(':'), pinned = /^([^@]+)@(\d+)$/.exec(id);
     try {
-      if (kind === 'page' && pinned) { parts.push(await decidePageHTML(pinned[1]!, Number(pinned[2]))); continue; }
+      if (kind === 'page' && pinned) {
+        // The page asked about, with the blocks not in the version the viewer last answered marked in its margin.
+        const asked = `${pinned[1]}@${pinned[2]}` === v.page && before && v.since;
+        parts.push(await decidePageHTML(pinned[1]!, Number(pinned[2]), asked ? (html => {
+          const out = pageMarkChanged(html, before);
+          v.since!.marked = out.marked;
+          return out.html;
+        }) : undefined));
+        continue;
+      }
       if (kind === 'page') { v.pages.push((await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true})).page); continue; }
       if (kind === 'email') { parts.push(emailSendPreviewHTML(await get<EmailSendPreview>('/v2/email/sends/' + encodeURIComponent(id), {fresh: true}))); continue; }
       if (kind === 'file' && pinned) { parts.push(await decideFileHTML(v, {file: pinned[1], version: Number(pinned[2])})); continue; }
@@ -903,8 +1054,27 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
-  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip], [data-dc-walk]');
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip], [data-dc-walk], [data-dc-jev], [data-dc-more], [data-dc-ver], [data-dc-since]');
   if (!b || (b as HTMLButtonElement).disabled) return;
+  const at = decideCurrent(st);
+  if (at && (b.dataset.dcMore != null || b.hasAttribute('data-dc-jev'))) {
+    // Jev's reason, or a part cut to 2 lines: shown on the right side of this item until it is left.
+    const key = b.dataset.dcMore != null ? `${at.id}:more:${b.dataset.dcMore}` : `${at.id}:jev`;
+    if (st.open.has(key) && b.dataset.dcMore == null) st.open.delete(key); else st.open.add(key);
+    decidePaintSide(st);
+    ($(b.dataset.dcMore != null ? '.decide .dc-side .dc-clamp.open' : '.decide .dc-side [data-dc-jev]') as HTMLElement | null)?.focus?.({preventScroll: true});
+    return;
+  }
+  if (b.dataset.dcVer) {
+    // A step of the review history opens that version in the page viewer.
+    const [fid = '', n = ''] = b.dataset.dcVer.split('@');
+    decideStop(); location.hash = `${pageHref(fid)}?v=${n}`; return;
+  }
+  if (at && b.hasAttribute('data-dc-since')) {
+    const v = st.ok.get(decideOkKey(at));
+    if (v?.since) { v.since.on = (b as HTMLInputElement).checked; decidePaintBody(st); }
+    return;
+  }
   if (b.dataset.dcWalk) { await decideStageOpen(b.dataset.dcWalk); return; }
   const what = b.dataset.dc || '';
   if (what === 'close') { decideStop(); return; }

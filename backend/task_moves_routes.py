@@ -525,10 +525,32 @@ def register(
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):  # pyright: ignore[reportUnknownMemberType]
                 raise Problem("not_found", "That page is not one you can read", 404)
-            made = H.task_page_attach(c, who.actor, task_id, body.requirement, ref, body.version)
+            made = H.task_page_attach(
+                c,
+                who.actor,
+                task_id,
+                body.requirement,
+                ref,
+                body.version,
+                note=body.note,
+                changed=body.changed,
+                answered=body.answered,
+            )
             return {"page": {"file_id": made["file_id"], "version": made["version"]}}
 
         return work(request, tid, body, call)
+
+    @app.get("/api/v2/tasks/{tid}/asks/{requirement_id}/rounds")
+    def task_page_rounds(request: Request, tid: str, requirement_id: str):
+        """A page requirement's rounds on this task, oldest first (backend/page_rounds.py): each version, what the bot
+        said with it, Jev's verdict and each answer to it. The decision view's right side and review history."""
+        from . import page_rounds
+
+        who = request.state.identity
+        with store.read() as c:
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            return {"rounds": page_rounds.rounds(c, task_id, requirement_id)}
 
     @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/give")
     def task_give(request: Request, tid: str, requirement_id: str, body: M.TaskAskGive):
