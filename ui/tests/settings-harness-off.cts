@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
-// A harness whose provider is off still appears in the picker, greyed out with its way in:
-// with only OpenAI and Anthropic enabled, Muse Code shows as "(off)" plus an AI-providers line,
-// and enabling Meta makes it pickable with the Wonder models in its model list.
+// The picker offers only the harnesses the team's providers run: with only OpenAI and Anthropic enabled, Muse Code
+// and the external agents (Hermes) stay out, for owners and members alike; enabling Meta (Settings > Models) brings
+// Muse Code in with the Wonder models in its model list; a bot already on an off harness keeps its own row.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -96,13 +96,10 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     let options = await harnessOptions();
     assert.ok(options.some(o => o.value === 'codex' && !o.disabled), 'Codex is offered');
     assert.ok(options.some(o => o.value === 'claude' && !o.disabled), 'Claude Code is offered');
-    const muse = options.find(o => o.value === 'musecode')!;
-    assert.ok(muse, 'Muse Code is listed while Meta is off');
-    assert.equal(muse.disabled, true, 'Muse Code is not pickable while Meta is off');
-    assert.match(muse.text, /Muse Code \(off\)/, 'Muse Code says it is off');
+    assert.ok(!options.some(o => o.value === 'musecode'), 'Muse Code stays out while Meta is off');
     assert.ok(!options.some(o => o.value === 'gemini'), 'a harness with no models stays out');
-    assert.ok(options.some(o => o.value === 'hermes' && !o.disabled), 'external harnesses are unaffected');
-    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'no off line: the harness option already says (off)');
+    assert.ok(!options.some(o => o.value === 'hermes'), 'an external agent is not picked here');
+    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'no off line');
     await page.evaluate(() => (document.querySelector('#bot-editor') as HTMLDialogElement).close());
     // Enabling Meta makes Muse Code pickable and lists the Wonder models under it.
     await settle();

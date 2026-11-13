@@ -140,7 +140,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       assert.equal(await panel.locator('[data-choice-harness] input:checked').inputValue(), '', 'Same as bot is picked');
       assert.equal(await panel.locator('[data-choice-model]').isVisible(), false, 'no model list for Same as bot');
       await choose(panel, 'harness', 'codex');
-      assert.deepEqual((await offered(panel, 'model')).map(t => t.replace(/\s+/g, ' ').trim()), ['gpt 6 luna 1.05M'], 'the task model says its window');
+      assert.deepEqual((await offered(panel, 'model')).map(t => t.replace(/\s+/g, ' ').trim()), ['GPT 6 Luna'], 'the task model lists its model');
       await choose(panel, 'model', 'gpt-6-luna');
       await applyPicker(panel);
     }

@@ -66,7 +66,7 @@ declare function renderSettingsBots(): void;
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: []});
-      if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico']});
+      if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico', 'openai']});
       if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); return json({enabled: ['tico'], default: catalog.default, revision: 2}); }
       if (p === '/api/v2/providers') return json({enabled: ['tico'], default: catalog.default, revision: 1, auto_fallback: true,
         providers: [{id: 'tico', label: 'Tico AI Gateway', gateway: true}]});

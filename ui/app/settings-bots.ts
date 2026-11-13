@@ -110,18 +110,6 @@ function settingsAllChoices() {
         return {harness, model: model.id, effort, label, search, value: settingsChoiceValue(harness, model.id, effort)};
       })));
 }
-// Harness the team has no provider for: shown greyed out to whoever can turn it on, never silently
-// missing, so a shipped vendor arrives with its way in (Muse Code stayed invisible while Meta was off).
-// Only admins see them: anyone else gets no way in, just clutter.
-function settingsOffHarnesses(choices: {harness: string | undefined}[]) {
-  const enabled = SETTINGS_DATA.enabledProviders || [];
-  if (!enabled.length || !settingsIsAdmin()) return [];
-  const have = new Set(choices.map(row => row.harness));
-  return (SETTINGS_DATA.harnesses || []).filter(row =>
-    !row.external && !have.has(row.id) && (SETTINGS_DATA.models || []).some(model =>
-      !model.deprecated && model.provider && !enabled.includes(model.provider) &&
-      (model.harnesses || [model.runtime]).includes(row.id)));
-}
 // What the bot's computer cannot run, as the server judges it (backend/readiness.py `can_run`, sent with
 // /v2/operations as `runnable`): {can_run: false, problem, short, computer, sign_in, move}. Not listed: not refused.
 function settingsRuntimeBlock(e: SettingsBot | null | undefined, harness: string | undefined) {

@@ -475,10 +475,11 @@ function settingsEditBot(slug = '', inline = false) {
         // The held rows, in the order they were changed; each one done leaves the list, so Save again never repeats it.
         for (const [key, item] of pending) { rev = await item.run(rev); pending.delete(key); }
         // The bot's window: it saves on its own and keeps the session, so before a model change.
-        if (model?.resized && model.compact) {
+        // Default (null) clears a saved window, back to the model's own.
+        if (model?.resized) {
           rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at: model.compact, expected_revision: rev}))?.revision ?? rev + 1;
           if (!target) settingsChoiceMarkSaved(model.box, model.value, model.compact);
-          else model.box.dataset.compactCurrent = String(model.compact);
+          else model.box.dataset.compactCurrent = model.compact ? String(model.compact) : '';
         }
         // Last, since a transition holds the revision it started from; its own dialog shows the progress. A model
         // change applies at once, then the move starts from the bot as it is now (one change at a time per bot).

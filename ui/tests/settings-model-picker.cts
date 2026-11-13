@@ -115,21 +115,22 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await closedText(cell(page, 'analyst')), 'Opus 5.5 MED 600K');
     // AC-7: no window for a harness that does not compact.
     assert.equal(await closedText(cell(page, 'reviewer')), 'GPT 6 Sol MED');
-    assert.match((await cell(page, 'assistant').locator('[data-choice-open]').getAttribute('aria-label'))!, /^Model for Assistant: Claude Code, opus 5.5, medium effort, compacts at 400k$/);
+    assert.match((await cell(page, 'assistant').locator('[data-choice-open]').getAttribute('aria-label'))!, /^Model for Assistant: Claude Code, Opus 5.5, medium effort, compacts at 400k$/);
     assert.deepEqual(await page.locator('[data-bot-choice][data-kind=model] .sb-pick-text').evaluateAll(texts => texts.filter(t => t.scrollWidth > t.clientWidth).map(t => t.textContent)), [],
       'the whole model, effort and window show in the table');
     await capture('desktop-closed', page.locator('#settings-bots-list'));
 
-    // AC-2: one panel; the harness and full effort names; each model with its window; twelve sizes, the default marked.
+    // AC-2: one panel; the harness and full effort names; the models (no window: it read like a size to pick); Compact
+    // starts on Default, which names the model's default, then the twelve sizes.
     let panel = await openPicker(cell(page, 'assistant'));
     assert.deepEqual(await offered(panel, 'harness'), ['Claude Code', 'Codex', 'Plain']);
     assert.equal(await chosen(panel, 'harness'), 'claude');
-    assert.deepEqual((await offered(panel, 'model')).map(t => t.replace(/\s+/g, ' ').trim()), ['opus 5.5 (default) 1M', 'haiku 5.5 1M']);
+    assert.deepEqual((await offered(panel, 'model')).map(t => t.replace(/\s+/g, ' ').trim()), ['Opus 5.5 (default)', 'Haiku 5.5']);
     assert.equal(await chosen(panel, 'model'), 'claude-opus-5-5');
     assert.deepEqual(await offered(panel, 'effort'), ['low', 'medium', 'high', 'xhigh', 'max']);
     const compact = panel.locator('[data-choice-compact]');
-    assert.deepEqual(await compact.locator('option').allInnerTexts(), SIZES.map(s => s === '400K' ? '400K (default)' : s));
-    assert.equal(await compact.inputValue(), '400000');
+    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Default (400K)', ...SIZES]);
+    assert.equal(await compact.inputValue(), '', 'no saved window: Default');
     assert.equal(await panel.locator('[data-choice-apply]').isDisabled(), true, 'nothing changed yet');
     await capture('desktop-open', panel);
     // AC-3: 700K and Apply saves the window alone: no model change, so no fresh session.
@@ -139,23 +140,32 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     await reloaded(page, 'assistant', 5);
     assert.deepEqual(calls.map(c => [c.what, c.body]), [['compact-at', {compact_at: 700_000, expected_revision: 4}]]);
     assert.equal(await closedText(cell(page, 'assistant')), 'Opus 5.5 MED 700K');
+    // Default clears the saved window: the bot compacts at its model's default again.
+    panel = await openPicker(cell(page, 'assistant'));
+    assert.equal(await compact.inputValue(), '700000');
+    calls = [];
+    await compact.selectOption('');
+    await applyPicker(panel);
+    await reloaded(page, 'assistant', 6);
+    assert.deepEqual(calls.map(c => [c.what, c.body]), [['compact-at', {compact_at: null, expected_revision: 5}]]);
+    assert.equal(await closedText(cell(page, 'assistant')), 'Opus 5.5 MED 400K');
 
     // AC-8, AC-9: a 600K bot moved to gpt 5.6 sol (500k): the list ends at 500K and the panel says it was lowered.
     panel = await openPicker(cell(page, 'analyst'));
     await choose(panel, 'harness', 'codex');
     await choose(panel, 'model', 'gpt-5-6-sol');
-    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['100K', '150K', '200K', '250K (default)', '300K', '400K', '500K']);
+    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Default (250K)', '100K', '150K', '200K', '250K', '300K', '400K', '500K']);
     assert.equal(await compact.inputValue(), '500000');
-    assert.equal(await panel.locator('[data-choice-note]').innerText(), 'Compact was 600K; lowered to 500K to fit gpt 5.6 sol.');
+    assert.equal(await panel.locator('[data-choice-note]').innerText(), 'Compact was 600K; lowered to 500K to fit GPT 5.6 Sol.');
     await capture('desktop-lowered', panel);
     await panel.locator('[data-choice-cancel]').click();
     // AC-10b: no saved window, opus to haiku: the default follows, and the panel says so.
     panel = await openPicker(cell(page, 'researcher'));
     await choose(panel, 'model', 'claude-opus-5-5');
-    assert.equal(await compact.locator('option:checked').innerText(), '400K (default)');
-    assert.equal(await panel.locator('[data-choice-note]').innerText(), 'The default follows the model: 400K for opus 5.5.');
+    assert.equal(await compact.locator('option:checked').innerText(), 'Default (400K)');
+    assert.equal(await panel.locator('[data-choice-note]').innerText(), 'The default follows the model: 400K for Opus 5.5.');
     await choose(panel, 'model', 'claude-haiku-5-5');
-    assert.equal(await compact.locator('option:checked').innerText(), '150K (default)');
+    assert.equal(await compact.locator('option:checked').innerText(), 'Default (150K)');
     await panel.locator('[data-choice-cancel]').click();
     // AC-7: a harness without compaction: no Compact row, and Apply saves no window.
     panel = await openPicker(cell(page, 'reviewer'));
@@ -179,7 +189,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     await reloaded(page, 'researcher', 5);
-    assert.deepEqual(calls.map(c => [c.what, c.body.compact_at]), [['compact-at', 200_000]], 'Enter applied the next size up');
+    assert.deepEqual(calls.map(c => [c.what, c.body.compact_at]), [['compact-at', 100_000]], 'Enter applied the size after Default');
 
     // AC-10c and AC-4 (Task model cell): Same as bot reads just that; its window saves to the task record.
     await page.locator('[data-settings-bot=assistant] [data-task-open=assistant]').click();
@@ -193,8 +203,8 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     calls = [];
     await compact.selectOption('150000');
     await applyPicker(panel);
-    await reloaded(page, 'assistant', 6);
-    assert.deepEqual(calls.map(c => [c.what, c.body]), [['task-model', {task_model: {model: null, effort: null, compact_at: 150_000}, expected_revision: 5}]]);
+    await reloaded(page, 'assistant', 7);
+    assert.deepEqual(calls.map(c => [c.what, c.body]), [['task-model', {task_model: {model: null, effort: null, compact_at: 150_000}, expected_revision: 6}]]);
     assert.equal(await closedText(page.locator('tr[data-task-row=assistant] [data-bot-choice][data-kind=task]')), 'Same as bot 150K');
 
     // AC-4, the bot editor: no Compact at row; the picker holds its pick until Save bot, which saves the window alone.
@@ -213,7 +223,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.deepEqual(calls, [], 'held until Save bot');
     assert.match(await editor.locator('[data-bot-pending]').innerText(), /model/);
     await editor.locator('button[type=submit]:not([data-choice-apply])').click();
-    await reloaded(page, 'assistant', 8);
+    await reloaded(page, 'assistant', 9);
     assert.deepEqual(calls.map(c => c.what), ['definition', 'compact-at'], 'the window alone: no model change');
     assert.equal(calls[1]!.body.compact_at, 300_000);
 
@@ -226,7 +236,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
     assert.equal(await closedText(add), 'Opus 5.5 MED 400K');
     panel = await openPicker(add);
     await choose(panel, 'model', 'claude-haiku-5-5');
-    assert.equal(await panel.locator('[data-choice-compact] option:checked').innerText(), '150K (default)');
+    assert.equal(await panel.locator('[data-choice-compact] option:checked').innerText(), 'Default (150K)');
     await panel.locator('[data-choice-compact]').selectOption('700000');
     await applyPicker(panel);
     await page.locator('#bot-editor input[name=display_name]').fill('Planner');

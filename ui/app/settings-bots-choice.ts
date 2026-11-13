@@ -81,7 +81,7 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
   const compacts = !!spec.mode && settingsCompacts(c.harness);
   const size = compacts ? compact || (spec.mode === 'bot' ? settingsCompactDefault(c.model) : null) : null;
   return {short: [settingsModelShort(c.model), settingsEffortShort(c.effort), settingsSizeWords(size)].filter(Boolean).join(' '),
-    long: [settingsHarnessShort(c.harness), settingsModelName(c.model), c.effort ? `${settingsEffortName(c.effort)} effort` : '',
+    long: [settingsHarnessShort(c.harness), settingsModelShort(c.model), c.effort ? `${settingsEffortName(c.effort)} effort` : '',
       size ? `compacts at ${settingsSizeWords(size).toLowerCase()}` : compacts && spec.mode !== 'bot' ? 'compacts as the bot does' : ''].filter(Boolean).join(', ')};
 }
 // The spec a box was drawn from, read back from its attributes.
@@ -159,7 +159,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     note = '';
     const now = runModel();
     if (!compactShown() || !now || now === before) return;
-    const window = settingsModelWindow(now), name = settingsModelName(now);
+    const window = settingsModelWindow(now), name = settingsModelShort(now);
     if (compact && window && compact > window) {
       const to = settingsFitCompact(compact, window);
       note = `Compact was ${settingsSizeWords(compact)}; lowered to ${settingsSizeWords(to)} to fit ${name}.`;
@@ -174,8 +174,9 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   const option = (value: string | number, label: string, selected: boolean, disabled = false) => `<option value="${esc(value)}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
   const part = (selector: string) => form.querySelector<HTMLElement>(selector)!;
   const paintHarness = () => {
-    const harnesses = [...new Set(choices.map(row => row.harness))];
-    const off = settingsOffHarnesses(choices);
+    // Only the harnesses the team's providers run: an external agent (Hermes, OpenClaw) is not picked here, and a
+    // provider that is off is turned on in Settings > Models, so neither crowds the row unless the bot is on it.
+    const harnesses = [...new Set(choices.map(row => row.harness))].filter(id => !settingsHarness(id)?.external || id === picked.harness);
     const rows: SettingsPanelRow[] = [];
     if (spec.none) rows.push({value: '', label: spec.none, on: !picked.harness});
     if (picked.harness && picked.harness !== 'tico' && !harnesses.includes(picked.harness)) rows.push({value: picked.harness, label: settingsHarnessShort(picked.harness), on: true, off: true});
@@ -183,7 +184,6 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
       rows.push({value: id || '', label: why ? `${name} (${why.short})` : name, on: id === picked.harness, off: !!why && id !== picked.harness, title: why?.reason}); });
     if (viaTier) { const why = block('tico');
       rows.push({value: 'tico', label: why ? `Tico AI Gateway (${why.short})` : 'Tico AI Gateway', on: picked.harness === 'tico', off: !!why && picked.harness !== 'tico', title: why?.reason}); }
-    off.filter(row => row.id !== picked.harness).forEach(row => { rows.push({value: row.id, label: `${harnessWords(row.id)} (off)`, on: false, off: true}); });
     part('[data-choice-harness] .mp-seg').innerHTML = radios('h', rows);
     // The reason and its Sign in / Move line only in the open bot editor's picker: the table already marks the bot's
     // row, and every bot on that computer would repeat it.
@@ -193,8 +193,8 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
     const list = part('[data-choice-model]');
     list.hidden = !picked.harness || inTier();
-    const row = (id: string, current = false): SettingsPanelRow => ({value: id, label: current ? `${settingsModelName(id)} (current)` : settingsModelName(id), on: id === picked.model, off: current,
-      extra: `${id === SETTINGS_DATA.defaultModel ? '<span class="mp-mark">(default)</span>' : ''}<span class="mp-window">${esc(modelContextWords(settingsModelWindow(id)))}</span>`});
+    const row = (id: string, current = false): SettingsPanelRow => ({value: id, label: current ? `${settingsModelShort(id)} (current)` : settingsModelShort(id), on: id === picked.model, off: current,
+      extra: id === SETTINGS_DATA.defaultModel ? '<span class="mp-mark">(default)</span>' : ''});
     list.querySelector<HTMLElement>('.mp-list')!.innerHTML = radios('m', [
       ...(picked.model && !inTier() && !models.includes(picked.model) ? [row(picked.model, true)] : []), ...models.map(id => row(id))]);
     part('[data-choice-tier]').hidden = !inTier();
@@ -235,9 +235,9 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     const sizes = SETTINGS_COMPACT_SIZES.filter(size => !window || size <= window);
     if (compact && !sizes.includes(compact) && (!window || compact <= window)) sizes.push(compact);
     sizes.sort((a, b) => a - b);
-    const selected = compact || def || 0;
-    select.innerHTML = (mode === 'task' || mode === 'fallback' ? option('', 'Same as bot', !compact) : mode === 'bulk' ? option('', "Keep each bot's", !compact) : '')
-      + sizes.map(size => option(size, `${settingsSizeWords(size)}${size === def ? ' (default)' : ''}`, size === selected)).join('');
+    // First the choice that saves no size: a bot's Default follows its model, Same as bot follows the bot.
+    const first = mode === 'bot' ? `Default (${settingsSizeWords(def)})` : mode === 'bulk' ? "Keep each bot's" : 'Same as bot';
+    select.innerHTML = option('', first, !compact) + sizes.map(size => option(size, settingsSizeWords(size), size === compact)).join('');
     select.disabled = readonly;
   };
   const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
@@ -289,8 +289,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
       followModel(before); paint('model');
     } else if (target.matches('[data-choice-compact]')) {
       const size = Number(target.value) || null;
-      // Picking a bot's default while none is saved keeps it following the model.
-      compact = mode === 'bot' && !savedCompact && size === settingsCompactDefault(runModel()) ? null : size;
+      compact = size;
       note = ''; paint('effort');
     }
   });
@@ -422,10 +421,11 @@ async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact
   if (move && (!choice.model || !choice.effort || !choice.harness)) return;
   if (move && !await settingsConfirmTransition(e, 'model', settingsChoiceLabel(choice.harness, choice.model, choice.effort))) return;
   let revision = e.revision || 0;
-  if (compact && compact !== savedCompact) {
+  // A size saves it; Default (null) clears a saved one, back to the model's own.
+  if (compact !== savedCompact) {
     try { revision = (await post(`/v2/bots/${encodeURIComponent(e.id)}/compact-at`, {compact_at: compact, expected_revision: revision}))?.revision ?? revision + 1; }
     catch (error) { toast(errorMessage(error, ''), true); return; }
-    if (!move) { await loadSettings(); toast(`${e.display_name} compacts at ${settingsSizeWords(compact)}`); return; }
+    if (!move) { await loadSettings(); toast(compact ? `${e.display_name} compacts at ${settingsSizeWords(compact)}` : `${e.display_name} compacts at its model's default`); return; }
   }
   await settingsBeginTransition(box, e, {kind: 'model', model: choice.model, effort: choice.effort,
     harness: choice.harness, expected_generation: e.machine?.generation || 0, expected_revision: revision});
