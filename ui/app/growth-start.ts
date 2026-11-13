@@ -174,26 +174,39 @@ async function grStepGo(step: GrStep) {
 }
 const grsLastMonth = () => { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 1); return d.toISOString().slice(0, 7); };
 
-// Scroll to the panel and pulse its next step (or the panel itself once done).
+// Scroll to the panel and pulse its next step. With no panel to point at (its read failed), an admin gets Settings,
+// where every form starts, and only someone who may not is told so.
 function grsPoint() {
   const panel = document.getElementById('gr-start');
-  if (!panel || panel.hidden) { toast('Only the owner or an admin can do this'); return; }
+  if (!panel || panel.hidden) {
+    if (grAdmin() && GR) void gcSettings(GR); else toast('Only the owner or an admin can do this');
+    return;
+  }
   const at = panel.querySelector<HTMLElement>('.grs-next') || panel;
   panel.scrollIntoView({block: 'nearest', behavior: 'smooth'});
   at.classList.remove('grs-flash'); void at.offsetWidth; at.classList.add('grs-flash');
 }
 
 // ----------------------------------------------------------------- empty cards
-// What fills each empty Growth card, with a link to that step (DASH_NONE, ui/app/dashboard.ts). The Funnel is Goals'.
+// What fills each empty Growth card (DASH_NONE, ui/app/dashboard.ts). While setup is not done, it names the step with a
+// link to it; once done (or before the place read says), a card can still be empty (Retention waits 30 days for kept
+// customers), and then it says what fills it in plain words, with no step. The Funnel is Goals'.
+// The place read carries the setup block (backend/growth_setup.py attach); `done: false` only while a step is left.
+const grsSettingUp = () => (DASH?.place === 'growth' ? (DASH.view as {setup?: {done?: boolean}} | null)?.setup?.done : undefined) === false;
+const grsNone = (line: string) => `<p class="muted dash-none grs-fill">${esc(line)}</p>`;
 const GRS_LINK: Record<GrStep, string> = {settings: 'Set the numbers', channel: 'Add a channel', source: 'Choose a source', month: 'Add a month'};
 const grsFill = (step: GrStep, line: string) => `<p class="muted dash-none grs-fill" data-grs-fill="${step}">${esc(line)} <button type="button" class="linkish" data-gr-step="${step}">${esc(GRS_LINK[step])}</button></p>`;
 const GRS_KEPT = ['kept_d30', 'kept_d90', 'kept_d180', 'ltv', 'ltv_cac', 'payback_months'];
 Object.assign(DASH_NONE, {
-  growth_number: (card: ApiCard) => GRS_KEPT.includes(String(card.settings?.metric))
-    ? grsFill('month', 'Fills after step 4, a channel’s first month, once its customers are kept 30 days.')
-    : grsFill('month', 'Fills after step 4: a channel’s first month.'),
-  growth_channels: () => grsFill('channel', 'Fills after step 2: your first channel.'),
-  growth_retention: () => grsFill('month', 'Fills after step 4: a month with customers kept 30, 90 and 180 days.'),
+  growth_number: (card: ApiCard) => {
+    const kept = GRS_KEPT.includes(String(card.settings?.metric));
+    if (!grsSettingUp()) return grsNone(kept ? 'Fills once a month has customers kept 30 days.' : 'Fills from a channel’s months.');
+    return kept ? grsFill('month', 'Fills after step 4, a channel’s first month, once its customers are kept 30 days.')
+      : grsFill('month', 'Fills after step 4: a channel’s first month.');
+  },
+  growth_channels: () => grsSettingUp() ? grsFill('channel', 'Fills after step 2: your first channel.') : grsNone('Fills when a channel is live.'),
+  growth_retention: () => grsSettingUp() ? grsFill('month', 'Fills after step 4: a month with customers kept 30, 90 and 180 days.')
+    : grsNone('Fills once a month has customers kept 30 days.'),
   growth_funnel: () => `<p class="muted dash-none grs-fill" data-grs-fill="goals">Comes from your growth KPIs on Goals. <a href="${GR_GOALS}">Open Goals</a></p>`,
   growth_board: () => `<p class="muted dash-none grs-fill" data-grs-fill="board">Fills when someone files a growth idea. ${grBoardLink('', 'Open the Growth board')}</p>`,
 });

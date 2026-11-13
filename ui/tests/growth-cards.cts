@@ -94,14 +94,16 @@ function setupAt(done: number, {may = true, sources = 1, celebrate = false}: {ma
     you_may: {settings: may, channels: may, sources: may, months: may}};
 }
 
-function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = setupAt(4)) {
+function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = setupAt(4), emptyCards: string[] = []) {
   let n = 0, saved = false;
   const empty = !setup.steps[3]!.done;   // a Growth with no month yet: every card shows nothing (backend/cards.py card_view)
+  const none = (template: string) => empty || emptyCards.includes(template);
   let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
   const reads: unknown[] = [], writes: Write[] = [];
-  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: empty,
-    data: empty ? null : DATA[c.template]!(c.settings, month)});
-  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
+  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: none(c.template),
+    data: none(c.template) ? null : DATA[c.template]!(c.settings, month)});
+  const block = () => setup.done ? {done: true} : {done: false, steps: setup.steps, next: setup.next};
+  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS, setup: block(),
     pins: pins.map(p => ({...p, card: draw(p.card, month)}))});
   const save = () => {
     if (saved) return;
@@ -144,9 +146,9 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4)} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4), emptyCards = [] as string[]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors: string[] = [], fake = server(me, pipelines, setup);
+  const errors: string[] = [], fake = server(me, pipelines, setup, emptyCards);
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
   const config = {company_name: 'Acme'};
@@ -541,6 +543,22 @@ async function shot(page: Page, name: string) {
       await page.locator('#dash-grid .grc-funnel').waitFor();
       await page.waitForTimeout(200);
       assert.equal(await panel(page).isVisible(), false, 'it does not come back');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const me of [OWNER, MEMBER]) {
+      // AC-13: a set-up Growth with a card still empty (Retention waits 30 days for kept customers) reads as before the
+      // panel: plain words, no step link, nothing that says an admin may not.
+      const {page, errors} = await open(browser, {me, emptyCards: ['growth_retention', 'growth_board']});
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      const lines = page.locator('#dash-grid .dash-none');
+      await lines.first().waitFor();
+      assert.equal(await panel(page).isVisible(), false);
+      assert.equal(await page.locator('#dash-grid [data-gr-step]').count(), 0, `${me.id}: no step links once set up`);
+      const words = await lines.allInnerTexts();
+      assert.ok(words.every(w => !/step \d/i.test(w)), `${me.id}: no step named once set up: ${words}`);
+      assert.ok(words.some(w => /kept 30 days/.test(w)), `${me.id}: Retention says what fills it`);
+      assert.equal(await page.locator('.toast').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -371,6 +371,10 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
 /* empty cards: the step that fills them */
 .grs-fill button.linkish,.grs-fill a{color:var(--link);text-decoration:none;font-weight:600;white-space:nowrap}
 .grs-fill button.linkish:hover,.grs-fill a:hover{text-decoration:underline}
+/* Reduced motion: the panel and its steps change state at once, with no ring, pop, burst or flash. */
+@media (prefers-reduced-motion:reduce){
+  .grs,.grs *,.grs-flash,tr.grs-flash>*{animation:none!important;transition:none!important}
+}
 @media(max-width:1100px){.grs-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){
   .grs{margin:4px 12px 10px;padding:var(--s3)}

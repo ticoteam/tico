@@ -2,10 +2,10 @@
    Growth board and Settings) and, until Growth is set up, the Get started panel (growth-start.ts), over the Dashboard's
    grid of cards for the place `growth` (ui/app/dashboard.ts, backend/cards.py), which the owner, admins and bots
    arrange. Its cards read the month picked here (GET /api/v2/places/growth?month=); this file draws them: a Number, the
-   Funnel, Channels, Retention and the Growth board. Settings (growth-channels.js) keeps the numbers the maths uses, the channels and their months; Sources
-   (growth-sources.js) is where the numbers come from. Also what those files, Brand (brand-page.js) and the KPI views on
-   Goals share: formats, a small dialog, form fields, the owner picker. Old addresses land on what replaced them. Every
-   write is the server's to allow.
+   Funnel, Channels, Retention and the Growth board. Settings (growth-channels.js) keeps the numbers the maths uses, the
+   channels and their months; Sources (growth-sources.js) is where the numbers come from. Also what those files, Brand
+   (brand-page.js) and the KPI views on Goals share: formats, a small dialog, form fields, the owner picker. Old
+   addresses land on what replaced them. Every write is the server's to allow.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
