@@ -70,7 +70,7 @@ function route(hash: string = location.hash): void {
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
   threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.ts)
-  calendarStop(S.route); calRowSync();   // the Calendar page's card and reads; the sidebar's day bar (ui/app/calendar*.ts)
+  calendarStop(S.route); calRowSync(true);   // the Calendar page's card and reads; the sidebar's next event, reset (ui/app/calendar*.ts)
   setupMark();        // the wizard's mark first: Ask stays away from it (ui/app/notices.ts)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.ts)
   renderTree();

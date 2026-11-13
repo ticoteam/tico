@@ -3,7 +3,7 @@
 // "Bots that report to me" adds every one; short runs that touch draw as one block that opens their list; no block is an
 // outline and each one's text meets AA; Runs under Show hides runs and is kept after a reload; search is an icon that
 // "/" opens; a calendar found in the search joins the view as a chip; 3 days moves by three days; a phone header takes
-// two lines; and the sidebar row shows the next event with its time, its name linking to the call. Fixtures only, no
+// two lines; and the sidebar row shows the next event with its time, its name opening the event. Fixtures only, no
 // network, at a fixed Wednesday 10:00 (spec calendar-page-cleanup AC-1 to AC-9).
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -161,18 +161,12 @@ async function shot(page: Page, name: string, clip?: string) {
       const {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, theme);
       await page.goto('https://tico-ui.test/#/calendar');
 
-      // The row: today's events on the bar (the standup behind the now line) and the next one, linking to its call.
+      // The row: the next event and when, its name opening the event (ui/tests/calendar-row.cts has the rest).
       const row = page.locator('#nav-calendar');
       await row.locator('.cal-nx .cal-nm').waitFor();
       assert.equal(await row.locator('.cal-nm').innerText(), 'Pricing review', `${where}: the next event`);
-      assert.equal(await row.locator('.cal-tm').innerText(), '11:00', `${where}: at its time`);
-      assert.equal(await row.locator('a.cal-nx').getAttribute('href'), MEET, `${where}: the name joins the call`);
-      assert.equal(await row.locator('a.cal-nx').getAttribute('target'), '_blank');
-      assert.equal(await row.locator('.cal-blk').count(), 2, `${where}: events only on the bar`);
-      assert.equal(await row.locator('.cal-blk.past').count(), 1, `${where}: the standup is past`);
-      await row.locator('.cal-blk:not(.past)').hover();
-      await row.locator('[data-cal-bub] a').waitFor();
-      assert.match(await row.locator('[data-cal-bub]').innerText(), /Pricing review[\s\S]*11:00–11:30/, `${where}: the bubble`);
+      assert.equal(await row.locator('.cal-tm').innerText(), '· 11:00', `${where}: at its time`);
+      assert.equal(await row.locator('a.cal-nx').getAttribute('href'), '#/calendar?date=2026-11-11&open=ev-pricing', `${where}: the name opens the event`);
       const rowRead = w.reads.find(q => q.get('kinds') === 'event');
       assert.ok(rowRead && rowRead.get('who') === 'me', `${where}: the row reads the viewer's events`);
       await shot(page, `row-${theme}`, '#nav-calendar');
@@ -428,12 +422,12 @@ async function shot(page: Page, name: string, clip?: string) {
       await page.goto('https://tico-ui.test/#/updates');
       await page.waitForFunction(() => !!document.querySelector('#nav-calendar a.nav-link'));
       await page.waitForTimeout(800);
-      assert.equal(await page.locator('#nav-calendar').evaluate(el => el.classList.contains('cal-on')), false, 'no calendars: no bar');
+      assert.equal(await page.locator('#nav-calendar').evaluate(el => el.classList.contains('cal-on')), false, 'no calendars: no next event');
       assert.equal(await page.locator('#nav-calendar .cal-nx').count(), 0, 'and no next event');
       assert.equal(await page.locator('#nav-calendar a.nav-link').isVisible(), true, 'just "Calendar"');
       assert.deepEqual(errors, []);
       await context.close();
     }
-    console.log('Calendar: row (bar, next, bubble, join link), week with only her events/due and no bot runs, one header line with no title, Add ticks a bot and × removes it, Bots that report to me, solid AA shapes, grouped runs, card links, Runs under Show kept after reload, search icon and "/", search adds a calendar, shared event once, 3 days, Day side by side with free time, Month, List, record toggle, phone two-line header, no calendars');
+    console.log('Calendar: row (next event, opens it), week with only her events/due and no bot runs, one header line with no title, Add ticks a bot and × removes it, Bots that report to me, solid AA shapes, grouped runs, card links, Runs under Show kept after reload, search icon and "/", search adds a calendar, shared event once, 3 days, Day side by side with free time, Month, List, record toggle, phone two-line header, no calendars');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

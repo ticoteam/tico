@@ -1,6 +1,6 @@
-/* ui/app/calendar-row.ts — The sidebar's Calendar row (spec 2026-11-10-calendar §12.1): the icon and "Calendar" (the page),
-   a day bar over the viewer's working hours with today's events and a now line, and the next event as quiet text that
-   joins its call. The row's markup is in index.html from the first paint; this file only fills the bar and the text.
+/* ui/app/calendar-row.ts — The sidebar's Calendar row (spec 2026-11-10-calendar §12.1, redrawn by "Next event on Home's
+   Calendar row" v3): the icon and "Calendar" (the page), then the viewer's next event in plain text with ‹ › to step
+   through the week. The row's markup is in index.html from the first paint; this file only fills the text.
    Also the shapes every calendar read answers with (docs/dev/calendar-contract.md) and Join, which the page shares.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -95,26 +95,29 @@ const calJoinAttrs = (o: CalOccurrence) => o.meeting_url
 const calOpenHref = (o: CalOccurrence) => `${CAL_ROUTE}?date=${calDay(calWhen(o.start))}&open=${encodeURIComponent(o.occurrence_id)}`;
 
 // ----------------------------------------------------------------- the row
-interface CalRowState { list: CalOccurrence[]; work: [number, number]; at: number; off: boolean; loading: boolean; sel: number; live: (() => void) | null; }
-const CAL_ROW: CalRowState = {list: [], work: [8 * 60, 18 * 60], at: 0, off: false, loading: false, sel: -1, live: null};
+// One line: "Calendar", then the viewer's next event as plain text ("Sales call · in 3 min"), its name opening the event on
+// the page. › steps to the event after it and ‹ back; a new page resets it to the very next. Nothing in the next week
+// reads "Nothing scheduled". Only the viewer's own timed events: no runs, nothing due, nothing declined, no all-day ones.
+// At the sidebar's default width a name is cut with "…" (the agreed fit); hovering it shows the whole line.
+interface CalRowState { list: CalOccurrence[]; at: number; off: boolean; failed: boolean; loading: boolean; pick: string | null; live: (() => void) | null; }
+const CAL_ROW: CalRowState = {list: [], at: 0, off: false, failed: false, loading: false, pick: null, live: null};
 const CAL_ROW_EVERY = 3 * 60 * 1000;
+const CAL_ROW_DAYS = 7;
 const calRowEl = () => document.getElementById('nav-calendar');
 
 async function calRowLoad(): Promise<void> {
   if (CAL_ROW.off || CAL_ROW.loading || !S.me || SESSION.out) return;
   CAL_ROW.loading = true;
-  const from = calMidnight(new Date()), to = calAddDays(from, 1);
+  const from = calMidnight(new Date()), to = calAddDays(from, CAL_ROW_DAYS + 1);
   try {
     const q = new URLSearchParams({who: 'me', from: from.toISOString(), to: to.toISOString(), kinds: 'event'});
     const a = await get<CalEventsAnswer>(`${CAL_API}/events?${q}`, {fresh: true});
     if (!a || !Array.isArray(a.occurrences)) return;     // not a calendar answer: the row stays just "Calendar"
-    const me = (a.calendars || [])[0];
-    CAL_ROW.work = [calMinutes(me?.work_starts, 8 * 60), calMinutes(me?.work_ends, 18 * 60)];
-    // Events the viewer is on: not declined, timed, today.
     CAL_ROW.list = a.occurrences.filter(o => o.kind === 'event' && !o.all_day && o.response !== 'declined')
       .sort((x, y) => calWhen(x.start).getTime() - calWhen(y.start).getTime());
+    // A calendar that would not answer is not an empty week: say nothing rather than "Nothing scheduled".
+    CAL_ROW.failed = !!a.errors?.length;
     CAL_ROW.at = Date.now();
-    calRowKeep(true);
     // Calendar writes arrive live once the server has shown it serves calendars (an older one refuses the topic).
     if (!CAL_ROW.live) {
       const soon = () => liveSoon('cal-row', () => void calRowLoad(), 500);
@@ -124,91 +127,75 @@ async function calRowLoad(): Promise<void> {
     }
   } catch (e) {
     // A server without calendars (404): the row is just "Calendar", and nothing asks again.
-    if ((e as {status?: number}).status === 404) { CAL_ROW.off = true; CAL_ROW.list = []; calRowKeep(false); }
+    if ((e as {status?: number}).status === 404) { CAL_ROW.off = true; CAL_ROW.list = []; }
   } finally {
     CAL_ROW.loading = false;
   }
   calRowDraw();
 }
-// Whether this server has calendars, kept so the next first paint holds the bar's line (ui/theme.ts).
-function calRowKeep(on: boolean): void {
-  document.documentElement.classList.toggle('nav-cal', on);
-  try { localStorage.setItem('tico.nav.calendar', on ? 'on' : 'off'); } catch { /* not kept */ }
-}
-// Called on every route (router.ts) and on focus: reads when the last read is older than the refresh.
-function calRowSync(): void {
+// Called on every route (router.ts, `home`: a new page starts again at the very next event) and on focus: reads when
+// the last read is older than the refresh.
+function calRowSync(home = false): void {
+  if (home && CAL_ROW.pick) { CAL_ROW.pick = null; calRowDraw(); }
   // The first read may add the `calendar` topic: the first live stream waits for it (live.ts liveProbe).
   if (Date.now() - CAL_ROW.at >= CAL_ROW_EVERY) { const read = calRowLoad(); if (!CAL_ROW.at) liveProbe(read); }
 }
 
-function calRowDraw(): void {
+// The events still to come in the next week, the one under way first. The week is today and the six days after it, so a
+// weekday on the line ("Wed 09:00") never means today's.
+function calRowUpcoming(now: Date): CalOccurrence[] {
+  const t = now.getTime(), until = calAddDays(calMidnight(now), CAL_ROW_DAYS).getTime();
+  return CAL_ROW.list.filter(o => calWhen(o.end).getTime() > t && calWhen(o.start).getTime() < until);
+}
+// When it starts, as the line says it: "now", "in 3 min", "15:30", "tomorrow 09:00", "Thu 10:00".
+function calRowWhen(o: CalOccurrence, now: Date): string {
+  const s = calWhen(o.start), ms = s.getTime() - now.getTime();
+  if (ms <= 0) return 'now';
+  if (ms < 60 * 60 * 1000) return `in ${Math.ceil(ms / 60000)} min`;
+  const days = Math.round((calMidnight(s).getTime() - calMidnight(now).getTime()) / 86400e3);
+  if (days === 0) return calClock(s);
+  if (days === 1) return `tomorrow ${calClock(s)}`;
+  return `${s.toLocaleDateString(undefined, {weekday: 'short'})} ${calClock(s)}`;
+}
+
+// `dir` slides the new event in from the side it came from (› from the right, ‹ from the left).
+function calRowDraw(dir = 0): void {
   const row = calRowEl(); if (!row) return;
-  const bar = row.querySelector<HTMLElement>('[data-cal-bar]'), next = row.querySelector<HTMLElement>('[data-cal-next]');
-  if (!bar || !next) return;
-  if (CAL_ROW.off || !CAL_ROW.at) { bar.innerHTML = ''; next.innerHTML = ''; row.classList.remove('cal-on'); return; }
+  const next = row.querySelector<HTMLElement>('[data-cal-next]');
+  if (!next) return;
+  if (CAL_ROW.off || !CAL_ROW.at) { next.innerHTML = ''; row.classList.remove('cal-on'); return; }
   row.classList.add('cal-on');
-  const now = new Date(), nowMin = calMinuteOf(now), list = CAL_ROW.list;
-  // The bar spans working hours, stretched for an earlier or later event.
-  let [lo, hi] = CAL_ROW.work;
-  for (const o of list) { lo = Math.min(lo, calMinuteOf(calWhen(o.start))); hi = Math.max(hi, calEndMinute(o)); }
-  if (hi - lo < 60) hi = lo + 60;
-  const pc = (m: number) => Math.max(0, Math.min(100, (m - lo) / (hi - lo) * 100));
-  const blocks = list.map((o, i) => {
-    const s = calMinuteOf(calWhen(o.start)), e = calEndMinute(o), past = calWhen(o.end).getTime() <= now.getTime();
-    return `<button type="button" class="cal-blk${past ? ' past' : ''}${CAL_ROW.sel === i ? ' sel' : ''}" style="left:${pc(s).toFixed(2)}%;width:${Math.max(0, pc(e) - pc(s)).toFixed(2)}%" data-cal-i="${i}" aria-label="${esc(o.title)}, ${esc(calRange(o))}"></button>`;
-  }).join('');
-  const nowLine = nowMin >= lo && nowMin <= hi ? `<i class="cal-now" style="left:${pc(nowMin).toFixed(2)}%"></i>` : '';
-  const sel = list[CAL_ROW.sel];
-  const bubble = sel ? `<span class="cal-bub" data-cal-bub><a ${calJoinAttrs(sel)}>${esc(sel.title)}</a><span>${esc(calRange(sel))}</span></span>` : '';
-  bar.innerHTML = blocks + nowLine + bubble;
-  if (sel) calRowPlaceBubble(row, bar);
-  // The current event ("Standup now"), else the next ("Standup 9:30"), else Clear.
-  const cur = list.find(o => calWhen(o.start).getTime() <= now.getTime() && calWhen(o.end).getTime() > now.getTime());
-  const up = cur || list.find(o => calWhen(o.start).getTime() > now.getTime());
-  next.innerHTML = up
-    ? `<a class="cal-nx" ${calJoinAttrs(up)}><span class="cal-nm">${esc(up.title)}</span><span class="cal-tm">${cur ? 'now' : esc(calClock(calWhen(up.start)))}</span></a>`
-    : '<span class="cal-nx cal-clear">Clear</span>';
+  const now = new Date(), up = calRowUpcoming(now);
+  if (!up.length) { CAL_ROW.pick = null; next.innerHTML = CAL_ROW.failed ? '' : '<span class="cal-nx cal-none">Nothing scheduled</span>'; return; }
+  let i = CAL_ROW.pick ? up.findIndex(o => o.occurrence_id === CAL_ROW.pick) : 0;
+  if (i < 0) { i = 0; CAL_ROW.pick = null; }
+  const o = up[i]!, when = calRowWhen(o, now);
+  // The minute's redraw replaces the buttons: a keyboard user's focus stays on the same control.
+  const focused = document.activeElement instanceof HTMLElement && next.contains(document.activeElement)
+    ? document.activeElement.dataset.calStep || 'event' : null;
+  const step = (d: number, label: string, glyph: string) => `<button type="button" class="cal-step" data-cal-step="${d}" aria-label="${label}">${glyph}</button>`;
+  next.innerHTML = (i > 0 ? step(-1, 'Previous event', '‹') : '')
+    + `<a class="cal-nx${dir > 0 ? ' cal-in-r' : dir < 0 ? ' cal-in-l' : ''}" href="${esc(calOpenHref(o))}" title="${esc(o.title)} · ${esc(when)}">`
+    + `<span class="cal-nm">${esc(o.title)}</span><span class="cal-tm">· ${esc(when)}</span></a>`
+    + (i < up.length - 1 ? step(1, 'Next event', '›') : '');
+  if (focused) (next.querySelector<HTMLElement>(focused === 'event' ? '.cal-nx' : `[data-cal-step="${focused}"]`) ?? next.querySelector<HTMLElement>('.cal-nx'))?.focus();
 }
-// Minutes after today's midnight an event ends (past midnight is the end of the day).
-function calEndMinute(o: CalOccurrence): number {
-  const end = calWhen(o.end), day = calMidnight(new Date());
-  return end.getTime() >= calAddDays(day, 1).getTime() ? 24 * 60 : calMinuteOf(end);
-}
-// The bubble sits under its block, kept inside the row.
-function calRowPlaceBubble(row: HTMLElement, bar: HTMLElement): void {
-  const bub = bar.querySelector<HTMLElement>('[data-cal-bub]'), blk = bar.querySelector<HTMLElement>('.cal-blk.sel');
-  if (!bub || !blk) return;
-  const r = row.getBoundingClientRect(), b = blk.getBoundingClientRect(), barR = bar.getBoundingClientRect(), w = bub.offsetWidth;
-  const center = b.left + b.width / 2;
-  const left = Math.max(r.left + 4, Math.min(center - w / 2, r.right - w - 4));
-  bub.style.left = (left - barR.left) + 'px';
-  bub.style.setProperty('--tip', (center - left) + 'px');
-}
-function calRowSelect(i: number): void {
-  if (CAL_ROW.sel === i) return;
-  CAL_ROW.sel = i; calRowDraw();
+function calRowStep(d: number): void {
+  const up = calRowUpcoming(new Date());
+  const i = CAL_ROW.pick ? Math.max(0, up.findIndex(o => o.occurrence_id === CAL_ROW.pick)) : 0;
+  const to = Math.max(0, Math.min(up.length - 1, i + d));
+  if (to === i) return;
+  CAL_ROW.pick = to === 0 ? null : up[to]!.occurrence_id;
+  calRowDraw(d);
 }
 
 (() => {
   const row = calRowEl(); if (!row) return;
-  row.addEventListener('mouseover', ev => {
-    const b = eventElement(ev)?.closest<HTMLElement>('.cal-blk');
-    if (b) calRowSelect(Number(b.dataset.calI));
-  });
-  row.addEventListener('mouseleave', () => calRowSelect(-1));
   row.addEventListener('click', ev => {
-    const t = eventElement(ev);
-    const join = t?.closest<HTMLElement>('[data-cal-join]');
-    if (join) {
-      const o = CAL_ROW.list.find(x => x.occurrence_id === join.dataset.calJoin);
-      if (o) calRecorder(o);
-      return;     // the link itself opens the call
-    }
-    const b = t?.closest<HTMLElement>('.cal-blk');
-    if (b) { const i = Number(b.dataset.calI); CAL_ROW.sel = CAL_ROW.sel === i ? -1 : i; calRowDraw(); }
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-cal-step]');
+    if (b) { ev.preventDefault(); calRowStep(Number(b.dataset.calStep)); }
   });
-  row.addEventListener('focusout', ev => { if (!row.contains(ev.relatedTarget instanceof Node ? ev.relatedTarget : null)) calRowSelect(-1); });
-  window.addEventListener('focus', calRowSync);
-  // The now line moves each minute; a read every three while the window is shown.
+  window.addEventListener('focus', () => calRowSync());
+  // "in 3 min" counts down and turns to "now" each minute; a read every three while the window is shown.
   setInterval(() => { if (document.hidden) return; if (Date.now() - CAL_ROW.at >= CAL_ROW_EVERY) void calRowLoad(); else calRowDraw(); }, 60 * 1000);
 })();
