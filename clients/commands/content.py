@@ -725,10 +725,16 @@ def docs_search(api, args):
     "history shows as yours, so say what changed in `note`. Pass `base_version`: the `version` tico_doc_read gave "
     "you. The write lands only if nobody saved since; otherwise it is refused (version_conflict, with who saved which "
     "version): read the doc again, apply your change to it and write with the new version. Without `base_version` you "
-    "may replace only your own latest version. Nothing is ever resent on its own. A locked doc is refused.",
+    "may replace only your own latest version. Nothing is ever resent on its own. A locked doc is refused. To change "
+    "one part: `section` replaces only the text under that # heading (up to the next heading of the same or a higher "
+    "level; the heading line stays), and `append` adds `body` at the end of the doc, or of `section`. These land even "
+    "if someone saved since your `base_version`, as long as that section is unchanged (an append always lands). A "
+    "missing or repeated heading is refused with the doc's headings.",
     {
         "path": _s("Folder and file, e.g. sales/pricing.md"),
-        "body": _s("The whole doc, in Markdown"),
+        "body": _s("The whole doc in Markdown; with `section` or `append`, only the text to write there"),
+        "section": _s("A heading's text (case and surrounding spaces ignored): write only under that heading"),
+        "append": {"type": "boolean", "description": "Add `body` at the end of the doc, or of `section`"},
         "base_version": {
             "type": "integer",
             "minimum": 1,
@@ -746,6 +752,7 @@ def docs_write(api, args):
     heading = re.match(r"\s*#\s+(.+)", text)
     title = args.get("title") or (heading.group(1).strip() if heading else path.rsplit("/", 1)[-1].rsplit(".", 1)[0])
     note, base = args.get("note") or "", args.get("base_version")
+    section, append = args.get("section") or None, bool(args.get("append"))
     current = _doc_lookup(api, path)
     # Exactly one write request per call: a refusal goes back to the bot, which reads again and redoes its change on
     # the newer version. Resending the same body would replace an edit the bot never read (docs/docs.md).
@@ -756,6 +763,12 @@ def docs_write(api, args):
                     "not_found",
                     f"No doc at {path} now, though you read version {base} of it: it was moved or archived. "
                     f"`tico doc list` shows where it is.",
+                    404,
+                )
+            if section or append:
+                raise APIError(
+                    "not_found",
+                    f"No doc at {path} to write a section of or add to. Leave out --section and --append to create it.",
                     404,
                 )
             return api.post("docs", {"path": path, "title": title, "body": text, "note": note}, key=_key(args))
@@ -769,6 +782,10 @@ def docs_write(api, args):
         }
         if args.get("title"):
             fields["title"] = args["title"]
+        if section:
+            fields["section"] = section
+        if append:
+            fields["append"] = True
         return api.patch("docs/" + current["id"], fields, key=_key(args))
     except Exception as exc:  # the api's own error type, whichever transport
         refusal = _write_refusal(api, exc, path, base)
