@@ -42,7 +42,7 @@ def _github(c, head, mergeable, action="synchronize"):
 
 
 def _review_page_jev_unsure(c, eng):
-    """Reviewer 2's page at the PR's newest commit; Jev is unsure, so it is back to Reviewer 2 to fix or explain."""
+    """Reviewer 2's page at the PR's newest commit; Jev sent it back, so it is Reviewer 2's to fix."""
     row = E.task(c, eng)
     rid = c.execute(
         "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
@@ -54,14 +54,14 @@ def _review_page_jev_unsure(c, eng):
     )
     c.execute(
         "INSERT INTO page_verdicts (id, file_id, version, rubric_hash, verdict, reasons, created_at, updated_at) "
-        "VALUES (?,?,1,'','unsure','The empty cart case is not covered',?,?)",
+        "VALUES (?,?,1,'','not_met','The empty cart case is not covered',?,?)",
         (H.new_id(), "f-rev2", H.now(), H.now()),
     )
     return rid
 
 
 def _in_review_2(c):
-    """An Engineering task in Review 2 with PR 12 open at commit aaa, Reviewer 2's page back with it (Jev unsure)."""
+    """An Engineering task in Review 2 with PR 12 open at commit aaa, Reviewer 2's page back with it (Jev sent it back)."""
     _product, eng = T._filed_engineering(c)
     T._move(c, eng, "engineering-build")
     T._link_pr(c, eng, 12, "aaa")
@@ -78,7 +78,7 @@ def _conflict_wakes(c, task_id):
 def test_a_conflict_while_a_reviewer_holds_the_stage_wakes_the_builder_once_per_commit(c):
     eng = _in_review_2(c)
     row = E.task(c, eng)
-    assert [(w.state, w.who) for w in W.of(c, row)] == [(W.BOT, "bot:rev-b")]  # Jev is unsure: the reviewer's
+    assert [(w.state, w.who) for w in W.of(c, row)] == [(W.BOT, "bot:rev-b")]  # Jev sent it back: the reviewer's
     visit = row["visit"]["id"]
 
     _github(c, "aaa", False)
@@ -101,7 +101,7 @@ def test_a_conflict_while_a_reviewer_holds_the_stage_wakes_the_builder_once_per_
     # What it waits on: the Builder first (the ladder's turn), the reviewer's page still there.
     waits = W.of(c, row)
     assert [(w.state, w.who) for w in waits] == [(W.BOT, "bot:builder"), (W.BOT, "bot:rev-b")]
-    assert waits[1].line.startswith(R.FIX_OR_EXPLAIN)
+    assert waits[1].line.startswith("Jev sent it back")
     assert W.turn(c, row) == "bot:builder"
     assert "bot:builder" in W.turns(c, row)  # its run is not held (task_wakes.may_start)
     line = next(w.line for w in waits if w.who == "bot:builder")

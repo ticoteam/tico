@@ -366,6 +366,9 @@ const importedChart = {org_groups: [{id: 'built-in', name: 'General', order: 0},
     const tour = page.locator('.gs-tour[role=dialog][aria-modal=true]');
     await tour.waitFor();
     assert.equal(await tour.locator('.gs-tour-count').textContent(), '1 of 6');
+    // Company and Library start folded; the tour shows their pages, and their chevrons turn open while it runs.
+    await page.waitForFunction(() => [...document.querySelectorAll('#side .rd-lib-toggle .section-chev')]
+      .every(el => getComputedStyle(el).transform === 'matrix(0, 1, -1, 0, 0, 0)'), null, {timeout: 5000});   // rotate(90deg), after its turn
     assert.equal(await tour.locator('#gs-tour-title').textContent(), 'Updates');
     await shot(page, 'tour');
     for (let i = 0; i < 4; i++) {

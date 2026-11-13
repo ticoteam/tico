@@ -13,7 +13,8 @@ which a stage rule is.
   All of a task's Jev questions on one event go to Jev in one call (`judge_snooze`); Jev failing or unset passes the
   write (fails open). Timers never ask a model.
 - **Then** (`then`): `block` (the write is refused with the rule's reason; an owner the rule refuses as a task enters is
-  cleared and the task still enters), `tell_manager`, `tell_owner`, `move_back` (`then_params.stage`).
+  cleared and the task still enters), `tell_manager`, `tell_owner`, `move_back` (`then_params.stage`). Tell and Move
+  back need a timer When until action events carry them out (`NEEDS_TIMER`).
 
 Every Block, Tell and Move back is written on the task's history (kind `stage_rule`), naming the rule and the reason,
 and published as `stage_rule.refused` / `stage_rule.told` / `stage_rule.moved_back`. A rule's own change sets off no
@@ -39,6 +40,9 @@ ACTIONS = ("enters", "owner_changes", "bot_snoozes")
 EVENTS = (*ACTIONS, "timer")
 TIMERS = ("in_stage", "quiet", "waiting_person")
 THENS = ("block", "tell_manager", "tell_owner", "move_back")
+# Step 1 carries out Tell and Move back on timers alone: owner_check and snooze_rules read Block. A rule with an action
+# When and another Then would save and never act, so it is refused; one saved before is listed as not acting.
+NEEDS_TIMER = "Tell and Move back need a timer in step 1: pick N h in the stage, quiet or waiting on a person"
 # The fixed conditions an If may hold. Those this module reads are in `matches`; the rest are read by the module that
 # owns their When (stage_rule_timers).
 CONDITIONS = (
@@ -189,7 +193,14 @@ def view(row: Any) -> dict[str, Any]:
     out["events"] = [e for e in str(out.get("event") or "").split(",") if e]
     out["scope"] = "stage" if out["stages"] else ("pipeline" if out.get("pipeline_id") else "company")
     out["cost"] = cost(out)
+    out["not_acting"] = not_acting(out)
     return out
+
+
+def not_acting(rule: Any) -> str:
+    """Why a rule never acts ('' when it does): Tell or Move back on an action When, which only timers carry out."""
+    events = [e for e in str(rule.get("event") or "").split(",") if e]
+    return NEEDS_TIMER if events and "timer" not in events and rule.get("then") != "block" else ""
 
 
 def cost(row: Any) -> str:
@@ -722,7 +733,9 @@ def sweep_snoozes(store: Any) -> list[str]:
 
 
 # ----------------------------------------------------------------------------- writes (the routes are part 3's)
-def _check(fields: Any) -> dict[str, Any]:
+def _check(fields: Any, retiring: bool = False) -> dict[str, Any]:
+    """A rule's fields, refused with a plain reason when they cannot be a rule. A bot's suggestion to retire a rule
+    copies the rule as it is, so a shape saved before `NEEDS_TIMER` is not refused there."""
     out = dict(fields)
     events = [e for e in str(out.get("event") or "").split(",") if e]
     if not events or any(e not in EVENTS for e in events) or ("timer" in events and len(events) > 1):
@@ -737,6 +750,8 @@ def _check(fields: Any) -> dict[str, Any]:
         raise _problem("validation", f"Then is one of {', '.join(THENS)}")
     if out["then"] == "block" and not set(events) & {"enters", "owner_changes", "bot_snoozes"}:
         raise _problem("validation", "Block needs an action to refuse: enters, owner changes or a bot snoozes")
+    if not retiring and not_acting(out):
+        raise _problem("validation", NEEDS_TIMER)
     unknown = set(out.get("cond") or {}) - set(CONDITIONS)
     if unknown:
         raise _problem("validation", f"Unknown condition: {', '.join(sorted(unknown))}")
@@ -759,8 +774,9 @@ def _fields(rule: Any) -> dict[str, Any]:
     return {k: rule[k] for k in keep if k in rule}
 
 
-def add(conn: Any, by: str, fields: Any, *, suggests: str = "") -> dict[str, Any]:
-    """A new rule; a bot's is Suggested until a person accepts it."""
+def add(conn: Any, by: str, fields: Any, *, suggests: str = "", retiring: bool = False) -> dict[str, Any]:
+    """A new rule; a bot's is Suggested until a person accepts it. Only `retire` passes `retiring`: a bot's suggestion
+    to retire copies the rule as it is, even a shape saved before `NEEDS_TIMER`; no request field turns that on."""
     H = _h()
     base: dict[str, Any] = {
         "pipeline_id": "",
@@ -771,7 +787,7 @@ def add(conn: Any, by: str, fields: Any, *, suggests: str = "") -> dict[str, Any
         "then_params": {},
         "reason": "",
     }
-    data = _check({**base, **fields})
+    data = _check({**base, **fields}, retiring=retiring)
     ts, rid = H.now(), "sr_" + uuid.uuid4().hex[:12]
     status = "active" if _core.is_human(by) else "suggested"
     cols = _columns(data)
@@ -810,7 +826,11 @@ def retire(conn: Any, by: str, rule_id: str, why: str = "") -> dict[str, Any]:
     if not _core.is_human(by):
         fields = _fields(rule)
         return add(
-            conn, by, {**fields, "then_params": {**rule["then_params"], "retire": why or True}}, suggests=rule_id
+            conn,
+            by,
+            {**fields, "then_params": {**rule["then_params"], "retire": why or True}},
+            suggests=rule_id,
+            retiring=True,
         )
     conn.execute("UPDATE stage_rules SET retired_at=?, updated_at=? WHERE id=?", (_h().now(), _h().now(), rule_id))
     return get(conn, rule_id) or {}
@@ -832,6 +852,7 @@ def accept(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
             out = edit(conn, person, rule["suggests"], {**_fields(rule), "then_params": params})
         conn.execute("UPDATE stage_rules SET retired_at=?, updated_at=? WHERE id=?", (ts, ts, rule_id))
         return out
+    _check(_fields(rule))  # a suggestion saved before a check came in goes live only if it would save today
     conn.execute("UPDATE stage_rules SET status='active', updated_at=? WHERE id=?", (ts, rule_id))
     return get(conn, rule_id) or {}
 

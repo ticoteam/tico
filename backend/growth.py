@@ -811,6 +811,9 @@ def source_update(c, actor, sid, fields, retire=False, catalog=None, who=None):
             logged["sync_map"] = json.dumps(GF.public_map(json.loads(logged["sync_map"] or "{}")), sort_keys=True)
         H.event(c, actor, "growth.source." + ("retire" if retire else "update"), sid, logged)
         _schedule(c, actor, sid, json.loads(row.get("sync_map") or "{}").get("automation"), who)
+        after = {**row, **changed}
+        if GS.is_customers(row) and (after.get("retired_at") or not GS.is_customers(after)):
+            GS.forget_customers(c, actor, row)
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,)))
 
 

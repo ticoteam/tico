@@ -87,6 +87,12 @@ def blockers(conn: "sqlite3.Connection", task_id: str) -> list[tuple[str, str]]:
     return read_cache.value(conn, (KIND, task_id), lambda: _open_of(conn, [task_id])[task_id], shared=True)
 
 
+def blockers_of(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[tuple[str, str]]]:
+    """`blockers` of many tasks in one statement, with or without the snapshot's cache (a list read outside a
+    transaction keeps nothing between reads)."""
+    return _open_of(conn, sorted({str(t) for t in task_ids if t}))
+
+
 def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> None:
     """Read the open dependencies of many tasks in one statement, for the `blockers` reads that follow."""
     values = read_cache.cache(conn)
@@ -120,6 +126,33 @@ def line(conn: "sqlite3.Connection", blocker_id: str) -> str:
         return UNNAMED
     said = LINE.format(ref=ref({"id": found[0], "number": found[1]}), title=str(found[2] or "").strip(), stage="")
     return said + str(found[3]) if found[3] else said.removesuffix(", in ")
+
+
+_BLOCKING = (
+    "SELECT d.to_task, d.from_task, w.number, d.created_at FROM task_relations d JOIN tasks w ON w.id = d.from_task "
+    "WHERE d.to_task IN (SELECT value FROM json_each(?)) AND d.kind = 'depends_on' AND w.status = 'open' "
+    "ORDER BY d.created_at, d.rowid"
+)
+
+
+def blocking(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[tuple[str, object, str]]]:
+    """{task id: [(dependent id, its number, since)]}: the open tasks each of these blocks ("Blocks #307, #308"), oldest
+    dependency first, in one statement however many."""
+    import json
+
+    ids = sorted({str(t) for t in task_ids if t})
+    out: dict[str, list[tuple[str, object, str]]] = {task_id: [] for task_id in ids}
+    if ids:
+        for found in conn.execute(_BLOCKING, (json.dumps(ids),)):
+            out[str(found[0])].append((str(found[1]), found[2], str(found[3])))
+    return out
+
+
+def blocks_line(named: list[str], hidden: int = 0) -> str:
+    """ "Blocks #307, #308", "Blocks #307 and 1 more", or "Blocks 2 tasks" when none may be named."""
+    if not named:
+        return f"Blocks {hidden} task{'' if hidden == 1 else 's'}"
+    return f"Blocks {', '.join(named)}" + (f" and {hidden} more" if hidden else "")
 
 
 def dependents(conn: "sqlite3.Connection", task_id: str) -> list[str]:

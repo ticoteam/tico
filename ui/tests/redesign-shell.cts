@@ -213,7 +213,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Updates', 'Company', 'Strategy', 'Growth', 'Automations', 'Listening', 'Rules', 'Library', 'Docs', 'Files', 'Skills', 'Tools', 'Meetings'], tag + ': the rail, with no Strategy Owner entry');
+      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Updates', 'Company', 'Strategy', 'Growth', 'Automations', 'Listening', 'Rules', 'Library'], tag + ': the rail, with no Strategy Owner entry (Company open on its own page, Library folded)');
       assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');

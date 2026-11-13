@@ -1,9 +1,13 @@
 # pyright: strict
-"""How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model, one probability.
+"""How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model.
 
-`judge_once` is the seam. It asks a model for p, the probability the attachment meets the rubric, and the bands decide:
-p >= 0.75 is met, p <= 0.2 is not met, anything between is unsure. Every verdict carries a reason: Jev answers a
-probability and no prose, so the reason is Tico's own words for the band and the rubric (`reason_for`). A call that
+`judge_once` is the seam. A check Tico ships (the Spec, Review, QA and Checked in production pages: `CHECKS`) is asked as
+its named parts, each a yes/no question (a probability) in the same one call; the check's bar (`BARS`) reads each part as
+yes, no or can't tell. Met when every part is yes, not met when any part is no, unsure when none is no and one can't be
+told. Any other rubric is asked as one question, read against the default bar. Every verdict carries a reason in one line
+per part that is missing (at most three), such as "No out-of-scope list found." (`reason_for`, `_part_lines`): never a
+probability, a band or the check's full wording, which helped nobody (task #351: 27% of verdicts said "could not tell"
+with the whole rubric after it). A call that
 did not give an answer (an error, a timeout, an answer that cannot be read, no model, the team's Decide cap) is not a
 verdict at all: it is `failed`, with what went wrong as its reason, and the caller retries it (page_verdicts). Nothing
 unsure or failed passes work.
@@ -61,6 +65,187 @@ QUESTION_SET = "pipeline-requirement"
 # went from 4 of 30 to 1 of 30, and the highest not-met case was 0.43 (Chris, Nov 11).
 MET_AT, NOT_MET_AT = 0.75, 0.2
 REASON_BYTES = 500
+LINES_AT_MOST = 3  # a verdict names at most this many missing parts, one line each
+
+
+class Part:
+    """One named part of a check: its question id, what Jev is asked (`ask`, completing "The attachment ..."), the line a
+    verdict says when it is missing (`missing`) and when Jev can't tell (`unclear`)."""
+
+    __slots__ = ("key", "ask", "missing", "unclear")
+
+    def __init__(self, key: str, ask: str, missing: str, unclear: str) -> None:
+        self.key, self.ask, self.missing, self.unclear = key, ask, missing, unclear
+
+
+# The checks Tico ships, each as its parts (the Spec page's "What changes" table, task #351). A rubric is one of these
+# when it reads as the preset's line, now or as it shipped before (`check_of`); a company that rewrote its rubric is
+# asked it whole.
+CHECKS: dict[str, tuple[Part, ...]] = {
+    "spec": (
+        Part(
+            "goal",
+            "states the goal: what the work is for, or the problem it solves",
+            "No goal found.",
+            "Can't tell if the goal is stated.",
+        ),
+        Part(
+            "in_scope",
+            "says what is in scope: what the work covers",
+            "No in-scope list found.",
+            "Can't tell what is in scope.",
+        ),
+        Part(
+            "out_of_scope",
+            "says what is out of scope: what the work leaves out, under any heading (out of scope, not doing, non-goals)",
+            "No out-of-scope list found.",
+            "Can't tell what is out of scope.",
+        ),
+        Part(
+            "criteria",
+            "says what done looks like as acceptance criteria someone can check (each a result that can be seen to "
+            "hold or not)",
+            "No acceptance criteria someone can check found.",
+            "Can't tell if the acceptance criteria can be checked.",
+        ),
+    ),
+    "review": (
+        Part(
+            "commit",
+            "names the commit it reviewed for every linked PR, and that commit is the PR's newest (`work.context.heads`, "
+            "in full or its first 7 or more characters)",
+            "The newest commit of each linked PR is not named.",
+            "Can't tell if the newest commit of each linked PR is named.",
+        ),
+        Part(
+            "read_run",
+            "says what the reviewer read and ran or checked (files, tests, commands); a summary of the change with "
+            "nothing read, run or checked does not count",
+            "Doesn't say what was read or run.",
+            "Can't tell what was read or run.",
+        ),
+        Part(
+            "blocks",
+            "says what blocks and what to fix, or says that nothing blocks",
+            "Doesn't say what blocks, or that nothing blocks.",
+            "Can't tell if it says what blocks.",
+        ),
+    ),
+    "qa": (
+        Part(
+            "built",
+            "says what changed; the work's title and spec say what was asked, so naming the work or its PR is enough",
+            "Doesn't say what was built.",
+            "Can't tell what was built.",
+        ),
+        Part(
+            "output",
+            "shows proof it works: screenshots of the running app, or output from how it was checked (test counts, "
+            "command output, a log line, numbers before and after); a line that only says it passed is not proof",
+            "No check output found.",
+            "Can't tell if check output is shown.",
+        ),
+        Part(
+            "checks",
+            "shows the checks at the newest commit and none of them failed: passing, or still running or re-running "
+            "when the page was written, is fine; a page that reports a check failed at the newest commit does not "
+            "have this part",
+            "The checks at the newest commit are not shown, or one failed.",
+            "Can't tell if the checks at the newest commit passed.",
+        ),
+        Part(
+            "reviewer_1",
+            "says what Reviewer 1 found on the commit it reviewed, or that it found nothing to fix (commits after the "
+            "review are fine)",
+            "Reviewer 1's findings are missing.",
+            "Can't tell what Reviewer 1 found.",
+        ),
+        Part(
+            "reviewer_2",
+            "says what Reviewer 2 found on the commit it reviewed, or that it found nothing to fix (commits after the "
+            "review are fine)",
+            "Reviewer 2's findings are missing.",
+            "Can't tell what Reviewer 2 found.",
+        ),
+    ),
+    "validate": (
+        Part(
+            "version",
+            "names the version production runs",
+            "The version production runs is not named.",
+            "Can't tell if the version production runs is named.",
+        ),
+        Part(
+            "holds",
+            "shows that the version production runs holds this work: it is not older than the release that holds the "
+            "work (`work.context.release`, when given)",
+            "The version production runs doesn't hold this work yet.",
+            "Can't tell if the version production runs holds this work.",
+        ),
+        Part(
+            "shown",
+            "says what was run or looked at in production and what it gave; a page that only says it works does not "
+            "have this part",
+            "Doesn't say what was run or looked at in production and what it gave.",
+            "Can't tell what was run or looked at in production.",
+        ),
+    ),
+}
+# Each check's bar: a part is yes at the first number or more, no at the second or less, can't tell between. One place,
+# with the eval result beside it. Today every check has the bar the 30-page eval set on Nov 11; the eval rebuilt from
+# the 826 real verdicts of Nov 11 to 13 and what happened next sets each check's own (task #351's follow-up).
+BARS: dict[str, tuple[float, float]] = {check: (MET_AT, NOT_MET_AT) for check in CHECKS}
+
+
+def _words(text: object) -> str:
+    return " ".join(str(text or "").split())
+
+
+def check_of(rubric: object) -> str | None:
+    """Which of CHECKS a rubric is: the preset's line for it, now or as it shipped before (pipeline_settings.EARLIER), or
+    None for a rubric of a company's own."""
+    from . import pipeline_settings as PS
+
+    S: Any = PS
+    said = _words(rubric)
+    if not said:
+        return None
+    known: dict[str, tuple[str, ...]] = {
+        "spec": (S.SPEC_RUBRIC, *S.EARLIER.get("product-spec/page/rubric", ())),
+        "review": (S.REVIEW_RUBRIC, *S.EARLIER.get("engineering-review-1/page/rubric", ())),
+        "qa": (S.QA_RUBRIC, *S.EARLIER.get("engineering-qa/page/rubric", ())),
+        "validate": (S.VALIDATE_RUBRIC, *S.EARLIER.get("product-validate/page/rubric", ())),
+    }
+    for check, texts in known.items():
+        if any(_words(text) == said for text in texts):
+            return check
+    return None
+
+
+def _band(p: float, bar: tuple[float, float]) -> str:
+    """yes, no or unsure for one part's probability against a check's bar."""
+    if p >= bar[0]:
+        return "yes"
+    if p <= bar[1]:
+        return "no"
+    return "unsure"
+
+
+def _part_lines(check: str, parts: dict[str, float]) -> tuple[str, float, str]:
+    """(verdict, p, reason) from each part's probability: not met naming the parts that are no, else unsure naming the
+    parts Jev can't tell, else met. p is the lowest part's, so a check's bands read the same on p alone."""
+    bar = BARS.get(check, (MET_AT, NOT_MET_AT))
+    said = {part.key: _band(parts[part.key], bar) for part in CHECKS[check] if part.key in parts}
+    no = [part.missing for part in CHECKS[check] if said.get(part.key) == "no"]
+    unclear = [part.unclear for part in CHECKS[check] if said.get(part.key) in ("unsure", None)]
+    p = min(parts.values()) if parts else 0.5
+    if no:
+        return "not_met", p, " ".join(no[:LINES_AT_MOST])
+    if unclear:
+        return "unsure", p, " ".join(unclear[:LINES_AT_MOST])
+    return "met", p, "Every part is there."
+
+
 # How much of the evidence's text and the task's spec Jev is sent. Jev reads 32k tokens of state (clients/judge.py
 # MAX_STATE_CHARS: 120,000 characters of JSON, about four a token), and the two share it with the rest of the state
 # (the rubric, the goal, the title, the commits and releases: a few thousand). 40,000 + 12,000 is under half of it, so
@@ -109,15 +294,15 @@ def verdict_of(p: float) -> str:
     return "unsure"
 
 
-def reason_for(verdict: str, p: float, rubric: str) -> str:
-    """What a verdict says when the model gave no reason (Jev never does): the band, Jev's probability and the check it
-    was asked, so a person or the bot that wrote the page can see what was judged. Never empty."""
-    check = " ".join(str(rubric or "").split()) or "the requirement"
+def reason_for(verdict: str, name: str) -> str:
+    """What a verdict on a check asked whole says when the model gave no reason (Jev never does): one line naming the
+    requirement (its short name, never its full rubric) and no probability. Never empty."""
+    what = f'"{_words(name)}"' if _words(name) else "the check"
     if verdict == "met":
-        return f"Jev found it meets the check (p {p:.2f}): {check}"
+        return f"Meets {what}."
     if verdict == "not_met":
-        return f"Jev found it does not meet the check (p {p:.2f}): {check}"
-    return f"Jev could not tell whether it meets the check (p {p:.2f}, between {NOT_MET_AT} and {MET_AT}): {check}"
+        return f"Doesn't meet {what}."
+    return f"Can't tell if it meets {what}."
 
 
 def _probability(value: object) -> float | None:
@@ -233,9 +418,28 @@ def _fit(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def _questions() -> dict[str, Any]:
-    """The question set's questions (questions/pipeline-requirement.json)."""
-    return J.load_set(QUESTION_SET)["questions"]
+def _questions(check: str | None = None) -> dict[str, Any]:
+    """The question set's questions (questions/pipeline-requirement.json): its one `met` question, or for one of CHECKS a
+    yes/no question per part (`part_<key>`), each with the set's rules for reading the work and the attachment."""
+    asked: dict[str, Any] = J.load_set(QUESTION_SET)["questions"]
+    if check is None or check not in CHECKS:
+        return asked
+    met: dict[str, Any] = asked["met"]
+    rules = str(met["instructions"])
+    # The set's rules for reading the work start at `work.title`; its first sentence (about the whole rubric) is not
+    # this question's. Without that anchor (the set reworded), every rule is kept rather than the call failing.
+    start = rules.find("`work.title`")
+    rules = rules[start:] if start >= 0 else rules
+    return {
+        "part_" + part.key: {
+            **met,
+            "instructions": (
+                f"This question is about one part of `requirement.rubric` alone: the `attachment` {part.ask}, for the "
+                f"work as it is now. Answer high when it does, low when it does not. {rules}"
+            ),
+        }
+        for part in CHECKS[check]
+    }
 
 
 def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None":
@@ -261,16 +465,25 @@ def raw_engine(store: "Store") -> "Callable[[dict[str, Any], dict[str, Any], str
     return ask
 
 
-def _read(result: dict[str, Any], qid: str, model: str, cost: object = None) -> dict[str, Any]:
-    """The engine's answer to `qid` as judge_once's engines give it: {p, reason, provider, model, cost_usd,
-    latency_ms}. Raises JudgeError("shape") when it has no probability."""
-    answers: Any = result.get("answers")
+def _noul(answers: Any, qid: str) -> float | None:
     answer: Any = cast("dict[str, Any]", answers).get(qid) if isinstance(answers, dict) else None
-    p = _probability(cast("dict[str, Any]", answer).get("noul") if isinstance(answer, dict) else None)
-    if p is None:
+    return _probability(cast("dict[str, Any]", answer).get("noul") if isinstance(answer, dict) else None)
+
+
+def _read(result: dict[str, Any], qid: str | list[str], model: str, cost: object = None) -> dict[str, Any]:
+    """The engine's answer to `qid` as judge_once's engines give it: {p, reason, provider, model, cost_usd,
+    latency_ms}, and with a list of part question ids (`part_<key>`), `parts` (each part's probability) and p the lowest.
+    Raises JudgeError("shape") when any asked question has no probability."""
+    answers: Any = result.get("answers")
+    asked = [qid] if isinstance(qid, str) else qid
+    got = {one: _noul(answers, one) for one in asked}
+    if any(p is None for p in got.values()) or not got:
         raise JudgeError("shape", "the decision model's answer has no probability")
+    ps = cast("dict[str, float]", got)
+    parts = {one.removeprefix("part_"): p for one, p in ps.items() if one.startswith("part_")}
     return {
-        "p": p,
+        "p": min(ps.values()),
+        **({"parts": parts} if parts else {}),
         "reason": "",
         "provider": result.get("provider") or "",
         "model": result.get("model") or MODELS[model],
@@ -285,7 +498,7 @@ def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any
     ask = raw_engine(store)
 
     def engine(model: str, state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
-        return _read(ask(state, questions, label), "met", model)
+        return _read(ask(state, questions, label), list(questions), model)
 
     return engine
 
@@ -374,7 +587,7 @@ def _ask(
         return _failed(base, "No judge is configured on this server")
     state = _state(requirement, attachment)
     try:
-        result = ask(chosen, state, _questions(), QUESTION_SET)
+        result = ask(chosen, state, _questions(check_of(requirement.get("rubric"))), QUESTION_SET)
     except Exception as exc:  # noqa: BLE001 - any error in the call is a judge failure, retried, never a verdict
         return _call_failed(base, exc)
     return _finish(base, requirement, attachment, state, result)
@@ -396,16 +609,26 @@ def _finish(
     state: dict[str, Any],
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """The verdict from the engine's answer about one pair, `state` being what one call about it alone is shown."""
+    """The verdict from the engine's answer about one pair, `state` being what one call about it alone is shown: from
+    its parts when it was asked as one of CHECKS (`_part_lines`), else from its one probability."""
     chosen = base["model"]
     p = _probability(result.get("p"))
-    if p is None:
+    check = check_of(requirement.get("rubric"))
+    raw: object = result.get("parts")
+    parts: dict[str, float] = {}
+    if isinstance(raw, dict):
+        for key, value in cast("dict[str, object]", raw).items():
+            got = _probability(value)
+            if got is not None:
+                parts[str(key)] = got
+    if check is not None and parts:
+        verdict, p, reason = _part_lines(check, parts)
+    elif p is None:
         return _failed(base, "The judge's answer could not be read")
-    verdict = verdict_of(p)
-    said = " ".join(str(result.get("reason") or "").split())
-    reason = (said or reason_for(verdict, p, str(requirement.get("rubric") or requirement.get("name") or "")))[
-        :REASON_BYTES
-    ]
+    else:
+        verdict = verdict_of(p)
+        reason = _words(result.get("reason")) or reason_for(verdict, str(requirement.get("name") or ""))
+    reason = reason[:REASON_BYTES]
     if _cannot_see(attachment, state):
         # Enforced here, not only in the prompt: a model that says met on text it was not all shown is still unsure.
         # The call was made and is paid for, so its cost and latency are kept. A text that was cut tells the owner how
@@ -479,16 +702,18 @@ def judge_many(store: Any, pairs: "list[tuple[dict[str, Any], dict[str, Any]]]")
             pages.setdefault(seen, []).append(n)
     # Each item: (state, questions) and, for each pair it holds, (its place, its question id).
     items: list[DG.Item] = []
-    holds: list[list[tuple[int, str]]] = []
+    holds: list[list[tuple[int, str | list[str]]]] = []  # each pair's question id, or its parts' ids
     for members in pages.values():
-        merged = _page_item([states[n] for n in members]) if SAME_PAGE and len(members) > 1 else None
+        whole = all(check_of(pairs[n][0].get("rubric")) is None for n in members)  # parts are never merged
+        merged = _page_item([states[n] for n in members]) if SAME_PAGE and whole and len(members) > 1 else None
         if merged is not None:
             items.append((merged[0], merged[1]))
-            holds.append(list(zip(members, merged[2], strict=True)))
+            holds.append([(n, qid) for n, qid in zip(members, merged[2], strict=True)])
             continue
         for n in members:
-            items.append((states[n], _questions()))
-            holds.append([(n, "met")])
+            asked = _questions(check_of(pairs[n][0].get("rubric")))
+            items.append((states[n], asked))
+            holds.append([(n, "met" if "met" in asked else list(asked))])
     for k, run in enumerate(DG.packs(items, GROUP)):
         if k:  # the cap is read again before every call after the first, as judge_outside read it before each pair
             with store.read() as c:

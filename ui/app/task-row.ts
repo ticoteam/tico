@@ -30,6 +30,26 @@ function taskMarkHTML(t: TaskAny | null | undefined, {space = true}: {space?: bo
 }
 const taskLate = (t: TaskAny | null | undefined) => !!t && t.status === 'open' && !!t.late;
 const lateTagHTML = (t: TaskAny | null | undefined) => taskLate(t) ? '<span class="tk-late">Late</span>' : '';
+/** One end of a dependency on a list row (backend/task_reads._dependencies): a task the reader may not open has no number. */
+interface TaskDepRef { id?: string | null; number?: number | null }
+/** The open tasks a list row depends on ("Blocked by #304"); [] for a full task or one that is not open. */
+const taskBlockedBy = (t: TaskAny | null | undefined): TaskDepRef[] =>
+  t && t.status === 'open' && 'blocked_by' in t ? t.blocked_by || [] : [];
+/** The open tasks that depend on a list row ("Blocks #307"). */
+const taskBlocks = (t: TaskAny | null | undefined): TaskDepRef[] =>
+  t && t.status === 'open' && 'blocks' in t ? t.blocks || [] : [];
+const taskDepRef = (r: TaskDepRef): string => r.number != null ? `#${r.number}` : '';
+/** "Blocks #307", "Blocks #307, #308", and past two, or when one has no number, "Blocks 4 tasks". */
+function taskBlocksText(rows: TaskDepRef[]): string {
+  const refs = rows.map(taskDepRef);
+  if (!rows.length) return '';
+  return rows.length <= 2 && refs.every(Boolean) ? `Blocks ${refs.join(', ')}` : `Blocks ${rows.length} task${rows.length === 1 ? '' : 's'}`;
+}
+/** On a task others depend on, "Blocks #307" beside Late. */
+function blocksTagHTML(t: TaskAny | null | undefined): string {
+  const text = taskBlocksText(taskBlocks(t));
+  return text ? `<span class="tk-blocks">${esc(text)}</span>` : '';
+}
 /** How long, short: since whose turn it is began, else since the task last changed. */
 const taskAge = (t: {turn?: TaskWaitV3 | null; updated_at?: string | null; created_at?: string | null} | null | undefined) =>
   ageShort(t?.turn?.since || t?.updated_at || t?.created_at);
@@ -59,10 +79,12 @@ interface TaskRowOptions {
   after?: string;
   /** The id the row opens; the task's own by default. */
   key?: string;
+  /** Drawn where the age goes (a blocked task's stop mark and "#304"). */
+  tail?: string;
 }
 /** One row, one line (S1). A row in your own list has no mark and no mark space; snoozed and finished rows are dimmed,
     with a date and no avatar. */
-function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''}: TaskRowOptions = {}): string {
+function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = '', tail = ''}: TaskRowOptions = {}): string {
   const id = esc(key || t.id), title = esc(text || t.title || '');
   const line = taskLine(t);
   const tip = esc([taskHolder(t) ? actorLabel(taskHolder(t)) : '', line].filter(Boolean).join(' · '));
@@ -74,15 +96,15 @@ function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''
   const holder = taskHolder(t);
   return `<div class="tk-row" data-task="${id}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}>`
     + (look === 'you' ? '' : taskMarkHTML(t))
-    + `<span class="tk-title">${title}</span>${lateTagHTML(t)}`
+    + `<span class="tk-title">${title}</span>${lateTagHTML(t)}${blocksTagHTML(t)}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${holder ? actorFace(holder, 18) : ''}</span>`
-    + `<span class="tk-age">${esc(taskAge(t))}</span></div>`;
+    + (tail || `<span class="tk-age">${esc(taskAge(t))}</span>`) + '</div>';
 }
 /** A task in a column (S7; task #220): the title on up to two lines, then a meta line with who asked (face and name),
     the marks (Late, the mark), how long it has been in this stage and, when someone else owns it, the owner's face at
     the right. Pointing at the card shows the whole title and its line; at the owner's face, "Owner: <name>". */
-function taskCardHTML(t: TaskAny): string {
+function taskCardHTML(t: TaskAny, tail = ''): string {
   const title = t.title || '', line = taskLine(t);
   // Who asked, as the task page's "Asked by" names it: who really filed it (a schedule's person, BotOps, a built-in such
   // as Health check, which has no face) over the requester whose rights it carries.
@@ -93,8 +115,8 @@ function taskCardHTML(t: TaskAny): string {
   const ownerTip = owner && owner !== asker ? esc(`Owner: ${actorLabel(owner)}`) : '';
   return `<div class="tk-card" data-task="${esc(t.id)}" role="button" tabindex="0" title="${esc([title, line].filter(Boolean).join('\n'))}">`
     + `<span class="tk-title">${esc(title)}</span>`
-    + `<span class="tk-meta">${who}<span class="tk-sp"></span>${lateTagHTML(t)}${taskMarkHTML(t, {space: false})}`
-    + `<span class="tk-age">${esc(ageShort(since))}</span>`
+    + `<span class="tk-meta">${who}<span class="tk-sp"></span>${lateTagHTML(t)}${blocksTagHTML(t)}${taskMarkHTML(t, {space: false})}`
+    + (tail || `<span class="tk-age">${esc(ageShort(since))}</span>`)
     + (ownerTip ? `<span class="tk-owner" role="img" aria-label="${ownerTip}" title="${ownerTip}">${actorFace(owner, 16)}</span>` : '')
     + '</span></div>';
 }
@@ -141,7 +163,7 @@ function taskFilterMatch(t: TaskAny, q: string, f: TaskFilters = {}): boolean {
 /** How a pipeline is drawn on the Tasks page (task-pipelines.ts sets it as it loads). The page (tasks-page.ts) owns the
     header, reading the pipeline and its open tasks, search, filter, the archive and opening a task (any [data-task]);
     it calls `html` again whenever it has read again. `bind` wires the root once drawn, `rail` draws the manager's rail
-    into its host, `ask` the phone's Ask bar into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
+    into its host, `ask` the phone's floating face into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
 interface PipelineViewHooks {
   html(p: PipelineRec, tasks: TaskAny[], opts: {layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters}): string;
   bind?(root: HTMLElement, p: PipelineRec): void;

@@ -653,19 +653,6 @@ function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HT
 
 // ---- New task (S6): a title, the details, and one row: who it is for, the pipeline, Create. No due date here; it is
 // added on the task. A new task starts in its pipeline's first stage. `parent` files it from that task.
-function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
-  const people = (S.people || []).filter(p => !p.hidden)
-    .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
-    .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
-  const pick = (value: string) => value === selected ? ' selected' : '';
-  return `<option value="">${esc(blank)}</option>
-    <optgroup label="Humans">${people.map(p =>
-      `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
-    <optgroup label="Bots">${bots.map(e =>
-      `<option value="${esc(e.id)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
-        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.id) || pick('bot:' + e.id)}>${esc(e.display_name || e.slug)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
-}
 function taskCreateModal() {
   let d = $('#task-create');
   if (d) return d;
@@ -695,7 +682,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
         <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
         <textarea name="body" required aria-label="Details" placeholder="Details" rows="6"></textarea>
         <div class="tc-row">
-          <label class="tc-pick"><span>For:</span><select name="owner" required aria-label="For">${taskOwnerOptions(forWho, '…')}</select></label>
+          <div class="tc-pick"><span aria-hidden="true">For:</span>${giveToFieldHTML({name: 'owner', label: 'For', placeholder: 'Who is this for?', selected: forWho, task: parent})}</div>
           <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
           <span class="spacer"></span>
           <button class="primary" type="submit">Create</button>
@@ -721,7 +708,8 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
     ev.preventDefault();
     const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);
     const title = field<HTMLInputElement>('title').value.trim(), body = field<HTMLTextAreaElement>('body').value.trim();
-    const who = field<HTMLSelectElement>('owner').value;
+    const who = field<HTMLInputElement>('owner').value;
+    if (title && body && !who) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }   // the hidden field is never "required"
     if (!title || !who || !body || !btn) return;
     btn.disabled = true; msg.hidden = true;
     const labels = (opts.labels || []).map(String).filter(Boolean);

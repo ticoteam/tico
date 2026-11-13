@@ -111,6 +111,7 @@ const TASKS_UI = [
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
+  'ui/app/give-to.ts', 'ui/styles/give-to.css',  // Give to…: a task's Owner, New task, Ask someone, Subtask (and Needs you)
 ];
 const BOT_CHAT_UI = [
   'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts',

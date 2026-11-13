@@ -181,20 +181,31 @@ async function access(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/');
   await page.locator('#tree .node').first().waitFor();
   const order = () => page.locator('#tree .node[data-org^="b:"]').evaluateAll(ns => ns.map(n => n.dataset.org));
-  const toggle = page.locator('#org-mine');
-  assert.equal(await toggle.getAttribute('aria-label'), 'Only bots I can read or write');
-  assert.equal(await toggle.getAttribute('title'), 'Only bots I can read or write');
-  assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+  // Both switches are in the Team header's ⋯ menu, in words; a switch keeps the menu open.
+  const more = page.locator('#org-more');
+  const menu = async (which: string) => {
+    if (await page.locator('#team-more-menu').isHidden()) await more.click();
+    await page.locator(`#team-more-menu [data-org-more="${which}"]`).click();
+  };
+  const toggle = page.locator('#team-more-menu [data-org-more="mine"]');
+  assert.equal(await more.getAttribute('aria-label'), 'Team options');
+  await more.click();
+  assert.equal((await toggle.innerText()).replace(/\s+/g, ' ').includes('Only bots I can open'), true);
+  assert.equal(await toggle.getAttribute('aria-checked'), 'false');
   assert.deepEqual((await order()).sort(), ['b:intake', 'b:legal', 'b:ops', 'b:sales']);
   await toggle.click();
-  assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+  assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+  assert.equal(await page.locator('#team-more-menu').isVisible(), true, 'the menu stays open');
+  assert.equal(await more.getAttribute('aria-label'), 'Team options · Only bots I can open');
+  assert.match(await page.locator('#tree .org-filter-note').innerText(), /Only bots you can open · Show all/);
   assert.deepEqual((await order()).sort(), ['b:intake', 'b:legal', 'b:ops'], 'a bot I may only see leaves the chart');
   await page.evaluate(() => { location.hash = '#/bot/legal'; });
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('tico.org.history') || '[]')[0] === 'b:legal');
-  await page.locator('#org-history').click();
+  await menu('history');
   assert.equal((await order())[0], 'b:legal', 'the Recent sort still orders what is left');
   assert.ok(!(await order()).includes('b:sales'), 'and the filter still applies');
-  await page.locator('#org-history').click();
+  assert.equal(await more.getAttribute('aria-label'), 'Team options · Only bots I can open · Recently viewed first');
+  await menu('history');
   const savedBy = Date.now() + t(10000);                     // the account copy is written after a short pause
   while (saved.at(-1)?.on !== true && Date.now() < savedBy) await new Promise(r => setTimeout(r, 50));
   assert.equal(saved.at(-1)?.on, true, 'kept with the account');
@@ -202,7 +213,7 @@ async function access(browser: import('playwright').Browser) {
   serverMine = {on: false, at: Date.now() + 60000};
   await page.reload();
   await page.locator('#tree .node').first().waitFor();
-  await page.waitForFunction(() => document.querySelector('#org-mine')?.getAttribute('aria-pressed') === 'false');
+  await page.waitForFunction(() => document.querySelector('#team-more-menu [data-org-more="mine"]')?.getAttribute('aria-checked') === 'false');
   assert.ok((await order()).includes('b:sales'));
 
   // ---- A bot page for someone who may only write to it, and one who may only see it

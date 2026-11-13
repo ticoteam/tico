@@ -9,9 +9,6 @@ button.pv-stage-h{cursor:pointer}
 button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-name{font-weight:600}
 .pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
-/* A person mark and a count: tasks in a limited stage that hold no slot (they wait only on a person's OK or answer). */
-.pv-stage-person{display:inline-flex;align-items:center;gap:3px;align-self:center;padding:1px 7px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:500;white-space:nowrap}
-.pv-stage-person svg{flex:none}
 
 /* Columns: one per work stage, side by side, sharing the width (300px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
@@ -41,6 +38,8 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-sleep:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .pv-is-phone .pv-sleep::after{content:"";position:absolute;left:50%;top:50%;width:40px;height:40px;transform:translate(-50%,-50%)}
 .tk-card .pv-wake{min-width:0}
+.pv-blocked-by{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.pv-stop{display:inline-flex;color:var(--fail)}
 
 /* The list: a group per stage. */
 .pv-group{margin:0 0 10px}
@@ -49,10 +48,13 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 
 /* ▶ n beside a stage's header: the stage's review (decide.ts), with how many of its items wait on the person. */
 .pv-col-head,.pv-group-head{display:flex;align-items:center;gap:8px}
-.pv-play{flex:none;display:inline-flex;align-items:center;gap:4px;height:24px;margin-left:auto;padding:0 8px;border:0;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font:600 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
+.pv-play{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;min-width:40px;height:24px;margin-left:auto;padding:0 8px;border:0;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font:600 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
 .pv-play:hover{filter:brightness(1.08)}
 .pv-play:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.pv-group-head .pv-play{margin-left:4px}
+.pv-play-none{visibility:hidden}
+/* in the list, Rules stays beside the count and ▶ still takes the right edge, as in columns (stage-rules.css) */
+.pv-group-head .sr-btn + .pv-play{margin-left:auto}
+.pv-stage-n[title]{cursor:help}
 
 /* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
    control is at least 44 px tall (S17). */
@@ -60,8 +62,12 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-tabs{flex:1 1 auto;min-width:0;display:flex;gap:4px;overflow-x:auto;padding:0 0 4px;scrollbar-width:none}
 .pv-tab{flex:none;min-height:44px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
 .pv-tab.on{background:var(--surface2);color:var(--ink)}
-.pv-phone-head .pv-play{height:44px;margin:0 0 4px;padding:0 14px}
-.pv-phone-head .pv-stage-person{flex:none;margin:0 0 4px}
+.pv-tab{position:relative}
+.pv-phone-head .pv-play{width:56px;height:44px;margin:0 0 4px;padding:0}   /* one width with or without a count: the tabs never move */
+/* a phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards */
+.pv-slots{margin:2px 4px 8px;color:var(--muted);font-size:var(--t-xs)}
+/* items wait on you in that stage: a dot in the tab's right padding, so the tab is as wide with it as without */
+.pv-tab-dot{position:absolute;top:50%;right:5px;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--wait)}
 
 /* A refused move: the engine's line, or "Move to X without Y?" with a why. */
 .pv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
@@ -111,28 +117,28 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
   .pe-f{grid-template-columns:1fr;gap:4px}
 }
 
-/* The Ask bar on a phone's pipeline board and the chat it opens over the board (ui/app/pipeline-ask.ts). The bar sits
-   above the bottom bar (on the screen's edge while a box has the keyboard and the bottom bar hides); the list keeps room
-   under its last row for it. Every tap target is 44px. */
+/* The board's bots on a phone and the chat they open over the board (ui/app/pipeline-ask.ts): the manager's face,
+   floating 12px from the right and 12px above the bottom bar, hidden while a keyboard is up; the list keeps 64px under
+   its last row for it. Every tap target is 44px. */
 .pa-host[hidden]{display:none}
-.pa-host{position:fixed;z-index:17;left:0;right:0;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));box-sizing:border-box;padding:6px 10px 8px;border-top:1px solid var(--line);background:var(--surface);box-shadow:0 -4px 14px rgba(0,0,0,.08)}
-body.mobile-composer-focus .pa-host{bottom:0}
-.tasks-page.has-ask .tasks-pane{padding-bottom:132px}
-.pa-bar{display:flex;flex-direction:column;gap:4px;min-width:0}
-.pa-ctx{display:flex;min-width:0;color:var(--muted);font-size:var(--t-xs);line-height:16px;white-space:nowrap}
-.pa-where{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.pa-n{flex:none}
-.pa-to{display:flex;gap:6px;min-width:0}
-.pa-to:empty{display:none}
-.pa-to-b{flex:1 1 0;min-width:0;min-height:44px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);border-radius:22px;background:none;color:var(--muted);font:600 var(--t-sm)/1.2 var(--sans);cursor:pointer;touch-action:manipulation}
-.pa-to-b.on{border-color:var(--accent);background:var(--accent-quiet);color:var(--ink)}
-.pa-to-l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pa-host{position:fixed;z-index:17;right:calc(12px + env(safe-area-inset-right));bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
+/* a keyboard is up: a chat box, the search, or a field on the board (the Why of a refused move) */
+body.mobile-composer-focus .pa-host,body:has(.tl-search:focus-within) .pa-host,body:has(#main input:focus, #main textarea:focus) .pa-host{display:none}
+.tasks-page.has-ask .tasks-pane{padding-bottom:64px}
+.pa-fab{position:relative;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.28);cursor:pointer;touch-action:manipulation}
+.pa-fab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.pa-fab>:first-child{border-radius:50%;overflow:hidden}
+/* a small chat mark on the face: it opens a chat, not the bot's page */
+.pa-fab-mark{position:absolute;right:-3px;bottom:-3px;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.pa-fab-mark svg{width:12px;height:12px}
+.pa-pop{position:absolute;right:0;bottom:52px;width:220px;box-sizing:border-box;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--raised, var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.28)}
+.pa-pop[hidden]{display:none}
+.pa-pick{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 8px;border:0;border-radius:8px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.pa-pick:hover,.pa-pick:focus-visible{background:var(--surface2);outline:0}
+.pa-pick-t{display:flex;flex-direction:column;min-width:0}
+.pa-pick-n{font-size:var(--t-base);font-weight:500;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pa-pick-r{font-size:var(--t-xs);line-height:16px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pa-face{flex:none;display:inline-flex}
-.pa-form{display:flex;align-items:flex-end;gap:6px;min-width:0}
-.pa-text{flex:1;min-width:0;min-height:44px;max-height:120px;box-sizing:border-box;padding:11px 14px;border:1px solid var(--line);border-radius:22px;background:var(--surface2);color:var(--ink);font:inherit;line-height:20px;resize:none}
-.pa-send{flex:none;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer;touch-action:manipulation}
-.pa-send svg{width:18px;height:18px}
-.pa-host.pa-small .pa-ctx,.pa-host.pa-small .pa-to{display:none}
 .pa-sheet{position:fixed;inset:auto 0 0;width:100%;max-width:none;height:calc(100% - 48px - env(safe-area-inset-top));max-height:none;margin:0;padding:0;box-sizing:border-box;display:flex;flex-direction:column;border:0;border-radius:14px 14px 0 0;background:var(--surface);color:var(--ink);box-shadow:0 -8px 30px rgba(0,0,0,.25)}
 .pa-sheet:not([open]){display:none}
 .pa-sheet::backdrop{background:rgba(0,0,0,.38)}

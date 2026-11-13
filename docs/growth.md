@@ -88,8 +88,8 @@ A team that knows its customers can load them instead of typing retention. Growt
 retention, LTV, CAC and payback itself, cut by channel, segment or plan, monthly or weekly, and each figure opens to the
 customers behind it.
 
-**Customer facts.** One row per customer, as a CSV (`tico growth customers load customers.csv`). Growth keeps only these
-columns:
+**Customer facts.** One row per customer, as a CSV: **Upload customers** in Growth's Settings or on the Retention card,
+or `tico growth customers load customers.csv`. Growth keeps only these columns:
 
 | Column | Required | What it holds |
 | --- | --- | --- |
@@ -107,6 +107,12 @@ forgotten. A customer who left and came back is a second row with the same key a
 the first row's churned date. A customer counts where they were when they became a customer; a later load that moves
 them to another channel, segment or plan does not move them between cohorts. Only the owner and admins load or delete
 customer facts (`tico growth customers delete` deletes them all; the figures go back to typed values).
+
+**From a synced source.** A source connected with `--sync file --map customers` takes the same columns: each file you
+push (`tico growth source push ID --file customers.csv`) is a load of that source's customers only, so an upload in
+Growth and two sources never replace each other's. A file the rules refuse fails the run, with the rule, and leaves its
+last customers as they were. Retiring the source, stopping its sync or mapping it to numbers deletes its customers and
+its stored file at once.
 
 **What is refused.** Nothing loads when any of these hold, and the message names the rule and the column, never a value:
 a column outside the list; a customer key that looks like an email address or a phone number; a segment or plan longer
@@ -133,11 +139,19 @@ Figures are worked out when they are read, so a load shows at once and day 90 an
 nobody typing. A two-week test shows its new customers and CAC by week; its day-30 retention appears 30 days after its
 last week ends.
 
+**On the Growth page.** With customer facts, the Retention card shows the picked month's cohorts. **Cut by** chooses
+channel, segment or plan, and **Weekly / Monthly** the grain; a month shows every whole week that touches it. Each row has
+its new customers, day 30, 90 and 180, LTV and CAC; the foot says how many customers the figures come from and when and
+where they were loaded. The month picker lists the months with customer facts too. Each Number card says whether its
+figure is computed, typed, or both (every channel together, some of each), and the Channels table dots its computed
+figures.
+
 **Computed beside typed.** A channel's month with customer facts shows the computed figures, each marked computed and
 with the number of customers it comes from. A typed estimate for the same month is replaced. A typed actual that differs
 is kept beside it. Channels and months with no customer facts read exactly as before. Every figure says which it is.
 
-**The customers behind a figure.** `--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
+**The customers behind a figure.** On the Retention card, a day's figure opens to its customers. In the CLI,
+`--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
 search-ads, still paying on day 30") and the customer keys, split into still customers and churned with the date. Anyone
 who reads Growth sees the counts and the rule; the keys and churn dates show only to the owner, admins and the people or
 bots they name (`--set key_readers=growth-product-owner`).
@@ -306,6 +320,7 @@ tico growth source push ID --file FILE.csv | sync ID | run ID
 tico growth source push ID --file FILE.csv | sync ID
 tico growth source campaigns [--months N]  Finance's ad campaigns and their keys, to map
 tico growth source add --truth-for spend --system NAME --sync finance_ad_spend --campaign KEY=CHANNEL
+tico growth source add --truth-for customers --system NAME --sync file --map customers
 tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]

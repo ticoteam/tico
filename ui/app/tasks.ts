@@ -20,7 +20,7 @@ interface TaskRow extends PropTask {
 }
 // One relation of a task (the server's `relations`, by kind): `direction` is the task's own side, `out` or `in`.
 // An `after` row also has the other task's number and stage (the order to merge in: backend/merge_order.py).
-type TaskRelRow = {direction: string; id: string; owner_id: string; status: string; title: string; number?: number | null; stage?: string | null};
+type TaskRelRow = {direction: string; id: string; owner_id: string; status: string; title: string; number?: number | null; stage?: string | null; since?: string};
 // A goal as the Serves picker needs it (goalOptions).
 type GoalOption = Pick<import('../types/api').Goal, 'id' | 'title' | 'owner_id' | 'parent_id' | 'rank' | 'status'>;
 const teamOf = (id: string) => botRow(id)?.team || '';
@@ -109,9 +109,12 @@ function taskDueInfo(t: (Partial<Pick<TaskRow, 'due_at' | 'occurrence' | 'status
     ? shown.toLocaleDateString(undefined, {weekday: 'short'}) : day;
   return {at, day, kind: 'deadline', late, soon: !late && at - Date.now() < 2 * 864e5, words: late ? `Overdue ${day}` : `Due ${when}`};
 }
-// Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then.
-function taskSnoozed(t: Pick<TaskV3, 'status' | 'snoozed' | 'snooze'> | null | undefined) {
-  return !!t && !taskFinished(t) && (!!t.snoozed || !!t.snooze);
+// Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then. A task that depends on an
+// open task is blocked, never Snoozed, even under a snooze left open (backend/task_depends.py): no chip, no Unsnooze.
+function taskSnoozed(t: Pick<TaskV3, 'status' | 'snoozed' | 'snooze'> & PartialTaskRow | null | undefined) {
+  if (!t || taskFinished(t)) return false;
+  if (taskRels(t, 'depends_on', 'out').some(r => r.status === 'open')) return false;
+  return !!t.snoozed || !!t.snooze;
 }
 function snoozeDay(t: Pick<TaskV3, 'snooze'> | null | undefined) {
   const until = parseServerTime(t?.snooze?.until);

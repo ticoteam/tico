@@ -42,7 +42,7 @@
   #task-modal:has(.task-layout) .prop{min-height:44px}
   body.task-modal-open{overflow:hidden}
   .task-tabs{display:flex;gap:20px;padding:0 16px;border-bottom:1px solid var(--line);flex:none}
-  .task-tab{min-height:44px;padding:0;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-base);cursor:pointer}
+  .task-tab{min-height:44px;min-width:44px;padding:0;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-base);cursor:pointer}
   .task-tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
   .tmodal-body.task-layout{display:flex;flex-direction:column;overflow:auto;padding:8px 16px max(16px,env(safe-area-inset-bottom))}
   .task-layout[data-task-tab-shown="chat"]{overflow:hidden;padding-bottom:max(8px,env(safe-area-inset-bottom))}

@@ -2,8 +2,9 @@
 // scripts are compiled with esbuild's transform and run in one vm context, with the few shared globals they read stubbed:
 // - the pipeline view's hook draws columns, the list and the phone's tabs from the tasks the page gives it, with each
 //   stage's count out of its limit, and a stage header that opens settings only for whoever may change the pipeline;
-// - against a limit the count is the tasks that hold a slot; those waiting only on a person (`on_person`) show beside it
-//   as a person mark and their number, the words only in its label and title (S8: no other words);
+// - against a limit the count is the tasks that hold a slot; one count per stage: those waiting only on a person
+//   (`on_person`) are said in the count's tooltip and name ("5 of 20 slots used. 15 more wait on a person and hold no
+//   slot."), and on a phone in one muted line above the open stage's cards; no person pill;
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
 // - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
 //   no factory under Other with no count;
@@ -40,7 +41,7 @@ const ctx = vm.createContext({
   skelRows: () => '<i class="skel"></i>',
   errorMessage: (_e: unknown, fallback: string) => fallback,
   TL_ICON: {plus: '+'},
-  taskOwnerOptions: () => '',
+  giveToFieldHTML: () => '',
   stageRulesButtonHTML: () => '',   // stage-rules.cts draws a stage's Rules button
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
@@ -70,7 +71,7 @@ if (!view) throw new Error('the view sets its hook on the page');
 {
   const html = view.html(rec(), TASKS, opts());
   assert.equal((html.match(/class="pv-col"/g) || []).length, 3, 'a column per work stage; Done and Closed are not columns');
-  assert.match(html, /data-pv-settings="spec"[^>]*><span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum">2\/2<\/span>/, 'a stage with a limit counts out of it');
+  assert.match(html, /data-pv-settings="spec"[^>]*><span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum" title="2 of 2 slots used." aria-label="2 of 2 slots used.">2\/2<\/span>/, 'a stage with a limit counts out of it');
   assert.match(html, /<span class="pv-stage-name">Ideas<\/span><span class="pv-stage-n tnum">1<\/span>/);
   assert.equal((html.match(/class="tk-card"/g) || []).length, 3, 'only this pipeline\'s open tasks');
   assert.doesNotMatch(html, /Other pipeline|Shipped/);
@@ -126,30 +127,39 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.match(phone, /<div class="pv-phone"><div class="tk-card" data-task="t1"[^]*class="tk-asker"/, "a phone's stage shows the same card");
 }
 
-// ---- a limited stage counts bot work; tasks waiting only on a person's OK hold no slot and are counted beside it
+// ---- a limited stage counts bot work; tasks waiting only on a person's OK hold no slot: one count, its tooltip says so
 {
   const waiting = Array.from({length: 15}, (_, i) => task(`w${i}`, `Spec ${i}`, 'spec', {pipeline_id: 'spec20', on_person: true,
     turn: {state: 'person', who: 'human:chris', line: 'OK the spec', ask: true}}));
   const working = Array.from({length: 5}, (_, i) => task(`b${i}`, `Draft ${i}`, 'spec', {pipeline_id: 'spec20'}));
   const twenty = rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec', {task_limit: 20}), stage('dev', 'In development')]});
   const html = view.html(twenty, [...waiting, ...working], opts());
-  // A person mark and the number; the words are its label and title only, never drawn (S8, C27).
-  const mark = (n: number, words: string) =>
-    new RegExp(`<span class="pv-stage-person tnum" role="img" aria-label="${words}" title="${words}"><svg [^>]*aria-hidden="true"[^>]*>(?:(?!</svg>).)*</svg>${n}</span>`);
-  assert.match(html, /<span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum">5\/20<\/span><span class="pv-stage-person/, 'Spec 5/20, then the mark');
-  assert.match(html, mark(15, '15 wait on a person'), 'a person mark and 15, with the words in its label and title');
-  assert.doesNotMatch(html.replace(/<[^>]*>/g, ' '), /wait on a person/, 'no words are drawn in the header');
+  const words = '5 of 20 slots used. 15 more wait on a person and hold no slot.';
+  assert.match(html, new RegExp(`<span class="pv-stage-name">Spec</span><span class="pv-stage-n tnum" title="${words}" aria-label="${words}">5/20</span></button>`),
+    'Spec 5/20, the rest said in its tooltip and name, and nothing after it');
+  assert.doesNotMatch(html, /pv-stage-person/, 'no person pill');
   assert.equal((html.match(/class="tk-card"/g) || []).length, 20, 'every task is still drawn');
   const list = view.html(twenty, [...waiting, ...working], opts({layout: 'list'}));
-  assert.match(list, mark(15, '15 wait on a person'));
+  assert.match(list, new RegExp(`title="${words}"`));
+  assert.doesNotMatch(list, /pv-stage-person/);
   const phone = view.html(twenty, [...waiting, ...working], opts({phone: true}));
   assert.match(phone, /data-pv-tab="spec"[^>]*>Spec <span class="tnum">5\/20<\/span>/, 'the phone tab counts bot work too');
-  assert.match(phone, new RegExp(`</div>${mark(15, '15 wait on a person').source}`), 'and the stage shown has the mark');
-  assert.doesNotMatch(phone.replace(/<[^>]*>/g, ' '), /wait on a person/, 'no words on the phone head either');
+  assert.doesNotMatch(phone, /pv-stage-person/);
+  assert.match(phone, new RegExp(`</div><p class="pv-slots">${words}</p><div class="pv-phone">`), 'a phone says it in one line above the cards');
   const one = view.html(twenty, [waiting[0], ...working], opts());
-  assert.match(one, mark(1, '1 waits on a person'));
+  assert.match(one, /title="5 of 20 slots used\. 1 more waits on a person and holds no slot\."/);
+  const none = view.html(twenty, working, opts({phone: true}));
+  assert.doesNotMatch(none, /pv-slots/, 'none waits on a person: no line on the phone');
+  assert.match(view.html(twenty, working, opts()), /title="5 of 20 slots used\." aria-label="5 of 20 slots used\.">5\/20</);
   const open = view.html(rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec')]}), [...waiting, ...working], opts());
-  assert.match(open, /<span class="pv-stage-n tnum">20<\/span><\/button>/, 'without a limit every task counts and no pill is drawn');
+  assert.match(open, /<span class="pv-stage-n tnum">20<\/span><\/button>/, 'without a limit every task counts, with no tooltip');
+}
+
+// ---- ▶ keeps its slot when nothing waits on the person, so nothing moves when the count arrives
+{
+  const html = view.html(rec(), TASKS, opts());
+  assert.match(html, /<span class="pv-play pv-play-none" aria-hidden="true"><\/span>/, 'an empty ▶ slot');
+  assert.doesNotMatch(html, /data-pv-play=/, 'nothing to click');
 }
 
 // ---- a refused move
