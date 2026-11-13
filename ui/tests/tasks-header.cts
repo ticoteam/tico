@@ -128,7 +128,14 @@ async function menu(page: Page): Promise<string[]> {
       assert.equal(await play.isVisible(), true, '▶ stays on the row');
       assert.equal(await play.evaluate(el => el.classList.contains('none')), true);
       assert.equal(await play.getAttribute('aria-label'), 'Review: nothing waits on you');
-      assert.ok((await box(page, '#task-play')).width >= 60, 'one width with or without a count');
+      // One width with or without a count, up to "99+".
+      const quiet = (await box(page, '#task-play')).width;
+      const widths = await page.locator('#task-play').evaluate(el => ['1', '12', '99', '99+'].map(n => {
+        el.classList.remove('none'); el.querySelector('.tl-review-n')!.textContent = n;
+        return el.getBoundingClientRect().width;
+      }));
+      assert.ok(widths.every(w => Math.abs(w - quiet) < 0.1), `▶ is ${quiet}px at 0 and ${widths.join(', ')} with 1, 12, 99, 99+`);
+      await page.locator('#task-play').evaluate(el => { el.classList.add('none'); el.querySelector('.tl-review-n')!.textContent = ''; });
       await play.click();
       await page.locator('.toast', {hasText: 'Nothing waits on you in Product'}).waitFor();
       assert.equal(await page.locator('#need-card[open]').count(), 0, 'no review opens');
