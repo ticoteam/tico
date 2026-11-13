@@ -6655,7 +6655,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_session_near_its_compact_at_or_of_unknown_size_gets_the_whole_prompt() {
         // Each fake turn uses 350 tokens. With the whole prompt (over 900 characters, counted as tokens) that is under
-        // 60% of a 100,000-token Compact at, but over 60% of 2,000, though 350 alone is not; a first turn's size is unknown.
+        // 60% of a 100,000-token Compact at, but over 60% of 1,000, though 350 alone is not; a first turn's size is unknown.
         let (_, prompts, _) = claude_turns(&[
             json!({"compact_at": 100_000}),
             json!({"compact_at": 100_000}),
@@ -6672,9 +6672,9 @@ for line in sys.stdin:
             prompts[1]
         );
         let (_, prompts, _) = claude_turns(&[
-            json!({"compact_at": 2_000}),
-            json!({"compact_at": 2_000}),
-            json!({"compact_at": 2_000}),
+            json!({"compact_at": 1_000}),
+            json!({"compact_at": 1_000}),
+            json!({"compact_at": 1_000}),
         ])
         .await;
         for p in &prompts {
