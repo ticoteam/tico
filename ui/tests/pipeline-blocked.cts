@@ -29,13 +29,13 @@ const brief = (id: string, number: number, title: string, turn: Record<string, u
   snoozed: deps.snoozed ?? turn?.['state'] === 'snoozed', turn, version: 1, created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z',
   blocked_by: deps.blocked_by ?? [], blocks: deps.blocks ?? []});
 // The queue order the server gives: blocked and snoozed tasks among the others. #307 depends on #304; #309 on a task the
-// reader may not open; #310 depends on #304 too and was also snoozed by a bot before the dependency was written.
+// reader may not open; #310 depends on #304 too and a bot also snoozed it: the server sends it as blocked, not snoozed.
 const TASKS = [
   brief('b307', 307, 'Growth synced sources part 2', blockedTurn('Blocked by #304 Growth synced sources part 1, in Build'), {blocked_by: [{id: 'a304', number: 304}]}),
   brief('s1', 301, 'Pricing page copy', snooze('2026-11-14T08:00:00Z')),
   brief('a304', 304, 'Growth synced sources part 1', null, {blocks: [{id: 'b307', number: 307}, {id: 'b310', number: 310}]}),
   brief('b309', 309, 'Ledger export', blockedTurn("Blocked by a task you can't open"), {blocked_by: [{id: null, number: null}]}),
-  brief('b310', 310, 'Growth synced sources part 3', blockedTurn('Blocked by #304 Growth synced sources part 1, in Build'), {blocked_by: [{id: 'a304', number: 304}], snoozed: true}),
+  brief('b310', 310, 'Growth synced sources part 3', blockedTurn('Blocked by #304 Growth synced sources part 1, in Build'), {blocked_by: [{id: 'a304', number: 304}]}),
   brief('a2', 302, 'Refund flow'),
 ];
 const AWAKE = ['a304', 'a2'], BLOCKED = ['b307', 'b309', 'b310'], ASLEEP = ['s1'];

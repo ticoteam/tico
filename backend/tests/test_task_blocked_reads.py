@@ -130,3 +130,28 @@ def test_a_blocker_owned_by_a_bot_or_itself_blocked_lists_no_blocks(c):
     TR.relate(c, X.ANA, task(c, "Part 3"), mine, "depends_on")
     TR.relate(c, X.ANA, mine, blocker, "depends_on")
     assert not any(e.get("task_id") == mine for e in W.needs(c, X.ANA))
+
+
+def test_a_blocked_task_a_bot_snoozed_is_listed_as_blocked_never_snoozed(c):
+    """A bot snoozes a task, then it is made to depend on another (or the other way round): it is blocked, so no list
+    has it under Snoozed. The Snoozed archive (snoozed=only) leaves it out, the lists that hide snoozed tasks keep it,
+    and its row is not snoozed, so every screen draws it as blocked."""
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    row = E.task(c, blocked)
+    E.snooze(c, blocked, B, "Waiting for part 1 to merge", "2026-11-16T00:00:00.000000Z", row["version"])
+    asleep = task(c, "Part 3")
+    E.snooze(c, asleep, B, "Vendor replies by Nov 16", "2026-11-16T00:00:00.000000Z", E.task(c, asleep)["version"])
+
+    def listed(snoozed):
+        return {t["id"] for t in H.tasks(c, status="open", snoozed=snoozed)}
+
+    assert blocked not in listed("only") and asleep in listed("only")
+    assert blocked in listed("hide") and asleep not in listed("hide")
+    read = rows(c, blocked, asleep)
+    assert read[blocked]["snoozed"] is False and read[blocked]["blocked_by"]
+    assert read[asleep]["snoozed"] is True
+    # Once the blocker ends, the snooze that is still open sets it aside again.
+    E.move(c, blocker, E.DONE, X.ANA, "Finished")
+    assert blocked in listed("only") and rows(c, blocked)[blocked]["snoozed"] is True

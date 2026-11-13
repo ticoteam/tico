@@ -1126,7 +1126,8 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     11: a manager bot's snooze took a people-only OK out of the person's list for two days); the rest of the task is
     set aside. An ask the stage's merge conflict waits on says so in one more sentence
     (pr_conflicts.held). A task of theirs that others depend on says "Blocks #307, #308" (`_blocks`), even when it is
-    not their turn; the tasks it blocks are in nobody's list.
+    not their turn; the tasks it blocks are in nobody's list. Like every entry here, that is for a task on a pipeline:
+    a plain task someone owns is not in Needs you, so its owner reads "Blocks" on the task itself.
 
     Read from the tasks that can put something in this person's list (`candidates`), each worked out as
     `needs_by_person` works out every task, so the list is the one it gives this person, item for item."""

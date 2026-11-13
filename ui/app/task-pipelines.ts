@@ -78,8 +78,9 @@ const pvSnoozed = (t: TaskAny): boolean => !!(t as {snoozed?: boolean}).snoozed;
  * a snooze: no list says Snoozed for a blocked task. */
 const pvBlocked = (t: TaskAny): boolean => taskBlockedBy(t).length > 0;
 
-/** The open tasks the manager's rail reads, when the view shows that pipeline: the snoozed ones are no one's turn. */
-const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks.filter(t => !pvSnoozed(t)) : [];
+/** The open tasks the manager's rail reads, when the view shows that pipeline: the snoozed and blocked ones are no one's
+ * turn. */
+const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks.filter(t => !pvSnoozed(t) && !pvBlocked(t)) : [];
 
 // ---------------------------------------------------------------- drawing
 

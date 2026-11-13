@@ -2649,7 +2649,11 @@ SCHEMAS = {
             "description": "Who really filed it, when not its requester: a bot id (BotOps on a person's rights) or a "
             "built-in source key (check-health, postal-mail). Display only; absent otherwise",
         },
-        snoozed={"type": "boolean", "description": "On a list row: whether the task is set aside"},
+        snoozed={
+            "type": "boolean",
+            "description": "On a list row: whether the task is set aside. A blocked task is not (see blocked_by), and "
+            "snoozed=only leaves it out",
+        },
         pipeline={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
             "description": "On the task's own read: the pipeline it is in",

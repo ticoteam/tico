@@ -275,7 +275,8 @@ def brief(c, rows, visible_sql="1"):
         row["late"] = late.get(row["id"])
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
-        row["snoozed"] = row["id"] in snoozed
+        # Blocked wins over a snooze: no list says Snoozed for a blocked task (hubdb.tasks' snoozed filter agrees).
+        row["snoozed"] = row["id"] in snoozed and not blocked_by.get(row["id"])
         # Only on a row with a dependency: 500 rows of empty lists would cost the list's byte budget.
         if blocked_by.get(row["id"]):
             row["blocked_by"] = blocked_by[row["id"]]
