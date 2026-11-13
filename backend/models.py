@@ -1534,6 +1534,7 @@ class Heartbeat(Contract):
             "computer_logins_v1",
             "capacity_continue_v1",
             "fork_session_v1",
+            "fresh_session_v1",
             "source_continue_v1",
             "turns_at_once_v1",
             "private_lanes_v1",

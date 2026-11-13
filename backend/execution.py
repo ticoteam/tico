@@ -165,6 +165,10 @@ CAPACITY_CONTINUE = "capacity_continue_v1"
 # (`claude --resume <thread> --fork-session`), leaving the original untouched (backend/wake_presets.py, session `fork`).
 # Any other runner is handed no fork and starts the job on a fresh session.
 FORK_SESSION = "fork_session_v1"
+# A runner that advertises this starts a turn whose claim says `fresh_session` in a new session, and leaves its
+# conversation's saved session as it was (backend/wake_presets.py, session `fresh`). Any other runner is not told,
+# resumes as usual, and the run record then says the session was resumed.
+FRESH_SESSION = "fresh_session_v1"
 
 # A runner that advertises this runs a private live meeting's turns in that meeting's own checkout, read-only on GitHub
 # (runner-rs/src/sessions.rs, private lanes). Any other runner would run them in the bot's checkout and push what they
@@ -310,6 +314,11 @@ def claimed_busy(runner_id, fresh=CLAIMED_FRESH):
 def runner_forks(runner):
     """Whether this runner row (its `capabilities`) forks a session a claim names (FORK_SESSION)."""
     return bool(runner) and FORK_SESSION in capability_set(runner["capabilities"])
+
+
+def runner_starts_fresh(runner):
+    """Whether this runner row starts a claim's `fresh_session` in a session of its own (FRESH_SESSION)."""
+    return bool(runner) and FRESH_SESSION in capability_set(runner["capabilities"])
 
 
 def capability_set(capabilities_json):
@@ -5152,6 +5161,7 @@ class Execution:
         fork_thread = (
             wake_presets.fork_thread(c, row["id"], row["bot_id"], runner["id"]) if runner_forks(runner) else None
         )
+        fresh_session = runner_starts_fresh(runner) and wake_presets.fresh_session(c, row["id"])
         c.execute(
             "UPDATE attempts SET wake=?,handed_runtime=?,handed_model=? WHERE id=?",
             (json.dumps(wake_presets.record(c, job, msg, row["bot_id"], forked=bool(fork_thread))), *handed, aid),
@@ -5521,6 +5531,8 @@ class Execution:
                 **({"continue_thread": continue_thread} if continue_thread else {}),
                 # A job the release policy let go to continue the bot's latest session (runner-rs forks it).
                 **({"fork_thread": fork_thread} if fork_thread else {}),
+                # A job the release policy let go to run in a session of its own (session `fresh`).
+                **({"fresh_session": True} if fresh_session else {}),
                 **({"source_continuation": source} if source else {}),
                 # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                 "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],

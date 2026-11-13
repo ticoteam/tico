@@ -305,6 +305,8 @@ def tick(c, at=None):
             if due is None:
                 c.execute("UPDATE jobs SET state='canceled',held=0 WHERE id=?", (job["id"],))
                 H.event(c, H.KEEPER, "job.wake_merged", job["id"], {"bot": job["bot_id"]})
+                # Its routine task goes with it: nothing else wakes it, and an open one would be worked as a second run.
+                _close_task(c, job, "Merged: this routine's previous run is still waiting or running.")
                 continue
             c.execute(
                 "UPDATE jobs SET hold_until=?,release=? WHERE id=?",
@@ -365,7 +367,12 @@ def idle_seconds(c, bot, at):
     to wait for). Its last model request is read as its last turn's end."""
     if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone():
         return None
-    last = c.execute("SELECT max(finished_at) FROM attempts WHERE bot_id=?", (bot,)).fetchone()[0]
+    # Only a turn that reached the model warmed the cache: one that failed before any request did not.
+    last = c.execute(
+        "SELECT max(finished_at) FROM attempts WHERE bot_id=? AND coalesce(input_tokens,0)+coalesce(cached_tokens,0)"
+        "+coalesce(cache_write_tokens,0)+coalesce(output_tokens,0)>0",
+        (bot,),
+    ).fetchone()[0]
     return _seconds(last, at) if last else None
 
 
@@ -442,15 +449,19 @@ def _skip(c, job, at):
         job["id"],
         {"bot": job["bot_id"], "class": job["wake_class"], "waited": waited, "task": refs.get("task")},
     )
+    _close_task(
+        c,
+        job,
+        "Skipped: the bot found no warm session before this run's deadline, and the routine skips at the deadline.",
+    )
+
+
+def _close_task(c, job, why):
+    """Close the open task a dropped run was filed as (a routine run's own task), so nothing works it later."""
+    refs = H._json(job["refs"], {}) or {}
     task = H.task(c, H._task_ref(refs.get("task")) or "") if refs.get("task") else None
     if task and task.get("status") == "open":
-        H.attempt(
-            c,
-            H.task_close,
-            H.KEEPER,
-            task["id"],
-            "Skipped: the bot found no warm session before this run's deadline, and the routine skips at the deadline.",
-        )
+        H.attempt(c, H.task_close, H.KEEPER, task["id"], why)
 
 
 def replan(c, bot):
@@ -463,17 +474,36 @@ def replan(c, bot):
 
 
 def fork_thread(c, job_id, bot, runner_id):
-    """The session a released job with session `fork` continues from: the bot's latest finished turn's thread on this
-    computer (a fork reads it from there), or None."""
+    """The session a released job with session `fork` continues from: the thread of the bot's latest finished turn on
+    this computer (a fork reads it from there) on a task that is not private, or None. A private task's session and a
+    chat's are never forked into a routine's run, whose task others may read; the runner keeps those apart too."""
     row = c.execute("SELECT release FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not row or policy_of(row[0])["session"] != FORK:
         return None
     found = c.execute(
-        "SELECT thread_id FROM attempts WHERE bot_id=? AND runner_id=? AND thread_id IS NOT NULL "
-        "AND finished_at IS NOT NULL AND coalesce(job_id,'')<>? ORDER BY finished_at DESC LIMIT 1",
+        "SELECT a.thread_id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.bot_id=? AND a.runner_id=? "
+        "AND a.thread_id IS NOT NULL AND a.finished_at IS NOT NULL AND coalesce(a.job_id,'')<>? "
+        "AND coalesce(t.private,0)=0 ORDER BY a.finished_at DESC LIMIT 1",
         (bot, runner_id, job_id),
     ).fetchone()
     return found[0] if found else None
+
+
+def fresh_session(c, job_id):
+    """Whether a job the release policy let go must start a session of its own (session `fresh`, the default) rather
+    than resume its conversation's: the runner then starts a new one and leaves the conversation's session as it was."""
+    row = c.execute("SELECT wake_class,release,released FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return bool(
+        row and row["wake_class"] in POLICY_CLASSES and row["released"] and policy_of(row["release"])["session"] != FORK
+    )
+
+
+def reported_session(kind, why):
+    """What the run record's fork/fresh says once the runner reports how the session began: `fork`, `fresh` or
+    `resumed` (a job that asked for one and resumed its conversation's instead, e.g. on an older runner)."""
+    if kind == "new":
+        return FORK if why == "forked" else FRESH
+    return "resumed"
 
 
 def _batch_slot(c, job, hour):

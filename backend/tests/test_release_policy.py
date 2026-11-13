@@ -68,8 +68,8 @@ def last_turn(api, ended, bot="ops", running=False):
     """The bot's last turn: running now, or ended at `ended` (its last model request)."""
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id) "
-            "VALUES(?,?,?,?,?,?,0,?,?)",
+            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id,"
+            "input_tokens) VALUES(?,?,?,?,?,?,0,?,?,100)",
             (
                 H.new_id(),
                 bot,
@@ -315,6 +315,9 @@ def test_a_routine_is_not_queued_again_while_its_last_run_is_running_and_waits_1
     second = held(api, task, "Hourly run 2.", automation="hourly")
     tick(api, H.now())
     assert job(api, second["id"])["state"] == "canceled"  # its last run is still going: nothing to add
+    with api.app.state.store.read() as c:  # and its routine task is closed with it, so nothing works it later
+        assert H.task(c, second["task_id"])["status"] != "open"
+        assert H.task(c, first["task_id"])["status"] == "open"
     started = H.shift(H.now(), minutes=-5)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (first["id"],))
@@ -396,8 +399,8 @@ def test_a_released_run_records_warm_fork_and_its_wait_and_a_forking_runner_is_h
     queued_at(api, routine["id"], t0)
     with api.app.state.store.transaction() as c:  # the bot's latest session, on this computer
         c.execute(
-            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id) "
-            "VALUES(?,?,?,?,?,?,0,?,?)",
+            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id,task_id,"
+            "input_tokens) VALUES(?,?,?,?,?,?,0,?,?,?,100)",
             (
                 H.new_id(),
                 "ops",
@@ -407,6 +410,7 @@ def test_a_released_run_records_warm_fork_and_its_wait_and_a_forking_runner_is_h
                 "default",
                 "latest-thread",
                 machine["runner_id"],
+                task["id"],
             ),
         )
     tick(api, t0)
@@ -478,3 +482,100 @@ def test_routine_settings_save_read_back_and_clear_through_the_api(api):
     patch(api, made["id"], {"trigger": event}, expected=422)
     moved = patch(api, made["id"], {"trigger": event, "release": None})
     assert moved["trigger"]["type"] == "event" and moved.get("release") is None
+
+
+def test_a_task_turn_that_folds_a_held_routine_wake_is_not_held(api):
+    """A pipeline task turn is never held: when the engine folds a waiting routine wake into a new turn on the same
+    task (a person moves it, a stage hands it on), the new turn does not carry the routine's release policy."""
+    from backend import task_wakes
+
+    routine = held(api, None, "A held routine run.", wait=DAY, warm=True)
+    with api.app.state.store.transaction() as c:
+        task = H.task(c, routine["task_id"])
+        visit = c.execute("SELECT id FROM visits WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (task["id"],)).fetchone()
+        task_wakes.add(c, task, "bot:ops", {"id": visit[0]}, "Your turn: a person moved this task.", try_n=1)
+        rows = c.execute(
+            "SELECT j.held,j.state,j.release FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='ops' AND json_extract(m.refs,'$.task')=? ORDER BY j.rowid",
+            (task["id"],),
+        ).fetchall()
+    live = [r for r in rows if r["state"] == "queued"]
+    assert live and all(r["held"] == 0 and r["release"] is None for r in live)
+
+
+def test_a_fresh_release_tells_a_runner_that_can_to_start_a_session_of_its_own(api):
+    machine = task_bot(api, lanes=True)
+    ready(api, machine, ["ops"], capabilities=["task_lanes_v2", "fresh_session_v1"])
+    task = new_task(api, "fresh routine")
+    settle_all(api)
+    routine = held(api, task, session=W.FRESH)
+    tick(api, H.now())
+    attempt = claim(api, machine)
+    assert attempt["job_id"] == routine["id"] and attempt["fresh_session"] is True
+    # The record says what the runner did, once it reports it.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["id"]}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done.", "session": {"kind": "new", "why": "fresh"}},
+        machine["token"],
+    )
+    [run] = [r for r in get(api, f"tasks/{routine['task_id']}/run-view")["runs"] if r["id"] == attempt["id"]]
+    assert run["wake"]["release"]["session"] == "fresh"
+    with api.app.state.store.read() as c:  # a fresh session on purpose is not a lost one in the task's history
+        assert not c.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='session'",
+            (routine["task_id"],),
+        ).fetchone()
+
+
+def test_a_fresh_run_that_resumed_on_an_older_runner_is_recorded_as_resumed(api):
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "old runner")
+    settle_all(api)
+    routine = held(api, task, session=W.FRESH)
+    tick(api, H.now())
+    attempt = claim(api, machine)
+    assert attempt["job_id"] == routine["id"] and "fresh_session" not in attempt
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["id"]}, machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Done.", "session": {"kind": "resumed"}},
+        machine["token"],
+    )
+    [run] = [r for r in get(api, f"tasks/{routine['task_id']}/run-view")["runs"] if r["id"] == attempt["id"]]
+    assert run["wake"]["release"]["session"] == "resumed"
+
+
+def test_a_continue_latest_run_never_forks_a_private_task_or_a_chat(api):
+    machine = task_bot(api, lanes=True)
+    ready(api, machine, ["ops"], capabilities=["task_lanes_v2", "fork_session_v1"])
+    open_task = new_task(api, "shared work")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-2)
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "bot:assistant", "Private matter", "x", "bot:ops", private=True)
+        for n, (task_id, thread) in enumerate(
+            ((open_task["id"], "shared-thread"), (secret["id"], "private-thread"), (None, "chat-thread"))
+        ):
+            c.execute(
+                "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id,task_id) "
+                "VALUES(?,?,?,?,?,?,0,?,?,?)",
+                (
+                    H.new_id(),
+                    "ops",
+                    "completed",
+                    t0,
+                    H.shift(t0, minutes=n),
+                    "default",
+                    thread,
+                    machine["runner_id"],
+                    task_id,
+                ),
+            )
+    settle_all(api)
+    routine = held(api, open_task, session=W.FORK)
+    tick(api, H.now())
+    attempt = claim(api, machine)
+    assert attempt["job_id"] == routine["id"] and attempt["fork_thread"] == "shared-thread"
