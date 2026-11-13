@@ -533,8 +533,11 @@ def page_event_readable(c, auth, who, target, detail):
 
 def page_reference(value):
     """One file identity, versioned attachment, pin, page route or absolute app page URL."""
-    if not isinstance(value, str) or "file-" not in value and "%" not in value:
-        return None  # every form holds "file-", or an escape that unquotes to it
+    if not isinstance(value, str):
+        return None
+    # Every form holds "file-", or an escape that unquotes to it, or a tab, CR or LF that urlsplit drops from it.
+    if "file-" not in value and "%" not in value and "\t" not in value and "\r" not in value and "\n" not in value:
+        return None
     try:
         value = unquote(value)
         url = urlsplit(value)
@@ -570,7 +573,7 @@ def _plain_name(part):
 
 # A string's scan is a pure function of its text, so it is kept across reads: one read primes and checks the same
 # ids, actors and refs many times (a long task: about 9,000 strings, under 500 distinct). Long strings are scanned
-# each time, so the cache holds at most CACHED_SCANS short ones.
+# each time, so the cache holds at most CACHED_SCANS short ones. Nothing about a reader or a snapshot belongs in it.
 CACHED_SCANS, CACHED_LENGTH = 8192, 512
 
 
@@ -630,6 +633,8 @@ def _names(value, file_ids=None):
 def page_references(value, c=None, *, file_ids=None):
     """Resolve file, version, blob and digest identities through one recognizer on every transport. Every candidate in
     `value` is gathered first and looked up in one batch, so a response naming many pages costs no more statements."""
+    if c is not None and _primed_names_none(c, value):
+        return set()
     found, names = _names(value, file_ids)
     if c is None or not names:
         return found
@@ -699,14 +704,43 @@ def prime_page_references(c, values):
                 stack.append(child.values())
             elif isinstance(child, (list, tuple)):
                 stack.append(child)
-    for text in strings:
+    # One read primes the same messages several times (task_privacy.prime_messages per page of a long task): a string
+    # this snapshot primed already is skipped, so each is scanned and looked up once per read. Each primed string
+    # records whether it names a page, which lets page_references answer a value naming none without its scan.
+    primed = _memo(c, "primed_page_strings")
+    fresh = {}
+    for text in strings - primed.keys():
         named, names = (_cached_string_names if len(text) <= CACHED_LENGTH else _string_names)(text)
+        fresh[text] = (named, [candidate for candidate, _ in names])
         found.update(named)
-        candidates.update(candidate for candidate, _ in names)
-    found.update(fid for ids in page_identities(c, candidates).values() for fid in ids)
+        candidates.update(fresh[text][1])
+    if not fresh:
+        return
+    aliases = page_identities(c, candidates) if candidates else {}
+    found.update(fid for ids in aliases.values() for fid in ids)
+    for text, (named, names) in fresh.items():
+        primed[text] = bool(named) or any(candidate in aliases for candidate in names)
     if found:
         deleted_page_refs(c, found)
         restricted_page_rows(c, found)
+
+
+def _primed_names_none(c, value):
+    """Whether every string in `value` was primed in this snapshot and names no page, so it names none."""
+    primed = _memo(c, "primed_page_strings")
+    if not primed:
+        return False
+    stack: list[Iterable[object]] = [[value]]
+    while stack:
+        for child in stack.pop():
+            if isinstance(child, str):
+                if primed.get(child) is not False:
+                    return False
+            elif isinstance(child, dict):
+                stack.append(child.values())
+            elif isinstance(child, (list, tuple)):
+                stack.append(child)
+    return True
 
 
 def page_ref_denials(c, auth, who, refs):

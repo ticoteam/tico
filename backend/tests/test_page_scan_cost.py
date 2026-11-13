@@ -8,7 +8,9 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from backend import files
+from backend.auth import Identity
 from backend.store import H
+from backend.tests.helpers.page_audience import edit, promoted
 
 FID = "file-" + "0123456789abcdef01234567"
 OTHER = "file-" + "fedcba9876543210fedcba98"
@@ -95,6 +97,13 @@ FORMS = [
     "HTTPS://acme.example/api/v2/pages/" + FID,
     " https://acme.example/#/page/" + FID,
     "ht\ttps://acme.example/#/page/" + FID,
+    # urlsplit drops every tab, CR and LF before it splits, so these still name the page
+    "https://acme.example/#/page/fi\tle-" + FID[5:],
+    "https://acme.example/#/page/file\n-" + FID[5:],
+    "https://acme.example/pages/fil\re-" + FID[5:],
+    "/pages/file\n-" + FID[5:],
+    "page:fi\rle-" + FID[5:],
+    "fi\tle-" + FID[5:],
     "page%3A" + FID,
     "%66ile-0123456789abcdef01234567",
     "%2Fapi%2Fv2%2Ffiles%2F" + FID,
@@ -169,6 +178,7 @@ def fuzz(seed, count):
         "http", "https", "HTTP", ":", "//", "/", "?", "@", "#", "%", "%3A", "%2F", "%66", "file-", FID, BLOB, DIGEST,
         "page:", "blob:", "file:", "/api/v2/files/", "/pages/", "#/page/", "versions", "3", " ", "\t", "\n", "\x01",
         "acme.example", "[", "]", "{", "}", '"', ",", "ana", "Ω", "℀",
+        "fi", "le-", "\r", FID[5:],  # a "file-" split by a tab or newline is reachable
     ]  # fmt: skip
     return ["".join(rng.choice(pieces) for _ in range(rng.randint(1, 6))) for _ in range(count)]
 
@@ -200,7 +210,8 @@ def test_plain_text_is_not_parsed(monkeypatch):
     """An answer naming no page (ids, times, actors, sentences) never reaches the URL parser or the unescaper: the
     cost of a scan is a look at each value, and the parse only for text that could name a page."""
     calls = []
-    files._cached_string_names.cache_clear()  # a scan kept from another test would hide the parse
+    if kept := getattr(files, "_cached_string_names", None):
+        kept.cache_clear()  # a scan kept from another test would hide the parse
     monkeypatch.setattr(files, "urlsplit", lambda *a, **k: calls.append(a) or urlsplit(*a, **k))
     monkeypatch.setattr(files, "unquote", lambda *a, **k: calls.append(a) or unquote(*a, **k))
     plain = {
@@ -275,3 +286,22 @@ def test_clean_up_is_needed_exactly_when_it_was():
     ]
     for value in values:
         assert files._marked(value) == old_marked(value), repr(value)
+
+
+def test_a_link_split_by_a_tab_or_newline_still_hides_the_page(api):
+    """urlsplit drops tabs and newlines, so a wrapped link names the page as it did before: a reader who may not open
+    it gets the placeholder, not the link and the page's title."""
+    fid, _ = promoted(api)
+    edit(api, fid, {"people": ["ben"]})
+    split = "https://acme.example/#/page/fi\tle-" + fid[5:]
+    refs = [
+        {"page": split, "title": "Secret plan"},
+        {"text": "see", "link": split},
+        {"page": "https://acme.example/pages/file\n-" + fid[5:] + "@1", "title": "Secret plan"},
+    ]
+    auth = api.app.state.auth
+    with api.app.state.store.read() as c:
+        files.prime_page_references(c, [refs])
+        shown = files.readable_page_refs(c, auth, Identity("human:cara", "human", "cara@acme.example"), refs)
+        assert shown == [{"removed": True, "label": "A page you can't open"}] * 3
+        assert files.readable_page_refs(c, auth, Identity("human:ben", "human", "ben@acme.example"), refs) == refs
