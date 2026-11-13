@@ -1538,7 +1538,9 @@ class Heartbeat(Contract):
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
-    # Nightly memory tidy pilot; a runner still sends them.
+    # Nightly memory tidy pilot's packet path: today's runner no longer sends it, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so it is accepted and ignored until 0.6.0 leaves the supported window
+    # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
             "assignment_instances_v1",

@@ -198,9 +198,23 @@ def test_the_retired_packet_capability_is_still_accepted_on_a_heartbeat(api):
     computer = runner(api)
     assign(api, computer, "ops")
     body = heartbeat_body("ops")
-    body["capabilities"].append("memory_tidy_packets_v1")  # the retired Nightly memory tidy pilot's; runners send it
+    # The retired Nightly memory tidy pilot's: a runner of the previous release in the window still sends it.
+    body["capabilities"].append("memory_tidy_packets_v1")
     assert not W.errors(body, ref("Heartbeat"), REQUESTS)
     post(api, "runners/heartbeat", body, token=computer["token"])
+
+
+def test_todays_runner_no_longer_advertises_or_gates_the_retired_packet_capability():
+    """The packet path is gone from runner-rs: its capability is neither advertised (lanes.rs CAPABILITIES) nor listed
+    under the contract's `gated` (what today's runner may send), so the server accepts it only from older runners."""
+    lanes = (W.ROOT / "runner-rs" / "src" / "lanes.rs").read_text()
+    advertised = re.search(r"pub const CAPABILITIES: &\[&str\] = &\[(.*?)\n\];", lanes, re.S)
+    assert advertised and '"task_lanes_v2"' in advertised.group(1)
+    assert '"memory_tidy_packets_v1"' not in lanes
+    assert not [k for k in WIRE["gated"] if "memory_tidy_packets_v1" in k]
+    manifests = sorted((W.ROOT / "runner-rs" / "harnesses").glob("*.toml"))
+    assert manifests
+    assert not [m.name for m in manifests if "packet_only" in m.read_text()]
 
 
 def turn(api, bot="ops"):

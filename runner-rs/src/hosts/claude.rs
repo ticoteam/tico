@@ -750,25 +750,9 @@ impl ClaudeHost {
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
         // claude.ai connectors). Every turn excludes the operator's own instructions, settings and hooks, even
-        // when HOME is the operator's. Packet-only turns also exclude the repository's settings.
-        argv.extend([
-            "--setting-sources".into(),
-            if t.settings.packet_only {
-                "".into()
-            } else {
-                "project,local".into()
-            },
-        ]);
+        // when HOME is the operator's.
+        argv.extend(["--setting-sources".into(), "project,local".into()]);
         argv.push("--strict-mcp-config".into());
-        if t.settings.packet_only {
-            argv.extend([
-                "--tools".into(),
-                "".into(),
-                "--disable-slash-commands".into(),
-                "--settings".into(),
-                "{\"disableAllHooks\":true}".into(),
-            ]);
-        }
         let project =
             std::fs::read_to_string(std::path::Path::new(&t.settings.cwd).join(".mcp.json"))
                 .ok()
@@ -794,12 +778,7 @@ impl ClaudeHost {
         }
         // Claude Code compacts on its own default, as it does for a person: no `--autocompact`. Its auto memory is
         // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
-        if let Some(dir) = t
-            .settings
-            .memory_dir
-            .as_deref()
-            .filter(|_| !t.settings.packet_only)
-        {
+        if let Some(dir) = t.settings.memory_dir.as_deref() {
             argv.extend([
                 "--settings".into(),
                 py_dumps(&json!({"autoMemoryDirectory": dir})),
@@ -2172,14 +2151,10 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
     } else {
         settings.env.clone()
     };
-    if settings.memory_dir.is_some() && !settings.packet_only {
+    if settings.memory_dir.is_some() {
         env.remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
     } else {
         env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
-    }
-    if settings.packet_only {
-        env.insert("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into());
-        env.insert("CLAUDE_CODE_DISABLE_CRON".into(), "1".into());
     }
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
@@ -2198,29 +2173,6 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
-        let host = ClaudeHost::new(
-            "synthetic",
-            vec!["claude".into()],
-            tokio::sync::mpsc::unbounded_channel().0,
-        );
-        let settings = Settings {
-            packet_only: true,
-            ..Settings::default()
-        };
-        let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
-        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
-        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
-        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
-        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
-        assert!(
-            !argv.contains(&"--bare".into()),
-            "subscription login must remain available"
-        );
-    }
 
     #[test]
     fn a_thread_started_forked_reads_the_old_session_and_keeps_its_own_id() {
