@@ -7,8 +7,13 @@
 //! keyed by bot, path and content digest; the key is also the request's idempotency key, so a retry lands once.
 //! A file that could not go is reported as not synced, never shown with a link that opens nothing.
 //! Each upload says when its content last changed (`modified`: the file's last commit time, else its own time), so a
-//! checkout published for the first time lists by when each file was written. A file published before that was sent
-//! (no `file_dated` row) goes once more with its time; the hub keeps the bytes it has and corrects only the time.
+//! checkout published for the first time lists by when each file was written.
+//! Before anything is uploaded, every file the hub may already hold (published before times were sent, so no
+//! `file_dated` row; published by another computer of the bot; or new) is dated in one or a few requests with no
+//! bytes (`POST /api/v2/files/dates`: path, digest, time). The hub moves back only a file whose current version has
+//! that digest, and names those paths; they count as published. Only the rest is uploaded, at most MAX_PER_TURN a
+//! turn, so a whole checkout copied before times were sent settles in one turn. An older hub without the route answers
+//! an error, and everything is uploaded as before.
 
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
@@ -25,6 +30,10 @@ use crate::state::State;
 use crate::util::log;
 
 pub const MAX_PER_TURN: usize = 40;
+/// Files a turn looks at that the hub may not hold as they are (new, changed or undated); MAX_PER_TURN * 5 of the rest.
+pub const MAX_SCAN: usize = 2000;
+/// Files one date request carries (backend/files.py DATES_MAX).
+pub const DATE_BATCH: usize = 500;
 pub const MAX_DEPTH: usize = 6;
 pub const DRAIN_BATCH: usize = 20;
 pub const GIVE_UP_AFTER: i64 = 20;
@@ -302,14 +311,16 @@ pub fn candidates(
     }
     // The cut bounds the work per turn. A fresh checkout gives every committed file the same time, so files
     // never published or refused go first; then newest first, so an edit made during the turn makes it.
+    // Every file not yet seen is looked at (dating it costs no upload); of the rest, the newest MAX_PER_TURN * 5.
     found.sort_by(|a, b| {
         (seen.contains(&a.1), b.0, &a.1)
             .partial_cmp(&(seen.contains(&b.1), a.0, &b.1))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let unseen = found.iter().filter(|f| !seen.contains(&f.1)).count();
     found
         .into_iter()
-        .take(MAX_PER_TURN * 5)
+        .take(unseen.min(MAX_SCAN) + MAX_PER_TURN * 5)
         .map(|(_, rel, why)| (rel, why))
         .collect()
 }
@@ -382,19 +393,25 @@ fn now() -> f64 {
     crate::util::epoch_s()
 }
 
-/// Queue what changed since the last publish; (queued, refused). `skip` names files that hold a granted secret.
-pub fn prepare(
+/// A file the hub may not hold as it is on disk: new, changed, or published before uploads carried a time.
+pub struct Found {
+    pub rel: String,
+    pub digest: String,
+    key: String,
+    pub modified: f64,
+}
+
+/// What changed since the last publish, and how many files were refused. `skip` names files that hold a granted secret.
+pub fn scan(
     state: &State,
     bot: &str,
-    attempt_id: &str,
     root: &Path,
     config: &Value,
-    pushed: bool,
     skip: &[String],
-) -> Result<(usize, usize), String> {
+) -> Result<(Vec<Found>, usize), String> {
     // Even an accidental later scan keeps this directory's original provenance and never queues its output.
     if root.join(MAKE_PAGE_ORIGIN).exists() {
-        return Ok((0, 0));
+        return Ok((vec![], 0));
     }
     let seen: HashSet<String> = state.with(|c| {
         c.execute_batch(TABLES)?;
@@ -402,12 +419,7 @@ pub fn prepare(
         let rows = q.query_map([bot], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<HashSet<_>>>();
         rows
     })?;
-    let resolved = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf())
-        .display()
-        .to_string();
-    let (mut queued, mut refused) = (0, 0);
+    let (mut found, mut refused) = (vec![], 0);
     for (rel, why) in candidates(root, &folders_for(config, root), &seen) {
         let checked: Result<(String, String), (String, String)> = (|| {
             if skip.contains(&rel) {
@@ -443,39 +455,137 @@ pub fn prepare(
             &sha256_hex(rel.as_bytes())[..16],
             &digest[..32]
         );
-        let commit = if pushed {
-            pushed_commit(root, &rel)
-        } else {
-            String::new()
-        };
-        let modified = content_time(root, &rel);
-        let stop = state.with(|c| {
+        let known = state.with(|c| {
             // Accepted now: a later refusal of this file is news again.
             c.execute("DELETE FROM file_refused WHERE bot=?1 AND rel=?2", params![bot, rel])?;
             let same = c.query_row("SELECT 1 FROM file_published p JOIN file_dated d ON d.bot=p.bot AND d.rel=p.rel WHERE p.bot=?1 AND p.rel=?2 AND p.digest=?3", params![bot, rel, digest], |_| Ok(())).optional()?;
             let queued_already = c.query_row("SELECT 1 FROM file_outbox WHERE key=?1", [&key], |_| Ok(())).optional()?;
-            if same.is_some() || queued_already.is_some() {
-                return Ok(Some(false));
-            }
-            if queued >= MAX_PER_TURN {
-                return Ok(None);
-            }
+            Ok(same.is_some() || queued_already.is_some())
+        })?;
+        if !known {
+            let modified = content_time(root, &rel);
+            found.push(Found {
+                rel,
+                digest,
+                key,
+                modified,
+            });
+        }
+    }
+    Ok((found, refused))
+}
+
+/// Ask the hub to date what it already holds of `found`, without the bytes; the paths it holds as they are.
+/// An error (an older hub has no such route, or it is unreachable) dates nothing, so everything is uploaded.
+pub async fn date(
+    client: &Client,
+    bot: &str,
+    attempt_id: &str,
+    found: &[Found],
+) -> HashSet<String> {
+    let mut known = HashSet::new();
+    for part in found.chunks(DATE_BATCH) {
+        let files: Vec<Value> = part
+            .iter()
+            .map(|f| {
+                serde_json::json!({"path": f.rel, "digest": f.digest,
+                    "modified": if f.modified > 0.0 { Some(f.modified) } else { None }})
+            })
+            .collect();
+        let body = serde_json::json!({"bot": bot, "attempt": attempt_id, "files": files});
+        let key = format!(
+            "file-dates:{bot}:{}",
+            &sha256_hex(body.to_string().as_bytes())[..32]
+        );
+        match client.post("files/dates", &body, Some(&key)).await {
+            Ok(answer) => known.extend(
+                answer["known"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_str().map(str::to_string)),
+            ),
+            Err(_) => break,
+        }
+    }
+    known
+}
+
+/// Queue the files of `found` the hub does not hold (`known` are published and dated as they are); how many queued.
+pub fn queue(
+    state: &State,
+    bot: &str,
+    attempt_id: &str,
+    root: &Path,
+    pushed: bool,
+    found: &[Found],
+    known: &HashSet<String>,
+) -> Result<usize, String> {
+    let resolved = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .display()
+        .to_string();
+    let mut queued = 0;
+    for f in found {
+        if known.contains(&f.rel) {
+            state.with(|c| {
+                c.execute(
+                    "INSERT OR REPLACE INTO file_published VALUES(?1,?2,?3)",
+                    params![bot, f.rel, f.digest],
+                )?;
+                c.execute(
+                    "INSERT OR IGNORE INTO file_dated VALUES(?1,?2)",
+                    params![bot, f.rel],
+                )
+            })?;
+            continue;
+        }
+        if queued >= MAX_PER_TURN {
+            continue;
+        }
+        let commit = if pushed {
+            pushed_commit(root, &f.rel)
+        } else {
+            String::new()
+        };
+        state.with(|c| {
             c.execute(
-                "INSERT INTO file_outbox(key,bot,attempt_id,root,rel,digest,commit_sha,created) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![key, bot, attempt_id, resolved, rel, digest, commit, now()],
+                "INSERT OR IGNORE INTO file_outbox(key,bot,attempt_id,root,rel,digest,commit_sha,created) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![f.key, bot, attempt_id, resolved, f.rel, f.digest, commit, now()],
             )?;
             c.execute(
                 "INSERT OR REPLACE INTO file_times(key,modified) VALUES(?1,?2)",
-                params![key, modified],
-            )?;
-            Ok(Some(true))
+                params![f.key, f.modified],
+            )
         })?;
-        match stop {
-            None => break,
-            Some(true) => queued += 1,
-            Some(false) => {}
-        }
+        queued += 1;
     }
+    Ok(queued)
+}
+
+/// Queue what changed since the last publish, with nothing dated first; (queued, refused). A turn dates first
+/// (after_turn); this is the same scan and queue without the hub.
+#[cfg(test)]
+pub fn prepare(
+    state: &State,
+    bot: &str,
+    attempt_id: &str,
+    root: &Path,
+    config: &Value,
+    pushed: bool,
+    skip: &[String],
+) -> Result<(usize, usize), String> {
+    let (found, refused) = scan(state, bot, root, config, skip)?;
+    let queued = queue(
+        state,
+        bot,
+        attempt_id,
+        root,
+        pushed,
+        &found,
+        &HashSet::new(),
+    )?;
     Ok((queued, refused))
 }
 
@@ -686,11 +796,32 @@ pub async fn after_turn(
         skip.to_vec(),
     );
     let who = bot.clone();
-    match state
-        .off(move |s| prepare(s, &who, &aid, &root, &config, pushed, &skip))
-        .await
-    {
-        Ok((queued, _)) => {
+    let scanned = {
+        let root = root.clone();
+        state
+            .off(move |s| scan(s, &who, &root, &config, &skip))
+            .await
+    };
+    let queued = match scanned {
+        Ok((found, _)) if !found.is_empty() => {
+            let known = date(client, &bot, &aid, &found).await;
+            if !known.is_empty() {
+                log(&format!(
+                    "Tico runner: {bot}: {} file{} already on Tico, dated without uploading",
+                    known.len(),
+                    if known.len() != 1 { "s" } else { "" }
+                ));
+            }
+            let who = bot.clone();
+            state
+                .off(move |s| queue(s, &who, &aid, &root, pushed, &found, &known))
+                .await
+        }
+        Ok(_) => Ok(0),
+        Err(e) => Err(e),
+    };
+    match queued {
+        Ok(queued) => {
             if queued > 0 {
                 log(&format!(
                     "Tico runner: {bot}: publishing {queued} file{}",
@@ -822,13 +953,25 @@ mod tests {
     }
 
     async fn hub(statuses: Vec<u16>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        hub_with(
+            statuses
+                .into_iter()
+                .map(|s| (s, "{}".to_string()))
+                .collect(),
+        )
+        .await
+    }
+
+    async fn hub_with(
+        replies: Vec<(u16, String)>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
         let log_ = seen.clone();
         tokio::spawn(async move {
-            for status in statuses {
+            for (status, body) in replies {
                 let Ok((mut sock, _)) = listener.accept().await else {
                     return;
                 };
@@ -856,7 +999,7 @@ mod tests {
                 log_.lock()
                     .unwrap()
                     .push(String::from_utf8_lossy(&got).to_string());
-                let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+                let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 let _ = sock.write_all(reply.as_bytes()).await;
             }
         });
@@ -1052,6 +1195,112 @@ mod tests {
             0,
             "sent with its time once: not again"
         );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn what_the_hub_holds_is_dated_in_one_request_without_bytes_and_only_the_rest_uploads() {
+        let dir = checkout();
+        let state = State::open(&dir.join("state")).unwrap();
+        // 45 files a computer published before times were sent (more than a turn uploads), one published by another
+        // computer (nothing about it here), and one the hub has never seen.
+        let old: Vec<String> = (0..45).map(|i| format!("reports/old-{i:02}.md")).collect();
+        for rel in &old {
+            std::fs::write(dir.join(rel), rel.as_bytes()).unwrap();
+            state
+                .with(|c| {
+                    c.execute_batch(TABLES)?;
+                    c.execute(
+                        "INSERT INTO file_published VALUES('ops',?1,?2)",
+                        params![rel, sha256_hex(rel.as_bytes())],
+                    )
+                })
+                .unwrap();
+        }
+        std::fs::write(dir.join("reports/elsewhere.md"), "# Elsewhere").unwrap();
+        std::fs::write(dir.join("reports/new.md"), "# New").unwrap();
+        let mut held = old.clone();
+        held.push("reports/elsewhere.md".into());
+        let (url, seen) = hub_with(vec![
+            (
+                200,
+                json!({"bot": "ops", "known": held, "dated": 46}).to_string(),
+            ),
+            (200, "{}".into()),
+        ])
+        .await;
+        let client = Client::new(&url, "t", 5, 0).unwrap();
+        after_turn(
+            &state,
+            &client,
+            &json!({"id": "att-1", "bot": "ops"}),
+            &dir,
+            false,
+            &[],
+        )
+        .await;
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "one date request, one upload");
+        assert!(
+            seen[0].starts_with("POST /api/v2/files/dates "),
+            "{}",
+            seen[0]
+        );
+        let body: Value =
+            serde_json::from_str(&seen[0][seen[0].find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(
+            (body["bot"].as_str(), body["attempt"].as_str()),
+            (Some("ops"), Some("att-1"))
+        );
+        assert_eq!(
+            body["files"].as_array().unwrap().len(),
+            47,
+            "every file it may hold, in one request"
+        );
+        let elsewhere = body["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["path"] == "reports/elsewhere.md")
+            .unwrap();
+        assert_eq!(elsewhere["digest"], sha256_hex(b"# Elsewhere"));
+        assert!(elsewhere["modified"].as_f64().unwrap() > 0.0);
+        assert!(!seen[0].contains("# Elsewhere"), "no bytes");
+        assert!(
+            seen[1].starts_with(
+                "POST /api/v2/files/uploads?bot=ops&attempt=att-1&path=reports%2Fnew.md"
+            ),
+            "{}",
+            seen[1]
+        );
+        let dated: i64 = state
+            .with(|c| c.query_row("SELECT count(*) FROM file_dated", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(dated, 47, "46 dated, the new one uploaded");
+        assert_eq!(
+            prepare(&state, "ops", "att-2", &dir, &json!({}), false, &[])
+                .unwrap()
+                .0,
+            0,
+            "nothing goes again"
+        );
+
+        // An older hub has no date route: the files go as uploads, as before.
+        std::fs::write(dir.join("reports/later.md"), "# Later").unwrap();
+        let (url, seen) = hub(vec![404, 200]).await;
+        let client = Client::new(&url, "t", 5, 0).unwrap();
+        after_turn(
+            &state,
+            &client,
+            &json!({"id": "att-3", "bot": "ops"}),
+            &dir,
+            false,
+            &[],
+        )
+        .await;
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].contains("path=reports%2Flater.md"), "{}", seen[1]);
         std::fs::remove_dir_all(dir).ok();
     }
 }

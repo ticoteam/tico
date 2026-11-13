@@ -2717,7 +2717,7 @@ class Store:
                     # Several receipts contain only an acknowledgement; the route or file request still binds the turn.
                     if operation.startswith("/api/v2/attempts/"):
                         aid = operation.split("/")[4]
-                    elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports"):
+                    elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports", "/api/v2/files/dates"):
                         aid = body.get("attempt") or aid
                 replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
                 if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):

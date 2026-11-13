@@ -44,8 +44,13 @@ One row is one file. Editing it does not add rows: the row keeps its title, gain
 activity entry, and moves to the top. Sending the same bytes again (a new computer, a lost outbox) is not activity:
 the row keeps its place. A new file's time is when its content was written, not when it was copied: the runner sends
 each file's last commit time (its modification time when uncommitted) as `modified`, and the server takes it for a new
-or changed file, never later than now. A file published before uploads carried that time is sent once more with it,
-and an unchanged publish with an earlier time moves the copy's time back to it. Migration
+or changed file, never later than now. Before it uploads anything, the runner dates every file Tico may already hold
+(published before times were sent, by another computer of the bot, or new) in one request per 500 files, without the
+bytes: `POST /api/v2/files/dates` with `{bot, attempt, files: [{path, digest, modified}]}`. Only a file of that bot at
+that path whose current version has that digest moves, only back, and only while its time is still the copy's (nothing
+has happened to it since); the answer's `known` paths are not uploaded. A whole checkout copied before times were sent
+settles in one turn; only the rest is uploaded, 40 a turn. An unchanged upload with an earlier time moves a copy's time
+back the same way. Migration
 `20261113201012_bot_files_activity_from_content` put rows whose time was only such a re-send back to their last real
 activity. A row is identified by the bot, where it came from (its task,
 its thread, or bot-wide) and a canonical identity:
@@ -170,7 +175,7 @@ the bot publishes a changed version.
 
 Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=&q=&kind=` (ordered by last
 activity, with the visible `total`; `q` keeps files that have every word in their name, path or text, as
-[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`,
+[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`, `/dates` (a bot's computer, above),
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
 lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
