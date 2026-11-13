@@ -1,8 +1,10 @@
 # Files
 
 A bot's page lists **Files** in its right rail: the useful things it created, revised or delivered, newest
-activity first, as a plain list of names. Three rows show by default; a small "+N" opens the rest in
-place. A bot with no files has no Files section. A stored file, or a Google Doc, Sheet, Slides or Drive file, opens in
+activity first, as a plain list of names. Three rows show by default; a small "N more" opens the rest in
+place, with a search field and the filter icon (the Library's kinds). Both ask the server, so they reach every file,
+not just the ones loaded, and the answer stays newest first and paged. "Less" folds the list and clears them. A bot with
+no files has no Files section. A stored file, or a Google Doc, Sheet, Slides or Drive file, opens in
 the [review view](#review); any other linked document opens at its provider in a new tab.
 
 ## Review
@@ -39,7 +41,13 @@ bot itself publishes or changes them. A git checkout is a workspace, not a file 
 bot publishes appears.
 
 One row is one file. Editing it does not add rows: the row keeps its title, gains a version and an
-activity entry, and moves to the top. A row is identified by the bot, where it came from (its task,
+activity entry, and moves to the top. Sending the same bytes again (a new computer, a lost outbox) is not activity:
+the row keeps its place. A new file's time is when its content was written, not when it was copied: the runner sends
+each file's last commit time (its modification time when uncommitted) as `modified`, and the server takes it for a new
+or changed file, never later than now. A file published before uploads carried that time is sent once more with it,
+and an unchanged publish with an earlier time moves the copy's time back to it. Migration
+`20261113201012_bot_files_activity_from_content` put rows whose time was only such a re-send back to their last real
+activity. A row is identified by the bot, where it came from (its task,
 its thread, or bot-wide) and a canonical identity:
 
 | Identity | Meaning |
@@ -160,8 +168,9 @@ the bot publishes a changed version.
 
 ## API
 
-Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=` (ordered by last
-activity, with the visible `total`), `POST /api/v2/files/uploads`, `/links`, `/imports`,
+Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=&q=&kind=` (ordered by last
+activity, with the visible `total`; `q` keeps files that have every word in their name, path or text, as
+[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`,
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
 lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
@@ -169,6 +178,15 @@ It returns `content`, `published`, `updated_at` and `source`; `published: false`
 It never substitutes the bot's description for its Instructions.
 `docs/custom-frontend.md` and `examples/custom-frontend` show a bot's Files in a frontend of your own.
 Pages, Library › Files, search and deleting for good are below and in [Pages](pages.md).
+
+## Files named in a message
+
+A path or file name a bot writes in a message (`reports/2026-11-12-legal-review-pack.docx`, or a bare
+`notes-for-chris.docx`) is a link that opens the file in the review view, as its Files rail does. The thread asks the
+server for every name it draws in one request, `GET /api/v2/bots/{bot}/files/mentions?m=…&m=…` (up to 60), which
+answers only names that are exactly one of the bot's files the viewer may see: a path by its path (or the end of it),
+a bare name only when no other file has it. A bare name after a folder in the same paragraph or list item is looked
+up in that folder first. Anything else stays text; web addresses are links as before.
 
 ## Library › Files
 

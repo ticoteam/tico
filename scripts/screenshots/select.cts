@@ -44,7 +44,7 @@ const SHARED: string[] = [
   'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.ts', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts', 'ui/app/page-head.ts', 'ui/app/confirm.ts',
   'ui/app/session.ts', 'ui/app/notices.ts', 'ui/app/sidebar.ts', 'ui/app/drawer.ts', 'ui/app/viewport.ts',
   'ui/app/refresh.ts', 'ui/app/boot.ts', 'ui/app/boot-snap.ts', 'ui/app/boot-timing.ts', 'ui/app/nav-events.ts',
-  'ui/app/markdown.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.ts', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
+  'ui/app/markdown.ts', 'ui/app/file-mentions.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.ts', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
   'ui/app/pill.ts', 'ui/app/live.ts', 'ui/app/motion.ts', 'ui/app/rails.ts', 'ui/app/stick-scroll.ts',
   'ui/app/org-fan.ts', 'ui/app/native.ts', 'ui/app/ask-panel.ts', 'ui/app/ask-rules.ts', 'ui/assistant.ts',
   'ui/app/search.ts', 'ui/app/viewer.ts', 'ui/tool-icons.ts', 'ui/assets/**', 'ui/vendor/fonts/**',

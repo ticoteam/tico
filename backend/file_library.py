@@ -575,8 +575,15 @@ class Library:
             }
 
     def _candidates(self, c, tokens, kind_sql="1", kind_args=()):
+        return self.candidates(c, tokens, kind_sql, kind_args)
+
+    @staticmethod
+    def candidates(c, tokens, kind_sql="1", kind_args=(), *, bot="", every=False):
         """Rows whose title or text match, best match first, at most SCAN_MAX: FTS5 when the build has it, else
-        titles alone."""
+        titles alone. `bot` keeps one bot's files; `every` wants every word (a list narrowed as it is typed, the bot's
+        Files), never the looser any-word match a question in a sentence falls back to."""
+        if bot:
+            kind_sql, kind_args = "(" + kind_sql + ") AND f.bot_id=?", (*kind_args, bot)
         select = (
             "SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
             "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
@@ -592,7 +599,9 @@ class Library:
             )
             seen, rows = set(), []
             stemmed = [manual._stem(t) for t in tokens]
-            for expression in Docs.expressions(stemmed):
+            for n, expression in enumerate(Docs.expressions(stemmed)):
+                if every and n:
+                    break
                 try:
                     found = c.execute(query, (*kind_args, expression, SCAN_MAX)).fetchall()
                 except sqlite3.OperationalError:

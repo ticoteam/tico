@@ -21,9 +21,11 @@ import tempfile
 from collections import namedtuple
 from collections.abc import Iterable
 from contextlib import ExitStack
+from datetime import datetime, timezone
+from typing import Annotated
 from urllib.parse import quote, unquote, urlsplit
 
-from fastapi import Request
+from fastapi import Query, Request
 from pydantic import Field
 
 from . import models as M
@@ -121,6 +123,7 @@ ACTIONS = (
     "reviewed",
 )
 LIST_MAX = 100
+MENTIONS_MAX = 60  # names one message lookup asks about
 
 
 def new_id():
@@ -153,6 +156,30 @@ def is_file_id(value):
 def series(bot, relative):
     """The stable identity of a published path: the same report edited is the same file."""
     return "blob-series:" + hashlib.sha256((bot + "\0" + relative).encode()).hexdigest()[:20]
+
+
+EARLIEST_CONTENT_TIME = "2000-01-01T00:00:00.000000Z"
+
+
+def content_time(value, now):
+    """When a published file's content last changed by its source's clock: `modified` from the bot's computer, the
+    commit time of the file (or its own time when it is not committed), as epoch seconds or ISO-8601. As this server
+    writes times; None when not given or not believable (before 2000, or after `now`, which it is then)."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        stamp = datetime.fromtimestamp(float(text), timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        stamp = H.parse_ts(text)
+        if stamp is None:
+            return None
+        stamp = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+        stamp = stamp.astimezone(timezone.utc)
+    out = stamp.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    if out < EARLIEST_CONTENT_TIME:
+        return None
+    return min(out, now)
 
 
 class FileEdit(M.Contract):
@@ -1310,10 +1337,16 @@ class Files:
         repo_path="",
         explicit_title=False,
         fid=None,
+        modified=None,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
-        file's id (for a caller that writes the file's id somewhere before the file exists)."""
+        file's id (for a caller that writes the file's id somewhere before the file exists). `modified` is when the
+        content last changed at its source (content_time): the file's activity time when it is new or changed, so a
+        repository published for the first time lists by when each file was written, not by when it was copied. An
+        unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when
+        Tico copied the current version back to when that content was written."""
         now = H.now()
+        when = content_time(modified, now) or now
         row, created = self.open_row(
             c,
             bot=bot,
@@ -1325,7 +1358,7 @@ class Files:
             locator="tico_blob",
             task=task,
             conversation=conversation,
-            now=now,
+            now=when,
             fid=fid,
         )
         last = c.execute(
@@ -1372,7 +1405,17 @@ class Files:
             fields["title"] = title[:300]
         if task and not row["task_id"]:
             fields["task_id"] = task
-        fields["last_activity_at"] = now
+        if changed and not created:
+            fields["last_activity_at"] = max(when, row["last_activity_at"])
+        elif (
+            not changed and when < row["last_activity_at"] and row["last_activity_at"] == (last and last["created_at"])
+        ):
+            # The time is the copy's, nothing happened since: the content's own time, never before the version it replaced.
+            prior = c.execute(
+                "SELECT MAX(created_at) FROM bot_file_versions WHERE file_id=? AND version<?", (row["id"], version)
+            ).fetchone()[0]
+            fields["last_activity_at"] = max(when, prior or "")
+            fields["first_activity_at"] = min(row["first_activity_at"], fields["last_activity_at"])
         c.execute(
             "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"])
         )
@@ -1699,6 +1742,7 @@ class Files:
                 else "",
                 repo_path=relative,
                 explicit_title=bool(fields.get("title")),
+                modified=fields.get("modified"),
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:
@@ -2110,18 +2154,45 @@ class Files:
             return None
         return f"{base.removesuffix('.git')}/blob/{version['commit_sha']}/{quote(version['repo_path'])}"
 
-    def listing(self, who, bot, limit, cursor):
+    def matching(self, c, bot, q, kind_sql, kind_args, rows):
+        """The ids among `rows` (the bot's, with `repo_path`) that Library search finds for `q`, every word, or whose
+        path in the bot's checkout holds every word ("winberg" finds drafts/2026-11-11-winberg-reply/letter.docx)."""
+        from . import manual
+
+        words = [w.casefold() for w in str(q).split() if w.strip()]
+        tokens = manual.query_words(q)
+        found = (
+            {r["id"] for r in file_library.Library.candidates(c, tokens, kind_sql, kind_args, bot=bot, every=True)}
+            if tokens
+            else set()
+        )
+        for r in rows:
+            where = (str(r["repo_path"] or "") + " " + str(r["title"] or "")).casefold()
+            if words and all(w in where for w in words):
+                found.add(r["id"])
+        return found
+
+    def listing(self, who, bot, limit, cursor, q="", kind=""):
+        """The bot's files the caller sees, newest activity first, a page at a time. `kind` is a Library kind
+        (file_library.KINDS); `q` keeps the files whose name, text (Library search, file_library) or path in the bot's
+        checkout holds every word. Both narrow the same list, so the order, the cursor and the total stay its own."""
+        kind_sql, kind_args = file_library.kind_filter(kind)
         with self.store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
             rows = c.execute(
-                "SELECT * FROM bot_files WHERE bot_id=? AND archived=0 "
-                "AND (identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions v "
-                "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot_id)) "
-                "ORDER BY last_activity_at DESC, id DESC",
-                (bot,),
+                "SELECT f.*,v.repo_path AS repo_path FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+                "LEFT JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+                "WHERE f.bot_id=? AND f.archived=0 AND (" + kind_sql + ") "
+                "AND (f.identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions o "
+                "WHERE o.file_id=f.id AND o.actor='bot:' || f.bot_id)) "
+                "ORDER BY f.last_activity_at DESC, f.id DESC",
+                (bot, *kind_args),
             ).fetchall()
+            if q.strip():
+                found = self.matching(c, bot, q, kind_sql, kind_args, rows)
+                rows = [r for r in rows if r["id"] in found]
             prime_visible(c, rows)
             rows = [r for r in rows if self.visible(c, who, r, cache)]
             start = 0
@@ -2148,6 +2219,48 @@ class Files:
                 "has_more": more,
                 "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who),
             }
+
+    def mentions(self, who, bot, said):
+        """The bot's files its messages name, for the links a message draws (docs/files.md, Files named in messages):
+        {what was said: the file as the rail lists it}. A path matches the file published from that path in the bot's
+        checkout (or the one path it ends with); a bare name the one file with that name. Two candidates are no answer,
+        never a guess; what matches nothing the caller sees is left out."""
+        said = list(dict.fromkeys(str(t).strip() for t in said if str(t).strip()))[:MENTIONS_MAX]
+        wanted = {}
+        for text in said:
+            path = text.replace("\\", "/").removeprefix("./")
+            name = path.rsplit("/", 1)[-1]
+            if name and len(path) <= 300:
+                wanted[text] = (path, name)
+        with self.store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            self.bot_row(c, who, bot)
+            out = {}
+            if not wanted:
+                return {"bot": bot, "files": out}
+            rows = c.execute(
+                "SELECT f.*,v.repo_path AS repo_path,v.name AS version_name FROM bot_files f "
+                "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+                "WHERE f.bot_id=? AND f.archived=0 AND f.locator='tico_blob' "
+                "AND v.name IN (SELECT value FROM json_each(?))",
+                (bot, json.dumps(sorted({name for _, name in wanted.values()}))),
+            ).fetchall()
+            prime_visible(c, rows)
+            cache, caches = {}, {"task": {}, "repo": {}}
+            rows = [r for r in rows if self.visible(c, who, r, cache)]
+            for text, (path, name) in wanted.items():
+                named = [r for r in rows if r["version_name"] == name]
+                if "/" in path:
+                    exact = [r for r in named if r["repo_path"] == path]
+                    named = exact or [
+                        r
+                        for r in named
+                        if r["repo_path"]
+                        and (r["repo_path"].endswith("/" + path) or path.endswith("/" + r["repo_path"]))
+                    ]
+                if len(named) == 1:
+                    out[text] = self.view(c, who, named[0], caches)
+            return {"bot": bot, "files": out}
 
     def visible_file(self, c, who, fid):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -2341,8 +2454,21 @@ def install_files(app, store, auth, blobs, mutate):
         return files.link(request, body)
 
     @app.get("/api/v2/bots/{bot}/files")
-    def bot_files(request: Request, bot: str, limit: int = 20, cursor: str = ""):
-        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor)
+    def bot_files(
+        request: Request,
+        bot: str,
+        limit: int = 20,
+        cursor: str = "",
+        q: Annotated[str, Query(max_length=200)] = "",
+        kind: str = "",
+    ):
+        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
+
+    @app.get("/api/v2/bots/{bot}/files/mentions")
+    def bot_file_mentions(
+        request: Request, bot: str, m: Annotated[list[str] | None, Query(max_length=MENTIONS_MAX)] = None
+    ):
+        return files.mentions(request.state.identity, bot, m or [])
 
     @app.patch("/api/v2/files/{fid}")
     def edit(request: Request, fid: str, body: FileEdit):
