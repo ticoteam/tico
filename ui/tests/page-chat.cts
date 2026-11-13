@@ -139,8 +139,8 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
     {
       // AC-5: a phone. The owner's face opens the chat full screen; ‹ or back returns to Listening where it was.
       const sent: Sent[] = [];
-      const answer = threadsFake({bot: OWNER, me: 'human:dana', sent: sent as ThreadsFakeSupport.ThreadsPost[], messages: [
-        {id: 'm-1', sender_id: 'bot:' + OWNER, body: 'Reddit rate-limited it from 14:00.'}]});
+      const msgs: ThreadsFakeSupport.ThreadsFixture[] = [{id: 'm-1', sender_id: 'bot:' + OWNER, body: 'Reddit rate-limited it from 14:00.'}];
+      const answer = threadsFake({bot: OWNER, me: 'human:dana', sent: sent as ThreadsFakeSupport.ThreadsPost[], messages: msgs});
       const {page, errors} = await openAutomationsWith(OWNER, PHONE, '#/listening', answer, []);
       await page.waitForSelector('.lst-row');
       const face = page.locator('.au-ph [data-pgc-open]');
@@ -195,6 +195,18 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await page.goBack();
       await page.waitForFunction(h => location.hash !== h, '#/listening/au_market');
       assert.equal(await page.evaluate(() => location.hash), hash, 'one back leaves the linked page');
+      // A link to another page: opened on the list, "From Listening › Market listening" goes to the listening, and
+      // one back returns to the list with no copy of it left in history.
+      await page.waitForSelector('.lst-row');
+      msgs.push({id: 'm-2', sender_id: 'human:dana', body: 'Why did this one send nothing yesterday?', refs: {from_page: sent.at(-1)?.refs?.from_page}});
+      await face.click();
+      await page.locator('.au-pgc.pgc-full .th-from a[href="#/listening/au_market"]').first().click();
+      await page.waitForFunction(() => location.hash === '#/listening/au_market' && document.querySelector('.au-pgc')!.hasAttribute('hidden'));
+      await page.waitForSelector('.lst-blk');
+      await page.goBack();
+      await page.waitForFunction(h => location.hash === h, hash);
+      await page.waitForSelector('.lst-row');
+      assert.equal(await page.locator('.au-pgc').isHidden(), true, 'back lands on the list, not on the chat');
       assert.deepEqual(errors, []);
       await page.close();
     }
