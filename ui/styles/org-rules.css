@@ -9,7 +9,7 @@
 .ru-ph .spacer{display:none}
 .ru-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .ru .spacer,.ru-modal .spacer,.ru-bot .spacer{flex:1}
-.ru-tabs{display:flex;flex:none;gap:2px}
+.ru-tabs{display:flex;flex:0 1 auto;flex-wrap:wrap;gap:2px}
 .ru-tabs a{padding:5px 10px;border-radius:var(--r-ctl);color:var(--muted);font-size:var(--t-sm);text-decoration:none;white-space:nowrap}
 .ru-tabs a:hover{color:var(--ink);background:var(--surface2)}
 .ru-tabs a.cur{color:var(--ink);background:var(--surface2);font-weight:600}
@@ -288,7 +288,7 @@ button.rr-line:hover{background:var(--surface2)}
   #main.ru-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .ru{height:auto}
   .ru-ph{gap:8px;padding:12px 12px 8px}
-  .ru-tabs{order:3;flex-basis:100%;min-width:0;overflow-x:auto;scrollbar-width:none}
+  .ru-tabs{order:3;flex-basis:100%;flex-wrap:nowrap;min-width:0;overflow-x:auto;scrollbar-width:none}
   .ru-tabs a{padding:8px 10px}
   .ru-body,.ru.ru-open .ru-body{display:block}
   .ru-filters{flex-direction:row;flex-wrap:nowrap;gap:6px;overflow-x:auto;padding:8px 12px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}

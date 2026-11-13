@@ -83,7 +83,10 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     assert.deepEqual(rule.who.bots.map(b => b.id), ['engineering-manager']);
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
-    assert.deepEqual(await page.locator('.ru-tabs a').allInnerTexts(), ['Internal', 'External', 'Due', 'Suggested'], 'tabs carry no counts');
+    // Every kind of rule has a tab, in the page's order, each with its count (Stage rules spec, The Rules page).
+    const tabs = (await page.locator('.ru-tabs a').allInnerTexts()).map(x => x.replace(/\s+\d+$/, ''));
+    assert.deepEqual(tabs, ['Company', 'Outside', 'Pipelines and stages', 'Due', 'Wakes', 'Automations on tasks', 'Built in', 'Suggested']);
+    assert.equal(await page.locator('.ru-tabs a .ru-n').count(), 8, 'each tab carries its count');
     // Its panel: one sentence from Who and With, the If broken labels say what happens, and the reviewer shows only
     // under Ask first.
     await go(page, '#/rules?rule=' + ruleId);

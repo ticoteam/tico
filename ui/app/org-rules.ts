@@ -1,5 +1,8 @@
-/* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with its Internal
-   (Reach: the org chart and a party's panel), External, Due and Suggested tabs, the rule and due-date side panels, the
+/* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
+   kind of rule, each with its count (GET /rule-groups): Company (internal; Reach: the org chart and a party's panel),
+   Outside (external), Pipelines and stages (stage rules by pipeline, then stage; changed from a stage's Rules button,
+   stage-rules.ts), Due, Wakes and Automations on tasks (listed, edited on the Automations page), Built in (read-only)
+   and Suggested (a bot's org rules and stage rules, for a person to accept or skip); the rule and due-date side panels, the
    Add rule and Add document dialogs, and a bot's Rules tab.
    Everything is read from and written to the org rules API (backend/org_rules.py): GET /api/v2/rules (paged; every
    page is read, a team has dozens of rules), /rules/due, /rule-sources and /bots/<slug>/rules. A rule
@@ -7,14 +10,16 @@
    again, and a refusal shows as one line. Saving sends the rule's `version`: a 409 reloads it and says so. Add document
    starts a Rules Owner review (POST /rules/read, backend/counsel.py); its suggestions wait in Suggested, and each one's
    quote shows in its side panel, never on its row.
-   Addresses: #/rules[/external|/due|/suggested][?rule=<id> | ?due=<id> | ?due=new&rule=<id>], and on Internal
+   Addresses: #/rules[/external|/stages|/due|/wakes|/automations|/builtin|/suggested][?rule=<id> | ?due=<id> | ?due=new&rule=<id>], and on Internal
    ?party=<party>[&rule=<id>] (a party as docs/reach.md writes it: *, group:<id>, human:<id>, bot:<id>). The filters stay on
    the page, not in the address. On a phone the lists are stacked rows and a panel is a full-screen sheet.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const RULES_ROUTE = '#/rules';
-const RU_TABS: [RuleTab, string][] = [['internal', 'Internal'], ['external', 'External'], ['due', 'Due'], ['suggested', 'Suggested']];
+// Every kind of rule, in the page's order (Stage rules spec, The Rules page): each tab's count comes from /rule-groups.
+const RU_TABS: [RuleTab, string][] = [['internal', 'Company'], ['external', 'Outside'], ['stages', 'Pipelines and stages'], ['due', 'Due'],
+  ['wakes', 'Wakes'], ['automations', 'Automations on tasks'], ['builtin', 'Built in'], ['suggested', 'Suggested']];
 const RU_REPEATS: [string, string][] = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
 const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'ready'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', 'ok']};
 const RU_KINDS: [string, string][] = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
@@ -24,7 +29,14 @@ const RU_BROKEN: [IfBroken, string][] = [['block', 'Stop'], ['escalate', 'Ask fi
 const RU_BROKEN_HINT: Record<string, string> = {block: 'The output is refused.', escalate: 'Held until the reviewer OKs it.', warn: 'It goes through with a note.'};
 const RU_PAGES = 50;        // pages read for one list at most (a page stops at 100 rows or at its byte budget)
 
-type RuleTab = 'internal' | 'external' | 'due' | 'suggested';
+type RuleTab = 'internal' | 'external' | 'stages' | 'due' | 'wakes' | 'automations' | 'builtin' | 'suggested';
+/** An automation the Rules page lists and the Automations page edits: a What wakes one, or one a task starts. */
+interface RuleAuto { id: string; name: string; enabled: boolean }
+/** GET /rule-groups: each tab's count, and the rows of the read-only tabs. Optional: an older hub answers without them. */
+interface RuleGroups {
+  groups?: {key: RuleTab; label: string; count: number}[];
+  wakes?: RuleAuto[]; automations?: RuleAuto[]; built_in?: StageBuiltIn[];
+}
 type RuleKind = 'internal' | 'external';
 type IfBroken = 'block' | 'escalate' | 'warn';
 type ScopeKind = 'groups' | 'bots' | 'people';
@@ -149,6 +161,10 @@ interface RuState {
   rules: { internal: RuleRow[]; external: RuleRow[] };
   reach: ReachState;
   suggested: RuleRow[];
+  /** Stage rules: those in force (Pipelines and stages), and a bot's waiting in Suggested. */
+  stageRules: StageRule[];
+  stageSuggested: StageRule[];
+  groups: RuleGroups | null;
   due: RuleDue[];
   sources: RuleSource[];
   filter: { q: string; who: string; from: string; due: boolean; status: string; routine: string; moreFrom: boolean };
@@ -345,9 +361,15 @@ async function ruLoad(tab: RuleTab): Promise<boolean> {
       [state.rules.external, state.sources] = await Promise.all([ruAll('/v2/rules?kind=external'), ruAll<RuleSource>('/v2/rule-sources')]);
     } else if (tab === 'due') {
       state.due = await ruAll<RuleDue>('/v2/rules/due?next=3660d');
-    } else {
-      state.suggested = await ruAll('/v2/rules?status=suggested');
+    } else if (tab === 'stages') {
+      state.stageRules = (await get<StageRulesList>('/v2/stage-rules', {fresh: true})).items || [];
+    } else if (tab === 'suggested') {
+      [state.suggested, state.stageSuggested] = await Promise.all([ruAll('/v2/rules?status=suggested'),
+        get<StageRulesList>('/v2/stage-rules?status=suggested', {fresh: true}).then(d => d.items || [])]);
     }
+    // Every tab's count, and the rows of Wakes, Automations on tasks and Built in. Read on its own: a tab still lists
+    // its rules when the counts can't be read, and shows none.
+    state.groups = await get<RuleGroups>('/v2/rule-groups', {fresh: true}).catch((): RuleGroups => ({}));
     state.error = '';
   } catch (e) { state.error = errorMessage(e, ''); }
   if (RU !== state || seq !== state.seq) return false;
@@ -367,7 +389,7 @@ async function pageRules() {
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
     const root: HTMLElement | null = $('#ru-root');
     if (!root) throw new Error('The Rules page did not draw');
-    RU = {root, tab: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [],
+    RU = {root, tab: null, rules: {internal: [], external: []}, suggested: [], stageRules: [], stageSuggested: [], groups: null, due: [], sources: [],
           reach: {...rrNormal(null), error: '', groups: null, party: null, q: '', edit: null, adding: false, shut: new Set(), chart: ''},
           filter: {q: '', who: '', from: '', due: false, status: '', routine: '', moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
@@ -392,8 +414,9 @@ function rulesStop() { RU = null; }
 
 function ruDrawHead() {
   const ru = ruOpen();
-  ruFind('.ru-tabs').innerHTML = RU_TABS.map(([k, label]) =>
-    `<a href="${ruHref(k)}" data-ru-tab="${k}"${ru.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('');
+  const count = (k: RuleTab) => ru.groups?.groups?.find(g => g.key === k)?.count;
+  ruFind('.ru-tabs').innerHTML = RU_TABS.map(([k, label]) => { const n = count(k);
+    return `<a href="${ruHref(k)}" data-ru-tab="${k}"${ru.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}${n === undefined ? '' : ` <span class="ru-n tnum">${n}</span>`}</a>`; }).join('');
   const human = S.me?.role !== 'bot';
   // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
   if (ru.tab === 'internal' && ru.root.querySelector('.ru-acts .rr-q')) return;
@@ -403,6 +426,7 @@ function ruDrawHead() {
     external: human ? '<button class="ghost small" type="button" data-ru-add>+ Add rule</button><button class="primary small" type="button" data-ru-add-doc>+ Add document</button>' : '',
     due: human ? '<button class="primary small" type="button" data-ru-add-due>+ Add due date</button>' : '',
     suggested: '',
+    stages: '', wakes: '', automations: '', builtin: '',
   }[ruTab()];
   ruFind('.ru-acts').innerHTML = acts;
 }
@@ -411,7 +435,8 @@ function ruDraw() {
   const root = ruOpen().root, list = ruFind('.ru-list', root), filters = ruFind('.ru-filters', root);
   root.dataset.tab = ruTab();
   if (ruOpen().error) { filters.innerHTML = ''; list.innerHTML = `<p class="err ru-pad">${esc(ruOpen().error)}</p>`; return; }
-  const draw = {internal: ruDrawInternal, external: ruDrawExternal, due: ruDrawDue, suggested: ruDrawSuggested}[ruTab()];
+  const draw = {internal: ruDrawInternal, external: ruDrawExternal, due: ruDrawDue, suggested: ruDrawSuggested, stages: ruDrawStages,
+    wakes: ruDrawWakes, automations: ruDrawAutomations, builtin: ruDrawBuiltIn}[ruTab()];
   draw(filters, list);
 }
 
@@ -984,8 +1009,106 @@ function ruDrawSuggested(filters: HTMLElement, list: HTMLElement) {
       ${g.rows.map(r => { const who = ruScopeWords(r.who, ''); return `<div class="ru-prop${ruSel(r.id) ? ' sel' : ''}" data-rule="${esc(r.id)}"${who ? ' data-has-who' : ''}><a class="ru-pt" href="${ruHref('suggested', {rule: r.id})}">${ruTextHTML(r.text, 'inline')}</a>
         <select class="ru-pwho" aria-label="Followed by" data-ru-who${r.can_edit ? '' : ' disabled'}><option value="">${esc(who || 'Pick who')}</option>${ruWhoOptions()}</select>
         <span class="ru-pacts">${r.can_edit ? `<button class="ghost small" type="button" data-ru-skip>Skip</button><button class="primary small" type="button" data-ru-accept${who ? '' : ' disabled'}>Add</button>` : ''}</span></div>`; }).join('')}</section>`)
-    .join('') || '<p class="muted ru-pad">No suggestions.</p>';
-  list.querySelectorAll<HTMLElement>('.ru-sg').forEach(ruAddAllSync);
+    .join('');
+  list.innerHTML += ruStageSuggestedHTML(ruOpen().stageSuggested);
+  if (!list.innerHTML) list.innerHTML = '<p class="muted ru-pad">No suggestions.</p>';
+  // Add all is the org rules' sections' alone; the stage rules' section has none.
+  list.querySelectorAll<HTMLElement>('.ru-sg:not([data-group="stage-rules"])').forEach(ruAddAllSync);
+}
+
+// ----------------------------------------------------------------- Pipelines and stages, Wakes, Automations, Built in
+// Stage rules are read here and changed from a stage's Rules button (stage-rules.ts), where On starts as that stage.
+const ruStageWhere = (r: StageRuleCore) => r.scope === 'company' ? 'Every pipeline'
+  : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id}: every stage` : `${r.pipeline_name || r.pipeline_id}: ${(r.stage_names || r.stages).join(', ')}`;
+function ruStageRowHTML(r: StageRule, acts = ''): string {
+  return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
+    + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
+    + `<div class="sr-what muted">${esc(ruStageWhere(r))} · ${esc(srSentence(r))}</div></div>`;
+}
+/** What a suggested change alters in the rule it replaces: "When: A task enters → The owner changes", one per part. */
+function ruStageDiff(old: StageRuleCore, r: StageRuleCore): [string, string, string][] {
+  const a = srParts(old), b = srParts(r);
+  const parts: [string, string, string][] = [['Name', old.name, r.name], ['On', ruStageWhere(old), ruStageWhere(r)],
+    ['When', a.when, b.when], ['If', a.ifs || 'always', b.ifs || 'always'], ['Then', a.act, b.act], ['Says', old.reason || '', r.reason || '']];
+  return parts.filter(([, x, y]) => x !== y);
+}
+// A bot's stage rule, change or retire, for a person to accept or skip. Each says what accepting does: a new rule
+// comes into force, a change rewrites the rule it names (what differs is listed), a retire takes that rule out of force.
+function ruStageSuggestedHTML(rows: StageRule[]): string {
+  if (!rows.length) return '';
+  const human = S.me?.role !== 'bot';
+  return `<section class="ru-sg" data-group="stage-rules"><header><h2>Stage rules</h2></header>${rows.map(r => {
+    const old = r.replaces, kind = !r.suggests ? 'new' : r.retires ? 'retire' : 'change';
+    const accept = kind === 'retire' ? 'Retire' : kind === 'change' ? 'Accept change' : 'Accept';
+    const acts = human && r.can_edit ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-decide="skip">Skip</button>`
+      + `<button class="primary small" type="button" data-sr-decide="accept">${accept}</button></span>` : '';
+    const title = kind === 'retire' ? `Retire: ${old?.name ?? r.name}` : kind === 'change' ? `Change to ${old?.name ?? r.name}` : `New: ${r.name}`;
+    let more = '';
+    if (kind === 'retire') more = `<div class="sr-says muted" data-sr-why>${r.retire_why ? `Why: ${esc(r.retire_why)}` : 'No reason given.'}</div>`;
+    else if (kind === 'change' && old) {
+      const diff = ruStageDiff(old, r);
+      more = `<ul class="sr-diff" data-sr-diff>${diff.map(([k, x, y]) => `<li><span class="sr-diff-k">${esc(k)}</span> <s class="muted">${esc(x || '(none)')}</s> → ${esc(y || '(none)')}</li>`).join('')
+        || '<li class="muted">Nothing differs from the rule as it is now.</li>'}</ul>`;
+    } else if (kind !== 'new') more = '<div class="sr-says muted">The rule it changes is gone; skip it.</div>';
+    return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"><div class="sr-line"><span class="sr-name">${esc(title)}</span>`
+      + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
+      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}</div>`;
+  }).join('')}</section>`;
+}
+// By pipeline, then stage: Company first, then each pipeline's whole-pipeline rules and its stages' rules.
+function ruDrawStages(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  const rows = ruOpen().stageRules, groups = new Map<string, StageRule[]>();
+  for (const r of rows) {
+    const key = r.scope === 'company' ? 'Company: every pipeline' : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id} · Whole pipeline`
+      : `${r.pipeline_name || r.pipeline_id} · ${(r.stage_names || r.stages).join(', ')}`;
+    groups.set(key, [...(groups.get(key) || []), r]);
+  }
+  list.innerHTML = [...groups].map(([name, rs]) => `<section class="ru-sg sr-ru-group"><header><h2>${esc(name)} <span class="ru-n tnum">${rs.length}</span></h2></header>`
+    + rs.map(r => ruStageRowHTML(r, r.can_edit && r.scope === 'stage'
+      ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-open-ru="${esc(r.stages[0] ?? '')}" data-sr-pipeline="${esc(r.pipeline_id)}" data-sr-name="${esc(r.stage_names?.[0] ?? '')}">Edit</button></span>` : '')).join('')
+    + '</section>').join('') || '<p class="muted ru-pad">No stage rules. Add one from a stage\'s Rules button on its pipeline.</p>';
+}
+function ruAutosHTML(rows: RuleAuto[], empty: string): string {
+  return rows.length ? `<p class="muted ru-pad">Listed here; edited on the Automations page.</p>${rows.map(a => `<div class="ru-row sr-row-ru"><div class="sr-line">`
+    + `<a class="sr-name" href="${AUTOMATION_HREF(a.id)}">${esc(a.name)}</a><span class="sr-cost">${a.enabled ? 'On' : 'Off'}</span></div></div>`).join('')}`
+    : `<p class="muted ru-pad">${empty}</p>`;
+}
+function ruDrawWakes(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  list.innerHTML = ruAutosHTML(ruOpen().groups?.wakes || [], 'No What wakes automations.');
+}
+function ruDrawAutomations(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  list.innerHTML = ruAutosHTML(ruOpen().groups?.automations || [], 'No automations start from a task.');
+}
+// What Tico does in code: read-only.
+function ruDrawBuiltIn(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  const rows = ruOpen().groups?.built_in || [];
+  list.innerHTML = `<p class="muted ru-pad">In code, read-only.</p>` + rows.map(b => `<div class="ru-row sr-row-ru sr-builtin" data-built-in><div class="sr-line"><span class="sr-name">${esc(b.name)}</span></div>`
+    + `${b.what ? `<div class="sr-what muted">${esc(b.what)}${b.where ? ` · ${esc(b.where)}` : ''}</div>` : ''}</div>`).join('');
+}
+// Accept or Skip on a suggested stage rule; Edit opens the stage's Rules panel.
+async function ruStageClick(ev: MouseEvent): Promise<boolean> {
+  const el = eventElement(ev)?.closest<HTMLElement>('[data-sr-decide],[data-sr-open-ru]');
+  if (!el) return false;
+  if (el.dataset['srOpenRu'] !== undefined) {
+    await stageRulesOpen(el.dataset['srPipeline'] ?? '', el.dataset['srOpenRu'] ?? '', el.dataset['srName'] ?? '');
+    return true;
+  }
+  const id = el.closest<HTMLElement>('[data-stage-rule]')?.dataset['stageRule'] ?? '', action = el.dataset['srDecide'] ?? '';
+  const r = ruOpen().stageSuggested.find(x => x.id === id);
+  if (!r) return true;
+  el.setAttribute('disabled', '');
+  try {
+    await post(`/v2/stage-rules/${encodeURIComponent(id)}/${action}`, {revision: r.revision});
+    toast(action === 'skip' ? 'Skipped' : r.retires ? 'Retired' : 'Accepted');
+    ruOpen().loaded.clear();
+    SR_BOARD.clear();  // the board's Rules counts read again the next time it draws
+    if (await ruLoad('suggested')) ruDraw();
+  } catch (e) { el.removeAttribute('disabled'); toast(ruError(e)); }
+  return true;
 }
 // The rows of a group that can be added now: the viewer may, and a Who is set.
 const ruReady = (group: HTMLElement) => [...group.querySelectorAll<HTMLElement>('.ru-prop')].filter(p => {
@@ -1048,6 +1171,7 @@ function ruWire() {
       else f[key] = f[key] === v ? '' : v;
       ruDraw(); return;
     }
+    if (t.closest('[data-sr-decide],[data-sr-open-ru]')) { void ruStageClick(ev); return; }
     if (t.closest('[data-ru-more]')) { ruOpen().filter.moreFrom = true; ruDraw(); return; }
     if (t.closest('[data-ru-add]')) { ruAddOpen({kind: ruOpen().tab === 'external' ? 'external' : 'internal'}); return; }
     if (t.closest('[data-ru-add-due]')) { location.hash = ruHref('due', {due: 'new'}); return; }
