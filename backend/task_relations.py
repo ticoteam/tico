@@ -2,8 +2,9 @@
 
 A row says `from_task` stands in `kind` to `to_task`:
 
-- `parent`: from is a sub-task of to. One parent a task (a partial unique index). It is written once, when the task is
-  filed (hubdb.task_create, beside the engine's own link), and never changed.
+- `parent`: from is a sub-task of to. One parent a task (a partial unique index). It is written when the task is
+  filed (hubdb.task_create, beside the engine's own link); after that only a person changes it, from the board
+  (backend/task_merge.py, which rewrites both copies).
 - `related`: the two belong together. No direction: stored once, lower id first (a CHECK).
 - `duplicate_of`: from duplicates to.
 - `follow_up`: from was split off or followed up from to.
@@ -22,7 +23,7 @@ through `_H()`.
 """
 
 KINDS = ("parent", "related", "duplicate_of", "follow_up", "after")
-# The kinds `relate` writes: a parent is set when the task is filed and never changed.
+# The kinds `relate` writes: a parent is set when the task is filed, or by a person through task_merge.set_parent.
 RELATED = ("related", "duplicate_of", "follow_up", "after")
 
 # Directed kinds read differently from each end; `related` reads the same from both.
@@ -353,8 +354,8 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
             conn,
             actor,
             "kind",
-            "A task's parent is the task that filed it, and does not change. File a new sub-task under the other "
-            "task, or relate the two.",
+            "A task's parent is the task that filed it. A person moves it under another task from the Tasks board; "
+            "otherwise file a new sub-task under the other task, or relate the two.",
         )
     if kind not in RELATED:
         H.refuse(conn, actor, "kind", f"a relation is {'|'.join(RELATED)}, not {kind}")

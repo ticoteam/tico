@@ -1,6 +1,18 @@
 /* ui/styles/task-board.css — A task being carried between a pipeline's columns (ui/app/task-board.ts): the copy under
-   the pointer, the place it left, and the column it is over. */
+   the pointer, the place it left, the column or the card it is over, and the dialog a drop on a card opens. */
 .pv-ghost{position:fixed;left:0;top:0;z-index:1000;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:.95}
 .tk-card.dragging{opacity:.35}
 .pv-col.over{background:var(--hover);box-shadow:inset 0 0 0 1px var(--g4)}
 body.board-holding,body.board-holding *{cursor:grabbing !important;user-select:none}
+.tk-card.drop-on{box-shadow:0 0 0 2px var(--accent);background:var(--hover)}
+.tb-drop{width:min(520px,calc(100vw - 32px))}
+.tb-drop .tmodal-head h2{font-size:var(--t-lg);color:var(--ink);margin:0}
+.tb-drop-titles{display:flex;flex-direction:column;gap:2px;margin:0 0 12px}
+.tb-drop-choices,.tb-drop-owner{border:0;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:6px}
+.tb-drop-owner legend{font-weight:600;margin-bottom:4px}
+.tb-drop-choice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
+.tb-drop-choice>span{display:flex;flex-direction:column;gap:2px}
+.tb-drop-choice:has(input:checked){border-color:var(--accent);background:var(--hover)}
+.tb-drop-choice.off{opacity:.6;cursor:default}
+.tb-drop-moves{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm)}
+.tb-drop-foot{display:flex;align-items:center;gap:8px}
