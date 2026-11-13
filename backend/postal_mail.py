@@ -609,7 +609,7 @@ class PostalMail:
             "row": row,
             "reading": reading,
             "digest": digest,
-            "data": data,
+            "size": len(data),  # only the size is filed: a group holds no scan bytes while it waits
             "mime": mime,
             "name": name,
         }
@@ -617,11 +617,11 @@ class PostalMail:
     def finish(self, got, decided):
         """File one prepared letter with Decide's word on it (or None)."""
         ident, row, reading = got["ident"], got["row"], got["reading"]
-        digest, data, mime, name = got["digest"], got["data"], got["mime"], got["name"]
+        digest, size, mime, name = got["digest"], got["size"], got["mime"], got["name"]
         kind = classify(reading, decided, self.thresholds(), bool(row["contains_checks"]))
         try:
             with self.store.transaction() as c:
-                self.file(c, ident, kind, reading, digest, len(data), mime, name)
+                self.file(c, ident, kind, reading, digest, size, mime, name)
         except Unavailable as error:
             return self.fail(row, error.code)
         except Exception as error:  # noqa: BLE001 - rolled back whole: the next try starts clean

@@ -264,7 +264,7 @@ def ask_many(store, primary, rows):
         errors = {p: err for p, (_found, _why, err) in read.items() if err is not None}
         with store.transaction() as c:
             for call in calls:
-                if call.sent:
+                if call.sent or len(call.items) == 1:  # a ticket refused before sending is audited, as before
                     H.event(c, "bot:" + bot, "judge.call", qset["label"], _call_audit(qset, call, errors))
             for p, (found, why, _err) in read.items():
                 row = rows[todo[p]]

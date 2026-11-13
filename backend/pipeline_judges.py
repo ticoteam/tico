@@ -87,7 +87,9 @@ ASK: "Callable[[dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = 
 # match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
 GROUP = 1
 # A page attached to several requirements read once, with one question per requirement. Off until the same replay shows
-# the merged call gives each requirement the verdict it gets alone: the state and question wording differ from today's.
+# the merged call gives each requirement the verdict it gets alone: the state and question wording differ from today's,
+# and page_verdicts stores a merged verdict under the one-requirement key (rubric_hash), so compare merged and alone
+# verdicts for the same pages before turning it on.
 SAME_PAGE = False
 # The store the server installed (install): judge_once asks the production engine on it when no engine is given.
 _installed_store: Any = None
@@ -487,7 +489,15 @@ def judge_many(store: Any, pairs: "list[tuple[dict[str, Any], dict[str, Any]]]")
         for n in members:
             items.append((states[n], _questions()))
             holds.append([(n, "met")])
-    for run in DG.packs(items, GROUP):
+    for k, run in enumerate(DG.packs(items, GROUP)):
+        if k:  # the cap is read again before every call after the first, as judge_outside read it before each pair
+            with store.read() as c:
+                capped = judge.over_spend_cap(c, store.settings) is not None
+        if capped:
+            for i in run:
+                for n, _qid in holds[i]:
+                    out[n] = _failed(bases[n], "Decide has reached the team's monthly spend cap")
+            continue
         replies = DG.ask_run(ask, [items[i] for i in run], QUESTION_SET, None, run)
         for i, reply in zip(run, replies, strict=True):
             share = None

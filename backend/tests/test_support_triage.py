@@ -482,6 +482,26 @@ def test_ten_tickets_are_triaged_in_at_most_two_calls_each_as_alone(api, quiet, 
     assert len(audit) == len(engine.calls) and sum(d.get("items", 1) for _, _, d in audit) == 10
 
 
+def test_a_ticket_the_client_refuses_before_sending_is_still_audited(api, quiet, monkeypatch):
+    """A ticket the contract refuses (never sent) keeps its judge.call row with the error, as when the engine refused it,
+    so the per-bot daily count still sees it."""
+    real = J.validate
+
+    def refuse(state, questions, label=None):
+        if isinstance(state, dict) and "TK-3-" in str(state.get("body")):
+            raise J.JudgeError("invalid", "state too large")
+        return real(state, questions, label)
+
+    monkeypatch.setattr(J, "validate", refuse)
+    r = hosted(api)
+    api.app.state.judge = engine = GroupedModel()
+    ten(api, r)
+    drain(api)
+    assert len(engine.calls) == 9, "the refused ticket is never sent"
+    audit = calls(api)
+    assert len(audit) == 10 and sum(1 for _, _, d in audit if d.get("error") == "invalid") == 1
+
+
 def test_a_ticket_whose_answer_is_missing_in_a_group_is_asked_again_alone(api, quiet, monkeypatch):
     """AC-9: the missing answer is asked again on its own, and no ticket takes another ticket's answer."""
     monkeypatch.setattr(T, "GROUP", DG.MOST)

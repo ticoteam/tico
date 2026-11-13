@@ -1519,6 +1519,17 @@ def test_five_pages_at_one_per_call_are_five_calls_as_before(store, seeded, monk
     assert all("requirement" in call["state"] for call in jev.calls)
 
 
+def test_the_spend_cap_is_read_again_before_each_page_call(store, seeded, monkeypatch):
+    """A beat that crosses the monthly cap makes no more calls after it, as when the cap was read before every page."""
+    monkeypatch.setattr(PJ, "GROUP", 1)
+    seeded(lambda c: _five(c, store))
+    jev = RawJev()
+    monkeypatch.setattr(PJ, "ASK", jev)
+    monkeypatch.setattr(PJ.judge, "over_spend_cap", lambda c, settings: "capped" if jev.calls else None)
+    V.run(store, H.shift(H.now(), seconds=1))
+    assert len(jev.calls) == 1
+
+
 def test_a_page_whose_answer_is_missing_in_a_group_is_asked_again_alone(store, seeded, monkeypatch):
     """AC-9: the page with no answer is asked again on its own; no page takes another page's answer."""
     monkeypatch.setattr(PJ, "GROUP", DG.MOST)
