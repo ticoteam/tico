@@ -129,7 +129,8 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   await page.locator('[data-tl-show=""]').click();
 
   // Close CRM: who can use it at which level, its keys, its checks and its calls.
-  await crmRow.locator('.tt-st').click();
+  // The whole row opens the tool (a working tool's Status cell is blank, so click Way in).
+  await crmRow.locator('.tt-way').click();
   await page.waitForFunction(() => location.hash === '#/tools/api/close-crm');
   await page.locator('#tool-access tr[data-ta-subject-row]').first().waitFor({timeout: t(10000)});
   const checked = (sel: string) => page.locator(`${sel}[aria-checked="true"]`).count();
