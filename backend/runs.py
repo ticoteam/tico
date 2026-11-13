@@ -71,7 +71,7 @@ def failed(c, since, limit=200):
 # events and completion, its uploads and credentials. A person's or bot's other calls are the public contract.
 RUNNER_WIRE = re.compile(
     r"/api/v2/(?:runners/(?:enroll|errors|heartbeat|desired|assignments|eligible|adopt|me|connectors|importers"
-    r"|performance|watchers)(?:/.*)?|runner-[^/]+(?:/.*)?|attempts/.+|jobs/claim|files/uploads|enrollments(?:/.*)?"
+    r"|performance|watchers)(?:/.*)?|runner-[^/]+(?:/.*)?|attempts/.+|jobs/claim|files/(?:uploads|dates)|enrollments(?:/.*)?"
     r"|bots/[^/]+/(?:memory/report|template/refresh)|imports/sources/[^/]+/status|github/token|connectors(?:/.*)?)"
 )
 

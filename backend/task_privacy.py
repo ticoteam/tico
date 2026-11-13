@@ -1445,6 +1445,7 @@ PRIVATE_MEETING_WRITES = (
     "/api/v2/tasks/dry-run",
     "/api/v2/files/uploads",
     "/api/v2/files/imports",
+    "/api/v2/files/dates",
     "/api/v2/github/token",
 )
 PRIVATE_MEETING_REFUSAL = "This is a private meeting: nothing from it is saved or shared until its owner reviews it."

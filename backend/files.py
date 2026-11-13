@@ -124,6 +124,7 @@ ACTIONS = (
 )
 LIST_MAX = 100
 MENTIONS_MAX = 60  # names one message lookup asks about
+DATES_MAX = 500  # files one date correction carries (runner-rs/src/files_publish.rs DATE_BATCH)
 
 
 def new_id():
@@ -180,6 +181,20 @@ def content_time(value, now):
     if out < EARLIEST_CONTENT_TIME:
         return None
     return min(out, now)
+
+
+class FileDate(M.Contract):
+    path: str = Field(min_length=1, max_length=1024)
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    modified: float | None = None
+
+
+class FileDates(M.Contract):
+    """When the content of files a bot's computer already published was written: no bytes, only times (Files.dates)."""
+
+    bot: str = Field(default="", max_length=200)
+    attempt: str = Field(default="", max_length=200)
+    files: list[FileDate] = Field(max_length=DATES_MAX)
 
 
 class FileEdit(M.Contract):
@@ -1407,19 +1422,73 @@ class Files:
             fields["task_id"] = task
         if changed and not created:
             fields["last_activity_at"] = max(when, row["last_activity_at"])
-        elif (
-            not changed and when < row["last_activity_at"] and row["last_activity_at"] == (last and last["created_at"])
-        ):
-            # The time is the copy's, nothing happened since: the content's own time, never before the version it replaced.
-            prior = c.execute(
-                "SELECT MAX(created_at) FROM bot_file_versions WHERE file_id=? AND version<?", (row["id"], version)
-            ).fetchone()[0]
-            fields["last_activity_at"] = max(when, prior or "")
-            fields["first_activity_at"] = min(row["first_activity_at"], fields["last_activity_at"])
+        elif not changed and last is not None:
+            fields.update(self.redated(c, row, last, when))
         c.execute(
             "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"])
         )
         return c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone(), created, changed
+
+    @staticmethod
+    def redated(c, row, current, when):
+        """The times that move a stored file back to when its current content was written (`when`, content_time), or {}.
+        Only a time that says when Tico copied the current version moves, so only when nothing has happened since that
+        copy (the last activity is the version's own time); never forward, and never before the version it replaced."""
+        if not when or when >= row["last_activity_at"] or row["last_activity_at"] != current["created_at"]:
+            return {}
+        prior = c.execute(
+            "SELECT MAX(created_at) FROM bot_file_versions WHERE file_id=? AND version<?",
+            (row["id"], current["version"]),
+        ).fetchone()[0]
+        back = max(when, prior or "")
+        if back >= row["last_activity_at"]:
+            return {}
+        return {"last_activity_at": back, "first_activity_at": min(row["first_activity_at"], back)}
+
+    def dates(self, request, body):
+        """A bot's computer says when the content of files it holds was written, with each file's digest and no bytes
+        (POST /api/v2/files/dates): every file of that bot from that path whose current version has that digest moves
+        back to that time, as an unchanged upload would move it (redated). The answer names the paths whose current
+        version has the digest, which the computer then need not upload; any other path it uploads as before."""
+        who = request.state.identity
+        if who.via == "assistant" or who.role not in ("bot", "runner"):
+            raise Problem("forbidden", "Only a bot, or the computer running it, dates its files", 403)
+        with self.store.read() as c:
+            bot = self.writer_bot(c, who, body.bot)
+        payload = body.model_dump()
+
+        def work(c):
+            # A computer dates only for a turn it ran of this bot (turn_context refuses another computer's turn).
+            attempt = who.attempt_id if who.role == "bot" and not who.agent else body.attempt
+            if who.role == "runner" and not attempt:
+                raise Problem("validation", "Say the turn (attempt) these files come from", 422)
+            self.turn_context(c, who, bot, attempt)
+            now, known, moved = H.now(), [], 0
+            for item in body.files:
+                relative = item.path.replace("\\", "/").strip("/")
+                if not relative or ".." in relative.split("/"):
+                    continue
+                rows = c.execute(
+                    "SELECT f.*,v.version,v.created_at AS version_at FROM bot_files f JOIN bot_file_versions v "
+                    "ON v.file_id=f.id AND v.version=f.current_version "
+                    "WHERE f.bot_id=? AND f.identity=? AND f.locator='tico_blob' AND v.digest=?",
+                    (bot, series(bot, relative), item.digest),
+                ).fetchall()
+                if not rows:
+                    continue
+                known.append(item.path)
+                when = content_time(item.modified, now)
+                for row in rows:
+                    times = self.redated(c, row, {"created_at": row["version_at"], "version": row["version"]}, when)
+                    if times:
+                        c.execute(
+                            "UPDATE bot_files SET last_activity_at=?,first_activity_at=? WHERE id=?",
+                            (times["last_activity_at"], times["first_activity_at"], row["id"]),
+                        )
+                        moved += 1
+            return {"bot": bot, "known": known, "dated": moved}
+
+        return self.write(request, who, payload, work)
 
     def publish_task_deliverable(self, c, who, task_id, item, digest):
         """Compatibility hook for attachment upload paths, including streaming uploads."""
@@ -2452,6 +2521,11 @@ def install_files(app, store, auth, blobs, mutate):
         """Register or touch an https document (Google, Notion, Figma, anything). Tico stores the
         address only: it never fetches the document or holds a provider token."""
         return files.link(request, body)
+
+    @app.post("/api/v2/files/dates")
+    def file_dates(request: Request, body: FileDates):
+        """When files the bot's computer already published were written, by digest and without their bytes."""
+        return files.dates(request, body)
 
     @app.get("/api/v2/bots/{bot}/files")
     def bot_files(
