@@ -9,9 +9,8 @@
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
 // means. It keeps its own small state, never the bot pages' (chat.js V2C), and drops the
 // Assistant page's cached copy when it sends.
-// What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
-// card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
-// answered here or by telling the Assistant.
+// A Confirm card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`) sits in the thread by when it
+// was asked. Bots' asks in Needs you are never added to the chat; the Assistant names them when asked.
 
 // The state of the panel's conversation (ASK), its thread and composer, as the functions below read and write them.
 interface AskChat {
@@ -46,13 +45,6 @@ interface AskInfo {
 interface AskExecution {
   text?: string;
 }
-// The reply forms: a choice of options has a named select, a free answer a named text box.
-interface AskChoiceForm extends HTMLFormElement {
-  readonly elements: HTMLFormControlsCollection & { pick: HTMLSelectElement };
-}
-interface AskReplyForm extends HTMLFormElement {
-  readonly elements: HTMLFormControlsCollection & { text: HTMLInputElement };
-}
 // One line of the thread: when it was asked (or sent), and its markup.
 interface AskRow {
   at?: string | null | undefined;
@@ -64,7 +56,6 @@ interface Element {
 
 const ASK_MANAGE = "We'd like Tico to fully manage our company.";
 let ASK: AskChat | null = null;
-const ASK_CARDS_MAX = 3;
 // The panel's name: "Tico Assistant", or the name a team gave its assistant.
 const askName = () => myChatName() === CONFIG_DEFAULTS.assistant_name ? 'Tico Assistant' : myChatName();
 const askPhone = () => matchMedia('(max-width:760px)').matches;
@@ -175,12 +166,6 @@ function askClick(ev: MouseEvent) {
   if (!(ev.target instanceof Element)) return;   // a click always lands on an element
   const t = ev.target;
   if (t.closest('[data-ask-close]')) { askToggle(false); return; }
-  const pick = t.closest<HTMLElement>('[data-ask-pick]');
-  if (pick) { void askAnswer(pick.closest<HTMLElement>('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
-  const opens = t.closest<HTMLElement>('[data-ask-open]');
-  if (opens) { const id = opens.closest<HTMLElement>('[data-ask-q]')?.dataset.askQ || ''; if (!decideOpen(id)) void decideWanted(id); return; }
-  const more = t.closest<HTMLElement>('[data-ask-more]');
-  if (more) { more.setAttribute('aria-expanded', String(more.getAttribute('aria-expanded') !== 'true')); return; }
   const hint = t.closest<HTMLElement>('[data-ask-hint]');
   if (hint) { ev.preventDefault(); void ASK?.send?.(hint.dataset.askHint || ''); return; }
   // A link followed from the panel: on a phone the sheet gets out of the way of the page it opens.
@@ -188,57 +173,6 @@ function askClick(ev: MouseEvent) {
   if (a && askPhone() && !a.getAttribute('href')?.startsWith('#/support')) askToggle(false, false);
 }
 
-// ---- Bots' asks
-// The asks to this person in Needs you (docs/pipelines-v3.md S3), the first few: a choice of two answered with a tap,
-// more in a list and Send, a question with a line of words. An OK, or an ask this person only opens, opens the ask
-// screen (decide.ts), where what is asked about is shown in full.
-function askQuestions(): NeedsEntry[] {
-  const me = myActor();
-  return needsAsEntries(S.v2?.needs).filter(it => it.kind === 'ask' && it.ask && it.ask.who === me && it.ask.asked_by !== me)
-    .slice(0, ASK_CARDS_MAX);
-}
-// Who asks: the panel's own bot by the panel's name, anyone else by their name.
-const askAsker = (actor: string | null | undefined): string => actor === 'bot:' + assistantBot() ? askName() : actor ? actorLabel(actor) : '';
-// Answered here: a question (the ask's own `answer`), not an OK, which needs its content shown.
-const askAnswerable = (it: NeedsEntry) => !!it.ask && it.ask.kind !== 'ok' && it.ask.may.includes('answer');
-// A card is who asks, the question and at most two buttons. A long question shows three lines until it is tapped; three
-// or more choices are one list and Send.
-const ASK_Q_LONG = 160;
-// A choice picked in a list and not yet sent, by the ask's id: the thread is drawn again whenever the chat changes.
-// Asks no longer shown drop out.
-const askPicks = new Map<string, string>();
-function askQuestionHTML(it: NeedsEntry) {
-  const ask = it.ask!, who = askAsker(ask.asked_by), choices = ask.choices || [], id = String(it.id);
-  const text = plainActors(ask.line || it.line || '');
-  const body = `${who ? `<div class="ask-card-who">${esc(who)}</div>` : ''}${text.length > ASK_Q_LONG
-    ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
-  const answer = !askAnswerable(it) ? `<button type="button" class="ghost" data-ask-open>Open</button>`
-    : choices.length > 2 ? `<form class="ask-reply" data-ask-choose="${esc(id)}"><select name="pick" aria-label="Answer">${choices.map((c, i) =>
-      `<option value="${i}"${askPicks.get(id) === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
-    : choices.length ? `<div class="ask-picks">${choices.map((c, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(c)}</button>`).join('')}</div>`
-    : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer" aria-label="Answer"><button type="submit" class="ghost">Send</button></form>`;
-  return `<div class="ask-card" data-ask-q="${esc(id)}" data-ask-row="q:${esc(id)}">${body}${answer}</div>`;
-}
-// The answer goes on the ask (POST /v2/tasks/{id}/asks/{rid}/answer): a choice by its words, or the line typed.
-async function askAnswer(card: HTMLElement | null, {pick, text}: {pick?: number; text?: string}) {
-  const it = askQuestions().find(x => String(x.id) === card?.dataset.askQ);
-  if (!it?.ask || !it.task_id || !card || card.dataset.busy) return;
-  const value = pick !== undefined ? it.ask.choices?.[pick] : text;
-  if (!value) return;
-  const who = askAsker(it.ask.asked_by);
-  card.dataset.busy = '1';
-  card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = true; });
-  try {
-    await taskAnswer(it.task_id, it.ask.requirement_id, value, null);
-    card.innerHTML = `${who ? `<div class="ask-card-who">${esc(who)}</div>` : ''}<div class="muted">Answered</div>`;
-    await v2Refresh();                              // Needs you without it: the card leaves the chat
-    ASK?.draw?.();
-  } catch (e) {
-    toast(errorMessage(e, ''), true);
-    delete card.dataset.busy;
-    card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = false; });
-  }
-}
 async function askLoad(chat: AskChat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
@@ -257,14 +191,13 @@ async function askLoad(chat: AskChat) {
     const replying = streaming || (messages.length > 0 && !isReply(messages.at(-1)));
     chat.dotState = replying ? ldotChatState({replying, streaming}) : 'idle';
     askDot();
-    // What waits on the person sits where it was asked, among the rest: Confirm cards left in other chats (BotOps'),
-    // and bots' questions. One with no time comes last.
-    const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
+    // The chat holds only what the person and the Assistant said, and the Confirm cards for what the person asked for
+    // (BotOps' previews of a send, a spend or a publish), where they were asked. What waits on the person in Needs you
+    // stays there: nothing of it is added here unasked; the Assistant names it when asked (spec #330). One with no time
+    // comes last.
+    const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString();
     const cards: AskRow[] = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
-      html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(asks.map(it => ({at: it.since || late, html: askQuestionHTML(it)})));
-    const listed = new Set(asks.map(it => String(it.id)));
-    for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
+      html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}));
     const rows: string[] = messages.slice(-30).map((m): AskRow => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
       .concat(cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
@@ -376,21 +309,6 @@ function askRowsIn(thread: Element, seen: Set<string>, animate: boolean) {
 $('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
-$('#ask-panel')?.addEventListener('change', (ev: Event) => {
-  if (!(ev.target instanceof Element)) return;
-  const choose = ev.target.closest<AskChoiceForm>('[data-ask-choose]');
-  if (choose) askPicks.set(choose.dataset.askChoose || '', choose.elements.pick.selectedOptions[0]?.textContent || '');
-});
-$('#ask-panel')?.addEventListener('submit', (ev: Event) => {
-  if (!(ev.target instanceof Element)) return;
-  const choose = ev.target.closest<AskChoiceForm>('[data-ask-choose]');
-  if (choose) { ev.preventDefault(); void askAnswer(choose.closest<HTMLElement>('[data-ask-q]'), {pick: Number(choose.elements.pick.value)}); return; }
-  const form = ev.target.closest<AskReplyForm>('[data-ask-reply]');
-  if (!form) return;
-  ev.preventDefault();
-  const text = form.elements.text.value.trim();
-  if (text) void askAnswer(form.closest<HTMLElement>('[data-ask-q]'), {text});
-});
 document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'j' && !askAway()) { ev.preventDefault(); askToggle(); return; }
   if (ev.key !== 'Escape' || !ASK?.open || document.querySelector('dialog[open]')) return;
@@ -410,7 +328,6 @@ document.addEventListener('click', ev => {
   ev.preventDefault();
   if (a.getAttribute('href')?.includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
 }, true);
-liveOn('needs-list', () => { ASK?.draw?.(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
 // On a phone Ask is a page of its own: another tab, even the one already under it, leaves it.
 document.addEventListener('click', ev => {
