@@ -1756,7 +1756,7 @@ def test_at_release_an_open_unsure_is_judged_again_and_old_lines_lose_their_prob
     every line in the old template is said the new way."""
     import importlib
 
-    migration = importlib.import_module("backend.migrations.20261113060000_jev_reasons_by_part")
+    migration = importlib.import_module("backend.migrations.20261113070000_jev_reasons_by_part")
     _pipeline(c)
     open_row = _task(c)
     closed_row = X.new_task(c, ANA, "Billing spec", "product", assignee=WRITER)
