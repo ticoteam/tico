@@ -335,6 +335,18 @@ const KEPT_ENV: &[&str] = &[
     "DBUS_SESSION_BUS_ADDRESS",
 ];
 
+/// Where Chrome on Linux keeps what it writes outside the profile (its crash database and caches): a private
+/// folder beside the profile, never the home. Bot code shares that home and owns `~/.config` (0700) once a bot has
+/// run Chrome itself, and Chromium aborts at start (`chrome_crashpad_handler: --database is required`) when it
+/// cannot make its crash folder there.
+fn linux_dirs(profile: &Path) -> [(&'static str, std::path::PathBuf); 2] {
+    let base = profile.parent().unwrap_or(profile).join("xdg");
+    [
+        ("XDG_CONFIG_HOME", base.join("config")),
+        ("XDG_CACHE_HOME", base.join("cache")),
+    ]
+}
+
 pub struct Launched {
     pub child: tokio::process::Child,
     pub browser: Arc<cdp::Browser>,
@@ -449,6 +461,10 @@ async fn start(
     if std::env::consts::OS == "linux" {
         if let Some(d) = display() {
             cmd.env("DISPLAY", d);
+        }
+        for (k, dir) in linux_dirs(profile) {
+            private_dir(&dir).map_err(other)?;
+            cmd.env(k, dir);
         }
     }
     cmd.stdin(std::process::Stdio::null())
@@ -566,6 +582,18 @@ pub async fn close(launched: &mut Launched) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_chrome_keeps_its_config_and_cache_beside_the_profile_not_in_the_home() {
+        let dirs = linux_dirs(Path::new("/state/browsers/c1/profile"));
+        assert_eq!(
+            dirs,
+            [
+                ("XDG_CONFIG_HOME", "/state/browsers/c1/xdg/config".into()),
+                ("XDG_CACHE_HOME", "/state/browsers/c1/xdg/cache".into()),
+            ]
+        );
+    }
 
     #[test]
     fn chrome_uses_a_pipe_and_linux_without_a_display_uses_headless() {
