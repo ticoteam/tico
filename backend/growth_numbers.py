@@ -80,7 +80,7 @@ MADE_FROM = {
 
 def origins(row):
     """{figure: computed or typed} for each figure a channel's month has."""
-    given = row.get("origin") or {}
+    given = row.get("computed_or_typed") or {}
     out = {}
     for key in SERIES_KEYS:
         if key == "quality" or row.get(key) is None:
