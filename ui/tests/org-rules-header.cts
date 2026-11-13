@@ -95,6 +95,27 @@ async function foldedSearchProblems(page: Page) {
   await page.keyboard.press('Escape');
   await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
   if (await more.evaluate(b => b.classList.contains('ph-held'))) bad.push('⋯ keeps its dot once the search is empty');
+  // Escape clears the box without an input event (rrKey), a second one closes ⋯: no dot left behind.
+  await more.click({timeout: t(3000)});
+  await box.click({timeout: t(3000)});
+  await page.keyboard.type('abc', {delay: 30});
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.locator('.ru-ph .ph-menu').waitFor({state: 'hidden', timeout: t(3000)});
+  // the menu hides at once; its toggle event, which reads the box again, comes a task later
+  try {
+    await page.waitForFunction(() => !document.querySelector('.ru-ph > .ph-more')?.classList.contains('ph-held'), null, {timeout: t(2000)});
+  } catch { bad.push('⋯ keeps its dot after Escape cleared the search'); }
+  // Widened while ⋯ is open: the tools stay put until ⋯ closes, then go back to the row.
+  await more.click({timeout: t(3000)});
+  await page.setViewportSize({width: 1440, height: 800});
+  await page.waitForTimeout(t(200));
+  await page.keyboard.press('Escape');
+  try {
+    await page.waitForFunction(() => !!document.querySelector('.ru-ph > .ph-tools .rr-q'), null, {timeout: t(3000)});
+  } catch { bad.push('the search stays in ⋯ after ⋯ closes at 1440'); }
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.waitForFunction(() => !!document.querySelector('.ru-ph .ph-menu .rr-q'), null, {timeout: t(3000)});
   return bad;
 }
 

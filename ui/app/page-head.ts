@@ -208,6 +208,7 @@ document.addEventListener('toggle', (event: Event) => {
   const button = menu.parentElement?.querySelector<HTMLElement>(`:scope > .ph-more[popovertarget="${CSS.escape(menu.id)}"]`);
   button?.setAttribute('aria-expanded', String(open));
   if (menu.parentElement instanceof HTMLElement) pageHeadHeld(menu.parentElement);   // a pick clears the search without an input event
+  if (!open) pageHeadFitSoon();   // tools kept folded while ⋯ was open may fit in the row again (the window widened)
   if (!open || !button) return;
   const rect = button.getBoundingClientRect();
   menu.style.top = `${Math.min(rect.bottom + 4, innerHeight - menu.offsetHeight - 12)}px`;
