@@ -172,7 +172,7 @@ wrote nothing.
    if the graph changed much.
 2. What you could not read goes in `_librarian/missing.md` under **Sources I could not read**. Durable lessons
    about where good sources are for this kind of market go in `memory/learnings.md`.
-3. Rewrite `state.md`. Commit this repository.
+3. Note progress on the task. Commit this repository.
 4. `tico task done <id> -m "<the update>" --version N`. Under twelve lines, sources by domain, covering:
    - the answer in one or two sentences;
    - what you read (counts by kind) and what you wrote (report link, entities added, pages changed);

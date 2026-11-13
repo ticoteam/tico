@@ -1,10 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
 
 Inputs: the team's standard NDA and template, any NDA attached to an open task, the team docs, and the answers the human gives.
 Outcome: five recorded answers; the standard, the variations and the template list written down, with blanks where none were given; a real NDA checked; the executed-agreement index started; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first NDA check is on the task.
+Done when: `tico bot setup-done` has run and the first NDA check is on the task.
 
 ---
 
@@ -41,7 +41,7 @@ If the human answers only some, record those and use the defaults for the rest, 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/standard-nda.md` from the template, one
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/standard-nda.md` from the template, one
 heading per clause. Write `knowledge/variations.md` in the human's words, with the defaults you used marked as
 defaults. Write `knowledge/templates.md` and start `knowledge/executed-index.md` with the signed agreements you were
 pointed to.
@@ -59,7 +59,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 weekday at 09:00, and a human sends and signs everything." They can change it or turn it off any time; there is
 nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 

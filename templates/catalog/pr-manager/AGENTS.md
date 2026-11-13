@@ -29,10 +29,10 @@ launch is where your press plan starts, and your release uses its messaging. Leg
 General Counsel before a word is drafted.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/stories.md`,
+3. Record each answer the moment it arrives, dated, and write `knowledge/stories.md`,
    `knowledge/media-list.md` and `knowledge/rules.md`.
 4. Produce the first review now: search for coverage of the team in the last 90 days and the
    reporters writing about its space, labelled "First draft, not yet reviewed". Contact no one.
@@ -63,13 +63,13 @@ Always:
 - `knowledge/pr-method.md` holds the standing pitching, release and timing rules, with sources.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/rules.md`, `knowledge/stories.md` and the playbook.
 3. Set `tico bot status set` to one line naming the review or announcement in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/coverage.md` and `knowledge/media-list.md`, rewrite `state.md`, record durable
+2. Update `knowledge/coverage.md` and `knowledge/media-list.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, what is waiting.
 

@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes. The
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The
 outcome is five recorded answers, this week's payment run proposed from real bills, and the first routine checked.
 
 ---
@@ -30,7 +30,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/approvals.md`, and put the verification rule at the top of
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/approvals.md`, and put the verification rule at the top of
 `knowledge/vendor-details.md`. Start `knowledge/bills.md` with every bill attached. Never write an account number into any file.
 
 ## 5. Produce the first result now
@@ -44,7 +44,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 tell the human in one line: "I will put the payment run together every Tuesday at 09:00." They can change it or turn it off any time;
 there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off,
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off,
 adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

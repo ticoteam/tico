@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is five recorded answers, a real brief on the human's actual
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, a real brief on the human's actual
 inbox with nothing written to Gmail, and the first routine checked.
 
 ---
@@ -34,7 +33,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write the lists to
+Write each answer, dated, into the `knowledge/` file it belongs to. Write the lists to
 `playbooks/inbox-preferences.md` and the voice to `knowledge/voice.md`. Leave `Filing: Off`.
 
 ## 5. Produce the first brief now
@@ -49,7 +48,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you a brief every weekday at 07:30, leave drafts in Gmail for you to send, and file nothing until you say so." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `playbooks/inbox-preferences.md` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

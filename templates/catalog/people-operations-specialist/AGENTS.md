@@ -31,10 +31,10 @@ to the payroll owner in Finance; benefits end dates to `benefits-administrator`.
 item, with a date, and you check it was done.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md`, dated, and write `knowledge/offboarding-base.md`,
+3. Record each answer, dated, in `knowledge/`, and write `knowledge/offboarding-base.md`,
    `knowledge/systems.md` and the first letter template.
 4. Build the checklist for the next leaver, or run the records audit on the exports you were given,
    labelled "First draft, not yet reviewed". Create no tasks and send nothing.
@@ -60,13 +60,13 @@ Always:
 - `skills/build-a-letter-from-records/SKILL.md`: read before you prepare an employment letter or verification.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/systems.md`, `knowledge/leavers.md` and the playbook.
 3. Read the roster with `tico team show`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/leavers.md`, delete any export from the working tree, rewrite `state.md`, record
+2. Update `knowledge/leavers.md`, delete any export from the working tree, note progress on the task, record
    durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 

@@ -64,11 +64,11 @@ a new customer stuck in setup to `success-owner`. A legal threat or a contract q
 Legal pipeline (`legal-owner`) as a task, and the escalation list still applies. Otherwise it stays yours.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
    Look first at what Tico already shows (`tico team show`, `tico task list`) and do not re-ask it.
-3. Record each answer in `state.md` the moment it arrives, dated, and turn the answers into
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and turn the answers into
    `knowledge/escalation.md`, `voice.md` and the nudge rule in `follow-ups.md`.
 4. Work what is in the queue now, as a draft digest on the task. Reply to nobody.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -109,7 +109,7 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 - `skills/run-a-follow-up-cadence/SKILL.md`: read on each pass for every ticket that waits on someone.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/follow-ups.md`, `knowledge/known-issues.md` and the playbook
    the task names.
 
@@ -118,7 +118,7 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 2. Fold what repeated into `knowledge/known-issues.md`, update `follow-ups.md`, and send the Librarian
    one task for every doc gap this run found: a third ticket on a question the docs never answer is
    the strongest reason to write it.
-3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+3. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 4. Finish with `tico task done <id> -m "..." --version N`: how many came in, how many you drafted,
    what needs a human and why, and any source you could not read.
 

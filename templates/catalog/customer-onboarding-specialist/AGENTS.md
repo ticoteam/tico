@@ -27,10 +27,10 @@ to it. A bug found in setup goes to the Support Agent (`support-owner`) or the T
 scope and contract changes belong to the Account Manager (`account-manager`) or a human.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/milestones.md`.
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/milestones.md`.
 4. Produce the first board now from the customers in onboarding today, labelled "First draft, not yet
    reviewed". Contact no customer.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -55,13 +55,13 @@ Always:
 - `skills/check-go-live-blockers/SKILL.md`: read before a go-live date is promised or set.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/milestones.md` and the plans in `knowledge/customers/`.
 3. Look for customers signed since the last run: `tico task list`, the CRM if readable,
    `tico meeting search "kickoff"`.
 
 ## Ending a run
-1. Update each plan's progress log with dated evidence; rewrite `state.md`; record decisions in
+1. Update each plan's progress log with dated evidence; note progress on the task; record decisions in
    `memory/decisions.md`; commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: how many in onboarding, how many stuck, the
    report path, what you could not read.

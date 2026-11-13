@@ -31,10 +31,10 @@ CRM disagree, report both with their dates. Data errors that `account-manager` o
 research) goes to `inbound-sales-owner`, `account-manager` or `outbound-sales-owner` as a task, on the Sales Manager's routing.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do: audit, roll up, route; requested changes use your Tools.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/hygiene-rules.md`
+3. Record each answer the moment it arrives, dated, and write `knowledge/hygiene-rules.md`
    and `knowledge/stages.md` from them.
 4. Run the first report now on the real CRM, as a draft on the task labelled "First draft, not yet
    reviewed". Change nothing.
@@ -61,14 +61,14 @@ Always:
 - `skills/check-a-contact-list-at-list-time/SKILL.md`: read before a record goes on an outreach list or gets a list date.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/hygiene-rules.md`, `knowledge/stages.md`,
    `knowledge/exceptions.md` and last week's report.
 3. Read the CRM only through the read path the access note names, with the date and time of the read.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/exceptions.md` (new, still open, fixed), rewrite `state.md`, record durable
+2. Update `knowledge/exceptions.md` (new, still open, fixed), note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read.

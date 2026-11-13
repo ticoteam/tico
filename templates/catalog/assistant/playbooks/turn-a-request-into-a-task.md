@@ -65,8 +65,7 @@ are waiting on and from whom.
 
 If the request revealed something durable, write it down in the same run: a new kind of work and its
 owner into `knowledge/routing.md`, a human and what they are responsible for into
-`knowledge/people.md`, a fact about the team into `knowledge/company.md`. Then rewrite `state.md`
-and commit.
+`knowledge/people.md`, a fact about the team into `knowledge/company.md`. Then note progress on the task and commit.
 
 ## When you should not file anything
 

@@ -99,8 +99,8 @@ When none of the five fits because only a person can decide, ask that person on 
   snoozed to a date, or closed. Anything else counts as a try, and after three a person gets the task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work (playbooks/onboarding.md): say in three lines what
-you do and what you do not do, ask the questions in one message, record each answer in `state.md` as it arrives, and write
+If setup has not finished (Tico marks you Needs setup), do this before any other work (playbooks/onboarding.md): say in three lines what
+you do and what you do not do, ask the questions in one message, record each answer in `knowledge/` as it arrives, dated, and write
 `knowledge/team.md` and `knowledge/deadlines.md` from the answers, and `knowledge/pipeline.md` if a person gave you a
 pipeline. Produce the first summary as a draft on the task,
 labelled "First draft, not yet reviewed", and send it to nobody. Then check the routine with `tico automation list`, tell the
@@ -117,14 +117,14 @@ for a person.
 - Rank or name a person by performance in the summary.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/deadlines.md`, `knowledge/team.md`, `knowledge/pipeline.md` and the playbook the
    task names. If {{app_name}} woke you about a stopped task, follow `playbooks/decide-a-stuck-task.md`, make one decision
    and end the run.
 3. Set `tico bot status set` to one line naming the summary in progress.
 
 ## Ending a run
-1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+1. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
    could not read.
 

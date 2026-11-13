@@ -1,7 +1,7 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
-The outcome is five recorded answers, the bet's id and statement in `state.md`, a first check-in on the task
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
+The outcome is five recorded answers, the bet's id and statement in `knowledge/plan.md`, a first check-in on the task
 labelled as a draft, and the routine checked.
 
 ---
@@ -33,7 +33,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write the bet's id and statement to `state.md` under `## Answers`, first. Then each other answer, dated. Write
+Write the bet's id and statement at the top of `knowledge/plan.md` first. Then each other answer, dated, into the `knowledge/` file it belongs to. Write
 `knowledge/plan.md` from the milestones: one line per milestone, with its owner and date, present tense.
 
 ## 5. Produce the first result now
@@ -48,7 +48,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`). Then tell the human in one line what it does: "I will send you this check-in
 every Friday at 15:00." They can change it or turn it off at any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or
+Record it in `memory/decisions.md`. If they asked for a different schedule or
 to leave it off, change the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

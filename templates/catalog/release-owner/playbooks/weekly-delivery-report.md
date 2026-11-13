@@ -7,7 +7,7 @@ Nothing in the product repositories changes in this run.
 
 ## Inputs
 
-- `knowledge/thresholds.md`, `knowledge/delivery-practice.md`, `knowledge/merge-gates.md`, `state.md` (open stalls), and last week's report.
+- `knowledge/thresholds.md`, `knowledge/delivery-practice.md`, `knowledge/merge-gates.md` (with its open and recent stalls), and last week's report.
 - Merged pull requests for the last 14 days and the 14 before, with their merge times and check results:
   `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,mergedAt,mergeCommit,headRefOid,statusCheckRollup,url`.
 - Workflow runs for the deploy workflow, for the same two windows:
@@ -44,7 +44,7 @@ Nothing in the product repositories changes in this run.
 - **Path to users:** merge wait and merge to production, each with the window before and the label it was measured under.
 - **Gating checks:** each gate by name, whether it is required, and the seat its failures are handed to. The Infrastructure Owner's figures are cited, not recounted.
 - **Releases and deploys:** releases that reached users, the days between the last two, failed deploys, rollbacks and time to recover.
-- **Stalls:** each stretch the merge queue stood still because a gating check was red on the default branch (from `state.md`).
+- **Stalls:** each stretch the merge queue stood still because a gating check was red on the default branch (from `knowledge/merge-gates.md`).
 - **Hand-offs:** each task opened, with its seat and what it asks.
 - **Could not read:** runs, logs, queue timings or releases unavailable, with the count.
 - **Sources:** the windows, the repository, the workflows, and the date of the thresholds file.

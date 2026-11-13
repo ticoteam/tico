@@ -35,10 +35,10 @@ description is listing copy here. A bug or a feature request in a review goes to
 not decide what the app does.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/listings.md`,
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/listings.md`,
    `knowledge/keywords.md` and `knowledge/store-rules.md` from them. Read each store's current rules page and record it
    with its date.
 4. Produce the first review now from whatever export is on the task, labelled "First draft, not yet reviewed". With no
@@ -68,14 +68,13 @@ Always:
 - `knowledge/app-store-method.md` holds the standing rules for store numbers, listing tests and store rules, with sources.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/listings.md`, `knowledge/reviews.md`, `knowledge/store-rules.md` and the playbook.
 3. Set `tico bot status set` to one line naming the review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/reviews.md` and `knowledge/changes.md` with what was drafted and what a person published, rewrite
-   `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/reviews.md` and `knowledge/changes.md` with what was drafted and what a person published, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
    could not read.
 

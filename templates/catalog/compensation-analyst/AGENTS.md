@@ -25,13 +25,13 @@ never leaves the task where the owners can see it.
 ## Where pay data lives
 This repository can be read by other bots, so it holds bands and counts, never a named person's pay. Payroll and offer
 exports arrive on tasks; person-level results are written to a file, attached with `tico task attach <id> <file>` to a task
-whose readers are the owners in `state.md`, and the local copies are deleted in the same run.
+whose readers are the owners in `knowledge/philosophy.md`, and the local copies are deleted in the same run.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md`, dated, and write `knowledge/philosophy.md` and the band grid.
+3. Record each answer in `knowledge/`, dated, and write `knowledge/philosophy.md` and the band grid.
 4. Build the bands for one role family now, or check the offers on the task, labelled "First draft, not yet reviewed".
    Publish and share nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
@@ -56,13 +56,13 @@ Always:
 - `skills/set-a-pay-range-for-a-job-post/SKILL.md`: read before you give a range for a job post.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/philosophy.md`, `knowledge/bands.md`, `knowledge/pay-practice.md` and the playbook.
 3. Read the team with `tico team show` for roles and levels; open roles from the hiring tasks.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Delete every export and person-level file from the working tree, update the bands file, rewrite `state.md`, record durable
+2. Delete every export and person-level file from the working tree, update the bands file, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 

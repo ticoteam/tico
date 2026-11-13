@@ -30,10 +30,10 @@ must approve are summarised by `contracts-manager`; a question of law goes to `g
 Investor updates are the finance team's; you record what the board decided about them.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do, including "not legal advice".
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/entities.md`,
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/entities.md`,
    `knowledge/board.md`, `knowledge/minute-book.md` from them.
 4. Produce the first calendar now, with the gaps you found. Label it "First draft, not yet reviewed". Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -50,12 +50,12 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a shareholder's home address, tax id or bank details into a file.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/board.md`, `knowledge/minute-book.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the registers, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
+2. Update the registers, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: what waits on whom first, then the path.
 
 ## Talking to {{app_name}}

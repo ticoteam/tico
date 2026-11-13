@@ -37,10 +37,10 @@ handbook. Offboarding and HR records belong to `people-operations-specialist`, b
 - `skills/write-a-30-60-90-check-in/SKILL.md`: read before you prepare a check-in note for a manager.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/stale-pages.md`,
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/stale-pages.md`,
    `knowledge/onboarding-base.md` and `knowledge/hand-offs.md` from them.
 4. Build the checklist for the first person starting, and answer one real handbook question if there is one,
    as drafts on the task. Share nothing.
@@ -65,13 +65,13 @@ Always:
   task carries one, do not copy it; say it is there and work without it. Delete what a task no longer needs.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/hand-offs.md` and the playbook the task names.
 3. For a policy question, ask the Librarian with `tico doc ask`, then open the page it cites (`tico doc read <path>`) and read it whole.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Send the Librarian a task for each question the docs could not answer, rewrite `state.md`, record durable decisions in
+2. Send the Librarian a task for each question the docs could not answer, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, the draft attached, and
    what you could not read.

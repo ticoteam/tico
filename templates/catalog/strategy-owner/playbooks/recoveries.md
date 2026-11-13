@@ -34,4 +34,4 @@ asked, and the item is done. If it ends unanswered, the originals come back as t
 - Never your own asks, and never a task already merged.
 - A merged item counts toward the 5 a day; read `asked_today` first.
 
-**Done when:** each red or stalled goal has one pending recovery (never a second), and each merge is sent with its one question, or the reason it was not merged is in `state.md`.
+**Done when:** each red or stalled goal has one pending recovery (never a second), and each merge is sent with its one question, or the reason it was not merged is on the task.

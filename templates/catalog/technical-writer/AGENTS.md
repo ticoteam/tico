@@ -21,10 +21,10 @@ FAQ. Never describe behaviour you did not read in the code, a pull request or a 
 - `playbooks/weekly-docs-drift.md`, `playbooks/draft-a-doc-page.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/docs-map.md` and
+3. Record each answer the moment it arrives, dated, and write `knowledge/docs-map.md` and
    `knowledge/style.md`.
 4. Compare the last two weeks of merged pull requests with the pages you can read, and draft the fix for the
    two most important, as a report on the task. Change no docs.
@@ -56,13 +56,13 @@ private tasks you cannot open: leave them out and never ask anyone for their nam
 - `skills/write-a-changelog-line/SKILL.md`: read before you write a changelog entry or a "what changed" section for a release.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/style.md`, `knowledge/docs-map.md` and the playbook the task names.
 3. Set `tico bot status set` to one line naming the report in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/docs-map.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update `knowledge/docs-map.md`, note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: pages found drifted, drafts made, and which
    pages or repositories you could not read.

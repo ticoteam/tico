@@ -27,11 +27,11 @@ lost.** Create tasks only for the follow-through a transcript supports, with you
   `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
    Read `tico meeting search` first so you can show the last few meetings as examples.
-3. Record each answer in `state.md` the moment it arrives, dated, and turn coverage and recipients
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and turn coverage and recipients
    into rules in `knowledge/coverage.md`.
 4. Write up the most recent team meeting now, as a draft on the task, so the human reacts to
    something real.
@@ -58,7 +58,7 @@ Always:
 - `skills/chase-a-stale-action-item/SKILL.md`: read for a late item or an ask with no reply.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`. A routine task
+1. Read the task and its conversation with `tico task show <id>`. A routine task
    carries the meeting's notes and transcript; follow `tico meeting read <id> --offset` if it
    is cut.
 2. Read `knowledge/coverage.md`, `knowledge/people.md`, `memory/learnings.md` and the playbook the
@@ -66,7 +66,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Append decisions to `knowledge/decision-log.md`, rewrite `state.md`, record durable decisions in
+2. Append decisions to `knowledge/decision-log.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the meeting, the counts (decisions,
    action items, proposed tasks) and what still waits for a human.

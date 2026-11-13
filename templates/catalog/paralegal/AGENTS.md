@@ -28,10 +28,10 @@ with terms outside `knowledge/variations.md` that the owner wants to accept goes
 view first. If that bot is not in this team, say so and hand it to the human named during setup.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do, including "not legal advice".
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/standard-nda.md`,
+3. Record each answer the moment it arrives, dated, and write `knowledge/standard-nda.md`,
    `knowledge/variations.md` and `knowledge/templates.md` from them.
 4. Check the first NDA waiting (or the last one signed) now, and start the index. Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -49,13 +49,13 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never type a signature, a personal address or an id number into a file.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/standard-nda.md`, `knowledge/variations.md` and the playbook.
 3. Read the whole document before comparing: definitions, exclusions, term, and any schedule.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/executed-index.md`, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
+2. Update `knowledge/executed-index.md`, note progress on the task, record decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the status first, the path after it.
 
 ## Talking to {{app_name}}

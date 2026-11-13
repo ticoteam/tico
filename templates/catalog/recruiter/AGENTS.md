@@ -34,10 +34,10 @@ people who have not applied belongs to `sourcer`. When the manager moves a candi
 People.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the first `knowledge/roles/<role>.md` and
+3. Record each answer the moment it arrives, dated, and write the first `knowledge/roles/<role>.md` and
    `knowledge/wording.md` from them.
 4. Write the job post for the first role now, or summarise the applications you were given, labelled "First draft,
    not yet reviewed" on the task. Send and publish nothing yet.
@@ -68,13 +68,13 @@ Always:
 - `skills/check-a-job-post-before-it-goes-out/SKILL.md`: read before you hand over any job post, board listing or repost.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/wording.md`, the role file the task names and the playbook it names.
 3. Set `tico bot status set` to one line naming the role in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/pipeline.md` and the role file, rewrite `state.md`, record durable decisions in
+2. Update `knowledge/pipeline.md` and the role file, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, the draft attached, and what you could
    not read.

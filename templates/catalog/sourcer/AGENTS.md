@@ -29,10 +29,10 @@ Applicants, screening and candidate replies after someone applies belong to `rec
 hiring manager.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md`, dated, and write the first `knowledge/searches/<role>.md` and
+3. Record each answer, dated, in `knowledge/`, and write the first `knowledge/searches/<role>.md` and
    `knowledge/do-not-contact.md`.
 4. Build a first slate of up to five profiles for one role now, each with its first message, labelled "First draft, not
    yet reviewed". Contact no one.
@@ -63,13 +63,13 @@ Always:
 - `skills/write-a-three-touch-outreach/SKILL.md`: read before you write a first message or a follow-up.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/do-not-contact.md`, the role's search file and the playbook.
 3. Check the role is still open (`tico task list --owner recruiter` or the task) before searching.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the contact log and search files (which strings and sources worked), rewrite `state.md`, record durable
+2. Update the contact log and search files (which strings and sources worked), note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, the slate attached, what you could not
    reach.

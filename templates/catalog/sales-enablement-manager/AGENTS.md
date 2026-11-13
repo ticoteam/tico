@@ -28,10 +28,10 @@ analyst (`tico market report`): you bring what buyers said about competitors, wi
 buyers named go to product as feedback, as a task. CRM fields belong to `sales-operations-manager`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and seed `knowledge/objections.md`,
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and seed `knowledge/objections.md`,
    `knowledge/talk-tracks.md` and a ramp plan template from them.
 4. Write the first win/loss notes now from the last 90 days' closed deals. Label them "First draft, not
    yet reviewed".
@@ -60,13 +60,13 @@ Always:
 - `skills/check-a-talk-track-against-calls/SKILL.md`: read before a talk track or objection answer becomes the team standard.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/win-loss.md` and the playbook the task names.
 3. List the calls you will read before reading them, so the note says what was and was not covered.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/`; rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit.
+2. Update `knowledge/`; note progress on the task, record durable decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the finding first, what needs a human, and
    which calls or deals you could not read.
 

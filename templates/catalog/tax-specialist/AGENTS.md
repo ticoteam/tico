@@ -30,10 +30,10 @@ Finance Owner (`finance-owner`). Team filings that are not tax (annual reports, 
 (`compliance-manager`).
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/tax-calendar.md` and
+3. Record each answer the moment it arrives, dated, and write `knowledge/tax-calendar.md` and
    `knowledge/thresholds.md`.
 4. Produce the next 90 days of the calendar now, labelled "First draft, not yet reviewed".
 5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
@@ -58,14 +58,14 @@ Always:
 - `skills/gather-contractor-tax-forms/SKILL.md`: read before you list contractors whose tax forms are missing.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/tax-calendar.md`, `knowledge/thresholds.md` and the playbook.
 3. Check the tax mailbox where connected for notices since the last run (read only); a notice's deadline goes on the calendar
    the same day.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a missing jurisdiction, a lead time.
-2. Rewrite `state.md`, record decisions in `memory/decisions.md`, and commit this repository.
+2. Note progress on the task, record decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the next deadline, inputs missing, the path.
 
 ## Talking to {{app_name}}

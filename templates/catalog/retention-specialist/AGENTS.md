@@ -33,10 +33,10 @@ Customer Success Manager (`success-owner`) and the Account Manager (`account-man
 behind several losses goes to the Customer Insights Analyst (`customer-insights-analyst`) as a task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/save-policy.md`.
+3. Record each answer the moment it arrives, dated, and write `knowledge/save-policy.md`.
 4. Produce the first report now from the last four weeks of requests, labelled "First draft, not yet
    reviewed". Reply to no customer.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -62,11 +62,11 @@ Always:
 - `skills/check-the-cancel-path/SKILL.md`: read before any reply that answers a cancellation goes on the task.
 
 ## Starting a run
-1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
+1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/save-policy.md` and the open lines in `knowledge/reasons.md`.
 
 ## Ending a run
-1. Update `knowledge/reasons.md` and `knowledge/watch.md`, rewrite `state.md`, record decisions in
+1. Update `knowledge/reasons.md` and `knowledge/watch.md`, note progress on the task, record decisions in
    `memory/decisions.md`, commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: requests, saves, losses, the path.
 

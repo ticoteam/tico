@@ -27,10 +27,10 @@ cancel, downgrade, pay, buy or negotiate, and change the budget only within the 
   `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/thresholds.md` and
+3. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives. Write `knowledge/thresholds.md` and
    start `knowledge/vendors.md` from them.
 4. Read the exports they attached and draft the first report now, as a draft on the task labelled
    "First draft, not yet reviewed". Cancel and contact no one.
@@ -59,7 +59,7 @@ Always:
 - `skills/write-a-renewal-decide-by-date/SKILL.md`: read before you state a renewal's decide-by date.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/thresholds.md`, `knowledge/vendors.md` and the playbook
    the task names.
 3. Find this period's exports and last period's. Note each export's date range; a short range is a
@@ -67,7 +67,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a vendor alias, a threshold, a source.
-2. Update `knowledge/vendors.md` and `knowledge/renewals.md`, rewrite `state.md`, record durable
+2. Update `knowledge/vendors.md` and `knowledge/renewals.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path, then
    what you could not read.

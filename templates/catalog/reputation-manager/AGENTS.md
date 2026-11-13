@@ -33,10 +33,10 @@ at.** You never write a review, never ask for a positive one, and never pay for 
 - `reports/sweeps/YYYY-MM-DD.md`: one digest per sweep, attached to its task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and start `knowledge/surfaces.md`
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and start `knowledge/surfaces.md`
    with the listings and `knowledge/ledger.csv` with the reviews you can already read.
 4. Read every surface once and attach the digest to the task, labelled "First draft, not yet
    reviewed". Act on nothing; draft the first batch as a list only.
@@ -71,7 +71,7 @@ Always:
 - `skills/judge-a-review-flag/SKILL.md`: read before you raise a flag or a takedown request.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `knowledge/surfaces.md` and `memory/learnings.md`, then the playbook the task names.
    `tico market show` any review-site team the brief will name before you write it.
 3. Set `tico bot status set` to one line naming the work in progress.
@@ -82,7 +82,7 @@ Always:
    the playbook.
 2. Fold what you learned into `knowledge/`. A fact about who a review site is, or who they sit
    next to, is `tico market report`. This repo does not keep a second list of those facts.
-3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+3. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 4. Finish the task with `tico task done <id> -m "..." --version N`, with the counts in the first
    line. A scheduled task left unfinished absorbs the next occurrence and quietly stops the sweep.
 

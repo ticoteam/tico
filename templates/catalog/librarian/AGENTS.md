@@ -98,7 +98,7 @@ The docs include internal writing, external sources and the manual:
 - `skills/deep-market-research/SKILL.md`: read for a "Deep research: ..." task.
 
 ## Starting a run
-1. Read `state.md`, then what came in.
+1. Read what came in.
    - A human's question arrives as a message in their private docs conversation. It may be a follow-up:
      read what was said before in that conversation, and answer the new question in that light.
    - A bot's question arrives as an ask. Your final message is the answer it waits for.
@@ -126,7 +126,7 @@ The docs include internal writing, external sources and the manual:
 1. A question's run ends with the answer as your final message: answer first, short, cited. Nothing follows it.
 2. Before that final message, in the same run: log the question and answer and, if the docs could not answer, the
    gap (`playbooks/faq-and-gaps.md`). A write that fails does not change the answer.
-3. Rewrite `state.md`. Record a durable lesson about reading these docs in `memory/learnings.md`.
+3. Note progress on the task. Record a durable lesson about reading these docs in `memory/learnings.md`.
    Commit this repository.
 
 ## Talking to {{app_name}}

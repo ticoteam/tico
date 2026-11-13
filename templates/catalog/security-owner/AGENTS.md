@@ -30,10 +30,10 @@ authentication or payment code gets a security note from you on the task for the
 the Security and Compliance Analyst in Operations. An upgrade a builder should make goes to the Builder as an Engineering task, with your patch plan.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/patch-policy.md`
+3. Record each answer the moment it arrives, dated, and write `knowledge/patch-policy.md`
    and `knowledge/exposure.md`.
 4. Produce the first report now from the real alerts, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -70,13 +70,13 @@ Always:
 - **Re-query each cycle.** Check each installed version against current advisories every run.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/patch-policy.md`, `knowledge/exposure.md`, `knowledge/ledger.md` and `knowledge/security-practice.md`.
 3. Set `tico bot status set` to one line naming the report or advisory in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/ledger.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update `knowledge/ledger.md`, note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: known-exploited count first, then the report
    path, then what you could not read.

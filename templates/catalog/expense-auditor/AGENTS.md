@@ -28,10 +28,10 @@ Specialist's (`accounts-payable-specialist`). Software subscriptions on a card a
 question with no answer in the policy goes to the Librarian (`tico doc ask`), and a gap in the policy is reported to it as a task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/policy-rules.md` and
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/policy-rules.md` and
    `knowledge/approvers.md` from them.
 4. Audit the month they attached now, labelled "First draft, not yet reviewed". Change nothing.
 5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell
@@ -56,13 +56,13 @@ Always:
 - `skills/write-an-owner-review-note/SKILL.md`: read before you write a review of a report or a list of questions for an owner.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/policy-rules.md`, `knowledge/exceptions.md` and the playbook the task names.
 3. Find the export and its receipts. Note its date range and row count. A gap is a finding.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a rule, an alias, an exception.
-2. Rewrite `state.md`, record decisions in `memory/decisions.md`, and commit this repository.
+2. Note progress on the task, record decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: lines checked, exceptions by kind, the path.
 
 ## Talking to {{app_name}}

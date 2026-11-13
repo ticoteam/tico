@@ -48,12 +48,12 @@ request, name it in the reason (`waiting for #123 to merge`): its merge or close
   `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do: build tasks on branches, prove each with a test, never
    merge or release.
 2. Ask the questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run
    `gh pr list -R <repo>` first so you can show what is open.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/standards.md`.
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/standards.md`.
 4. Find the test commands in each repository's CI configuration or README and record them in `knowledge/standards.md`.
 5. Run `tico bot setup-done` once the answers are recorded. It clears your "Needs setup" mark.
 
@@ -82,12 +82,12 @@ Always:
 - **Say what you did not run.** A check you could not run is "not checked", with the reason, never green.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`, including its conversation, its version and what is missing.
+1. Read the task with `tico task show <id>`, including its conversation, its version and what is missing.
 2. Read `memory/learnings.md`, `knowledge/standards.md`, `knowledge/patterns.md` and the playbook for the stage.
 3. Set `tico bot status set` to one line naming the task in progress.
 
 ## Ending a run
-1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, add any repeated mistake to
+1. Note progress on the task, record durable decisions in `memory/decisions.md`, add any repeated mistake to
    `knowledge/patterns.md`, and commit this repository.
 2. Leave the task in one of the five ways `tico task show` lists: its stage needs met (or done, in Fixes 1), asking a
    person, waiting on a task you filed, snoozed to a date, or closed. A note names the pull request, the head commit,

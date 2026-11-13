@@ -45,7 +45,7 @@ source, the source stays the source.
 
 ## 4. Finish
 
-1. Rewrite `state.md` (what the docs cover, what is thin, which sources failed). Record anything durable about
+1. Note progress on the task (what the docs cover, what is thin, which sources failed). Record anything durable about
    reading these kinds of sources in `memory/learnings.md`. Commit this repository.
 2. Finish the task: `tico task done <id> -m "<the update>" --version N`. The person reads this note.
    Under ten lines, sources by name and domain, not full links:

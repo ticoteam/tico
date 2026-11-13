@@ -122,7 +122,7 @@ place; file a separate task only for a broken bot, tool or shared infrastructure
   snoozed to a date, or closed. Anything else counts as a try, and after three a person gets the task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work. You go live without an interview:
+If setup has not finished (Tico marks you Needs setup), do this before any other work. You go live without an interview:
 1. Read your pipeline: `tico task list --status open`, `tico task show <id>` on a few of its tasks, and `tico team show`.
    Write `knowledge/pipeline.md` from what you read.
 2. Say in three lines what you do and what you will not do, and ask the two questions in `playbooks/onboarding.md` in the same
@@ -144,14 +144,14 @@ Always:
 - `skills/write-the-stuck-task-question/SKILL.md`: read when only a person can decide what happens to a stopped task.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md` and `knowledge/pipeline.md`. If {{app_name}} woke you about a stopped task, follow
    `playbooks/decide-a-stuck-task.md`, make one decision and end the run.
 3. Set `tico bot status set` to one line naming the task or the summary in progress.
 
 ## Ending a run
 1. Add the smallest note to `memory/learnings.md` against anything that went wrong this run.
-2. Correct `knowledge/pipeline.md` where the run proved it wrong, rewrite `state.md`, record durable decisions in
+2. Correct `knowledge/pipeline.md` where the run proved it wrong, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish the task with `tico task done <id> -m "..." --version N`: the headline, and which sources you could not read.
 

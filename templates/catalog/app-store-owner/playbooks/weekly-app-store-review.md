@@ -66,7 +66,7 @@ Write `reports/YYYY-MM-DD-app-store.md` in the shape of `knowledge/examples/app-
     tico file publish reports/YYYY-MM-DD-app-store.md
 
 Add the dated readings and the reply statuses to `knowledge/reviews.md`, add the drafted changes to `knowledge/changes.md`
-as "proposed", rewrite `state.md`, and commit this repository.
+as "proposed", note progress on the task, and commit this repository.
 
 ## 7. Close
 

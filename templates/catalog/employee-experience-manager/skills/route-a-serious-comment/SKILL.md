@@ -11,7 +11,7 @@ Steps:
 1. Recognise it. The trigger is the content, not the wording of the question. If you are unsure whether a comment qualifies,
    route it.
 2. Stop. Do not summarise, theme, count or paraphrase it, and do not form a view about what happened.
-3. Copy it untouched to the named human in `state.md`, on a task created the same day with `tico task create --owner <person>`. Put
+3. Copy it untouched to the named human in `knowledge/survey.md`, on a task created the same day with `tico task create --owner <person>`. Put
    the source and the date on the task. If someone may be at risk now, say so in the first line of the task and use the fastest
    channel the task allows.
 4. Remove the comment from the working files, so no readout or summary can pick it up. Keep the routing record without its text.

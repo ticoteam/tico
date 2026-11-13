@@ -28,10 +28,10 @@ event emails are yours, and you check the email calendar so they do not collide.
 staff go to the Travel Coordinator if the team has one.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/calendar.md`
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/calendar.md`
    and `knowledge/rules.md` (budget owner, ceiling, follow-up owner and deadline), and `knowledge/do-not-email.md` from the tool that holds the opt-outs (or say on the task that none is connected).
 4. Produce the first weekly review now from the events named, labelled "First draft, not yet
    reviewed". Book, send and hand over nothing.
@@ -58,13 +58,13 @@ Always:
 - `skills/score-an-event-after-it-ends/SKILL.md`: read for the results line of an event that has ended.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/calendar.md`, `knowledge/rules.md` and the playbook.
 3. Set `tico bot status set` to one line naming the event or review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/calendar.md` and `knowledge/results.md`, rewrite `state.md`, record durable
+2. Update `knowledge/calendar.md` and `knowledge/results.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, what is late.
 

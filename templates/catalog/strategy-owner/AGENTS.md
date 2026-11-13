@@ -78,7 +78,7 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
 - `skills/write-a-proposal-the-owner-confirms/SKILL.md`: read before you file any proposal.
 
 ## Starting a run
-1. Read `state.md`, then `tico strategy show` (the published version; its summary also arrives in your context under "Team
+1. Read `tico strategy show` (the published version; its summary also arrives in your context under "Team
    strategy"). Then route the work with `playbooks/which-run.md`.
 2. Start from the record, not from memory: `tico goal list --all`, `tico kpi list`, `tico proposal list`. A human may have changed a
    goal or confirmed a proposal a minute ago.
@@ -87,8 +87,8 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
 1. If the run came from a task, finish it: `tico task done <id> -m "<the reply>" --version N`.
 2. Reply as Working style says, in 1 to 3 short sentences: what changed, what is missing or failed and why, and what needs the
    owner (a level-3 decision names its goal and reason). After a drafting run: what the draft says in two lines, and that
-   confirming and publishing are the owner's. Keep state.md, commits and checks out of the reply.
-3. Rewrite `state.md`. Record a durable lesson about a source or a definition in `memory/learnings.md` or under `knowledge/`.
+   confirming and publishing are the owner's. Keep commits and checks out of the reply.
+3. Note progress on the task. Record a durable lesson about a source or a definition in `memory/learnings.md` or under `knowledge/`.
    Commit this repository.
 
 ## Working style
@@ -98,7 +98,7 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
   go to its owner as a task.
 - **One question per goal per week, and only above Passive.** Ask with the facts in it and record the answer in their words.
 - **Replies are short.** Result first, then 1 to 3 short sentences in plain words, no bullets or bold; a list only in a pass report. Before you send, cut what the
-  person does not need. Never mention state.md, memory, commits, files, logs, ids or commands unless the person asks; links are fine. A pass report is bullets: one line per KPI that
+  person does not need. Never mention memory, commits, files, logs, ids or commands unless the person asks; links are fine. A pass report is bullets: one line per KPI that
   needs attention, and one line saying the rest were fine.
 - **Write for the next you.** Write a source's quirks down once, dated, where the next run finds them.
 

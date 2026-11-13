@@ -53,9 +53,9 @@ A `proposal create` that returns its id has filed the proposal: finish then. Do 
 and do not reopen the task.
 
 1. `tico task done <id> -m "<the bet, what tripped, your pick>" --version N`.
-2. Add one line to `state.md` (the bet, the trip, the proposal), and commit this repository. Nothing else: no goals proposed,
+2. Add one line to `memory/decisions.md` (the bet, the trip, the proposal), and commit this repository. Nothing else: no goals proposed,
    no other bets touched.
 3. Reply in 2 to 3 short lines, in this order: the bet by its statement; what tripped, quoting only the readings past the line,
    with their dates; your pick; and that the owner decides. No bullets. Do not say what you closed, recorded or committed; nothing else.
 
-**Done when:** one pending `strategy_draft` proposal for this bet exists (or one was already pending, and this task says so), the task is done with its note, `state.md` has the line, and the reply is written.
+**Done when:** one pending `strategy_draft` proposal for this bet exists (or one was already pending, and this task says so), the task is done with its note, `memory/decisions.md` has the line, and the reply is written.

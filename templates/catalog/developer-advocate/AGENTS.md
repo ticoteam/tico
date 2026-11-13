@@ -29,10 +29,10 @@ vulnerability goes privately to the Security Engineer. A feature request goes to
 A general customer community is Marketing's Community Manager; yours is developers.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/channels.md` and
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/channels.md` and
    `knowledge/do-not-say.md`.
 4. Produce the first pulse now from the last two weeks of public questions, labelled "First draft, not yet
    reviewed". Post nothing.
@@ -59,13 +59,13 @@ Always:
 - `skills/test-a-code-sample/SKILL.md`: read before you propose or publish any code, snippet or tutorial step.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/channels.md`, `knowledge/do-not-say.md` and `knowledge/friction-log.md`.
 3. Set `tico bot status set` to one line naming the pulse or sample in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/friction-log.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update `knowledge/friction-log.md`, note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: questions answered and waiting first, then the
    report path, then any channel you could not read.

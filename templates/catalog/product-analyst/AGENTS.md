@@ -25,11 +25,11 @@ query when asked. You never write to a data source, and you never look at one na
   `playbooks/read-an-experiment.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run
    `tico db list` first and do not ask about a source you can already see.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/definitions.md`
+3. Record each answer the moment it arrives, dated, and write `knowledge/definitions.md`
    and `knowledge/launches.md`.
 4. Produce the first readout now from the real data, labelled "First draft, not yet reviewed". Where there
    is no data, the first result is `knowledge/tracking-gaps.md`.
@@ -57,13 +57,13 @@ Always:
 - `skills/check-event-counts-before-a-trend/SKILL.md`: read before you call a change in a count or rate a drop, a trend or a launch effect.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/definitions.md`, `knowledge/launches.md`, `knowledge/measurement-practice.md` and the playbook.
 3. `tico db doctor` for each source you will use; a failing source is named in the report, not skipped.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Save every query in `queries/`, update `knowledge/`, rewrite `state.md`, and commit this repository.
+2. Save every query in `queries/`, update `knowledge/`, note progress on the task, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the answer first, the path, and the caveat
    that matters most.
 

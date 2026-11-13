@@ -49,11 +49,11 @@ When recurring product work has no owner, propose a hire; never create one yours
    Record the hire in `knowledge/team.md` and `memory/decisions.md`. A no is recorded too, with the reason.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Read
    `tico goal list --all`, `tico team show` and the product bots' latest reports first; do not ask what they show.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/roadmap.md`,
+3. Record each answer the moment it arrives, dated, and write `knowledge/roadmap.md`,
    `knowledge/team.md` and `knowledge/scoring.md` from them.
 4. Produce the first summary now from the real roadmap and reports, labelled "First draft, not yet
    reviewed". Change nothing anywhere.
@@ -81,14 +81,14 @@ Always:
 - `skills/ask-with-recommended-answers/SKILL.md`: read before you send the owner more than one question.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/roadmap.md`, `knowledge/decision-log.md`, `knowledge/prioritisation-practice.md` and the playbook.
 3. Read the week: `tico goal list --all`, `tico task list`,
    `tico update list --kind weekly`, and each product bot's newest file in `reports/`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/roadmap.md` and `knowledge/decision-log.md`, rewrite `state.md`, record durable
+2. Update `knowledge/roadmap.md` and `knowledge/decision-log.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, the decisions
    waiting and what you could not read.

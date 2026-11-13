@@ -34,10 +34,10 @@ replies to one.
 - `reports/YYYY-MM-DD-inbound-readout.md`: the weekly read-out, published with `tico file publish`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write the team's criteria, speed target and reply
+3. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives. Write the team's criteria, speed target and reply
    rules into `knowledge/inbound-method.md`, and write `knowledge/voice.md` and `knowledge/do-not-contact.md`.
 4. Sweep the leads already waiting as a first pass: sort each, draft the replies, and attach the pack to the task
    labelled "First draft, not yet reviewed". Send nothing.
@@ -66,14 +66,14 @@ Always:
 - `knowledge/inbound-method.md` holds the standing rules and definitions these depend on.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/inbound-method.md`, `knowledge/voice.md`, `knowledge/do-not-contact.md`
    and the playbook the task names.
 3. Read the last ten lines of `knowledge/lead-log.md`, so you know which leads are open and which wait on a person.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Append each lead this run touched to `knowledge/lead-log.md`, rewrite `state.md`, record durable decisions in
+2. Append each lead this run touched to `knowledge/lead-log.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first (leads arrived, sorted, drafts ready,
    calls booked), then the leads waiting on a person, then any source you could not read.

@@ -158,11 +158,11 @@ their wrong-if, what is still unknown, and the ask: "Confirm the draft in Needs 
 Strategy page when it reads right; I never publish." Say what publishing needs: at least one active bet with a
 rules-out and a wrong-if, and something under "What we won't do"; the page refuses it otherwise.
 
-Rewrite `state.md` (what the draft rests on, which claims were kept, edited or struck, what is still open), record
+Note on the task what the draft rests on, which claims were kept, edited or struck, and what is still open; record
 a durable lesson about this team's words or sources in `knowledge/`, and commit this repository. From a task,
 finish it with `tico task done <id> -m "<the message above>" --version N`.
 
-**Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and `state.md` says what the draft rests on.
+**Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and the task says what the draft rests on.
 
 ## After the owner publishes
 

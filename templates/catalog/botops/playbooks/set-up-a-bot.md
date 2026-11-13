@@ -98,7 +98,7 @@ elsewhere names the folders, `files: {publish: [reports/, deliverables/]}`.
 
     tico bot check <slug>
 
-Fix everything it reports as a failure: a missing `state.md`, an `AGENTS.md` still identical to the
+Fix everything it reports as a failure: an `AGENTS.md` still identical to the
 template, an empty `## Owns`, a `name:` that is not the slug, a schedule that would be refused. A
 warning can stand if you say in the note what it is and why it is acceptable now. A credential the bot
 needs and does not have is yours to ask for: open the card (`playbooks/connect-a-tool.md`), never

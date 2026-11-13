@@ -28,10 +28,10 @@ the Design Owner's and the Product Marketing Manager's; you follow them inside t
 belong to the Librarian (report a gap as a task); READMEs and API docs to the Technical Writer.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the first
+3. Record each answer the moment it arrives, dated, and write the first
    `knowledge/glossary.md` and `knowledge/error-rules.md`.
 4. Produce the first review now from the last two weeks of pull requests, labelled "First draft, not yet
    reviewed". Post nothing.
@@ -55,13 +55,13 @@ meaning unless the task changes it.
 - `skills/audit-one-name-per-thing/SKILL.md`: read for the monthly flow audit or when a review finds two names for one thing.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/glossary.md`, `knowledge/error-rules.md` and the playbook.
 3. Set `tico bot status set` to one line naming the review or screen in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the glossary with documented terms, rewrite `state.md`, record decisions in `memory/decisions.md`,
+2. Update the glossary with documented terms, note progress on the task, record decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result, the path, and anything waiting on
    a human.

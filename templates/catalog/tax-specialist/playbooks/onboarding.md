@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is five recorded answers, the next 90 days of the tax
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The outcome is five recorded answers, the next 90 days of the tax
 calendar, and the first routine checked.
 
 ---
@@ -30,7 +29,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Build `knowledge/tax-calendar.md` from the
+Record each answer, dated, in the `knowledge/` file it belongs to. Build `knowledge/tax-calendar.md` from the
 registrations and the official calendars (for US federal dates, the IRS tax calendar; for each state or
 country, its revenue department's page), each date with its source and the date you checked. Build
 `knowledge/thresholds.md` for each place the team sells into.
@@ -46,7 +45,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will refresh the calendar on the 1st of each month." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

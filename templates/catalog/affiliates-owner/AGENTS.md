@@ -30,10 +30,10 @@ that needs a negotiated rate goes to `partnerships-owner` in a task. `search-ads
 with; a brand-term bidding flag goes to it as a note, not as a change.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/program-terms.md`,
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/program-terms.md`,
    `knowledge/fraud-signals.md` and the first `knowledge/affiliates/` files from them.
 4. Run the first check now (`playbooks/weekly-affiliate-review.md`) on whatever export was attached, and attach
    the review to the task as a draft labelled "First draft, not yet reviewed". Pay nothing and change nothing.
@@ -63,14 +63,14 @@ Always:
 - `skills/review-an-affiliate-application/SKILL.md`: read before an application gets a proposed decision.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/program-terms.md`, `knowledge/program-method.md` and
    `knowledge/fraud-signals.md`, then last week's review.
 3. Set `tico bot status set` to one line naming the review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/affiliates/` with the dated checks and decisions, rewrite `state.md`, record durable decisions in
+2. Update `knowledge/affiliates/` with the dated checks and decisions, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the review path after it, then the
    exports you could not read.

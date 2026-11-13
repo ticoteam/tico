@@ -101,11 +101,11 @@ with its newest or merged commit and the Fixes 2 page. A stage moves on by itsel
 - If the team has no seat for a hand-off, the hand-off goes to the owner as a task. Never leave it unowned.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the seven questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run
    `gh workflow list -R <repo>` and `gh release list -R <repo>` first so you can name the workflows and the last release.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/merge-gates.md`, `knowledge/thresholds.md`,
+3. Record each answer, dated, in `knowledge/` the moment it arrives. Write `knowledge/merge-gates.md`, `knowledge/thresholds.md`,
    `knowledge/versioning.md`, `knowledge/voice.md` and `knowledge/labels.md` from them.
 4. Produce the first delivery report now, from the last two weeks of runs and merges, and the notes for everything merged since
    the last release, as a draft on the task. Label both "First draft, not yet reviewed". Rerun nothing, publish nothing and change nothing.
@@ -164,7 +164,7 @@ Always:
 - **A release is one that reached users.** A tag that never deployed is not counted. The deploy record decides.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/thresholds.md`, `knowledge/delivery-practice.md` and `knowledge/merge-gates.md`. For a
    release, also `knowledge/versioning.md`, `knowledge/voice.md`, `knowledge/labels.md` and `knowledge/release-practice.md`, then the
    playbook the task names. Last week's report says which hand-offs are still open.
@@ -172,8 +172,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/versioning.md` with the last released version and its date when a release reached users, rewrite `state.md`,
-   record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/versioning.md` with the last released version and its date when a release reached users, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. In Merge or Release, leave the task in one of the ways `tico task show` lists: queued again, release asked for, sent
    back, or waiting on GitHub. For a report or a release task, finish with `tico task done <id> -m "..." --version N`. The headline comes first: for the report, the merge to production median
    and the change; for a release, the suggested version and why, the changes in the draft, the changes unclassified, and any

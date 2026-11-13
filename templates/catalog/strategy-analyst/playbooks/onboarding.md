@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 15 minutes. The outcome is five recorded answers, a first draft on the task, built from the real goals, and the first routine checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 15 minutes. The outcome is five recorded answers, a first draft on the task, built from the real goals, and the first routine checked.
 
 ---
 
@@ -32,7 +31,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/rhythm.md` (quarter dates, recipients, cap, format) as present-tense statements. The answer to question 1 stays in `state.md` only: the Strategy page is the one copy of the strategy.
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/rhythm.md` (quarter dates, recipients, cap, format) as present-tense statements. Write the answer to question 1 at the top of `knowledge/rhythm.md`, marked unconfirmed, and nowhere else: the Strategy page is the one copy of the strategy.
 
 ## 5. Produce the first result now
 
@@ -44,7 +43,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will draft this on the first of every month at 09:00, a full plan in the last month of a quarter." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

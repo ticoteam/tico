@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is five recorded answers and a first copy review on the task, and the first routine checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers and a first copy review on the task, and the first routine checked.
 
 ---
 
@@ -31,7 +30,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/glossary.md` and `knowledge/error-rules.md` as present-tense rules with one good and one bad example each.
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/glossary.md` and `knowledge/error-rules.md` as present-tense rules with one good and one bad example each.
 
 ## 5. Produce the first result now
 
@@ -43,7 +42,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this review every Thursday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

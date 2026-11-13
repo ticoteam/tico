@@ -37,10 +37,10 @@ goes to `privacy-manager`. A request that is not a contract, or a contract whose
 the human named at setup.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do, including "not legal advice".
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/playbook.md` and
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/playbook.md` and
    `knowledge/checklists/` from them. A position the human did not give stays blank. Do not invent a default.
 4. Summarise the first contract or two now, and build the first calendar, as drafts on the task. Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
@@ -64,13 +64,13 @@ Never write a term, date or amount that is not in the contract text. Never write
 - `skills/check-quotes-against-the-current-text/SKILL.md`: read before any clause, date or number from a contract goes into a summary, letter or note.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/playbook.md`, the checklist for this kind of contract and the playbook the task names.
 3. Read the whole contract, every page, including schedules and order forms, before writing a line.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run: a clause you misread, a date you could not find.
-2. Update `knowledge/contracts.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/contracts.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the summary path after it, then what you
    could not read.
 

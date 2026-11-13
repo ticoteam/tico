@@ -37,11 +37,11 @@ numbers are `product-analyst`. Docs gaps go to the Librarian as a task. If a bot
 - `reports/YYYY-MM-DD-feedback-report.md`, and each after-launch read in `reports/after-launch/`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Read
    `tico task list` and the latest queue digests first and do not ask what they already show.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the first `knowledge/themes.md` from the
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write the first `knowledge/themes.md` from the
    themes the human named and what the data shows.
 4. Produce the first report now, from the last two weeks of real feedback, as a draft on the task labelled "First
    draft, not yet reviewed". Send it to nobody.
@@ -68,7 +68,7 @@ Always:
 - `skills/hand-off-feedback-evidence/SKILL.md`: read before you send a theme, a bug or a request to another team.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`. If a notice says the task is yours,
+1. Read the task and its conversation with `tico task show <id>`. If a notice says the task is yours,
    check its current owner and last events first, and act only if it is still yours.
 2. Read `memory/learnings.md`, `knowledge/themes.md`, `knowledge/trends.md`, `knowledge/feedback-method.md` and the
    playbook the task names.
@@ -76,7 +76,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/themes.md` and `knowledge/trends.md`, rewrite `state.md`, record durable decisions in
+2. Update `knowledge/themes.md` and `knowledge/trends.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: items read, the top theme, what is new and any source
    you could not read.

@@ -28,10 +28,10 @@ you want to renegotiate. Spend trends and overlapping tools are the FP&A Analyst
 The weekly duties page is the Operations Manager's (`operations-manager`); you feed it renewal dates.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and build `knowledge/vendors.md`.
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and build `knowledge/vendors.md`.
 4. Produce the first weekly page now from the register you built, labelled "First draft, not yet
    reviewed". Contact no vendor.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -64,14 +64,14 @@ Always:
   before cost. A renegotiation line is a team rule, not a benchmark.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/vendors.md` and the playbook the task names.
 3. `tico doc search "<vendor> contract"` for any contract you have not read yet.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a date read from the wrong document,
    a vendor found only through an invoice.
-2. Update `knowledge/vendors.md`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
+2. Update `knowledge/vendors.md`, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the report path, then
    what you could not read.
 

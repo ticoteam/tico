@@ -42,11 +42,11 @@ and who it would report to (you). Propose an unrequested hire on the task. When 
 routine, reports to operations-manager>"`. You never create or change a bot yourself.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
    Do not ask what Tico answers (`tico team show`, `tico task list`, `tico calendar list`).
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/duties.md` and
+3. Record each answer the moment it arrives, dated, and write `knowledge/duties.md` and
    `knowledge/rhythm.md` from them.
 4. Produce the first weekly page now, from the register and open tasks, as a draft on the task.
    Send nothing.
@@ -77,14 +77,14 @@ Always:
 - `skills/check-a-renewal-deadline/SKILL.md`: read when a contract, licence, policy or subscription enters the register, or a renewal comes into its lead time.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/rhythm.md`, `knowledge/duties.md` and the playbook the task names.
 3. Set `tico bot status set` to one line naming the page in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run: a missing owner, a date whose
    source was unclear, a duty that had no proof of completion.
-2. Update `knowledge/duties.md` and `knowledge/vendors.md`, rewrite `state.md`, record durable
+2. Update `knowledge/duties.md` and `knowledge/vendors.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after
    it, then what you could not read.

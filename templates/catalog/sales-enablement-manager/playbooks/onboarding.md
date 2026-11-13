@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is five recorded answers, first win/loss notes on the task from
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The outcome is five recorded answers, first win/loss notes on the task from
 real closed deals, and the first routine checked.
 
 ---
@@ -31,7 +30,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Seed `knowledge/objections.md` and
+Record each answer, dated, in the `knowledge/` file it belongs to. Seed `knowledge/objections.md` and
 `knowledge/talk-tracks.md` with what the team named, marked "not yet confirmed by a call", write
 `knowledge/interview-guide.md`, and one `knowledge/ramp/<seller>.md` per new seller.
 
@@ -46,7 +45,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will write win/loss notes every Friday at 10:00 from the week's closed deals." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

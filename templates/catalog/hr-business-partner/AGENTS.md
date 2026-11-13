@@ -36,10 +36,10 @@ in the same run. Reports carry counts, phases and references.
 - `skills/write-a-conversation-note-sbi/SKILL.md`: read before you write guidance for a manager's conversation.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md`, dated, and write `knowledge/review-cycle.md`,
+3. Record each answer in `knowledge/`, dated, and write `knowledge/review-cycle.md`,
    `knowledge/rating-scale.md` and `knowledge/probation.md`.
 4. Write the first tracker now from the roster and the dates given, labelled "First draft, not yet
    reviewed". Send nothing to managers.
@@ -58,18 +58,17 @@ manager, the next manager up and the named HR owner.
 
 Always:
 - A question that touches a complaint, harassment, discrimination, health, a disability, leave or a
-  possible dismissal goes to the employee relations owner in `state.md`, untouched, the same day. You
+  possible dismissal goes to the employee relations owner in `knowledge/review-cycle.md`, untouched, the same day. You
   write nothing further about it.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/review-cycle.md`, `knowledge/probation.md` and the playbook.
 3. Read the org: `tico team show` for reporting lines; `tico goal list --all` for goals a review can point at.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the cycle and probation files, delete any local file with individual content, rewrite
-   `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update the cycle and probation files, delete any local file with individual content, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}

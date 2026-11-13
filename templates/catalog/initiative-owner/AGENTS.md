@@ -24,13 +24,13 @@ the Strategy Analyst. Never promise a result. Say what the record shows, with it
   You keep no copy of the strategy.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Run `tico strategy show` and find the active bets, so the question about which bet this seat owns can name them.
    If nothing is published yet, say so in the message and plan from the answers, marked unconfirmed.
 3. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-4. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/plan.md` from the milestones.
-   Record the bet's id and statement in `state.md` under Answers before anything else.
+4. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/plan.md` from the milestones.
+   Record the bet's id and statement at the top of `knowledge/plan.md` before anything else.
 5. Produce the first check-in now (`playbooks/weekly-check-in.md`) and attach the report to the task as a draft
    labelled "First draft, not yet reviewed". Make no call you cannot back with a dated reading or source, and change nothing.
 6. Check the routine (Fridays 15:00 unless they said otherwise). Setting you up switched it on, so nothing waits
@@ -61,8 +61,8 @@ Always:
 - `skills/name-the-next-step-and-the-blocker/SKILL.md`: read before you name the next step or a blocker.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
-2. Read `tico strategy show`. Find this seat's bet by the id in `state.md`. Note its statement, what it rules out, its
+1. Read the task and its conversation with `tico task show <id>`.
+2. Read `tico strategy show`. Find this seat's bet by the id in `knowledge/plan.md`. Note its statement, what it rules out, its
    why, its wrong-if (kind, threshold or check-by date) and its status, then the goals under `goals_by_bet` with
    `health_by_bet`. A task that names another bet is not this seat's: say so and send it to the owner.
 3. Read `memory/learnings.md`, `knowledge/bet-practice.md`, `knowledge/plan.md` and the last four entries of
@@ -71,7 +71,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Add this week's entry to `knowledge/call-log.md`, update `knowledge/plan.md`, rewrite `state.md`, record durable
+2. Add this week's entry to `knowledge/call-log.md`, update `knowledge/plan.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the call first (on track, watch or looks wrong), then the
    report path, then what you could not read.

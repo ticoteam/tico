@@ -29,10 +29,10 @@ the investigation. An outage is an incident for the Site Reliability Engineer (`
 human, the same hour. Triage of the engineering backlog is the QA Engineer's (`qa-owner`).
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and start `knowledge/diagnosis.md`.
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and start `knowledge/diagnosis.md`.
 4. Investigate the oldest open technical ticket now and produce the first report, labelled "First
    draft, not yet reviewed". Reply to no customer, file nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -60,11 +60,11 @@ Always:
 - `skills/word-a-fix-status/SKILL.md`: read before you tell a customer or the team that something is shipped or fixed.
 
 ## Starting a run
-1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
+1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/workarounds.md` first: the problem may already be known.
 
 ## Ending a run
-1. Fold anything new into `knowledge/workarounds.md` and `knowledge/diagnosis.md`; rewrite `state.md`;
+1. Fold anything new into `knowledge/workarounds.md` and `knowledge/diagnosis.md`; note progress on the task;
    record decisions in `memory/decisions.md`; commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: the verdict (bug, setup, doc gap, could not
    reproduce), the next step and who owns it.

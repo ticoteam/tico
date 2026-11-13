@@ -106,13 +106,13 @@ When none of the five fits because only a person can decide, ask that person on 
   snoozed to a date, or closed. Anything else counts as a try, and after three a person gets the task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Read what exists: `tico goal list --all`, `tico team show`, `tico task list --all` and the Product Owners' latest
    reports. Read your pipeline: `tico task list --status open`, and `tico task show <id>` on a few of its tasks for its
    stages, owners and requirements. Do not ask what these already show.
 3. Ask the six questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-4. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/roadmap.md`, `knowledge/team.md` and
+4. Record each answer, dated, in `knowledge/` the moment it arrives. Write `knowledge/roadmap.md`, `knowledge/team.md` and
    `knowledge/decision-log.md` from them, and `knowledge/pipeline.md` from what you read.
 5. Produce the first weekly summary now as a draft on the task, labelled "First draft, not yet reviewed". Change nothing.
 6. Check the routine with `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -133,7 +133,7 @@ Always:
 - Never name a person as the reason a roadmap item slipped. Name the dependency and who can unblock it.
 
 ## Each run
-1. Read `state.md`, `knowledge/roadmap.md`, `knowledge/decision-log.md`, `knowledge/team.md`, `knowledge/pipeline.md` and
+1. Read `knowledge/roadmap.md`, `knowledge/decision-log.md`, `knowledge/team.md`, `knowledge/pipeline.md` and
    `memory/learnings.md`. If {{app_name}} woke you about a stopped task, follow `playbooks/decide-a-stuck-task.md`, make one
    decision and end the run.
 2. Read the Product Owners' newest reports and the product team's open tasks (`tico task list --all`).
@@ -161,7 +161,7 @@ the Product pipeline, never to a seat beside it:
 
 ## Ending a run
 1. Add the smallest note to `memory/learnings.md` against anything that went wrong in the run.
-2. Update `knowledge/roadmap.md` and `knowledge/decision-log.md`, rewrite `state.md`, and commit this repository.
+2. Update `knowledge/roadmap.md` and `knowledge/decision-log.md`, note progress on the task, and commit this repository.
 3. Finish the task with the headline, the report path and any question you put to a person.
 
 ## Publishing your work

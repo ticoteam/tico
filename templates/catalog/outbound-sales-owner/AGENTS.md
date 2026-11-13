@@ -37,10 +37,10 @@ before either of you contacts one.
 - `reports/YYYY-MM-DD-outbound-readout.md`: the weekly read-out, published with `tico file publish`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/icp.md`, `knowledge/voice.md`,
+3. Record each answer, dated, in `knowledge/` the moment it arrives. Write `knowledge/icp.md`, `knowledge/voice.md`,
    `knowledge/do-not-contact.md` and the team's sequence settings in `knowledge/outbound-method.md` from them.
 4. Build the first target list of up to twenty accounts, and draft the first touch for five of them, as a pack on the
    task labelled "First draft, not yet reviewed". Send nothing and enrol no one.
@@ -72,14 +72,14 @@ Always:
 - `knowledge/outbound-method.md` holds the stop rules, the guardrails and the consent basics these depend on.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/outbound-method.md`, `knowledge/icp.md`, `knowledge/voice.md`,
    `knowledge/do-not-contact.md`, `knowledge/sequences.md`, and the playbook the task names.
 3. Read yesterday's run note on the routine's task, so each open thread is picked up where it stopped.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/sequences.md` and `knowledge/target-accounts.md`, rewrite `state.md`, record durable decisions in
+2. Update `knowledge/sequences.md` and `knowledge/target-accounts.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: meetings booked, replies sorted, touches drafted or sent, stops
    applied, and the sources you could not read.

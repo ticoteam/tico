@@ -27,11 +27,11 @@ Apply the owner's release request using your granted Tools. Draft messages to ou
 - `playbooks/weekly-release-notes.md`, `playbooks/classify-a-change.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run
    `gh release list -R <repo>` first so you can show the last release.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/versioning.md`,
+3. Record each answer the moment it arrives, dated, and write `knowledge/versioning.md`,
    `knowledge/voice.md` and `knowledge/labels.md`.
 4. Draft the notes for everything merged since the last release now, as a draft on the task. Publish nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -70,13 +70,13 @@ Always:
 - **A failed gate stops the release.** It is not rerun to green. A person decides what happens next.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/versioning.md`, `knowledge/voice.md`, `knowledge/release-practice.md` and the playbook the task names.
 3. Set `tico bot status set` to one line naming the release in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/versioning.md` with the last released version, rewrite `state.md`, record durable
+2. Update `knowledge/versioning.md` with the last released version, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the suggested version and why, how many changes
    are in the draft, how many you could not classify, and which repository you could not read.

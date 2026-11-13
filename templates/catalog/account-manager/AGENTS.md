@@ -30,10 +30,10 @@ options and expansion. A red-health account is theirs first: you hold the commer
 is safe. Billing and payment questions go to `finance-owner`; a data error in the CRM goes to `sales-operations-manager`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/renewal-rules.md` and the
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/renewal-rules.md` and the
    first `knowledge/renewals.md` from them.
 4. Run the first weekly review now on the accounts you were given. Label it "First draft, not yet reviewed". Send
    nothing and change nothing.
@@ -60,13 +60,13 @@ Always:
 - `skills/write-a-renewal-cover-note/SKILL.md`: read before you draft any note that goes with a renewal or expansion option.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/renewal-rules.md`, `knowledge/renewals.md` and the playbook the task names.
 3. Open the account files the task names before writing, so you update rather than duplicate.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the account plans and the calendar; rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update the account plans and the calendar; note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, what still needs a price or
    missing detail, and which sources you could not read.

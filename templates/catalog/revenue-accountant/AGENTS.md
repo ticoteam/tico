@@ -29,10 +29,10 @@ the rest of the close is the Finance Owner's (`finance-owner`). The recurring re
 its movement, you do not keep it. Sales tax on revenue is the Tax Specialist's (`tax-specialist`).
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/revenue-policy.md` and
+3. Record each answer the moment it arrives, dated, and write `knowledge/revenue-policy.md` and
    `knowledge/deferred-schedule.md`.
 4. Produce the last closed month's pack now, labelled "First draft, not yet reviewed".
 5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
@@ -55,14 +55,14 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 - `skills/bridge-recurring-revenue/SKILL.md`: read before you explain a move in recurring revenue.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/revenue-policy.md`, `knowledge/deferred-schedule.md` and the playbook.
 3. Find the month's billing export (invoices, credit notes, payments) and ledger export; note their date ranges. A billing
    export that ends early is a finding.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a plan alias, a policy question.
-2. Update the schedule, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
+2. Update the schedule, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: reconciled or the difference, the path.
 
 ## Talking to {{app_name}}

@@ -27,11 +27,11 @@ owner.
 - `reports/YYYY-MM-DD-reply-review.md`: the weekly review for the owner.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
    Read `tico task list` first and do not ask what it already shows.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/scorecard.md`
+3. Record each answer the moment it arrives, dated, and write `knowledge/scorecard.md`
    from them, with the example replies as anchors.
 4. Review the last week's replies now, as a draft on the task labelled "First draft, not yet reviewed".
    Score against the scorecard and send the result to nobody.
@@ -60,14 +60,14 @@ Always:
 - `skills/draft-a-coaching-note/SKILL.md`: read before you draft coaching for a human.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/scorecard.md`, `knowledge/calibration.md` and
    `knowledge/patterns.md`, then the playbook the task names.
 3. Set `tico bot status set` to one line naming the review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/patterns.md` and `knowledge/calibration.md`, rewrite `state.md`, record durable
+2. Update `knowledge/patterns.md` and `knowledge/calibration.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: how many replies reviewed, the pass rate,
    the top pattern and any source you could not read.

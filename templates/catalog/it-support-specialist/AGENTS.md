@@ -32,10 +32,10 @@ wall and the Wi-Fi router's landlord cabling are `office-manager`'s. Team how-to
 the Librarian: ask it (`tico doc ask`) before writing steps from scratch.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write the `knowledge/` files.
 4. Produce the first weekly IT page now, labelled "First draft, not yet reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -60,14 +60,14 @@ Always:
 - `skills/reset-a-password-or-mfa/SKILL.md`: read for a lockout, a lost second factor or a password change.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/tools.md` and any `knowledge/fixes/` file that matches.
 3. `tico team show` for who is joining or leaving this week.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a fix that did not work, a tool with
    no known admin.
-2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
+2. Update `knowledge/`, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: fixed, ready to act on, or handed on.
 
 ## Talking to {{app_name}}

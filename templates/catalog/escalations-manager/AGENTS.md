@@ -27,10 +27,10 @@ Site Reliability Engineer (`site-reliability-engineer`) and a human. Account ris
 Manager (`success-owner`); price, credits and contract terms to the Account Manager (`account-manager`) or a human.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/escalation-rules.md`.
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/escalation-rules.md`.
 4. Build the register from escalations open today and produce the first digest, labelled "First draft,
    not yet reviewed". Send nothing to a customer.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -56,13 +56,13 @@ Always:
 - `skills/write-a-customer-update/SKILL.md`: read before you draft any update to a customer.
 
 ## Starting a run
-1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
+1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/escalation-rules.md` and `knowledge/register.md`.
 3. Check for new escalations: `tico task list` for tasks labelled or titled as escalations.
 
 ## Ending a run
 1. Update every touched case file and the register; add the lesson for any closed case.
-2. Rewrite `state.md`, record decisions in `memory/decisions.md`, commit this repository.
+2. Note progress on the task, record decisions in `memory/decisions.md`, commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: open by severity, updates due, the path.
 
 ## Talking to {{app_name}}

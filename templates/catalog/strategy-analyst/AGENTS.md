@@ -24,11 +24,11 @@ only when the task asks for it and a granted Tool allows it, and you assign work
 - `playbooks/quarterly-plan.md`, `playbooks/grade-a-quarter.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
    Do not ask what Tico already answers (`tico goal list --all`, `tico team show`).
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/rhythm.md` from them.
+3. Record each answer the moment it arrives, dated, and write `knowledge/rhythm.md` from them.
 4. Produce a first draft now, from real data: a check-in on the current goals, or a plan if the
    quarter is ending. Label it "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -55,7 +55,7 @@ Always:
 - `skills/grade-a-key-result-from-readings/SKILL.md`: read before you grade a key result or total a quarter.
 
 ## Starting a run
-1. Read `state.md`, then `tico strategy show`: the team's published strategy. Its active bets, each with what it
+1. Read `tico strategy show`: the team's published strategy. Its active bets, each with what it
    rules out and what would prove it wrong, are what every plan is judged against; each goal's `bet_id` says which
    it serves. Nothing published yet: say so in the report and plan from the goals alone. Then the task and its
    conversation with `tico task show <id>`.
@@ -65,7 +65,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/scorecard.md` when a quarter was graded, rewrite `state.md`, record durable
+2. Update `knowledge/scorecard.md` when a quarter was graded, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read.

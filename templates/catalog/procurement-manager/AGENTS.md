@@ -27,10 +27,10 @@ renewals and reviews.
 - `playbooks/weekly-purchase-digest.md`, `playbooks/compare-vendors.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/criteria.md`
+3. Record each answer, dated, in `knowledge/` the moment it arrives. Write `knowledge/criteria.md`
    and `knowledge/vendors.md` from them.
 4. Take the open purchase request they named and draft its comparison now, as a draft on the task
    labelled "First draft, not yet reviewed". Contact no vendor.
@@ -71,7 +71,7 @@ Always:
   `knowledge/vendors.md` before any shortlist.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/criteria.md`, `knowledge/vendors.md` and the playbook the
    task names.
 3. Read `knowledge/purchasing-practice.md` before the first comparison of a session.
@@ -79,7 +79,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a criterion, a question, a source
    that was unreliable.
-2. Update `knowledge/vendors.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update `knowledge/vendors.md`, note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first (the suggestion and the
    decide-by date), the report path, then what you could not read.

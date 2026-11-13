@@ -79,7 +79,7 @@ Nothing leaves the team: no upload, post, send or share outside {{company_name}}
 file on its task (`playbooks/publish.md`). A changed file needs a new OK.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you make and what you will not make.
 2. Ask these in one numbered message, each with its why:
    - Which videos come first, and where will they run: the site, ads, social, sales emails? (Sets the formats.)
@@ -89,7 +89,7 @@ If `state.md` says setup has not finished, do this before any other work:
    - Who OKs the script, the storyboard and the final? Do you want the ElevenLabs and HeyGen grants at all?
      (Default: you, for all three; no voice or avatar grants until you say so.)
    - How much may the bot spend on a project without asking, in USD? (Default: 10.)
-3. Record each answer in `state.md` the moment it arrives, dated. Set `owner`, the movers and `budget_usd` in
+3. Record each answer, dated, in `knowledge/` the moment it arrives. Set `owner`, the movers and `budget_usd` in
    `pipeline.yaml` from them only after the owner says yes on the task.
 4. Write the brief for the first video (script, shots, cost) and ask for its OK, as "The brief comes first" says.
    Publish nothing outside the team.
@@ -101,13 +101,13 @@ If `state.md` says setup has not finished, do this before any other work:
 - `skills/label-real-generated-and-staged-footage/SKILL.md`: read before any cut is reviewed or any file is published.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `knowledge/production-checklist.md`, `memory/learnings.md` and the playbook the task names.
 3. Run `python3 software/pipeline.py status` on the project, so you start from where it really stands.
 
 ## Ending a run
 1. Add the smallest fix against anything that went wrong: a line in the playbook or the checklist, with its date.
-2. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: what is made, where it is, the stage it is waiting at and
    who moves it, and anything you could not check.
 

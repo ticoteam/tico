@@ -42,7 +42,7 @@ release, corrections from step 2, new contracts.
 
 ## 6. Bridge recurring revenue
 
-Follow `skills/bridge-recurring-revenue/SKILL.md`, using the definition in `state.md`. Explain the movement in one sentence.
+Follow `skills/bridge-recurring-revenue/SKILL.md`, using the definition in `knowledge/revenue-policy.md`. Explain the movement in one sentence.
 
 ## 7. Write and hand over
 

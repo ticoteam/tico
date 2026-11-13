@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, a first store review attached to the task as a draft, and the first routine checked.
 
 ---
@@ -32,7 +32,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/listings.md` from the store addresses, and
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/listings.md` from the store addresses, and
 `knowledge/keywords.md` from answer three. Read each store's current rules page and record its clauses, with the date,
 in `knowledge/store-rules.md`. Write the owner of each console and each claim rule into `knowledge/store-rules.md` too.
 
@@ -48,7 +48,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`. Then tell the human in one line what it does: "I will send you this review every
 Thursday at 09:00." They can change it or turn it off at any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
+Record it in `memory/decisions.md`. If they asked for a different schedule or to
 leave it off, change the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

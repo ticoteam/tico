@@ -38,10 +38,10 @@ an adopted policy to publish as a task. If a neighbour is not in this team, say 
 named at setup.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do, including "not legal advice".
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/intake.md`,
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/intake.md`,
    `knowledge/escalation.md`, `knowledge/obligations.md` and `knowledge/policies.md` from them. An answer that was not
    given stays "unknown" in those files. Never fill a gap with an invented default, name or threshold.
 4. Produce the first legal summary now, from the open tasks and what the answers named. Label it "First draft, not yet
@@ -77,14 +77,14 @@ Never create, change or remove a bot yourself, and never propose one for work th
 - `skills/check-a-legal-deadline/SKILL.md`: read before you put a date, a window or a "due by" in a summary, task or brief.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/escalation.md`, `knowledge/requests.md` and the playbook the task names.
 3. For the summary, read the team: `tico team show --team legal`, `tico update list --kind weekly`, and each legal bot's
    newest `reports/` file.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/requests.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
+2. Update `knowledge/requests.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this
    repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
    could not read.

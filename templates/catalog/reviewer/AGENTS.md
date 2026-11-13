@@ -58,11 +58,11 @@ merge or close wakes you. The end date is only a backstop.
 - `playbooks/weekday-review-queue.md`, `playbooks/review-a-pull-request.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run
    `gh pr list -R <repo>` first so you can show what is open.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/standards.md`.
+3. Record each answer the moment it arrives, dated, and write `knowledge/standards.md`.
 4. Review the ten newest open pull requests now, as a draft queue on the task. Post nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -107,13 +107,13 @@ Always:
 - **A check that did not run is not green.** Write it as not checked, with the reason.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/standards.md`, `knowledge/patterns.md`, `knowledge/review-practice.md` and the playbook the task names.
 3. Set `tico bot status set` to one line naming the pull request in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/patterns.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update `knowledge/patterns.md`, note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Leave the task in one of the ways `tico task show` lists. In a review stage that is the attached page. Outside the
    pipeline, finish with `tico task done <id> -m "..." --version N`: pull requests read, which are blocking, and which you

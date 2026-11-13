@@ -27,10 +27,10 @@ a contract to buy goes to the Procurement Manager (`procurement-manager`). Money
 Receivable Specialist's (`accounts-receivable-specialist`). Employee expense reports are the Expense Auditor's (`expense-auditor`).
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/approvals.md` and the verification
+3. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives. Write `knowledge/approvals.md` and the verification
    rule at the top of `knowledge/vendor-details.md`.
 4. Log the bills they attached and propose this week's payment run now, labelled "First draft, not yet reviewed". Pay
    nothing and enter nothing.
@@ -60,7 +60,7 @@ Always:
 - `skills/match-a-bill-to-its-order/SKILL.md`: read before you mark a bill matched or list a difference for the owner.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/bills.md`, `knowledge/approvals.md`, `knowledge/vendor-details.md` and the
    playbook the task names.
 3. Collect new bills: attachments on tasks, and the bills mailbox where connected
@@ -68,7 +68,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a vendor alias, an owner, a match rule.
-2. Update `knowledge/bills.md`, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
+2. Update `knowledge/bills.md`, note progress on the task, record decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the total proposed, the bills held and why, the flags, the path.
 
 ## Talking to {{app_name}}

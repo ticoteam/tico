@@ -1,9 +1,9 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes. The outcome is six recorded answers, your pipelines written down, a first growth page on the task, and the routines checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is six recorded answers, your pipelines written down, a first growth page on the task, and the routines checked.
 
 Inputs: the setup task, `tico team show`, `tico task list --all`, and the six questions in step 3.
-Done when: `state.md` holds six dated answers; `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md`, `knowledge/routing.md` and `knowledge/pipeline.md` are written; the first draft page is on the task, labelled as a draft; the routines are checked and logged in `memory/decisions.md`; `tico bot setup-done` has run.
+Done when: the six dated answers are recorded; `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md`, `knowledge/routing.md` and `knowledge/pipeline.md` are written; the first draft page is on the task, labelled as a draft; the routines are checked and logged in `memory/decisions.md`; `tico bot setup-done` has run.
 
 ---
 
@@ -35,7 +35,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/workstreams.md` (workstream, owner, where its status shows), `knowledge/team.md`, `knowledge/pipeline-rules.md` (stages, stalled threshold, always-show size) and `knowledge/routing.md` (source to owner) as present-tense statements. Write `knowledge/pipeline.md`: each of your pipelines, its stages in order, each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/workstreams.md` (workstream, owner, where its status shows), `knowledge/team.md`, `knowledge/pipeline-rules.md` (stages, stalled threshold, always-show size) and `knowledge/routing.md` (source to owner) as present-tense statements. Write `knowledge/pipeline.md`: each of your pipelines, its stages in order, each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
 
 ## 5. Draft the first page now
 
@@ -47,7 +47,7 @@ Setting you up switched on all three routines: `weekly-growth-summary`, `weekly-
 
 Tell the human in one line what they do: "I will draft this page every Friday at 14:00 for you to review, refresh the growth numbers every Monday at 07:00, and run the growth meeting every Monday at 08:00." They can change or turn off any of them any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave one off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave one off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

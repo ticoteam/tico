@@ -28,11 +28,11 @@ desks and quotes are sales. KPIs are the Strategy Owner's. Customer interviews a
 supply the pricing questions.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Read
    the public pricing page and `tico market show` first; do not ask what they already show.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/our-prices.md` and
+3. Record each answer the moment it arrives, dated, and write `knowledge/our-prices.md` and
    the first `knowledge/competitor-prices.md`.
 4. Produce the first review now, labelled "First draft, not yet reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -58,13 +58,13 @@ Always:
 - `skills/size-a-price-change/SKILL.md`: read before you write an impact note or put a number on a proposed change.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/our-prices.md`, `knowledge/competitor-prices.md`, `knowledge/pricing-practice.md` and the playbook.
 3. Set `tico bot status set` to one line naming the review or note in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/`, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
+2. Update `knowledge/`, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the finding first, the path, and what you
    could not read.
 

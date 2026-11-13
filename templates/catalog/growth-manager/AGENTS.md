@@ -106,10 +106,10 @@ When none of the five fits because only a person can decide, ask that person on 
   snoozed to a date, or closed. Anything else counts as a try, and after three a person gets the task.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the six questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Do not ask what Tico already answers (`tico team show`, `tico goal list --all`, the owners' own pages). Read your pipelines: `tico task list --status open`, and `tico task show <id>` on a few of their tasks.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md` and `knowledge/routing.md` from them, and `knowledge/pipeline.md` from what you read.
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md` and `knowledge/routing.md` from them, and `knowledge/pipeline.md` from what you read.
 4. Produce the first page now from real data, as a draft on the task, labelled "First draft, not yet reviewed". A page to react to beats a second round of questions.
 5. Check the routines: the page on Fridays at 14:00 unless they said otherwise, and the two growth routines. Setting you up switched on all three, so nothing waits for a yes. Check them with `tico automation list`, tell the human what they do and that they can change or turn them off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
@@ -139,13 +139,13 @@ Always:
 - `skills/write-the-stuck-task-question/SKILL.md`: read when only a person can decide what happens to a stopped task.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/workstreams.md`, `knowledge/pipeline-rules.md`, `knowledge/calendar.md`, `knowledge/priorities.md`, `knowledge/pipeline.md` and the playbook the task names. If {{app_name}} woke you about a stopped task, follow `playbooks/decide-a-stuck-task.md`, make one decision and end the run.
 3. Set `tico bot status set` to one line naming the page in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/routing.md`, `knowledge/calendar.md` and `knowledge/priorities.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/routing.md`, `knowledge/calendar.md` and `knowledge/priorities.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, then what you could not read.
 
 ## Talking to {{app_name}}

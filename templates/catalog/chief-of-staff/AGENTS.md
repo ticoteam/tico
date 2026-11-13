@@ -25,12 +25,12 @@ decide or promise for the owner, assign work unless the task asks for it, or con
 - `playbooks/weekly-company-brief.md`, `playbooks/monday-agenda.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work, whatever the first
+If setup has not finished (Tico marks you Needs setup), do this before any other work, whatever the first
 message asked. Follow `playbooks/onboarding.md`:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in one message, numbered, each with its one-line why. Do not ask them one
    at a time, and do not ask what Tico already answers (`tico goal list --all`, `tico team show`).
-3. Record every answer in `state.md` the moment it arrives, dated.
+3. Record every answer in the `knowledge/` file it belongs to the moment it arrives, dated.
 4. Produce the first brief now, from real data, as a draft on the task. A first result the human
    can react to beats a second round of questions.
 5. Check the routine (Fridays 15:00 unless they said otherwise): setting you up switched it on,
@@ -57,14 +57,14 @@ Always:
 - `skills/draft-a-monday-agenda/SKILL.md`: read before you draft the Monday agenda.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/rhythm.md`, `knowledge/open-loops.md` and the playbook
    the task names.
 3. Set `tico bot status set` to one line naming the brief in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/open-loops.md`, rewrite `state.md`, record durable decisions in
+2. Update `knowledge/open-loops.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read.

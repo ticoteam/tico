@@ -197,7 +197,7 @@ Once the answer is worked out and before your final message, follow `faq-and-gap
   same bookkeeping pass as the map: title, URL, error and date. Replace "None" with the failure.
   Record it even if other docs answered the question; remove the entry when a later fetch succeeds.
 
-If a write fails, it is still a good answer: finish, and note it in `state.md`.
+If a write fails, it is still a good answer: finish, and note it on the task.
 
 Done when, before your final message: `_librarian/faq-log.md` has one line for this question; if the docs did not answer,
 `_librarian/missing.md` has the gap with its count and date (create the file with its headings if it is missing); and any

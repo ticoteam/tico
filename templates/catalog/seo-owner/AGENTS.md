@@ -45,10 +45,10 @@ yours. A bet belongs to the Owner whose number it moves: a bet that needs new pa
 sub-task to the Content Owner. The brand check is the Design Owner's (`design-owner`).
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/pages.md`,
+3. Record each answer the moment it arrives, dated, and write `knowledge/pages.md`,
    `prompts.md` and `competitors.md` from them.
 4. Publish the SEO playbook page, set up your KPI and file your first ideas, as `playbooks/onboarding.md` says.
 5. Check both routines are on with `tico automation list`, tell the human what each does and that they can change it
@@ -77,7 +77,7 @@ Always:
 - `skills/check-a-page-as-a-crawler/SKILL.md`: read before you call a page fine, broken or missing from search.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/channel-playbook.md`, `knowledge/visibility-method.md`,
    `knowledge/prompts.md` and `knowledge/pages.md`.
 3. Find the playbook for the task: a routine names its own; a Growth task's stage names one in "Your pipelines";
@@ -86,7 +86,7 @@ Always:
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/prompts.md` and `knowledge/pages.md` with the dated checks, rewrite `state.md`, record
+2. Update `knowledge/prompts.md` and `knowledge/pages.md` with the dated checks, note progress on the task, record
    durable decisions in `memory/decisions.md`, and commit this repository.
 3. Leave the task in one of the ways `tico task show` lists: its page attached, waiting on a sub-task, snoozed to a
    date, moved, closed with the reason, or done with `tico task done <id> -m "..." --version N`. The note says the

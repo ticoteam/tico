@@ -48,10 +48,10 @@ A new supplier or a large one-off purchase is `procurement-manager`'s. Supplier 
 books is the Finance Owner's (`finance-owner`).
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and build `knowledge/items.md`.
+3. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives, and build `knowledge/items.md`.
 4. Produce the first reorder list now from the exports, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -68,13 +68,13 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **A purchase order sent to a supplier, or any change to one.**
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>` and its attached exports.
+1. Read the task with `tico task show <id>` and its attached exports.
 2. Read `memory/learnings.md`, `knowledge/items.md`, `knowledge/suppliers.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: an export missing a column, a lead
    time that proved wrong.
-2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
+2. Update `knowledge/`, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline and the export dates used.
 
 ## Talking to {{app_name}}

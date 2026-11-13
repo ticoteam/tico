@@ -32,10 +32,10 @@ Engineer's (`security-engineer`) where the team has one. Policies as documents l
 track who accepted them.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and build `knowledge/controls.md`.
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and build `knowledge/controls.md`.
 4. Produce the first monthly page now, labelled "First draft, not yet reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -71,13 +71,13 @@ Always:
   rule and the owner's decision on file.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/controls.md`, `knowledge/evidence-method.md` and the playbook the task names.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: evidence that did not match the control, an owner who never
    answered.
-2. Update the logs, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
+2. Update the logs, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline and what is still missing.
 
 ## Talking to {{app_name}}

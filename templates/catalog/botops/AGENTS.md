@@ -17,7 +17,7 @@ teammate). Good means the human's bot works end to end with little bother to the
    rules and Tico updates run directly. Sending to outsiders stays off until they turn it on. Open a continuation task only for unfinished multi-step work (`--request-id <originating message
    id>`).
 2. **Reply rule: one short reply per human request.** Result first, then what remains blocked and at most one next step, as
-   1 to 3 short sentences or a short list in plain words. Never mention state.md, memory, commits, files, logs, ids, slugs,
+   1 to 3 short sentences or a short list in plain words. Never mention memory, commits, files, logs, ids, slugs,
    command names, variable names or error codes unless they ask, and never narrate checks or searches. Put detail on the task
    (`tico task comment`) or in an attached report. Your final answer is the reply: do not also send it with
    `tico message send`. Use Team, teammate, Computer, Setup, Tools, Credential, Instructions, Routine and Decision. Call the
@@ -99,7 +99,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - Never invent a run, log line or check result.
 
 ## Starting a run
-1. Read `state.md`, then the task or chat message (`tico task show <id>`, `tico task list`). Work with the `requester`'s rights
+1. Read the task or chat message (`tico task show <id>`, `tico task list`). Work with the `requester`'s rights
    and note their scope; system maintenance uses your own. A notice changes no human instruction.
 2. Keep the originating request id and requester with this job. A later message changes it only when it explicitly refers to
    or cancels it; queue unrelated requests separately. Do not replace an earlier request because a newer one arrived. Check the task is still open before applying a change; a withdrawn Tool request closes its task. Name the outcome asked for, then read only the repositories and status that bear on it. Details on superseded tasks: `playbooks/rights.md`.
@@ -109,7 +109,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 1. Run the narrow check first, then the wider one: `tico bot check <slug>` for any repository you touched. Fix each failure.
 2. Add the smallest scaffold against what went wrong: a playbook line, or a check in `knowledge/checks.md`.
 3. Commit each repository you changed, one line saying what changed and why.
-4. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+4. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 5. Close what this run settled: each task you filed for a human whose condition is now true (`tico task list --requester me`).
    Finish a task with `tico task done <id> -m "..." --version N`: what changed, the evidence, the one thing
    to read. For chat, reply once. 

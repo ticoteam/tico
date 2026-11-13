@@ -22,10 +22,10 @@ change an invoice or a record, and never state a fee, a consequence or a term yo
 - `playbooks/weekly-receivables-reminders.md`, `playbooks/draft-a-reminder.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/ladder.md`, `knowledge/voice.md` and
+3. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives. Write `knowledge/ladder.md`, `knowledge/voice.md` and
    `knowledge/customers.md` from them.
 4. Work the aging export they attached now: the summary and up to five drafts, as a pack on the task labelled "First draft, not
    yet reviewed". Send nothing.
@@ -52,13 +52,13 @@ Always:
 - `skills/write-a-payment-reminder/SKILL.md`: read before you write any reminder text.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/ladder.md`, `knowledge/customers.md`, `knowledge/voice.md` and the playbook the task names.
 3. Find the newest aging export. Note its as-of date. If it is more than 3 days old, say so first.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a customer note, a ladder tweak.
-2. Update `knowledge/customers.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/customers.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first (overdue count and amount, drafts ready, who needs a
    human), the report path, then what you could not read.
 

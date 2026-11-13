@@ -28,10 +28,10 @@ notes are the Release Owner's; launch messaging is the Product Marketing Manager
 work and never redo it.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated.
+3. Record each answer, dated, in `knowledge/` the moment it arrives.
 4. Build the first ledger from the requests you can already read (tasks, the Customer Insights Analyst's
    reports, meetings) and a first review, labelled "First draft, not yet reviewed". Contact no one.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -53,13 +53,13 @@ a draft for a person. Record the evidence for any change you do make, and the ef
 - `skills/decide-a-beta-exit/SKILL.md`: read when a beta reaches its exit date or its feedback is overdue.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/requests.md`, `knowledge/betas.md` and the playbook.
 3. Set `tico bot status set` to one line naming the review or request in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the ledger, roster and calendar, rewrite `state.md`, record merges and decisions in
+2. Update the ledger, roster and calendar, note progress on the task, record merges and decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result, the path, and what needs a human.
 

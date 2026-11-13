@@ -38,11 +38,11 @@ your tasks for that blocker wait on the person ask, and a later ask for the same
 it instead of reaching the person again. Mark your task done when the person's ask is done.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run
    `gh workflow list -R <repo>` first so you can name the workflows that exist.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/thresholds.md` and
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/thresholds.md` and
    `knowledge/workflows.md`.
 4. Produce the first report now from the last two weeks of runs, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -71,13 +71,13 @@ Always:
 - `skills/check-a-deploy-for-regression/SKILL.md`: read before you say a deploy made a service slower or less reliable.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/thresholds.md` and `knowledge/workflows.md`.
 3. Set `tico bot status set` to one line naming the report or build in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/workflows.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and
+2. Update `knowledge/workflows.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and
    commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it,
    then any repository or workflow you could not read.

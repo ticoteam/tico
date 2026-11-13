@@ -35,10 +35,10 @@ health and adoption; the Account Manager owns price, renewal terms and contract.
 `knowledge/renewals.md`; a renewal with two owners, or none, is flagged the same week.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/renewals.md`
+3. Record each answer the moment it arrives, dated, and write `knowledge/renewals.md`
    and `knowledge/health-rules.md` from them.
 4. Produce the first brief now from the customers you can read, as a draft on the task labelled
    "First draft, not yet reviewed". Contact no one.
@@ -74,14 +74,14 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 - `skills/write-a-customer-next-touch/SKILL.md`: read before you draft any message to a customer.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/health-rules.md`, `knowledge/renewals.md` and the playbook.
 3. For each account in the window read its note in `knowledge/accounts/` and the newest signals:
    `tico meeting search "<account>"`, a support mailbox or CRM read where connected, `tico task list`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the account notes and `knowledge/renewals.md`, rewrite `state.md`, record durable decisions in
+2. Update the account notes and `knowledge/renewals.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read.

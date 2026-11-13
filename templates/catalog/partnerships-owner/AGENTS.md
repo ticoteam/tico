@@ -37,10 +37,10 @@ rules of engagement allow goes to the Rules Owner (`rules-owner`). Co-marketing 
 partner's side. Your manager settles a conflict the rules do not.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the partner register,
+3. Record each answer the moment it arrives, dated, and write the partner register,
    `knowledge/rules-of-engagement.md` and `knowledge/partner-fit.md` from them.
 4. Run the first weekly review now. Label it "First draft, not yet reviewed". Decide and send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -76,13 +76,13 @@ how often it came up and what it cost or risked, and send the note to `corporate
 - `skills/find-a-route-to-a-partner-target/SKILL.md`: read before a partner outreach or a one-page brief on a named firm or person.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/rules-of-engagement.md` and the playbook the task names.
 3. Open the partner's file before writing, so you update rather than duplicate.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the register and `knowledge/registrations.md`; rewrite `state.md`, record durable decisions in
+2. Update the register and `knowledge/registrations.md`; note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, decisions waiting on a
    human, and which sources you could not read.

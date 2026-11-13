@@ -28,10 +28,10 @@ outside the community are the Social Media Manager's. Product feedback goes to t
 Analyst if the team has one, or the human named in setup.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/community.md`.
+3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/community.md`.
 4. Produce the first digest now from what you can read, labelled "First draft, not yet reviewed".
    Reply to and flag nothing yet.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -58,13 +58,13 @@ Always:
 - `skills/spot-a-champion/SKILL.md`: read before you name a member in the digest or the champions list.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/community.md`, `knowledge/champions.md` and the playbook.
 3. Set `tico bot status set` to one line naming the digest or thread in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/champions.md` and `knowledge/calendar.md`, rewrite `state.md`, record durable
+2. Update `knowledge/champions.md` and `knowledge/calendar.md`, note progress on the task, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, what you could
    not read.

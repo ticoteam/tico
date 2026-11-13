@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, the `knowledge/` files written, a first result built from a real export, and the
 first routine checked.
 
@@ -32,7 +32,7 @@ Numbered, each with its one-line why and a default where there is one.
 
 ## 4. Record
 
-Answers go to `state.md` under `## Answers`, dated. Write `knowledge/booking-rules.md` as present-tense rules, each with
+Answers go, dated, into the `knowledge/` files they belong to. Write `knowledge/booking-rules.md` as present-tense rules, each with
 where it came from. Write `knowledge/exceptions.md` empty except for any exception already granted. Anything nobody answered
 goes in `knowledge/open-questions.md`, not guessed.
 
@@ -47,7 +47,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 --enable`) and tell the human in one line: "I will send the weekly bookings page every Monday at 08:00 team time, and draft
 any reschedule or no-show follow-up for a person to send."
 
-They can change it or turn it off any time. Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If
+They can change it or turn it off any time. Record it in `memory/decisions.md`. If
 they asked for a different schedule or to leave it off, change the routine to match (`tico automation update <id>`, with
 `--disable` to turn it off).
 

@@ -21,8 +21,7 @@ Done when: the copy exists as an ordinary bot the asker owns, or the update or s
 
     tico bot copy <original> [--name "<Display>"] [--slug <slug>] [--with-memory] [--computer <label>]
 
-- Ask about memory only if they raised it. The default leaves out the original's memory, notes, state and reports, and the copy starts
-  with a blank `state.md`. `--with-memory` brings them too; use it only when they asked for the original's history.
+- Ask about memory only if they raised it. The default leaves out the original's memory, notes and reports. `--with-memory` brings them too; use it only when they asked for the original's history.
 - No credential, `.env`, key file or `secrets/` is ever copied. Routines are not copied either (the copy starts with none).
 - They need to be allowed to add bots and to be within their limit; a copy counts like any bot they add. If the server says they are at
   their limit, offer to archive one they no longer need, or say an admin can raise it, and stop.

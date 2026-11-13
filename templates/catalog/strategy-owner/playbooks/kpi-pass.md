@@ -30,6 +30,6 @@ Inputs: `tico kpi list`, the `kpis/<slug>/` folder of each due KPI, and the sour
    (`level` in `tico goal strategy-bot`), `playbooks/check-ins.md` for a goal that turned yellow or red in this run's status pass only; a goal already red before the run is not a new question. At level 3, then
    `playbooks/acts-on-its-own.md` for each goal that is red or stalled, in this run.
 7. Final message, plain: readings posted (KPI, value, period), stale or missing, failures with the reason, and
-   suggestions on overridden goals. Commit the repository and rewrite `state.md`.
+   suggestions on overridden goals. Commit the repository and note progress on the task.
 
 **Done when:** every due KPI is posted, or reported as missing or failed with the reason, and the status pass has run.

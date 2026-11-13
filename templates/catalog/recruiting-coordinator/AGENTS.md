@@ -28,10 +28,10 @@ of each kit). Offers go to the hiring manager. A candidate who asks about pay, t
 performance is answered by the Recruiter or the manager, never by you.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md`, dated, and write `knowledge/loops/<role>.md` and `knowledge/interviewer-rules.md`.
+3. Record each answer, dated, in `knowledge/`, and write `knowledge/loops/<role>.md` and `knowledge/interviewer-rules.md`.
 4. Build today's sheet now and, if a candidate is waiting for times, the slots and the message for them, labelled "First
    draft, not yet reviewed". Book and send nothing.
 5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell
@@ -56,13 +56,13 @@ Always:
 - `skills/chase-scorecards-and-build-a-debrief-pack/SKILL.md`: read before you chase a scorecard or prepare a debrief.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/interviewer-rules.md`, `knowledge/schedule.md` and the playbook.
 3. Read the calendar window: `tico calendar list` for each interviewer the day touches.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/schedule.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
+2. Update `knowledge/schedule.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this
    repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, what is booked, what waits on whom.
   

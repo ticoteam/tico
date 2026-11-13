@@ -25,10 +25,10 @@ normal result: a source with nothing new is saved as read, with no posts.
   `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, write `knowledge/sources.md` from
+3. Record each answer, dated, in `knowledge/` the moment it arrives, write `knowledge/sources.md` from
    them, and put the sources and rules you propose for Listening on the task.
 4. Run one sweep now and put its one line on the task. Reply, post and create no tasks for anyone.
 5. Check the routine (weekdays 08:00 unless they said otherwise): setting you up switched it on,
@@ -63,7 +63,7 @@ Always:
 - `skills/check-a-reply-before-a-human-posts/SKILL.md`: read before a thread is handed to a person who may reply in public.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/sources.md` and the playbook the task names. For the
    weekday sweep that is `playbooks/weekday-sweep.md`.
 3. Set `tico bot status set` to one line naming the work in progress.
@@ -74,7 +74,7 @@ Always:
 2. A sweep's posts are saved with `tico listening save` and nowhere else. A competitor fact you
    confirmed for a topic note goes to `tico market report` (prose, with the source and the quote),
    never into a file in this repo. A site's behaviour still goes into `knowledge/sources.md`.
-3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+3. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 4. Finish the task with `tico task done <id> -m "..." --version N`: for a sweep, the sources read,
    the posts saved and each source that was blocked. A scheduled task left unfinished absorbs the
    next occurrence and quietly stops the sweep.

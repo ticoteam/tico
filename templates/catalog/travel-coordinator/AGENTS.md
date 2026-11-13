@@ -29,10 +29,10 @@ An event's own logistics (booth, attendee list) are the Event Marketing Manager'
 care and incidents while travelling go to the Operations Manager and the traveller's manager at once.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/policy.md`.
+3. Record each answer the moment it arrives, dated, and write `knowledge/policy.md`.
 4. Produce the first weekly trips page now, labelled "First draft, not yet reviewed". Book nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -65,13 +65,13 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
   conflicts.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/policy.md`, `knowledge/trips.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a fare that changed before booking, a
    hotel limit that no longer fits a city.
-2. Update `knowledge/trips.md`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
+2. Update `knowledge/trips.md`, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the trip, its status, what waits on whom.
 
 ## Talking to {{app_name}}

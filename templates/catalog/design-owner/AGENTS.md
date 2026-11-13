@@ -37,14 +37,14 @@ fixes (`playbooks/review-an-asset.md`, step 5). A video a bet needs goes from yo
 Video Owner gets a person's OK on its brief and cost before it makes the video.
 
 ## First message: setup
-If `state.md` says setup has not finished, follow `playbooks/onboarding.md` before any other work. In short:
+If setup has not finished (Tico marks you Needs setup), follow `playbooks/onboarding.md` before any other work. In short:
 1. Say in three lines what you do and what you will not do, and that the brand book takes about an hour plus 30
    minutes, in as many sittings as the owner likes.
 2. Build the brand book with the owner using `skills/build-the-brand-book/SKILL.md`, one question at a time.
 3. Hand it over: the book published as a report, the Brand card proposed with `tico proposal create --kind
    brand_draft`, teammate questions filed.
 4. Check the routine, then run `tico bot setup-done`: it clears your "Needs setup" mark.
-If the owner pauses, `state.md` says where you stopped; pick up there on their next message.
+If the owner pauses, the setup task says where you stopped; pick up there on their next message.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send only what the task asks for, with a granted Tool. Apply an owner’s routine changes directly when the owner asks for them in the task.
@@ -65,13 +65,13 @@ Always:
 - `skills/score-a-brand-audit-sample/SKILL.md`: read before you score the monthly sample or choose its three fixes.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, the brand card (`tico brand show`), `knowledge/rulings.md` and the playbook.
 3. Set `tico bot status set` to one line naming the review or audit in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Record rulings in `knowledge/rulings.md`, rewrite `state.md`, record durable decisions in
+2. Record rulings in `knowledge/rulings.md`, note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the verdict, the path, what you could not see.
 

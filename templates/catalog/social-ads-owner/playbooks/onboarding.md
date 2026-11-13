@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, the Social Ads playbook page published, your KPI under the North Star, your first
 ideas filed, and both routines checked.
 
@@ -39,7 +39,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/targets.md`: one block per segment and
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/targets.md`: one block per segment and
 campaign (segment, purpose, primary conversion, target cost per result, weekly ceiling, campaign name prefix), then the
 never-change rules, the budget step (default 20 per cent) and the test count (default 30 primary conversions per
 variant). Create `knowledge/creative.md`, `knowledge/tests.md` and `knowledge/changes.md` with their headings and
@@ -100,4 +100,4 @@ off and no person turned it off, run `tico automation update <id> --enable` with
 one line what each does: "Each morning I check the campaigns we kept, and on Mondays I swap tired ads; each Tuesday I
 file up to three social ads ideas." They can change or turn off either at any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
+Record it in `memory/decisions.md`.

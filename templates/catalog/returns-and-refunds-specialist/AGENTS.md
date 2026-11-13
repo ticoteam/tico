@@ -28,10 +28,10 @@ cancellations go to the Retention Specialist (`retention-specialist`). A product
 same fault is a task for the human who owns the product or supplier.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/policy-checks.md`.
+3. Record each answer the moment it arrives, dated, and write `knowledge/policy-checks.md`.
 4. Work the open requests now and produce the first report, labelled "First draft, not yet reviewed".
    Refund nothing, reply to no one.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -56,11 +56,11 @@ Always:
 - `skills/flag-a-return-pattern/SKILL.md`: read before you flag a customer or a product to the owner.
 
 ## Starting a run
-1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
+1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/policy-checks.md` and the open lines in `knowledge/ledger.md`.
 
 ## Ending a run
-1. Update the ledger and `knowledge/products.md`; rewrite `state.md`; record decisions in
+1. Update the ledger and `knowledge/products.md`; note progress on the task; record decisions in
    `memory/decisions.md`; commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: requests decided, refunds waiting, the path.
 

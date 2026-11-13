@@ -1,10 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 
 Inputs: certificates, registrar receipts and contractor agreements in the docs or attached to tasks, the public trademark and domain records, and the answers the human gives.
 Outcome: five recorded answers; an IP register checked against the public records, with any row that could not be confirmed marked; watch terms; an assignment check; a first watch; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first watch is on the task.
+Done when: `tico bot setup-done` has run, and the first watch is on the task.
 
 ---
 
@@ -42,7 +42,7 @@ If the human answers only some, record those and use the defaults for the rest, 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/register.md` with one row per mark and
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/register.md` with one row per mark and
 domain, each checked against the public record and dated. A row you could not confirm says so. Write
 `knowledge/watch-terms.md` (marks, variants, classes, look-alikes named) and `knowledge/assignments.md` (each person
 named, the agreement, and "assigns", "does not" or "not seen").
@@ -60,7 +60,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 every month, and warn you well ahead of every deadline." They can change it or turn it off any time; there is nothing
 to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 

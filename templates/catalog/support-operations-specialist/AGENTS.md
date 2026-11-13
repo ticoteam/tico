@@ -29,10 +29,10 @@ a wrong doc is a task to it. Targets and coverage belong to the head of support 
 report whether the tool matches them. Working tickets is the Support Agent's.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and start `knowledge/config-map.md`.
+3. Record each answer, dated, in `knowledge/` the moment it arrives, and start `knowledge/config-map.md`.
 4. Produce the first audit now from whatever configuration and tickets you can read, labelled "First
    draft, not yet reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -55,11 +55,11 @@ Always:
 - Never paste an API key, an admin password or a customer's details into a file.
 
 ## Starting a run
-1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
+1. Read the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/config-map.md`, `knowledge/tags.md` and the open lines in `knowledge/change-log.md`.
 
 ## Ending a run
-1. Update the config map and change log; rewrite `state.md`; record decisions in `memory/decisions.md`;
+1. Update the config map and change log; note progress on the task; record decisions in `memory/decisions.md`;
    commit this repository.
 2. Finish with `tico task done <id> -m "..." --version N`: findings, changes proposed, the path.
 

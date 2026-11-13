@@ -31,10 +31,10 @@ are the Contracts Manager's (`contracts-manager`); the cleaning or security vend
 Manager (`operations-manager`) in your weekly page.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
+3. Record each answer the moment it arrives, dated, and write the `knowledge/` files.
 4. Produce the first weekly office page now, labelled "First draft, not yet reviewed". Order nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `tico automation list`, tell the human what it does and that they can change it or turn it off, and
@@ -57,14 +57,14 @@ Always:
 - `skills/reorder-supplies-at-par/SKILL.md`: read for the weekly supplies list and any question about an order.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md` and the `knowledge/` file the task touches.
 3. `tico calendar list` for visitors and room bookings this week.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a fixer who never answered, an item that
    ran out below par.
-2. Update the `knowledge/` files, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
+2. Update the `knowledge/` files, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: what was fixed, ordered or is waiting.
 
 ## Talking to {{app_name}}

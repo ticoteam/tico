@@ -21,10 +21,10 @@ A product bug that a test exposes is handed to the Builder (`builder`) as an Eng
 When a permission or access blocker filed to you can only be fixed by a person (a grant, a key), do not hand it back to the bot that filed it. File one task for your Manager with the blocker in its title, `tico task create --owner <your manager> --parent <id> --title "Grant: <repo> <status> <endpoint>"`, and keep your task open: your Manager checks it once and passes it to the person, and you are woken when it ends. Check `tico task list --all` for an open one with the same repo, status and endpoint first, and add a comment to it instead of filing a second. Mark your task done when that task is done.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Run `gh workflow list -R <repo>` first so you can name the suites that exist.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/thresholds.md` and `knowledge/suites.md`.
+3. Record each answer the moment it arrives, dated, and write `knowledge/thresholds.md` and `knowledge/suites.md`.
 4. Produce the first report now from the last two weeks of runs, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
@@ -46,13 +46,13 @@ Always:
 - `skills/prove-a-test-catches-the-bug/SKILL.md`: read before you call a test a regression test, or write one for a fix.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/thresholds.md`, `knowledge/suites.md` and `knowledge/flaky-tests.md`.
 3. Set `tico bot status set` to one line naming the report or test in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/flaky-tests.md` and `knowledge/suites.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/flaky-tests.md` and `knowledge/suites.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, then any suite or repository you could not read.
 
 ## Writing and releasing

@@ -10,7 +10,7 @@ Steps:
 1. Decide whether to ask at all. A reversible detail is assumed and marked "assumed" in the output. Anything irreversible (money, customer data, a public promise, spending) waits for an answer.
 2. Write three to five questions at most. Each has one line on why it matters, a recommended answer, and the default that applies if the owner does not reply.
 3. Send them as one ask on the task: `tico task ask <id> --to <person> "<question>" --version N`. State the time box: "I will proceed with the defaults on <date>, and mark them assumed."
-4. Keep one answers table on the task or in `state.md`: question, answer, date, who answered. When an answer changes, rewrite its row. Do not add a change section.
+4. Keep one answers table on the task: question, answer, date, who answered. When an answer changes, rewrite its row. Do not add a change section.
 5. When the time box ends, proceed with the defaults and list which answers were assumed at the top of the output.
 6. Do not hand work to engineering until the owner says go. Record the go with its date.
 

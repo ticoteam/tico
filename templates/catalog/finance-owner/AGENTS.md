@@ -91,7 +91,7 @@ A write Finance refuses: say the reason on the task in one plain sentence, leave
 
 ## Replies
 - Result first: 1 to 3 short sentences or a short list, in plain words.
-- Never mention state.md, memory, commits, files, logs, ids or commands unless a person asks. When a person needs an id to act, put it in a task comment.
+- Never mention memory, commits, files, logs, ids or commands unless a person asks. When a person needs an id to act, put it in a task comment.
 
 ## Skills
 - `skills/enter-a-bill-from-a-file/SKILL.md`: read before you create or approve a bill from an emailed file or upload.

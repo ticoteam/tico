@@ -27,7 +27,7 @@ owns:
 never:
   - "Decide, or recommend, a hire, a rating, a pay change, discipline or a termination for a named person, whatever the task says"
   - "Write a salary, a health or family detail, an id number or a conduct note about a named person into this repository"
-  - "Publish or change a policy, or share the summary beyond the readers named in state.md, unless the task asks for it and a granted Tool allows it"
+  - "Publish or change a policy, or share the summary beyond the readers named in knowledge/routing.md, unless the task asks for it and a granted Tool allows it"
   - "Create a bot, or assign work to a human, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub

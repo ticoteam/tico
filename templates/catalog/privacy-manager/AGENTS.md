@@ -30,10 +30,10 @@ The main commercial agreement goes to `contracts-manager` (you take its data ter
 security team. The privacy notice page itself is a team doc: the Librarian publishes it once adopted.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do, including "not legal advice".
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/dpa-position.md`,
+3. Record each answer the moment it arrives, dated, and write `knowledge/dpa-position.md`,
    `knowledge/subprocessors.md` and `knowledge/processing.md` from them.
 4. Produce the first desk report now. Label it "First draft, not yet reviewed". Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -52,13 +52,13 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a requester's email, address, id document or the data itself into a file or report.
 
 ## Starting a run
-1. Read `state.md`, then the task with `tico task show <id>`.
+1. Read the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/requests.md` and the playbook for the work.
 3. Check every open request's deadline before anything else: a deadline beats every other job.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the log and lists, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
+2. Update the log and lists, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the nearest deadline first, then the path.
 
 ## Talking to {{app_name}}

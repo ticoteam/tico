@@ -158,10 +158,10 @@ A page with nothing found says what you looked for, in one line. Do not pad it.
    Something the owner named that you could not find or verify stays on the list without an id, marked
    "not found yet", so the curate routine looks again.
 2. From here on you keep the map current from what others report: the daily "Curate the market" routine
-   (`playbooks/curate-the-market.md`). Note in `state.md` what is thin and which sources could not be read, so
+   (`playbooks/curate-the-market.md`). Note on the setup task what is thin and which sources could not be read, so
    the next curate pass knows where to look.
 3. Put unreadable sources in `_librarian/missing.md` under **Sources I could not read** (`playbooks/faq-and-gaps.md`).
-4. Rewrite `state.md`. Record anything durable about reading these kinds of sites in `memory/learnings.md`.
+4. Note progress on the task. Record anything durable about reading these kinds of sites in `memory/learnings.md`.
    Commit this repository.
 5. Finish the task: `tico task done <id> -m "<the update>" --version N`. This note is what the owner
    reads. Keep it under twelve lines, name sources by their domain, not as full links, and cover:

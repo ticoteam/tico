@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 30 minutes. The outcome is five recorded answers, a vendor register with a tier and
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The outcome is five recorded answers, a vendor register with a tier and
 an owner proposed for every vendor, a first weekly page from it, and the first routine checked.
 
 ---
@@ -31,7 +30,7 @@ Numbered, each with its one-line why, each with a default so "fine" is an answer
 
 ## 4. Record
 
-Each answer goes to `state.md` under `## Answers`, dated. Build `knowledge/vendors.md`: one row per
+Each answer goes, dated, into the `knowledge/` file it belongs to. Build `knowledge/vendors.md`: one row per
 vendor, every field with its source. A field you could not read says "not on file".
 
 ## 5. Produce the first result now
@@ -45,7 +44,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send this page every Tuesday at 09:00 and open each renewal 90 days before its notice deadline." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

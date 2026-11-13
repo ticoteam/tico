@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not finished. Budget 20
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20
 minutes. The outcome is five recorded answers, `knowledge/segment.md` written, a first review on the task from a real
 month's numbers, and the routine checked.
 
@@ -35,7 +35,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/segment.md`: the segment, its label
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/segment.md`: the segment, its label
 (`segment:<slug>`, lowercase with dashes), the counting rule, the goal and its KPI, the floor and ceiling with their
 source, the monthly budget, the channels allowed to spend on it, and the human who answers escalations. Create
 `knowledge/message.md` and `knowledge/asks.md` with their headings only.
@@ -53,7 +53,7 @@ off, `tico automation update <id> --enable`) and tell the human in one line what
 each Tuesday at 09:00 from Tico's growth numbers and file ideas for the Monday growth meeting." They can change it or
 turn it off at any time. Nothing needs approval.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. Last, once the answers and the first review
+Record it in `memory/decisions.md`. Last, once the answers and the first review
 are recorded, and not before, run:
 
     tico bot setup-done

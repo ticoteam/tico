@@ -30,10 +30,10 @@ goes to engineering as a concrete task with the evidence. Security answers witho
 the named security owner.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated, and write
+3. Record each answer the moment it arrives, dated, and write
    `knowledge/technical-discovery.md` and `knowledge/never-show.md` from them.
 4. Run the first weekly prep now on the deals you were given. Label it "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
@@ -58,13 +58,13 @@ Always:
 - `skills/check-a-demo-script-before-it-runs/SKILL.md`: read before a demo, and when a script is reused for a new buyer.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/technical-discovery.md` and the playbook the task names.
 3. Open the deal's technical note, and the Account Executive's deal note, before writing.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the deal notes, POC plans and demo scripts; rewrite `state.md`, record durable decisions in
+2. Update the deal notes, POC plans and demo scripts; note progress on the task, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, what waits on a human,
    and which sources you could not read.

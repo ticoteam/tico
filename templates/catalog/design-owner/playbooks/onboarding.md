@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. The outcome is
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). The outcome is
 the brand book, a Brand card proposal built from it, and the first routine checked. It takes the owner about an hour
 of answering plus 30 minutes for the look and real pieces; they can stop at any point and you resume.
 
@@ -24,8 +24,7 @@ as many sittings as they like. Then ask if now is a good time to start; if not, 
 
 ## 3. Build the brand book
 
-Follow `skills/build-the-brand-book/SKILL.md` from Stage 0. Write `## Brand book run` in `state.md` after each
-stage (stage, next question, open threads) and commit, so a pause loses nothing. When the owner already has a
+Follow `skills/build-the-brand-book/SKILL.md` from Stage 0. Note the brand book run on the setup task after each stage (stage, next question, open threads) and commit, so a pause loses nothing. When the owner already has a
 finished guide, the skill still runs, but Stage 0 pre-fills from it and the questions only cover what it lacks.
 
 ## 4. Hand it over
@@ -40,7 +39,7 @@ Setting you up switched your monthly audit on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the owner in one line: "I will audit what went public on the 1st of
 each month, against the brand card." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

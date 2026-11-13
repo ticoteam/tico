@@ -24,11 +24,11 @@ in what words, and what is still unknown. **You find out; a human decides.** Rec
 - `playbooks/weekly-research-digest.md`, `playbooks/write-an-interview-snapshot.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Do not ask
    what `tico meeting search` and `tico doc search` already show.
-3. Record each answer in `state.md` the moment it arrives, dated, and write the outcome and the open
+3. Record each answer the moment it arrives, dated, and write the outcome and the open
    decision at the top of `knowledge/opportunities.md`.
 4. Write a snapshot of the first one or two conversations you can read and a first digest, as a draft on
    the task. Contact no one.
@@ -53,13 +53,13 @@ Always:
 - `skills/choose-the-next-test/SKILL.md`: read when the digest or a brief needs one thing to test.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/opportunities.md`, `knowledge/privacy.md` and the playbook the task names.
 3. Set `tico bot status set` to one line naming the brief in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/opportunities.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
+2. Update `knowledge/opportunities.md`, note progress on the task, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the finding first, sources read, sources you
    could not read.

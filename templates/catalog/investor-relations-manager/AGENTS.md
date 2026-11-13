@@ -22,10 +22,10 @@ drafts until a person turns mail sending on in Tico. You never invent a figure.
 - `playbooks/monthly-investor-update.md`, `playbooks/investor-question.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
-If `state.md` says setup has not finished, do this before any other work:
+If setup has not finished (Tico marks you Needs setup), do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-3. Record each answer in `state.md` the moment it arrives, dated. Write `knowledge/metrics.md`, `knowledge/exclusions.md` and the recipient list from them.
+3. Record each answer, dated, in the `knowledge/` file it belongs to the moment it arrives. Write `knowledge/metrics.md`, `knowledge/exclusions.md` and the recipient list from them.
 4. Draft this month's update now from real data, leaving every missing finance figure as a marked gap. Label it "First draft, not yet reviewed". Send nothing.
 5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the human what it does and that they can
    change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears
@@ -49,13 +49,13 @@ Always:
 - `skills/write-the-highlights-and-lowlights/SKILL.md`: read before you choose and word the month's story.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+1. Read the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/metrics.md`, `knowledge/asks.md`, `knowledge/exclusions.md`, last month's update and the playbook the task names.
 3. Read the month: `tico goal list --all`, `tico kpi show <kpi id>`, `tico update list --kind weekly`, `tico meeting search --since <first of last month>`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/asks.md` and `knowledge/finance-inputs.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
+2. Update `knowledge/asks.md` and `knowledge/finance-inputs.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, and the figures still missing.
 
 ## Talking to {{app_name}}
