@@ -291,7 +291,6 @@
    "botRulesLoad",
    "goalFinishedMount",
    "goalSheetOpen",
-   "goalsFollowRoster",
    "goalsRefresh",
    "headGoalsLoad",
    "openGoal",
@@ -306,7 +305,8 @@
    "overviewStop",
    "overviewStuckDraw",
    "rulesStop",
-   "strategyStop"
+   "strategyStop",
+   "goalsFollowRoster"
   ]
  },
  "library": {
@@ -485,8 +485,7 @@
   ],
   "calls": [
    "personTasksLive",
-   "personTasksReload",
-   "pushSubscribe"
+   "personTasksReload"
   ],
   "idle": [
    "mailForget"

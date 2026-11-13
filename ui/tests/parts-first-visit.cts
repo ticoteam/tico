@@ -14,6 +14,11 @@ const {startHub, DESKTOP} = require('./support/real-hub.cts') as RealHubSupport.
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 const {must} = require('./support/e2e.cts') as {must: (hub: RealHubSupport.Hub, who: string, method: string, path: string, body?: unknown) => Promise<{id?: string; task?: {id: string}}>};
 
+// The page's own globals the background refresh and the live stream go through.
+declare const S: {v2: {status: Record<string, unknown>}};
+declare function refresh(quiet: boolean): void;
+declare function liveEmit(topic: string, data: unknown): void;
+
 interface PartsTable { build: string; parts: Record<string, {url: string; load: string[]}> }
 const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
 // Pages a cold open draws from the shell alone.
@@ -81,6 +86,28 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await open.close();
     }
     assert.ok(routes.some(r => r.startsWith('#/bot/')), 'the sidebar links a bot');
+
+    // Home stays the shell alone after it opens: the background refresh (every 2 minutes), a bot's status change on the
+    // live stream, and browser notifications kept at boot for someone who allowed them load no page's code.
+    {
+      await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: true});
+      const open = await cold(browser, hub);
+      // Headless Chromium answers "denied" whatever is granted: the page is told the person allowed them.
+      await open.page.addInitScript(() => { Object.defineProperty(Notification, 'permission', {get: () => 'granted'}); });
+      await open.page.goto(hub.url + '/#/home');
+      await drawn(open.page, '#/home');
+      await open.page.evaluate(() => {
+        refresh(false);
+        const bot = Object.keys(S.v2.status)[0] || 'ops';
+        liveEmit('bots', {bot, status: S.v2.status[bot]});
+      });
+      await open.page.waitForTimeout(1000);
+      await open.page.waitForLoadState('networkidle', {timeout: t(15000)}).catch(() => {});
+      assert.deepEqual(open.errors, [], 'Home after a refresh: errors on the page');
+      assert.deepEqual(open.parts, [], "Home's refresh, a bot's status change and notifications download no page part");
+      await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: false});
+      await open.close();
+    }
 
     // Every page on its first visit, a few at a time: it opens, and it downloads one page's group of parts at most.
     const queue = [...routes];

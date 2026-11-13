@@ -18,30 +18,6 @@ interface HumanSlackThread {
 // ----------------------------------------------------------------- Web Push for this browser
 // On with Browser notifications, so a call rings while Tico is hidden or closed (backend/web_push.py, docs/push.md).
 // A browser without push, or a page that cannot reach its service worker (ui/app/boot.ts registers it), skips it.
-async function pushRegistration(): Promise<ServiceWorkerRegistration | null> {
-  const sw = serviceWorkerContainer();
-  if (!sw || !('PushManager' in window)) return null;
-  return Promise.race([sw.ready, new Promise<null>(done => setTimeout(() => done(null), 5000))]);
-}
-function pushKeyBytes(key: string): Uint8Array<ArrayBuffer> {
-  const text = atob(key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4));
-  return Uint8Array.from(text, ch => ch.charCodeAt(0));
-}
-function samePushKey(held: ArrayBuffer | null, key: Uint8Array): boolean {
-  const bytes = held ? new Uint8Array(held) : null;
-  return !!bytes && bytes.length === key.length && bytes.every((b, i) => b === key[i]);
-}
-// This browser's subscription, made or kept, sent to the server. One made for another key (a copy of the install, a
-// new key) is replaced.
-async function pushSubscribe(): Promise<void> {
-  const reg = await pushRegistration();
-  if (!reg) return;
-  const key = pushKeyBytes((await get<{key: string}>('/v2/push/key')).key);
-  let sub = await reg.pushManager.getSubscription();
-  if (sub && !samePushKey(sub.options.applicationServerKey, key)) { await sub.unsubscribe(); sub = null; }
-  sub = sub || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
-  await post('/v2/push/subscriptions', sub.toJSON());
-}
 async function pushUnsubscribe(opts?: ApiWriteOptions): Promise<void> {
   const reg = await pushRegistration();
   const sub = reg && await reg.pushManager.getSubscription();

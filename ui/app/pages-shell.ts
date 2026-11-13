@@ -385,6 +385,32 @@ function meetPendingBadge(count: number): void {
 
 // app/person-page.ts
 // Each browser the person opens Tico in with Browser notifications on and allowed takes push too.
+// Web Push for this browser (from app/person-page.ts): kept at boot for anyone with browser notifications on, so
+// it is the shell's, not a page part's.
+async function pushRegistration(): Promise<ServiceWorkerRegistration | null> {
+  const sw = serviceWorkerContainer();
+  if (!sw || !('PushManager' in window)) return null;
+  return Promise.race([sw.ready, new Promise<null>(done => setTimeout(() => done(null), 5000))]);
+}
+function pushKeyBytes(key: string): Uint8Array<ArrayBuffer> {
+  const text = atob(key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4));
+  return Uint8Array.from(text, ch => ch.charCodeAt(0));
+}
+function samePushKey(held: ArrayBuffer | null, key: Uint8Array): boolean {
+  const bytes = held ? new Uint8Array(held) : null;
+  return !!bytes && bytes.length === key.length && bytes.every((b, i) => b === key[i]);
+}
+// This browser's subscription, made or kept, sent to the server. One made for another key (a copy of the install, a
+// new key) is replaced.
+async function pushSubscribe(): Promise<void> {
+  const reg = await pushRegistration();
+  if (!reg) return;
+  const key = pushKeyBytes((await get<{key: string}>('/v2/push/key')).key);
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && !samePushKey(sub.options.applicationServerKey, key)) { await sub.unsubscribe(); sub = null; }
+  sub = sub || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
+  await post('/v2/push/subscriptions', sub.toJSON());
+}
 function pushKeep(on: boolean | undefined) {
   if (on && 'Notification' in window && Notification.permission === 'granted') void pushSubscribe().catch(() => {});
 }
@@ -412,7 +438,8 @@ const unknownHTML = (word: string) => `<div class="cmd-out"><span class="err">Un
 // app/task-modal.ts
 let TASK_CHAT: TaskChatState | null = null;
    // {task, id}: a link's message, once that task's conversation shows
-const TASK_DRAFTS = new Map<string, string>();function taskChatCurrent(state: TaskChatState) { return TASK_CHAT === state && state.dialog.open; }
+const TASK_DRAFTS = new Map<string, string>();         // an unsent comment, per task, kept across redraws until it is sent or cleared
+function taskChatCurrent(state: TaskChatState) { return TASK_CHAT === state && state.dialog.open; }
 
 // app/roadmaps.ts
 // Set by the #/settings/roadmap route (Health's fix link): bring the Public roadmap card into view once it is drawn.
@@ -844,7 +871,8 @@ const goalRank = (a: GkGoal | GkStrategyBet, b: GkGoal | GkStrategyBet) => (a.ra
 const auHref = (id: string | undefined, view?: string) => auBase() + (id ? '/' + encodeURIComponent(id) : '') + (id && view && view !== 'flow' ? '/' + view : '');
 
 // app/automations-maintenance.ts
-const AU_MAINT_OWNER = 'tico';const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
+const AU_MAINT_OWNER = 'tico';
+const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
 
 // app/usage.ts
 function useSpan(range: string, custom?: { from?: string; to?: string } | null): { from: string; to: string } {

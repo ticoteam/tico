@@ -682,7 +682,7 @@ interface TaskChatState {
   /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
   shown?: number; earlier?: boolean;
 }
-let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;         // an unsent comment, per task, kept across redraws until it is sent or cleared
+let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 function taskChatStop() {
   if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
   TASK_CHAT = null;

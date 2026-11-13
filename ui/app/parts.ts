@@ -103,7 +103,7 @@ for (const type of ['click', 'change'] as const) {
       if (type === 'click') ev.preventDefault();
       ev.stopImmediatePropagation();
       uiPartLoad(name).then(() => {
-        if (el.isConnected) el.dispatchEvent(type === 'click' ? new MouseEvent('click', {bubbles: true, cancelable: true, composed: true}) : new Event('change', {bubbles: true}));
+        if (el.isConnected) el.dispatchEvent(type === 'click' ? new MouseEvent('click', {bubbles: true, cancelable: true, composed: true, clientX: (ev as MouseEvent).clientX, clientY: (ev as MouseEvent).clientY, ctrlKey: (ev as MouseEvent).ctrlKey, metaKey: (ev as MouseEvent).metaKey, shiftKey: (ev as MouseEvent).shiftKey, altKey: (ev as MouseEvent).altKey}) : new Event('change', {bubbles: true}));
       }, (error: unknown) => uiPartFailed(name, false, '', error));
       return;
     }

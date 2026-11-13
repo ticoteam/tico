@@ -15,9 +15,10 @@
 // `typeof NAME` is fine anywhere. `window.NAME?.()` is a call like any other: before its part is loaded it would do
 // nothing at all, so it needs an entry too.
 // Each entry must be a function declaration (or `window.NAME = function`) in its part: a stand-in is a function, and
-// a `const` of the same name would refuse to load. A name a part uses as it runs (outside any function) must come from
-// a part listed before it, since parts that load together run in ui/parts.json's order; and, for the files served
-// separately, from a file index.html lists before it. It prints each use that breaks a rule, as file:line, and exits 1.
+// a `const` of the same name would refuse to load. A part never uses another part's names as it runs (outside any
+// function): a dep that failed to load would leave them undefined. Any file's names used as it runs come from a file
+// index.html lists before it, the order files run in when served separately. It prints each use that breaks a rule, as
+// file:line, and exits 1.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -50,7 +51,6 @@ function main() {
   // A part's deps, transitively: their names are loaded before the part runs.
   const deps = name => { const seen = new Set(); const walk = n => { for (const d of parts[n]?.deps || []) if (!seen.has(d)) { seen.add(d); walk(d); } }; walk(name); return seen; };
   const depsOf = new Map(Object.keys(parts).map(n => [n, deps(n)]));
-  const rank = new Map(Object.keys(parts).map((n, i) => [n, i]));
 
   const sources = new Map();
   const owner = new Map();   // top-level name -> file
@@ -153,8 +153,9 @@ function main() {
       }
       if (!theirs || theirs === mine) return;
       if (mine && depsOf.get(mine).has(theirs)) {
-        // Loaded with this part, but a name used as the part runs must come from a part that runs before it.
-        if (!inFn && rank.get(theirs) > rank.get(mine)) problems.push(`${at}: ${name} (${theirs} part) is used as the ${mine} part runs, but ${theirs} runs after it: list ${theirs} first in ui/parts.json`);
+        // Loaded with this part, but never used as the part runs: a dep that failed to load (Retry fetches it again)
+        // would leave the name undefined while this part's own top level had already run.
+        if (!inFn) problems.push(`${at}: ${name} (${theirs} part) is used as the ${mine} part runs: a dep that failed to load would leave it undefined; use it inside a function`);
         return;
       }
       // `typeof NAME` only asks whether it is there (a stand-in is a function).
