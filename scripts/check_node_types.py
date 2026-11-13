@@ -35,7 +35,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc"]
 BASE = "tsconfig.node.json"
-PROJECTS = ("scripts/tsconfig.json", "recorder/tsconfig.json", "recorder/ui/tsconfig.json")
+PROJECTS = (
+    "scripts/tsconfig.json",
+    "recorder/tsconfig.json",
+    "recorder/ui/tsconfig.json",
+    "bench/tsconfig.json",
+)
 # Projects whose scripts run in a page (the Recorder's WebView), not in Node.
 PAGE_PROJECTS = ("recorder/ui/tsconfig.json",)
 REQUIRED_TRUE = ("strict", "noEmit", "erasableSyntaxOnly", "verbatimModuleSyntax")

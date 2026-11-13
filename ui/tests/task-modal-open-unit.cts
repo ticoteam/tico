@@ -27,6 +27,7 @@ const ctx = vm.createContext({
   ENTRY_JUMP: null,
   TASKS_ST: {},
   S: {route: '#/tasks'},
+  LIVE: {after: null},              // live.ts: the change number a task's own stream resumes from
   get: (p: string) => { reads.push(p); return answer(); },
   v2Get: (p: string) => { reads.push(p); return answer().catch(() => null); },
   toast: (msg: string, isErr?: boolean, action?: Toast['action'], opts?: Toast['opts']) => { toasts.push({msg, isErr, action, opts}); },

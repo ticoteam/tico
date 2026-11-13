@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from . import (
     delivery,
+    events,
     org_rule_check,
     page_owners,
     reach,
@@ -520,10 +521,14 @@ def install(app, store, auth, mutate, rule_check):
     @app.get("/api/v2/threads/rail")
     def rail(request: Request, cursor: str | None = None, limit: int | None = None):
         """The threads the viewer is in, by title: `pinned` (first page), then `threads`, paged. Never a 1:1 DM, a Home,
-        a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM."""
+        a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM,
+        and `seq`: the change number it is as of (read first, in the same snapshot), so a live stream that resumes from
+        it (`GET /api/v2/events?after=`) misses nothing since and the page need not read the rail again when it connects."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.rail(c, v, cursor=cursor, limit=limit)
+            seq = None if cursor else events.latest(c)
+            page = thread_rail.rail(c, v, cursor=cursor, limit=limit if limit is not None else thread_rail.RAIL_LIMIT)
+            return page if seq is None else {**page, "seq": seq}
 
     @app.get("/api/v2/threads/browse")
     def browse(request: Request, q: str | None = None, cursor: str | None = None, limit: int | None = None):

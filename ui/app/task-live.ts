@@ -433,11 +433,13 @@ function taskLivePaint(d: TaskDialog, live: TaskLive) {
   const conflict = $('[data-task-edit-current]', d);
   if (conflict) { conflict.hidden = !draft.current; conflict.textContent = draft.current ? `Current: ${draft.current.title} · ${draft.current.body || ''}` : ''; }
 }
-function taskLiveStart(d: TaskDialog) {
+// `after`: a live change number from before the task on screen was read, when known (taskModalShow): the stream resumes
+// there, so its first connect replays what changed since instead of reading the task again.
+function taskLiveStart(d: TaskDialog, after: number | null = null) {
   const live = d.taskLive;
   if (!live || live.revoked) return;
   sharedPlaceStart(live, {
-    id: live.id, place: 'task:' + live.id, topic: 'tasks', filter: 'task',
+    id: live.id, place: 'task:' + live.id, topic: 'tasks', filter: 'task', after,
     changed: () => taskLiveRead(d, live),
     gone: () => taskLiveGone(d, live),
     present: (words: string) => { const el = $('[data-task-presence]', d); if (d.taskLive === live && el) el.textContent = words; }

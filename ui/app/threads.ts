@@ -76,6 +76,8 @@ interface ThreadRailReply {
   catch_up_ids?: string[];
   unread?: ThreadUnread[];
   dms?: Record<string, number>;
+  /** The change number the first page is as of: a live stream resuming from it misses nothing since. */
+  seq?: number;
 }
 // The plain list's reply, from a server without the rail.
 interface ThreadListReply {
@@ -94,6 +96,7 @@ interface ThreadsLoaded {
   cu: Set<string> | null;
   unread: ThreadUnread[];
   dms: Record<string, number>;
+  seq?: number | null;
 }
 // A root that is not on the rail, learned once for live counts: its 1:1 DM's teammate, and whether it is muted.
 interface ThreadRoot {
@@ -153,6 +156,7 @@ interface ThreadsState {
   again: boolean;
   wired: boolean;
   needsSeen: string | null;
+  needsFirst: boolean;
   readAt: number;
   gen: number;
 }
@@ -160,7 +164,7 @@ interface ThreadsState {
 // New message (ui/app/new-message.ts) is a page of its own beside the rail.
 const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', THREADS_NEW = '#/threads/new';
 const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, unread: [], dms: {}, roots: {}, counted: new Set(),
-                 loading: null, again: false, wired: false, needsSeen: null, readAt: 0, gen: 0};
+                 loading: null, again: false, wired: false, needsSeen: null, needsFirst: false, readAt: 0, gen: 0};
 // A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).
 const THREADS_CONNECT_FRESH_MS = 300e3;
 // The Catch up count: the sidebar link, the phone tab and the rail's Catch up button all show this.
@@ -242,7 +246,8 @@ async function threadsRead(): Promise<ThreadsLoaded | null> {
       if (Array.isArray(r?.threads)) {
         return {rail: true, pinned: r.pinned || [], threads: r.threads, next: r.next_cursor || null,
                 catchUp: Number(r.catch_up) || 0, cu: Array.isArray(r.catch_up_ids) ? new Set(r.catch_up_ids) : null,
-                unread: Array.isArray(r.unread) ? r.unread : [], dms: r.dms || {}};
+                unread: Array.isArray(r.unread) ? r.unread : [], dms: r.dms || {},
+                seq: typeof r.seq === 'number' ? r.seq : null};
       }
     } catch (e) { if (errorStatus(e) !== 404) throw e; }
   }
@@ -270,12 +275,16 @@ async function threadsLoad(): Promise<void> {
       const r = await threadsRead();
       // Only a real list turns Threads on; any other answer is a server without them.
       if (!r) { if (THREADS.on !== true) THREADS.on = false; return; }
+      const {seq, ...lists} = r;
       const moved = JSON.stringify(r.dms) !== JSON.stringify(THREADS.dms);
-      Object.assign(THREADS, {on: true, ...r, needsSeen: gen === THREADS.gen ? seen : null, readAt: Date.now()});
+      // The page's first read goes out before Needs you is read (seen is null): the Needs you read sent right after it
+      // stands for its version (the `needs` handler below).
+      const vouch = gen === THREADS.gen;
+      Object.assign(THREADS, {on: true, ...lists, needsSeen: vouch ? seen : null, needsFirst: vouch && !seen, readAt: Date.now()});
       // An open Catch up follows what this read counts, an empty one too.
       if (typeof cuReconcile === 'function') cuReconcile();
       if (moved && typeof renderTree === 'function') renderTree();
-      liveTopicAdd('threads');
+      liveTopicAdd('threads', seq);     // the first stream resumes from this read, so it need not read the rail again
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
       if (errorStatus(e) === 404 && THREADS.on !== true) THREADS.on = false;
@@ -508,8 +517,10 @@ const threadsRecount = () => liveThrottle('threads-rail', threadsLoad, 3000);
 // Every route: the first load, the current row marked, and the stream wired once.
 function threadsSync() {
   if (!S.me) return;
-  if (THREADS.on === null && !THREADS.loading) void threadsLoad();
-  else threadsSideRender();
+  if (THREADS.on === null && !THREADS.loading) {
+    void threadsLoad();
+    if (THREADS.loading) liveProbe(THREADS.loading);     // the first stream waits for it, to open with `threads` (live.ts)
+  } else threadsSideRender();
   if (THREADS.wired) return;
   THREADS.wired = true;
   liveOn('threads', (d: ThreadsEvent) => {
@@ -542,10 +553,13 @@ function threadsSync() {
   // reconnect that carried `threads` over (it replays the thread changes it missed) naming the Needs you version the
   // rail was last read at, within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other
   // connect reads it: a change no event names (a thread the viewer can no longer see) is caught by one at least that often.
+  // The first stream resumes from the first read's `seq` (liveTopicAdd), so it carries `threads` over too; that read went
+  // out just before Needs you was first read, and the version that read holds stands for it (`needsFirst`).
   liveOn('needs', (d: NeedsEvent) => {
     if (!THREADS.on || !d?.connect) return;
     const fresh = Date.now() - THREADS.readAt < THREADS_CONNECT_FRESH_MS;
-    if (fresh && d.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
+    const seen = THREADS.needsSeen ?? (THREADS.needsFirst ? S.v2.needsVersion || null : null);
+    if (fresh && d.carried?.includes('threads') && d.version === seen) return;
     threadsRecount();
   });
   liveOn('reset', () => { liveSoon('threads-rail', threadsLoad, 400); threadViewsLive('reset', {}); });
