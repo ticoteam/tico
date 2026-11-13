@@ -35,7 +35,7 @@ STRAY = "Give the choices' lines only with choices, one per choice."
 
 # What an ask may show: a page, file or task by its id (a page or file pinned at a version), a website's live browser,
 # or a web address. A path (anything with a slash or a dot after page:, file: or task:) is not an id.
-OPENS = re.compile(r"^(?:(page|file|task):([A-Za-z0-9_-]+)(?:@[1-9][0-9]*)?|browser:\S+|https?://\S+)$", re.I)
+OPENS = re.compile(r"^(?:(page|file|task):([A-Za-z0-9_-]+)(?:@([1-9][0-9]{0,8}))?|browser:\S+|https?://\S+)$", re.I)
 
 
 def unopenable(person: str, ref: str) -> str:
@@ -50,11 +50,11 @@ def refusal(
     details: Sequence[str] | None,
     recommend: str | None,
     shows: Sequence[str] | None,
-    exists: Callable[[str, str], bool] = lambda kind, ident: True,
+    exists: Callable[[str, str, int | None], bool] = lambda kind, ident, version: True,
 ) -> str | None:
     """What is wrong with a bot's question to `person` (their name), as the bot is told it, or None. Plain code: no
-    model call. `exists(kind, id)` says whether the page, file or task a `page:`, `file:` or `task:` ref names is
-    there (one indexed read each, made by the caller)."""
+    model call. `exists(kind, id, version)` says whether the page, file or task a `page:`, `file:` or `task:` ref names
+    is there, at the version it pins if it pins one (one indexed read each, made by the caller)."""
     fixes: list[str] = []
     if not (why or "").strip():
         fixes.append(NO_WHY)
@@ -77,7 +77,8 @@ def refusal(
         return " ".join([NEEDS, *fixes])
     for ref in shows or []:
         found = OPENS.match(str(ref).strip())
-        if not found or (found.group(1) and not exists(found.group(1).lower(), found.group(2))):
+        pinned = int(found.group(3)) if found and found.group(3) else None
+        if not found or (found.group(1) and not exists(found.group(1).lower(), found.group(2), pinned)):
             return unopenable(person, str(ref))
     return None
 

@@ -456,12 +456,25 @@ def register(
                 return
             name = H.actor_name(c, target) or "They"
 
-            def exists(kind: str, ident: str) -> bool:
-                """A page or file by its id (pages are files), a task by its id or number."""
+            def exists(kind: str, ident: str, version: int | None) -> bool:
+                """A task by its id or number (the number through its unique index). A page or file by its id (pages
+                are files), not archived, not a deleted page, and at the version it pins when it pins one."""
                 if kind == "task":
-                    sql = "SELECT 1 FROM tasks WHERE id=? OR CAST(number AS TEXT)=?"
-                    return c.execute(sql, (ident, ident)).fetchone() is not None
-                return c.execute("SELECT 1 FROM bot_files WHERE id=?", (ident,)).fetchone() is not None
+                    number = int(ident) if ident.isdigit() else None
+                    return (
+                        c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
+                    )
+                found = c.execute(
+                    "SELECT f.current_version FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.id=? "
+                    "AND f.archived=0 AND (p.file_id IS NULL OR (p.deleted_at IS NULL AND p.archived=0))",
+                    (ident,),
+                ).fetchone()
+                if found is None:
+                    return False
+                if version is None:
+                    return True
+                sql = "SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?"
+                return c.execute(sql, (ident, version)).fetchone() is not None
 
             detail = ask_shape.refusal(
                 name,

@@ -129,6 +129,26 @@ def test_a_question_may_show_a_page_a_file_a_task_or_a_web_address(ruled, ref):
     assert r.status_code == 200, r.text
 
 
+def test_an_archived_file_a_deleted_page_or_a_missing_version_cannot_be_shown_and_a_task_number_can(ruled):
+    """Review 2: what is shown must open now, at the version it pins; a task may be named by its number."""
+    api, _ = ruled
+    task = task_for_ops(api)
+    archived, _ = store_file(api, "Old draft.", title="Old draft")
+    deleted, _ = store_file(api, "Gone page.", title="Gone page")
+    kept, _ = store_file(api, "The launch note.", title="Launch note")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET archived=1 WHERE id=?", (archived,))
+        c.execute(
+            "INSERT INTO pages(file_id, deleted_at, created_at, updated_at) VALUES (?,?,?,?)",
+            (deleted, "2026-11-13T00:00:00Z", "2026-11-13T00:00:00Z", "2026-11-13T00:00:00Z"),
+        )
+        c.execute("UPDATE tasks SET number=? WHERE id=?", (9350, task["id"]))
+    for ref in (f"file:{archived}", f"page:{deleted}", f"file:{kept}@99"):
+        r = ask(api, task, {**GOOD, "show": [ref]})
+        assert r.status_code == 409 and r.json()["detail"].endswith("show that page."), (ref, r.text)
+    assert ask(api, task, {**GOOD, "show": ["task:9350"]}).status_code == 200
+
+
 def test_a_well_shaped_question_is_asked_and_its_why_lines_and_recommendation_are_on_the_ask(ruled):
     api, _ = ruled
     task = task_for_ops(api)
