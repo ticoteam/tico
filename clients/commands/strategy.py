@@ -490,11 +490,11 @@ def _source_body(api, args):
                 None,
             )
             kept = (current or {}).get("map") or {}
-            if not kept.get("fields"):
+            if not kept.get("fields") and kept.get("shape") != "customers":
                 raise APIError(
                     "map", "--database, --query and --bot go with --map NUMBER=COLUMN for each number it fills"
                 )
-            body["sync_map"] = {k: kept[k] for k in ("month", "channel", "fields") if kept.get(k)}
+            body["sync_map"] = {k: kept[k] for k in ("shape", "month", "channel", "fields") if kept.get(k)}
         body["sync_map"].update({k: args[k] for k in db_keys if args.get(k)})
     if args.get("campaign"):
         campaigns = {}

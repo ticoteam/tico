@@ -155,6 +155,21 @@ def view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _db_keys(kind: str | None, given: dict[str, Any]) -> dict[str, str]:
+    """A database query source's database, query and bot, each required; none for another kind."""
+    if kind != "db_query":
+        return {}
+    out: dict[str, str] = {}
+    for key in DB_KEYS:
+        value = str(given.get(key) or "").strip()
+        if not value:
+            raise Problem(
+                "validation", "A database query source names its database, query and bot (the one granted it)", 422
+            )
+        out[key] = value.removeprefix("bot:") if key == "bot" else value
+    return out
+
+
 def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str | None) -> dict[str, Any]:
     """The mapping a source will keep: month and channel columns (default `month`, `channel`) and `fields`, the column
     for each number (default the number's own name). Refused when a number is unknown, a column is blank, or another
@@ -167,7 +182,7 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
     if given.get("shape") == "customers":
         if given.get("fields") or given.get("month") or given.get("channel"):
             raise Problem("validation", "A customers source maps no numbers: its rows are customers", 422)
-        return {"shape": "customers"}
+        return {"shape": "customers", **_db_keys(kind, given)}
     raw: Any = given.get("fields") or {}
     if not isinstance(raw, dict) or not raw:
         raise Problem("validation", "A synced source fills at least one number: map FIELD=COLUMN", 422)
@@ -180,14 +195,7 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
         "channel": str(given.get("channel") or "channel").strip(),
         "fields": {f: str(fields[f] or f).strip() for f in FIELDS if f in fields},
     }
-    if kind == "db_query":
-        for key in DB_KEYS:
-            value = str(given.get(key) or "").strip()
-            if not value:
-                raise Problem(
-                    "validation", "A database query source names its database, query and bot (the one granted it)", 422
-                )
-            out[key] = value.removeprefix("bot:") if key == "bot" else value
+    out.update(_db_keys(kind, given))
     if kind == GF.KIND:
         out["campaigns"] = given["campaigns"]
     for live in H._rows(

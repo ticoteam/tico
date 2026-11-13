@@ -405,3 +405,24 @@ def test_sync_now_follows_the_automation_run_rule_but_the_sources_bot_may_start_
             "SELECT count(*) FROM automation_runs WHERE automation_id=?", (src["map"]["automation"],)
         ).fetchone()[0]
     assert runs == 1
+
+
+def test_a_database_query_can_be_a_customers_source_and_keeps_its_shape_when_remapped(api):
+    """A customers source on a database query keeps its database, query and bot beside the customers shape, gets its
+    daily run, and a remap of the query does not lose the shape."""
+    catalog(api)
+    bot(api, "ops")
+    src = connect(
+        api,
+        truth_for="customers",
+        sync_map={"shape": "customers", "database": "acme", "query": "signups-by-channel", "bot": "ops"},
+    )
+    assert (src["kind"], src["fills"]) == ("db_query", [])
+    assert src["map"]["shape"] == "customers"
+    assert (src["map"]["database"], src["map"]["query"], src["map"]["bot"]) == ("acme", "signups-by-channel", "ops")
+    assert automation(api, src["map"]["automation"])["enabled"] == 1
+    again = patch(
+        api, f"growth/sources/{src['id']}", {"sync_map": {"shape": "customers", "query": "signups-by-channel"}}
+    )
+    assert again["map"]["shape"] == "customers" and again["map"]["bot"] == "ops"
+    assert again["map"]["automation"] == src["map"]["automation"]
