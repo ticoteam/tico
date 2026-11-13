@@ -513,6 +513,7 @@ def check_as(
     place=None,
     attempt_id="",
     origin=None,
+    late=False,
 ):
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
@@ -521,7 +522,9 @@ def check_as(
     or a malformed answer from it, the breaker, no engine, the budget) is a verdict marked unchecked; any other
     failure raises a 503 `Problem` (`CHECK_FAILED`), so the write fails. `skip`: (rule id, version) pairs already
     decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
-    where an outside message came from (`inbound`), kept on the verdict and its hold."""
+    where an outside message came from (`inbound`), kept on the verdict and its hold. `late`: the write may be saved
+    before its check (`deferred`): when every rule it meets only warns and the verdict is not cached, nothing is asked
+    now, and the verdict says so (`late`), for `apply` to queue the one check to run right after the write."""
     author = principal
     if not author:
         return None
@@ -577,6 +580,10 @@ def check_as(
                     "call": hit[1],
                     **({"unchecked_rules": unchecked} if unchecked else {}),
                 }
+            if deferred(late, draft, skip, rules):
+                # A Warn never changes what is saved: the write goes now, and this same check runs right after it,
+                # where too long to check, no engine and the day's cap are found and recorded as they are here.
+                return {**verdict, "late": {"output": output, "run": (store, primary)}}
             # Every matching rule is judged, all in one call: more only when the rules do not fit beside the output in
             # one (`J.pack`), never silently the first ones only.
             sender_name, recipient_names = _names(c, [author])[0], _names(c, recipients)
@@ -928,13 +935,16 @@ def preflight(
     *,
     contacts=(),
     targets=(),
+    late=False,
 ):
     """The stable entry for a write one identity makes (core's `threads.post` calls it): `check_as` for the principal,
     sender and route `checked_as` reads from `who`. `place`: the write's place, or a function of (c, principal,
     recipients) (`place_for`). Returns the verdict `apply` reads, or None when nothing is checked. The Directory's
     structured rules run on the same write: a structured hold carries the judged verdict it was checked with (`judged`),
     so a block of either holds it; a structured Warn rides on a judged verdict (`structured_warned`). `contacts` are the
-    addresses the write goes to (a mail's), `targets` the entities it is about; a person recipient's address is one too."""
+    addresses the write goes to (a mail's), `targets` the entities it is about; a person recipient's address is one too.
+    `late`: the check may run after the write (`check_as`); never while the Directory's structured rules are in force,
+    whose hold carries the judged verdict."""
     found = checked_as(who, store.settings.assistant_bot)
     if not found:
         return None
@@ -943,6 +953,7 @@ def preflight(
     structured = None
     with store.read() as c:
         if DR.in_force(c):
+            late = False
             where = _place_now(c, place, found[0], people)
             if where is None and callable(place):
                 where = place(c, found[0], people)
@@ -974,6 +985,7 @@ def preflight(
         skip=skip,
         place=place,
         attempt_id=attempt_id,
+        late=late,
     )
     if structured is None:
         return verdict
@@ -1308,7 +1320,16 @@ def _people(recipients, author):
 
 
 def apply(
-    c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None, judged=None, private_to=None
+    c,
+    verdict,
+    payload=None,
+    replay=None,
+    tell=False,
+    obj_now=None,
+    audience_now=None,
+    judged=None,
+    private_to=None,
+    late=False,
 ):
     """The verdict inside the write. Returns None to deliver as is; {"warn": line, ...} to deliver with the warning
     line on the recipient's copy; {"held": view} to write nothing and answer with the hold. `payload` is the text the
@@ -1322,7 +1343,10 @@ def apply(
     (`refused`) raises its error here, so the write fails with it. `judged`: the whole text the check judged, when the
     reviewer's `payload` leaves some of it out (a private task's words): a hold keeps it where only Send anyway's
     recheck reads it (`hold_input`), never shown. `private_to`: {private task id: the recipients the write reaches only
-    through that task}; a hold lists them only to a reader who may read one of those tasks (`_shown_to`)."""
+    through that task}; a hold lists them only to a reader who may read one of those tasks (`_shown_to`). A verdict
+    left for after the write (`check_as`'s `late`) is queued here, in the write's own transaction, and comes back as
+    {"late": id}: the write goes as it was sent, and the route says where its words went (`late_on`). `late`: this is
+    that check's own verdict, run after the write (`run_late`); its events say so."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
     if verdict and "applied" in verdict:
@@ -1336,6 +1360,9 @@ def apply(
         return {"moved": True}
     if verdict.get("check") == "structured":
         return _structured_apply(c, verdict, payload, replay, tell, judged, private_to)
+    if verdict.get("late"):
+        return _queue_late(c, verdict)
+    marked = {"late": True} if late else {}
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
@@ -1357,6 +1384,7 @@ def apply(
                 "reason": verdict.get("error") or "unchecked",
                 "rules": verdict.get("unchecked_rules") or [r["id"] for r in verdict["rules"]],
                 **({"call": verdict["call"]} if verdict.get("call") else {}),
+                **marked,
             },
         )
     if verdict["outcome"] not in ("broken", "too_large"):
@@ -1380,7 +1408,7 @@ def apply(
             author,
             "rules.unchecked",
             operation,
-            {"operation": operation, "reason": cause, "rules": [r["id"] for r in broken]},
+            {"operation": operation, "reason": cause, "rules": [r["id"] for r in broken], **marked},
         )
         could_not = "was too long to check" if cause == "too_large" else "could not be checked"
         line = f"Warning: {_author_name(c, author)}'s message {could_not} against the rule '{strictest['text']}'."
@@ -1405,7 +1433,7 @@ def apply(
             author,
             "rules.warned",
             "org_rule:" + strictest["id"],
-            {"operation": operation, "rules": [r["id"] for r in broken], "cached": verdict["cached"]},
+            {"operation": operation, "rules": [r["id"] for r in broken], "cached": verdict["cached"], **marked},
         )
         told = (
             f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it may break the rule "
@@ -1645,6 +1673,224 @@ def answer(gate):
     if gate.get("warned"):
         return {"rule_warning": gate["warned"]}
     return {}
+
+
+# ----------------------------------------------------------------------------- after the write
+# A write whose every matching rule only warns is saved and answered first; its one check runs right after (`check_as`
+# with `late`, `apply` queues it in `org_rule_late` inside the write). A broken rule then puts today's warning line on
+# the saved words (`late_on` says where they are) and tells the author; a check that cannot run records the same
+# `rules.unchecked` as before. A rule that can hold a write is never left for later: it is checked before the write.
+LATE_TRIES = 5  # passes a late check waits for a free call slot (`busy`) before it is recorded unchecked
+LATE_KEYS = (
+    "author",
+    "sender",
+    "via",
+    "operation",
+    "recipients",
+    "context",
+    "obj",
+    "place",
+    "attempt_id",
+    "origin",
+    "day_cap_line",
+)
+_LATE_LANES = weakref.WeakKeyDictionary()
+_LATE_STATE = {"store": None, "app": None}  # set by `install`: the store and app the scheduler's tick reads
+
+
+def deferred(late, draft, skip, rules):
+    """Whether a check may run after its write: asked to (`late`), a real write (no draft, no Send anyway recheck) and
+    every rule it meets only warns."""
+    return bool(late and rules) and not draft and not skip and all(r["if_broken"] == "warn" for r in rules)
+
+
+def _queue_late(c, verdict):
+    """The check left for after this write, kept in the write's own transaction, so the write and its check are saved
+    together or not at all; it starts once the write commits."""
+    late_id = H.new_id()
+    saved = json.dumps({k: verdict.get(k) for k in LATE_KEYS}, sort_keys=True, default=str)
+    c.execute(
+        "INSERT INTO org_rule_late(id, verdict, output, created_at) VALUES(?,?,?,?)",
+        (late_id, saved, verdict["late"]["output"], H.now()),
+    )
+    store, primary = verdict["late"]["run"]
+    hooks = getattr(c, "after_commit", None)
+    if hooks is not None:
+        hooks.append(lambda: kick_late(store, primary))
+    return {"late": late_id}
+
+
+def late_on(c, gate, kind, **ref):
+    """Where a write left for a late check saved its words, so a broken rule's line lands on them: `message` (a
+    comment: `message`, `task`), `answer` (a done note: `answer`) or `task_note` (an ask, whose line goes before the
+    task's note as today: `task`). Nothing for any other gate."""
+    if gate and gate.get("late"):
+        c.execute(
+            "UPDATE org_rule_late SET target=? WHERE id=?",
+            (json.dumps({"kind": kind, **ref}, sort_keys=True), gate["late"]),
+        )
+
+
+def _late_lane(store):
+    """(running, again, draining) for one store: one drain thread at a time, woken again by writes made meanwhile."""
+    with _CALLS_LOCK:
+        lane = _LATE_LANES.get(store)
+        if lane is None:
+            lane = _LATE_LANES[store] = (threading.Lock(), threading.Event(), threading.Lock())
+        return lane
+
+
+def kick_late(store, primary):
+    """Start the late checks' drain thread unless one runs; a running one sees what was just queued."""
+    running, again, _ = _late_lane(store)
+    again.set()
+    if not running.acquire(blocking=False):
+        return
+
+    def work():
+        try:
+            while again.is_set():
+                again.clear()
+                drain_late(store, primary)
+        except Exception:  # the scheduler's tick starts it again
+            LOG.exception("Late rule checks failed")
+        finally:
+            running.release()
+        if again.is_set():  # queued after the last look, before the release
+            kick_late(store, primary)
+
+    try:
+        threading.Thread(target=work, name="org-rule-late", daemon=True).start()
+    except RuntimeError:  # no thread to be had: the scheduler's tick tries again
+        running.release()
+
+
+def drain_late(store, primary):
+    """Run every late check waiting, oldest first, each once in this pass. Returns how many ran."""
+    _, _, draining = _late_lane(store)
+    ran, tried = 0, set()
+    with draining:
+        while True:
+            with store.read() as c:
+                rows = [dict(r) for r in c.execute("SELECT * FROM org_rule_late ORDER BY created_at, rowid LIMIT 200")]
+            row = next((r for r in rows if r["id"] not in tried), None)
+            if row is None:
+                return ran
+            tried.add(row["id"])
+            try:
+                run_late(store, primary, row)
+            except Exception:  # one check's fault never stops the rest; it stays for the next pass
+                LOG.exception("A late rule check failed")
+            ran += 1
+
+
+def _late_failed(store, saved):
+    """The verdict of a late check that could not run (a fault here): every rule it meets now, unchecked."""
+    with store.read() as c:
+        rules = _rule_rows(R.matching(c, saved["author"], saved["recipients"], saved.get("place")))
+    if not rules:
+        return None
+    return {
+        **saved,
+        "rules": rules,
+        "matched": sorted((r["id"], r["version"]) for r in rules),
+        "outcome": "unchecked",
+        "error": "error",
+        "broken": [],
+        "call": None,
+        "cached": False,
+        "draft": False,
+    }
+
+
+def run_late(store, primary, row):
+    """One late check: the same question, now, then its verdict on the saved write. A broken rule only ever warns here,
+    even one made a hold since: the write is already saved and is never taken back."""
+    saved = json.loads(row["verdict"])
+    try:
+        verdict = check_as(
+            store,
+            primary,
+            saved["author"],
+            saved["sender"],
+            saved["via"],
+            saved["operation"],
+            row["output"],
+            saved["recipients"],
+            context=saved.get("context") or None,
+            obj=saved.get("obj") or "",
+            place=saved.get("place"),
+            attempt_id=saved.get("attempt_id") or "",
+            origin=saved.get("origin"),
+        )
+    except Problem:
+        verdict = _late_failed(store, saved)
+    if (
+        verdict
+        and saved.get("day_cap_line")
+        and verdict.get("outcome") == "unchecked"
+        and verdict.get("error") == "day_cap"
+    ):
+        # A task write with the day's calls spent carries a line saying it could not be checked, as before the write
+        # (backend/task_rule_gate.py `held_locally`).
+        verdict = {**verdict, "outcome": "too_large", "local": "day_cap", "broken": [r["id"] for r in verdict["rules"]]}
+    busy = bool(verdict) and verdict.get("error") == "busy"
+    if busy and row["tries"] + 1 < LATE_TRIES:
+        with store.transaction() as c:
+            c.execute("UPDATE org_rule_late SET tries=tries+1 WHERE id=?", (row["id"],))
+        return None
+    with store.transaction() as c:
+        if not c.execute("DELETE FROM org_rule_late WHERE id=?", (row["id"],)).rowcount:
+            return None  # another pass ran it
+        if not verdict:
+            return None
+        gate = apply(c, {**verdict, "rules": [{**r, "if_broken": "warn"} for r in verdict["rules"]]}, late=True)
+        if gate and gate.get("warn"):
+            _warn_saved(c, json.loads(row["target"] or "{}"), gate)
+            told = (gate.get("warned") or {}).get("text") or ""
+            if H.is_bot(verdict["author"]):
+                _tell_bot(c, verdict["author"], told)
+            elif H.is_human(verdict["author"]) and told:
+                H.notice(c, H.KEEPER, verdict["author"], told, refs={"org_rule": True})
+        return gate
+
+
+def _warn_saved(c, target, gate):
+    """Today's warning line on the words a late-checked write saved (`late_on`). Words edited or deleted since are left
+    as they are: an edit is checked on its own. The task's version is not moved, so nobody's next write is refused as
+    stale over a warning line."""
+    kind, ts = target.get("kind"), H.now()
+    if kind == "message":
+        found = c.execute(
+            "SELECT body FROM messages WHERE id=? AND edited_at IS NULL AND deleted_at IS NULL", (target["message"],)
+        ).fetchone()
+        if found is None:
+            return
+        c.execute("UPDATE messages SET body=? WHERE id=?", (warned_text(gate, found[0]), target["message"]))
+        if target.get("task"):
+            c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, target["task"]))
+        H.event(c, H.KEEPER, "message.edited", target["message"], {"task": target.get("task"), "rule_warning": True})
+    elif kind == "answer":
+        found = c.execute("SELECT notes FROM answers WHERE id=?", (target["answer"],)).fetchone()
+        if found is not None:
+            c.execute("UPDATE answers SET notes=? WHERE id=?", (warned_text(gate, found[0] or ""), target["answer"]))
+    elif kind == "task_note":
+        found = c.execute("SELECT note FROM tasks WHERE id=?", (target["task"],)).fetchone()
+        if found is not None:
+            c.execute(
+                "UPDATE tasks SET note=?, updated_at=? WHERE id=?",
+                (warned_note(gate, found[0] or ""), ts, target["task"]),
+            )
+
+
+def late_tick(store):
+    """Every scheduler tick: late checks a restart left (or a busy pass put off) are run."""
+    app = _LATE_STATE["app"]
+    if store is not _LATE_STATE["store"] or app is None:
+        return
+    with store.read() as c:
+        if c.execute("SELECT 1 FROM org_rule_late LIMIT 1").fetchone():
+            kick_late(store, getattr(app.state, "judge", None))
 
 
 def held_note(c, author, rule):
@@ -2742,6 +2988,7 @@ def install(app, store, auth, mutate):
     # install after this one register theirs later, so `seal` fills these once the app is whole.
     table, prepare, audience = dict(REPLAY), dict(PREPARE), dict(AUDIENCE)
     app.state.rule_tables = (table, prepare, audience)
+    _LATE_STATE.update(store=store, app=app)
 
     class HoldSend(Contract):
         nonce: str = Field(min_length=1, max_length=200)

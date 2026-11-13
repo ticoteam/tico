@@ -2467,11 +2467,14 @@ def create_app(settings=None):
 
         return place
 
-    def rule_check(who, operation, output, audience, obj="", context=None, place=None, *, track_route=False):
+    def rule_check(
+        who, operation, output, audience, obj="", context=None, place=None, *, track_route=False, late=False
+    ):
         """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
         is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
         place, or a function of (c, author, recipients) that reads it. `track_route` keeps the audience even when
-        nothing matches, so a send cannot move to an unchecked recipient."""
+        nothing matches, so a send cannot move to an unchecked recipient. `late`: when every rule it meets only warns,
+        the check runs right after the write instead of before it (org_rule_check `check_as`)."""
         author = org_rule_check.author_of(who, settings.assistant_bot)
         if not track_route and (not output or not author):
             return None
@@ -2485,7 +2488,7 @@ def create_app(settings=None):
                 return org_rule_check.refused(exc)
         verdict = (
             org_rule_check.preflight(
-                store, app.state.judge, who, operation, output, recipients, context, obj, place=place
+                store, app.state.judge, who, operation, output, recipients, context, obj, place=place, late=late
             )
             if in_force and output and author
             else None

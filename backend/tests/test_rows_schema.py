@@ -475,6 +475,7 @@ UNTYPED = frozenset(
         "oidc_codes",
         "oidc_sessions",
         "org_rule_holds",
+        "org_rule_late",
         "org_rule_verdicts",
         "org_rules",
         "org_turn_waits",

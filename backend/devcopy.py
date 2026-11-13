@@ -107,6 +107,7 @@ EMPTY = (
     "bookkeeper_watch_listed",  # the Finance Owner's ledgers: the copy starts its checks fresh
     "org_rule_holds",  # org rules: a held output could still be sent anyway from the copy
     "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
+    "org_rule_late",  # org rule checks still to run after a write: the copy has its own judge, and never re-warns
     "watcher_pending",
     "watcher_triage",  # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending",
