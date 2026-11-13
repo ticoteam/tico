@@ -5,8 +5,9 @@
 'use strict';
 
 // Which window a picker's Compact row sets: the bot's own (`bot`: a bot's model, a new bot), its tasks' (`task`,
-// "Same as bot" first), every selected bot's (`bulk`, "Keep each bot's" first), or none (a fallback).
-type SettingsCompactMode = '' | 'bot' | 'task' | 'bulk';
+// "Same as bot" first), the fallback's own (`fallback`, "Same as bot" first: the turn's window lowered to fit), every
+// selected bot's (`bulk`, "Keep each bot's" first, and settable with no model picked), or none.
+type SettingsCompactMode = '' | 'bot' | 'task' | 'fallback' | 'bulk';
 // A box's pick: its value ('harness::model::effort', '' for Same as bot / None) and its window (null: the model's
 // default, the bot's own or each bot's own, as the mode says).
 interface SettingsChoicePicker { value: () => string; compact: () => number | null; valid: () => boolean; changed: () => boolean; }
@@ -66,7 +67,8 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
   const c = settingsChoiceFromValue(value), bot = spec.bot;
   if (!c.model) {
     if (!spec.none) return bot ? {short: settingsDefaultLabel(bot), long: settingsDefaultLabel(bot)} : {short: 'Choose', long: 'Not chosen'};
-    const size = spec.mode && compact && settingsCompacts(bot ? settingsBotHarness(bot) : '') ? settingsSizeWords(compact) : '';
+    // Same as bot with its tasks' own window, or bulk change's window alone; a fallback of None has none.
+    const size = compact && (spec.mode === 'bulk' || (spec.mode === 'task' && settingsCompacts(bot ? settingsBotHarness(bot) : ''))) ? settingsSizeWords(compact) : '';
     return {short: [spec.none, size].filter(Boolean).join(' '), long: [spec.none, size ? `compacts at ${size.toLowerCase()}` : ''].filter(Boolean).join(', ')};
   }
   const compacts = !!spec.mode && settingsCompacts(c.harness);
@@ -97,9 +99,9 @@ function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
   const spec = SETTINGS_CHOICE_KINDS[kind], selected = spec.of(e);
   const current = selected?.model ? settingsChoiceValue(selected.harness || selected.runtime, selected.model,
     selected.reasoning_effort || selected.effort) : '';
-  const compact = kind === 'model' ? Number(e.compact_at) || null : kind === 'task' ? e.task_model?.compact_at || null : null;
+  const compact = kind === 'model' ? Number(e.compact_at) || null : kind === 'task' ? e.task_model?.compact_at || null : e.fallback?.compact_at || null;
   return settingsChoiceBox({bot: e, kind, name: spec.name, current, compact, readonly: !settingsCanManageBot(e),
-    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind === 'task' ? 'task' : ''});
+    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind});
 }
 // In the bots table a model or fallback is its picker's closed button.
 const settingsChoiceCell = (e: SettingsBot, kind: SettingsChoiceKind) => settingsChoiceCombo(e, kind);
@@ -141,8 +143,10 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
   // What runs, for the Compact row: a task pick on Same as bot runs on the bot's own harness and model.
   const runHarness = () => picked.harness ? real().harness : mode === 'task' && bot ? settingsBotHarness(bot) : '';
   const runModel = () => picked.model || (mode === 'task' && bot ? settingsTaskRunsOn(bot, '') : '');
-  const compactShown = () => !!mode && !!runModel() && settingsCompacts(runHarness());
-  const compactOut = () => compactShown() ? compact : savedCompact;
+  // Bulk change with no model picked sets a window alone, each bot keeping its model: every size is offered.
+  const compactShown = () => !!mode && (mode === 'bulk' && !picked.model ? true : !!runModel() && settingsCompacts(runHarness()));
+  // A fallback on a harness that does not compact keeps no window of its own.
+  const compactOut = () => compactShown() ? compact : mode === 'fallback' ? null : savedCompact;
   // A model change: a saved window past the new model's lowers to fit it; the default follows the model.
   const followModel = (before: string) => {
     note = '';
@@ -225,7 +229,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     if (compact && !sizes.includes(compact) && (!window || compact <= window)) sizes.push(compact);
     sizes.sort((a, b) => a - b);
     const selected = compact || def || 0;
-    select.innerHTML = (mode === 'task' ? option('', 'Same as bot', !compact) : mode === 'bulk' ? option('', "Keep each bot's", !compact) : '')
+    select.innerHTML = (mode === 'task' || mode === 'fallback' ? option('', 'Same as bot', !compact) : mode === 'bulk' ? option('', "Keep each bot's", !compact) : '')
       + sizes.map(size => option(size, `${settingsSizeWords(size)}${size === def ? ' (default)' : ''}`, size === selected)).join('');
     select.disabled = readonly;
   };
@@ -377,10 +381,11 @@ function settingsChoiceRepaint(box: SettingsChoiceBox) {
   if (button) { button.title = words.long; button.setAttribute('aria-label', `${spec.name}${spec.bot ? ` for ${spec.bot.display_name || spec.bot.slug}` : ''}: ${words.long}`); }
   box.dispatchEvent(new CustomEvent('tico:choice', {bubbles: true}));
 }
-// The /fallback body for a picker value ('' is None); Apply and the bot editor's Save send the same.
-function settingsFallbackBody(value: string) {
+// The /fallback body for a picker value ('' is None) and its own window (none: Same as bot); Apply and the bot
+// editor's Save send the same.
+function settingsFallbackBody(value: string, compact: number | null = null) {
   const choice = value ? settingsChoiceFromValue(value) : null;
-  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null;
+  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort, ...(compact ? {compact_at: compact} : {})} : null;
 }
 // Apply in the bots table: save the pick. A window alone saves at once and keeps the session; a model change asks
 // first and continues in its own dialog, after the window.
@@ -399,9 +404,9 @@ async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact
   if (box.dataset.kind === 'fallback') {
     try {
       const choice = value ? settingsChoiceFromValue(value) : null;
-      await post(`/v2/bots/${encodeURIComponent(String(slug))}/fallback`, {fallback: settingsFallbackBody(value), expected_revision: e.revision});
+      await post(`/v2/bots/${encodeURIComponent(String(slug))}/fallback`, {fallback: settingsFallbackBody(value, compact), expected_revision: e.revision});
       await loadSettings();
-      toast(choice ? `${e.display_name} fallback is ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`
+      toast(choice ? `${e.display_name} fallback is ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}${compact ? `, compacting at ${settingsSizeWords(compact)}` : ''}`
         : `${e.display_name} fallback is none`);
     } catch (error) { toast(errorMessage(error, ''), true); }
     return;

@@ -12,22 +12,22 @@ function settingsBulkModelDialog() {
   if (!bots.length) return;
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal settings-bulk-dialog';
   dialog.setAttribute('aria-labelledby', 'bulk-model-title');
-  // The pick and its window (null: each bot keeps its own).
+  // The pick (null: each bot keeps its model) and its window (null: each bot keeps its own); one of them is needed.
   let choice: SettingsChoice | null = null, compact: number | null = null, target = 'bot', running = false, ran = false;
   // A part paint() just drew (each is in the dialog's markup).
   const part = <T extends Element>(selector: string): T => dialog.querySelector<T>(selector)!;
   const paint = () => {
     const value = choice ? settingsChoiceValue(choice.harness, choice.model, choice.effort) : '';
-    const label = choice ? settingsBulkWords(choice, compact) : '';
+    const label = settingsBulkWords(choice, compact);
     dialog.innerHTML = `<div class="tmodal-head"><h2 id="bulk-model-title">Change model · ${bots.length} bot${bots.length === 1 ? '' : 's'}</h2><span class="spacer"></span><button class="ghost" type="button" data-bulk-close aria-label="Close">✕</button></div>
       <div class="transition-body">
         <label>Apply to<select data-bulk-target aria-label="Apply to"><option value="bot">Bot model</option><option value="task">Task model</option><option value="both">Both models</option></select></label>
-        <div class="settings-bulk-pick" data-bulk-pick>${settingsChoiceBox({kind: 'bulk', name: 'Change to', current: value, compact, mode: 'bulk'})}</div>
-        <p data-bulk-destination>${choice ? `Destination: ${esc(label)}` : ''}</p>
+        <div class="settings-bulk-pick" data-bulk-pick>${settingsChoiceBox({kind: 'bulk', name: 'Change to', current: value, compact, mode: 'bulk', none: "Keep each bot's model"})}</div>
+        <p data-bulk-destination>${label ? `Destination: ${esc(label)}` : ''}</p>
         <div class="transition-progress" data-bulk-explanation></div>
         <ul class="settings-bulk-list" data-bulk-list>${bots.map(e => `<li data-bulk-bot="${esc(e.id)}" data-state="pending"><span>${esc(e.display_name || e.slug)}</span><span class="settings-cell-note">${esc(settingsChoiceLabel(settingsBotHarness(e), e.model, settingsBotEffort(e)))}</span></li>`).join('')}</ul>
         <p role="status" data-bulk-summary></p>
-        <div class="transition-actions"><button class="primary" type="button" data-bulk-apply ${choice ? '' : 'disabled'}>Change ${bots.length} bot${bots.length === 1 ? '' : 's'}</button><button class="ghost" type="button" data-bulk-close>Cancel</button></div></div>`;
+        <div class="transition-actions"><button class="primary" type="button" data-bulk-apply ${choice || compact ? '' : 'disabled'}>Change ${bots.length} bot${bots.length === 1 ? '' : 's'}</button><button class="ghost" type="button" data-bulk-close>Cancel</button></div></div>`;
     dialog.querySelectorAll<HTMLButtonElement>('[data-bulk-close]').forEach(button => { button.onclick = () => dialog.close(); });
     const preview = () => {
       part<HTMLElement>('[data-bulk-explanation]').innerHTML = target === 'task'
@@ -44,8 +44,9 @@ function settingsBulkModelDialog() {
       choice = value ? settingsChoiceFromValue(value) : null; compact = size;
       pickBox.dataset.current = value; pickBox.dataset.compactCurrent = size ? String(size) : '';
       settingsChoiceRepaint(pickBox);
-      part<HTMLButtonElement>('[data-bulk-apply]').disabled = !choice;
-      part<HTMLElement>('[data-bulk-destination]').textContent = choice ? `Destination: ${settingsBulkWords(choice, compact)}` : '';
+      part<HTMLButtonElement>('[data-bulk-apply]').disabled = !choice && !compact;
+      const words = settingsBulkWords(choice, compact);
+      part<HTMLElement>('[data-bulk-destination]').textContent = words ? `Destination: ${words}` : '';
       preview();
     };
     preview();
@@ -56,7 +57,7 @@ function settingsBulkModelDialog() {
     row.dataset.state = state; row.querySelector('.settings-cell-note')!.textContent = note;
   };
   const run = async (targets: SettingsBot[]) => {
-    if (running || !choice) return;
+    if (running || (!choice && !compact)) return;
     running = ran = true;
     const apply = dialog.querySelector<HTMLButtonElement>('[data-bulk-apply]');
     if (apply) apply.disabled = true;
@@ -90,14 +91,16 @@ function settingsBulkModelDialog() {
 }
 // Each destination uses its existing single-bot route. In Both mode, reload after the bot transition
 // so the task-model request uses its new revision. Retry failed preserves already-applied destinations.
-// The destination in words: "Opus 5.5 MED", and its window when one was chosen ("· compacts at 700K").
-const settingsBulkWords = (choice: SettingsChoice, compact: number | null) => settingsChoiceLabel(choice.harness, choice.model, choice.effort)
-  + (compact ? ` · compacts at ${settingsSizeWords(compact)}` : '');
-async function settingsBulkApplyOne(slug: string, choice: SettingsChoice, target = 'bot', compact: number | null = null): Promise<SettingsBulkOutcome> {
+// The destination in words: "Opus 5.5 MED", and its window when one was chosen ("· compacts at 700K"); a window
+// alone reads "Each bot's model · compacts at 700K".
+const settingsBulkWords = (choice: SettingsChoice | null, compact: number | null) => !choice && !compact ? ''
+  : (choice ? settingsChoiceLabel(choice.harness, choice.model, choice.effort) : "Each bot's model") + (compact ? ` · compacts at ${settingsSizeWords(compact)}` : '');
+async function settingsBulkApplyOne(slug: string, choice: SettingsChoice | null, target = 'bot', compact: number | null = null): Promise<SettingsBulkOutcome> {
   const notes: string[] = [], kinds = target === 'both' ? ['bot', 'task'] : [target];
   let changed = false, failed = false, blocked = false;
   for (const kind of kinds) {
-    const result = await settingsBulkApplyKind(slug, choice, kind, compact);
+    const result = choice ? await settingsBulkApplyKind(slug, choice, kind, compact)
+      : compact ? await settingsBulkCompact(slug, compact, kind) : {state: 'skipped', note: 'Kept'} as SettingsBulkOutcome;
     notes.push(`${kind === 'task' ? 'Task model' : 'Bot model'}: ${result.note}`);
     failed ||= result.state === 'failed';
     blocked ||= result.state === 'blocked';
@@ -110,6 +113,21 @@ async function settingsBulkApplyOne(slug: string, choice: SettingsChoice, target
   }
   return {state: failed ? 'failed' : blocked ? 'blocked' : changed ? 'changed' : 'skipped',
     partial: changed && (failed || blocked), note: notes.join(' · ')};
+}
+// A window alone (each bot keeps its model): the bot's own (POST /compact-at) or its tasks', from a fresh read; the
+// window saves without a fresh session.
+async function settingsBulkCompact(slug: string, compact_at: number, kind: string): Promise<SettingsBulkOutcome> {
+  try {
+    S.emps = namedRoster(await get('/employees'));
+    const e: SettingsBot | undefined = S.emps.find(row => row.id === slug);
+    if (!e || !settingsBotSelectable(e)) return {state: 'failed', note: 'This bot can no longer be changed here'};
+    if (kind === 'task') await post(`/v2/bots/${encodeURIComponent(slug)}/task-model`, {task_model: settingsTaskBody(e, {compact_at}), expected_revision: e.revision});
+    else await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at, expected_revision: e.revision});
+    return {state: 'changed', note: `Now compacts at ${settingsSizeWords(compact_at)}`};
+  } catch (error) {
+    if (errorCode(error) === 'unchanged') return {state: 'skipped', note: `Already compacts at ${settingsSizeWords(compact_at)}`};
+    return {state: 'failed', note: errorMessage(error, 'The window was not saved')};
+  }
 }
 // A window goes only where the harness compacts, lowered to fit the model. For the bot it saves first (keeping the
 // session), and the model change follows on the revision that returns.

@@ -446,10 +446,10 @@ function settingsEditBot(slug = '', inline = false) {
         if (move && !await settingsConfirmTransition(bot, 'machine', move.label))
           throw new Error('Nothing saved: the move was not confirmed. Pick the current computer again, or press Save bot again.');
         if (fallback) {
-          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value), expected_revision: rev})).revision;
+          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value, fallback.compact), expected_revision: rev})).revision;
           saved = true;
           // Saved now: if the definition fails below, pressing Save again does not send it twice.
-          settingsChoiceMarkSaved(fallback.box, fallback.value);
+          settingsChoiceMarkSaved(fallback.box, fallback.value, fallback.compact);
         }
         if (task || taskParts.length) {
           // The task model, its window and Task effort in one save, each part not changed kept as it is.
