@@ -1,13 +1,13 @@
-/* Library › Skills (ui/app/skills.ts). Builds on Tools' list, tabs and cards (ui/styles/tools.css); theme tokens only,
+/* Library › Skills (ui/app/skills.ts). Builds on Tools' list, search and cards (ui/styles/tools.css); theme tokens only,
    so light and dark follow the theme. At 760px the tables stack and nothing scrolls sideways. */
-.sk .tt-tabs{margin-bottom:12px}
 .sk-name a{display:flex;flex-direction:column;min-width:0;color:var(--ink);text-decoration:none}
 .sk-name a:hover{text-decoration:none}
 .sk-name strong{font-weight:600;overflow-wrap:anywhere}
-.sk-desc{font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52ch}
-.sk-list td.sk-name{max-width:0;width:50%}
-.sk-installed td.sk-name{width:auto;max-width:none}
-.sk-num,.sk-ver,.sk-when,.sk-kind,.sk-sha-cell{white-space:nowrap}
+.sk-list td.sk-name{width:35%}
+.sk-on{color:var(--muted);overflow-wrap:anywhere}
+.sk-list tr[hidden]{display:none}
+.sk-ver,.sk-when{white-space:nowrap}
+.sk-waiting .sk-screen,.sk-waiting .sk-when{white-space:nowrap}
 .sk-act{width:1%;text-align:right}
 .sk-sha{font:var(--t-xs, .8rem) var(--mono);color:var(--muted)}
 .sk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px;margin:8px 0 4px}
@@ -33,16 +33,13 @@
 .sk-field select,.sk-field input{min-width:0;width:100%}
 #skills-root .card{margin:0 0 12px}
 #skills-root .card>header .theme-seg button{min-width:40px}
-#skills-root .sk-elsewhere{margin-top:16px}
+#skills-root .sk-elsewhere,#skills-root .sk-ideas{margin-top:16px}
 .sk-ideas .sk-act{white-space:nowrap}
 .sk-elsewhere .sk-bots{white-space:nowrap;text-align:right}
 
 @media (max-width:760px){
   .sk-elsewhere .sk-bots{white-space:normal}
-  .sk-list td.sk-name{width:auto;max-width:none;grid-column:1 / -1}
-  .sk-desc{white-space:normal;max-width:none;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
-  .sk-list tr{grid-template-columns:repeat(3,minmax(0,auto)) minmax(0,1fr)}
-  .sk-list td.sk-num[data-label]::after{content:" " attr(data-label);color:var(--muted);font-size:var(--t-xs, .8rem)}
-  .sk-list td.sk-screen,.sk-list td.sk-sha-cell{white-space:normal}
+  .sk-list td.sk-name{width:auto;grid-column:1 / -1}
+  .sk-list tr{grid-template-columns:minmax(0,1fr) auto auto}
   .sk-act{width:auto;text-align:left}
 }

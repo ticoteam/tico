@@ -12536,7 +12536,7 @@ STABLE.extend(
             "get",
             "Skills",
             "listSkills",
-            "The directory: each skill with its latest approved version and install count",
+            "The directory: each skill with its latest approved version, install count and the first few it is on",
             None,
         ),
         (
@@ -12552,7 +12552,7 @@ STABLE.extend(
             "get",
             "Skills",
             "listSkillProposals",
-            "Proposals: admins see all, anyone else their own",
+            "Proposals waiting for an OK (status=all or a status for history): admins see all, anyone else their own",
             None,
         ),
         (

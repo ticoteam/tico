@@ -303,6 +303,40 @@ def _install_row(c, install_id):
     return _installs(c, "i.id=?", (install_id,))[0]
 
 
+ON_CAP = 3  # targets named per skill on the directory; the rest is installs_count
+
+
+def _installed_on(c, auth, who, skill_ids):
+    """{skill id: [{type, id, name}]}: the first ON_CAP installs of each skill the caller may see (bots, then people,
+    by name), read in one pass with one access check for all the bots."""
+    if not skill_ids:
+        return {}
+    rows = c.execute(
+        "SELECT i.skill_id, i.target_type, i.target_id, b.display_name AS bot_name, hu.name AS human_name "
+        "FROM skill_installs i "
+        "LEFT JOIN bots b ON i.target_type = 'Bot' AND b.id = i.target_id "
+        "LEFT JOIN humans hu ON i.target_type = 'Human' AND hu.id = i.target_id "
+        f"WHERE i.skill_id IN ({','.join('?' * len(skill_ids))}) "
+        "ORDER BY i.skill_id, i.target_type, COALESCE(b.display_name, hu.name, i.target_id) COLLATE NOCASE",
+        skill_ids,
+    ).fetchall()
+    admin, me = _admin(auth, who), H.actor_id(who.actor)
+    bots = sorted({r["target_id"] for r in rows if r["target_type"] == "Bot"})
+    seen = (
+        {b for b, level in auth.bot_accesses(c, who, bots).items() if level.get("see")} if bots and not admin else set()
+    )
+    out = {}
+    for r in rows:
+        names = out.setdefault(r["skill_id"], [])
+        if len(names) >= ON_CAP:
+            continue
+        ident = r["target_id"]
+        if not (admin or (ident in seen if r["target_type"] == "Bot" else ident == me)):
+            continue
+        names.append({"type": r["target_type"], "id": ident, "name": r["bot_name"] or r["human_name"]})
+    return out
+
+
 def propose(c, auth, who, body):
     """A new skill, or an update of one from `base_version` (or its latest). Replaces this proposer's pending proposal for the name."""
     files = [{"path": item.path, "content": item.content} for item in body.files]
@@ -490,14 +524,16 @@ def install(app, store, auth, mutate):
         return mutate(request, body, lambda c: propose(c, auth, who, body))
 
     @app.get("/api/v2/skills/proposals")
-    def skill_proposals(request: Request, status: str | None = Query(default=None)):
-        """Admins see every proposal; anyone else sees their own. Newest first, at most 200."""
+    def skill_proposals(request: Request, status: str = Query(default="pending")):
+        """The proposals waiting for an OK: admins see every one, anyone else their own. Newest first, at most 200. A
+        decided proposal is history (an approved one is the skill's version); `status` names one to read it anyway,
+        `all` every status."""
         who = reader(request)
-        if status is not None and status not in REVIEWED:
-            raise Problem("validation", "status is pending, approved, declined or withdrawn", 422)
+        if status != "all" and status not in REVIEWED:
+            raise Problem("validation", "status is pending, approved, declined, withdrawn or all", 422)
         with store.read() as c:
             clauses, args = [], []
-            if status:
+            if status != "all":
                 clauses.append("p.status=?")
                 args.append(status)
             if not _admin(auth, who):
@@ -603,8 +639,9 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/skills")
     def skills_list(request: Request):
-        """The directory: each skill with its latest approved version and how many installs it has."""
-        reader(request)
+        """The directory: each skill with its latest approved version, how many installs it has, and the first few of
+        them the caller may see (`on`)."""
+        who = reader(request)
         with store.read() as c:
             rows = c.execute(
                 "SELECT s.id, s.name, s.description, v.number, v.sha256, v.approved_at, "
@@ -613,6 +650,7 @@ def install(app, store, auth, mutate):
                 "WHERE s.deleted_at IS NULL ORDER BY s.name LIMIT ?",
                 (LIST_CAP,),
             ).fetchall()
+            on = _installed_on(c, auth, who, [r["id"] for r in rows])
             return {
                 "skills": [
                     {
@@ -623,6 +661,7 @@ def install(app, store, auth, mutate):
                         if r["number"] is not None
                         else None,
                         "installs_count": r["installs_count"],
+                        "on": on.get(r["id"], []),
                     }
                     for r in rows
                 ]
