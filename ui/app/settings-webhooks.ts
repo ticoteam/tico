@@ -154,13 +154,18 @@ async function whClick(ev: MouseEvent) {
     void whRender();
   }
 }
-// A dialog in the house form style; Cancel and Escape close it, and closing removes it.
+// A dialog in the house form style. The header holds the title only; one footer, pinned to the dialog's bottom while
+// the body scrolls, carries the refusal, then Cancel (Close when there is nothing to submit) and the caller's buttons
+// (a .danger one sits far left). The body is not wrapped, so each dialog's own `>label` rules apply. Cancel and
+// Escape close it, and closing removes it.
 function whDialog(title: string, body: string, footer = ''): HTMLDialogElement {
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal task-rule-dialog wh-dialog';
   dialog.setAttribute('aria-label', title);
-  dialog.innerHTML = `<form class="task-rule-form" novalidate><header><h2>${esc(title)}</h2><button type="button" class="ghost" data-close>Cancel</button></header>
-    ${body}<p class="err" role="status" data-wh-error></p>${footer ? `<footer>${footer}</footer>` : ''}</form>`;
+  dialog.innerHTML = `<form class="task-rule-form" novalidate><header><h2>${esc(title)}</h2></header>
+    ${body}<footer class="wh-foot"><p class="err" role="status" data-wh-error></p><span class="spacer"></span><button type="button" class="ghost" data-close>Cancel</button>${footer}</footer></form>`;
+  const foot = dialog.querySelector('.wh-foot')!;
+  if (!foot.querySelector('[type="submit"]')) foot.querySelector('[data-close]')!.textContent = 'Close';
   dialog.addEventListener('close', () => dialog.remove());
   dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dialog.close(); });
   document.body.appendChild(dialog); dialog.showModal();
@@ -373,13 +378,28 @@ async function whTriggerDelete(t: WebhookTrigger) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- Outgoing
+// An endpoint's events in words, as its page, its row in the list and the dialog say them: an area whose every event
+// is chosen is "All <area>", the rest their labels, a code the catalog does not know as itself; three, then "+N".
+function whEventsWords(events: string[], types: WhEventType[] = whOutbound(EVENT_TYPES)) {
+  if (events.includes('*')) return 'All events';
+  const {areas, extra} = whEventAreas(types, events), on = whEventOn(events), words: string[] = [];
+  for (const a of areas) {
+    const picked = a.items.filter(i => on(i));
+    if (a.key !== 'other' && picked.length && picked.length === a.items.length) words.push('All ' + a.label.toLowerCase());
+    else words.push(...picked.map(i => i.label || i.name));
+  }
+  words.push(...extra);
+  if (!words.length) return 'None chosen';
+  return words.length <= 3 ? words.join(', ') : `${words.slice(0, 3).join(', ')} +${words.length - 3}`;
+}
 function whEventsSummary(events: string[] | null | undefined) {
-  if (!events?.length || events.includes('*')) return 'All events';
-  return events.length <= 2 ? events.join(', ') : `${events.slice(0, 2).join(', ')} +${events.length - 2}`;
+  return !events?.length ? 'All events' : whEventsWords(events);
 }
 function whHookPills(h: WhHook) { return h.enabled ? '' : `<span class="pill waiting" title="${esc(h.paused_reason || '')}">Paused</span>`; }
 async function whHooks(el: HTMLElement, run: number) {
-  const list = (await get<{ items?: WhHook[] }>('/v2/webhooks?limit=200', {fresh: true})).items || [];
+  // The rows say each endpoint's events in the catalog's words; without the catalog they show the codes.
+  const [d] = await Promise.all([get<{ items?: WhHook[] }>('/v2/webhooks?limit=200', {fresh: true}), eventTypesLoad().catch(() => [])]);
+  const list = d.items || [];
   WH_HOOKS = list;
   if (run !== WH_RUN) return;
   el.innerHTML = `<div class="settings-bots-filters"><button type="button" class="primary" data-wh-hook-new>New endpoint</button></div>
@@ -391,55 +411,79 @@ async function whHooks(el: HTMLElement, run: number) {
   el.querySelector<HTMLElement>('[data-wh-hook-new]')!.onclick = () => void whHookDialog(null);
   el.querySelectorAll<HTMLElement>('[data-wh-hook]').forEach(b => { b.onclick = () => { WH.hook = b.dataset.whHook!; WH.hookShown = null; void whRender(); }; });
 }
-// The event picker: All, then each catalog group (its box means `group.*`) and its events. A pattern the catalog
-// does not know is kept, checked, at the end.
-function whEventGroups(types: WhEventType[]) {
-  const groups = new Map<string, WhEventType[]>();
-  for (const t of types) { if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group)!.push(t); }
-  return [...groups];
+// The event picker. At All (the default) it is one line, "All events" and Choose. Choose opens the catalog in place,
+// nothing ticked, one row per area: the area's own box ticks it whole, its events in plain words with the code and
+// description as the tooltip. A pattern the catalog does not know is kept, ticked, under Other as its code.
+type WhArea = { key: string; label: string; items: WhEventType[] };
+const WH_AREAS: [string, string, string[]][] = [['tasks', 'Tasks', ['task']], ['messages', 'Messages', ['thread', 'message']], ['bots', 'Bots', ['bot']],
+  ['rules', 'Rules', ['rules', 'org_rule']]];
+function whEventAreas(types: WhEventType[], events: string[]) {
+  const areas: WhArea[] = [...WH_AREAS.map(([key, label]) => ({key, label, items: [] as WhEventType[]})), {key: 'other', label: 'Other', items: []}];
+  for (const t of types) (areas.find(a => WH_AREAS.find(([k]) => k === a.key)?.[2].includes(t.group)) || areas.at(-1)!).items.push(t);
+  const groups = new Set(types.map(t => t.group));
+  const known = new Set(types.map(t => t.name).concat([...groups].map(g => g + '.*')));
+  return {areas: areas.filter(a => a.items.length), extra: events.filter(e => e !== '*' && !known.has(e))};
 }
+// Whether a saved list holds an event: by name, or by its catalog group's `group.*`.
+const whEventOn = (events: string[]) => { const set = new Set(events); return (t: WhEventType) => set.has('*') || set.has(t.name) || set.has(t.group + '.*'); };
 function whEventsHTML(types: WhEventType[], events: string[]) {
-  const set = new Set(events), all = set.has('*'), groups = whEventGroups(types);
-  const known = new Set(types.map(t => t.name).concat(groups.map(([g]) => g + '.*')));
-  const extra = events.filter(e => e !== '*' && !known.has(e));
-  const on = (g: string, n: string) => all || set.has(n) || set.has(g + '.*');
-  const box = (attrs: string, checked: boolean, label: string, title = '') => `<label${title ? ` title="${esc(title)}"` : ''}><input type="checkbox" ${attrs}${checked ? ' checked' : ''}> ${label}</label>`;
-  return `<fieldset class="wh-events" data-wh-events><legend>Events</legend>
-    ${box('data-ev-all', all, 'All events')}
-    <div class="wh-ev-groups">${groups.map(([g, items]) => `<div class="wh-ev-group" data-ev-group="${esc(g)}">
-      ${items.length > 1 ? box('data-ev-head', items.every(i => on(g, i.name)), `<code>${esc(g)}.*</code>`) : ''}
-      ${items.map(i => box(`data-ev-name="${esc(i.name)}"`, on(g, i.name), items.length > 1 ? esc(i.name.slice(g.length + 1)) : `<code>${esc(i.name).replace('.', '.<wbr>')}</code>`, i.description)).join('')}</div>`).join('')}
-      ${extra.length ? `<div class="wh-ev-group">${extra.map(n => box(`data-ev-name="${esc(n)}"`, true, `<code>${esc(n)}</code>`)).join('')}</div>` : ''}</div></fieldset>`;
+  const all = events.includes('*'), {areas, extra} = whEventAreas(types, all ? [] : events), on = whEventOn(all ? [] : events);
+  const box = (attrs: string, checked: boolean, label: string, title: string) => `<label title="${esc(title)}"><input type="checkbox" ${attrs}${checked ? ' checked' : ''}> ${esc(label)}</label>`;
+  const at = (t: WhEventType) => types.indexOf(t);
+  const rows = areas.map(a => `<div class="wh-area" data-ev-area="${a.key}">
+      <label class="wh-area-k"><input type="checkbox" data-ev-head> ${esc(a.label)}</label>
+      <div class="wh-area-items">${a.items.map(i => box(`data-ev-name="${esc(i.name)}" data-ev-g="${esc(i.group)}" data-ev-i="${at(i)}"`, on(i), i.label || i.name, `${i.name} · ${i.description}`)).join('')}
+        ${a.key === 'other' ? extra.map(n => box(`data-ev-name="${esc(n)}" data-ev-g=""`, true, n, n)).join('') : ''}</div></div>`);
+  if (extra.length && !areas.some(a => a.key === 'other')) rows.push(`<div class="wh-area" data-ev-area="other"><label class="wh-area-k"><input type="checkbox" data-ev-head> Other</label>
+      <div class="wh-area-items">${extra.map(n => box(`data-ev-name="${esc(n)}" data-ev-g=""`, true, n, n)).join('')}</div></div>`);
+  return `<div class="wh-sum" data-wh-events${all ? ' data-all' : ''}><span class="wh-sum-k" id="wh-events-k">Events</span>
+    <div class="wh-sum-row"><span data-ev-words>${esc(all ? 'All events' : whEventsWords(events, types))}</span>
+      <button type="button" class="ghost" data-ev-choose${all ? '' : ' hidden'}>Choose</button><button type="button" class="ghost" data-ev-back${all ? ' hidden' : ''}>All events</button></div>
+    <div class="wh-pick" data-ev-pick role="group" aria-label="Events"${all ? ' hidden' : ''}>${rows.join('')}</div></div>`;
 }
-function whEventsBind(box: HTMLElement) {
+function whEventsBind(box: HTMLElement, types: WhEventType[]) {
+  const pick = box.querySelector<HTMLElement>('[data-ev-pick]')!, choose = box.querySelector<HTMLButtonElement>('[data-ev-choose]')!;
+  const back = box.querySelector<HTMLButtonElement>('[data-ev-back]')!, words = box.querySelector<HTMLElement>('[data-ev-words]')!;
+  const boxes = () => [...pick.querySelectorAll<HTMLInputElement>('[data-ev-name]')];
   const sync = () => {
-    const all = box.querySelector<HTMLInputElement>('[data-ev-all]')!.checked;
-    box.querySelectorAll<HTMLInputElement>('.wh-ev-groups input').forEach(i => { i.disabled = all; if (all) i.checked = true; });
-    if (!all) box.querySelectorAll('[data-ev-group]').forEach(g => {
-      const head = g.querySelector<HTMLInputElement>('[data-ev-head]');
-      if (head) head.checked = [...g.querySelectorAll<HTMLInputElement>('[data-ev-name]')].every(i => i.checked);
+    pick.querySelectorAll<HTMLElement>('[data-ev-area]').forEach(a => {
+      const head = a.querySelector<HTMLInputElement>('[data-ev-head]')!, items = [...a.querySelectorAll<HTMLInputElement>('[data-ev-name]')], n = items.filter(i => i.checked).length;
+      head.checked = n > 0 && n === items.length; head.indeterminate = n > 0 && n < items.length;
     });
+    words.textContent = box.hasAttribute('data-all') ? 'All events' : whEventsWords(whEventsValue(box), types);
   };
+  const open = (on: boolean) => {
+    box.toggleAttribute('data-all', !on); pick.hidden = !on; choose.hidden = on; back.hidden = !on;
+    boxes().forEach(i => { i.checked = false; });
+    sync();
+    (on ? boxes()[0] : choose)?.focus();
+  };
+  choose.onclick = () => open(true);
+  back.onclick = () => open(false);
   // Only the picker's checkboxes fire change in it.
   box.addEventListener('change', ev => {
-    const target = ev.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.matches('[data-ev-all]') && !target.checked) box.querySelectorAll<HTMLInputElement>('.wh-ev-groups input').forEach(i => { i.checked = false; });
-    const head = target.closest<HTMLInputElement>('[data-ev-head]');
-    if (head) head.closest('[data-ev-group]')!.querySelectorAll<HTMLInputElement>('[data-ev-name]').forEach(i => { i.checked = head.checked; });
+    const head = ev.target instanceof HTMLInputElement && ev.target.matches('[data-ev-head]') ? ev.target : null;
+    if (head) head.closest('[data-ev-area]')!.querySelectorAll<HTMLInputElement>('[data-ev-name]').forEach(i => { i.checked = head.checked; });
     sync();
   });
   sync();
 }
+// What the picker sends: ['*'] at All; else, per catalog group, `group.*` when it has more than one event and all are
+// ticked, else the ticked names, in catalog order; codes the catalog does not know as they are, last.
 function whEventsValue(box: HTMLElement): string[] {
-  if (box.querySelector<HTMLInputElement>('[data-ev-all]')?.checked) return ['*'];
-  const out: string[] = [];
-  box.querySelectorAll<HTMLElement>('.wh-ev-group').forEach(g => {
-    const head = g.querySelector<HTMLInputElement>('[data-ev-head]');
-    if (head?.checked) out.push(g.dataset.evGroup + '.*');
-    else g.querySelectorAll<HTMLElement>('[data-ev-name]:checked').forEach(i => out.push(i.dataset.evName!));
-  });
-  return out;
+  if (box.hasAttribute('data-all')) return ['*'];
+  const groups = new Map<string, HTMLInputElement[]>(), out: string[] = [];
+  const all = [...box.querySelectorAll<HTMLInputElement>('[data-ev-name]')];
+  // Areas regroup the catalog; its own order (each box's place in it) decides the order sent.
+  for (const i of all.filter(x => x.dataset.evG).sort((a, b) => Number(a.dataset.evI) - Number(b.dataset.evI))) {
+    const g = i.dataset.evG!; if (!groups.has(g)) groups.set(g, []); groups.get(g)!.push(i);
+  }
+  const names = (list: HTMLInputElement[]) => list.filter(i => i.checked).map(i => i.dataset.evName || '');
+  for (const [g, items] of groups) {
+    if (items.length > 1 && items.every(i => i.checked)) out.push(g + '.*');
+    else out.push(...names(items));
+  }
+  return out.concat(names(all.filter(i => !i.dataset.evG)));
 }
 // The events an endpoint may subscribe to: the catalog less the ones only rules see (`outbound: false`).
 const whOutbound = (types: WhEventType[]) => types.filter(t => t.outbound !== false);
@@ -457,18 +501,41 @@ async function whFilterChoices(): Promise<WhChoices> {
   };
 }
 const whFilterIds = (key: WhFilterKey, list: string[] | undefined) => (list || []).map(v => key === 'bots' ? String(v).replace(/^bot:/, '') : String(v));
+// Sends for: one line, "Every department, bot and pipeline" and Narrow, until something is narrowed. Narrow opens the
+// three lists in place, side by side, with nothing said for an empty list (empty means every one).
+const WH_FILTER_ALL = 'Every department, bot and pipeline';
 function whFiltersHTML(filter: WhFilter | null | undefined, choices: WhChoices) {
+  let set = false;
   const cols = WH_FILTERS.map(([key, label]) => {
     const chosen = new Set(whFilterIds(key, filter?.[key])), known = new Set(choices[key].map(([v]) => v));
     const items = [...choices[key], ...[...chosen].filter(v => !known.has(v)).map((v): [string, string] => [v, v])];
     if (!items.length) return '';
-    return `<div class="wh-ev-group wh-filter" data-filter="${key}"><span class="wh-filter-head">${label} <span class="muted" data-filter-all>All</span></span>
+    set ||= chosen.size > 0;
+    return `<div class="wh-filter" data-filter="${key}" role="group" aria-label="${label}"><span class="wh-filter-k">${label}</span>
       <div class="wh-filter-items">${items.map(([v, w]) => `<label><input type="checkbox" value="${esc(v)}"${chosen.has(v) ? ' checked' : ''}> ${esc(w)}</label>`).join('')}</div></div>`;
   }).join('');
-  return cols ? `<fieldset class="wh-events" data-wh-filters><legend>Filters</legend><div class="wh-ev-groups">${cols}</div></fieldset>` : '';
+  return cols ? `<div class="wh-sum" data-wh-filters${set ? ' data-open' : ''}><span class="wh-sum-k">Sends for</span>
+    <div class="wh-sum-row"><span data-filter-words>${WH_FILTER_ALL}</span>
+      <button type="button" class="ghost" data-filter-narrow${set ? ' hidden' : ''}>Narrow</button><button type="button" class="ghost" data-filter-back${set ? '' : ' hidden'}>Send for all</button></div>
+    <div class="wh-pick wh-filters" data-filter-pick role="group" aria-label="Sends for"${set ? '' : ' hidden'}>${cols}</div></div>` : '';
 }
+// The line counts what is narrowed: "2 departments, 1 bot".
+const WH_FILTER_WORDS: Record<WhFilterKey, string> = {departments: 'department', bots: 'bot', pipelines: 'pipeline'};
 function whFiltersBind(box: HTMLElement) {
-  const sync = () => box.querySelectorAll('[data-filter]').forEach(g => { g.querySelector<HTMLElement>('[data-filter-all]')!.hidden = !!g.querySelector('input:checked'); });
+  const pick = box.querySelector<HTMLElement>('[data-filter-pick]')!, narrow = box.querySelector<HTMLButtonElement>('[data-filter-narrow]')!;
+  const back = box.querySelector<HTMLButtonElement>('[data-filter-back]')!, words = box.querySelector<HTMLElement>('[data-filter-words]')!;
+  const sync = () => {
+    const parts = Object.entries(whFiltersValue(box)).filter(([, v]) => v.length).map(([k, v]) => whPlural(v.length, WH_FILTER_WORDS[k as WhFilterKey]));
+    words.textContent = parts.length ? parts.join(', ') : WH_FILTER_ALL;
+  };
+  const open = (on: boolean) => {
+    box.toggleAttribute('data-open', on); pick.hidden = !on; narrow.hidden = on; back.hidden = !on;
+    if (!on) pick.querySelectorAll<HTMLInputElement>('input:checked').forEach(i => { i.checked = false; });
+    sync();
+    (on ? pick.querySelector<HTMLInputElement>('input') : narrow)?.focus();
+  };
+  narrow.onclick = () => open(true);
+  back.onclick = () => open(false);
   box.addEventListener('change', sync); sync();
 }
 function whFiltersValue(box: HTMLElement) {
@@ -489,12 +556,13 @@ function whHeaderRowHTML(x: WhHeader = {}) {
     <button type="button" class="ghost" data-hdr-remove aria-label="Remove header">✕</button></div>`;
 }
 function whHeadersHTML(list: WhHeader[] | undefined) {
-  return `<fieldset class="wh-events" data-wh-headers><legend>Headers</legend><div class="wh-hdrs">${(list || []).map(whHeaderRowHTML).join('')}</div>
-    <div><button type="button" class="ghost" data-hdr-add>Add header</button></div></fieldset>`;
+  return `<div class="wh-sum" data-wh-headers><span class="wh-sum-k">Headers</span>
+    <div class="wh-sum-row"><span class="muted" data-hdr-none>None</span><button type="button" class="ghost" data-hdr-add>Add header</button></div>
+    <div class="wh-hdrs">${(list || []).map(whHeaderRowHTML).join('')}</div></div>`;
 }
 function whHeadersBind(box: HTMLElement) {
-  const rows = box.querySelector('.wh-hdrs')!, add = box.querySelector<HTMLElement>('[data-hdr-add]')!;
-  const sync = () => { add.hidden = rows.children.length >= WH_MAX_HEADERS; };
+  const rows = box.querySelector('.wh-hdrs')!, add = box.querySelector<HTMLElement>('[data-hdr-add]')!, none = box.querySelector<HTMLElement>('[data-hdr-none]')!;
+  const sync = () => { add.hidden = rows.children.length >= WH_MAX_HEADERS; none.textContent = rows.children.length ? '' : 'None'; };
   add.onclick = () => { rows.insertAdjacentHTML('beforeend', whHeaderRowHTML()); sync(); rows.lastElementChild!.querySelector<HTMLElement>('[data-hdr-name]')!.focus(); };
   box.addEventListener('click', ev => { const x = eventElement(ev)?.closest('[data-hdr-remove]'); if (x) { x.closest('[data-hdr]')!.remove(); sync(); } });
   // A secret is typed hidden. Only the rows' inputs fire change here.
@@ -516,14 +584,15 @@ function whHeadersValue(box: HTMLElement) {
 }
 async function whHookDialog(h: WhHook | null) {
   const [types, choices] = await Promise.all([eventTypesLoad().catch(() => []), whFilterChoices()]);
-  const dialog = whDialog(h ? 'Edit endpoint' : 'New endpoint', `<label>Name<input name="name" maxlength="100" required autocomplete="off" value="${esc(h?.name || '')}"></label>
+  // Name is not a login: the data- hints keep password managers (1Password, LastPass, Bitwarden, Dashlane) off it.
+  const dialog = whDialog(h ? 'Edit endpoint' : 'New endpoint', `<label>Name<input name="name" maxlength="100" required autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" value="${esc(h?.name || '')}"></label>
     <label>URL<input name="url" type="url" maxlength="2000" required autocomplete="off" spellcheck="false" placeholder="https://" value="${esc(h?.url || '')}"></label>
     <label data-wh-http hidden><input type="checkbox" name="allow_http"${h?.allow_http ? ' checked' : ''}> Allow plain http to this computer</label>
-    ${whEventsHTML(whOutbound(types), h?.events || ['*'])}${whFiltersHTML(h?.filter, choices)}${whHeadersHTML(h?.headers)}`,
+    <div class="wh-sums">${whEventsHTML(whOutbound(types), h?.events?.length ? h.events : ['*'])}${whFiltersHTML(h?.filter, choices)}${whHeadersHTML(h?.headers)}</div>`,
   `<button type="submit" class="primary">${h ? 'Save' : 'Create'}</button>`);
   const form = dialog.querySelector<WhHookForm>('form')!, events = dialog.querySelector<HTMLElement>('[data-wh-events]')!;
   const filters = dialog.querySelector<HTMLElement>('[data-wh-filters]'), headers = dialog.querySelector<HTMLElement>('[data-wh-headers]')!;
-  whEventsBind(events);
+  whEventsBind(events, whOutbound(types));
   if (filters) whFiltersBind(filters);
   whHeadersBind(headers);
   const http = () => { dialog.querySelector<HTMLElement>('[data-wh-http]')!.hidden = !/^http:/i.test(form.elements.url.value.trim()); };
@@ -567,8 +636,8 @@ async function whHookDetail(el: HTMLElement, run: number) {
     ${WH.hookShown?.id === id ? whSecretHTML('Signing secret', WH.hookShown.secret, 'secret') : ''}
     <dl class="wh-facts">
       <dt>URL</dt><dd><code>${esc(h.url)}</code></dd>
-      <dt>Events</dt><dd>${h.events.includes('*') ? 'All events' : h.events.map(e => `<code>${esc(e)}</code>`).join(' ')}</dd>
-      ${filterWords.length ? `<dt>Filters</dt><dd data-wh-filter-facts>${esc(filterWords.join(' · '))}</dd>` : ''}
+      <dt>Events</dt><dd data-wh-event-facts${h.events.includes('*') ? '' : ` title="${esc(h.events.join(', '))}"`}>${esc(whEventsSummary(h.events))}</dd>
+      ${filterWords.length ? `<dt>Sends for</dt><dd data-wh-filter-facts>${esc(filterWords.join(' · '))}</dd>` : ''}
       ${h.headers?.length ? `<dt>Headers</dt><dd data-wh-header-facts>${h.headers.map(x => `<code>${esc(x.name)}</code>${x.secret ? ' <span class="muted">secret</span>' : ''}`).join(', ')}</dd>` : ''}
       <dt>7 days</dt><dd><span class="tnum">${h.last_7_days.delivered} sent</span> · <span class="tnum${h.last_7_days.failed ? ' wh-bad' : ''}">${h.last_7_days.failed} failed</span>${h.last_7_days.pending ? ` · <span class="tnum">${h.last_7_days.pending} waiting</span>` : ''}</dd>
       ${h.enabled ? '' : `<dt>Paused</dt><dd>${esc(h.paused_reason || 'Yes')}</dd>`}
