@@ -562,10 +562,11 @@ def _check_query(catalog, database, query_id):
 
 
 DB_RUN_VIA = "growth source"
+# Fixed words and the source's id only: nothing a person types reaches the bot's turn. The command reads the source's
+# query and database itself.
 DB_RUN_PROMPT = (
-    "Run `tico growth source run {sid}` and reply with the line it prints. It runs the named query {query} on the "
-    '{database} database on this computer and posts its rows to the Growth source "{system}"; when the query fails it '
-    "posts the reason instead. Do nothing else."
+    "Run `tico growth source run {sid}` and reply with the line it prints. It runs this Growth source's named query on "
+    "this computer and posts its rows, or the reason the query failed. Do nothing else."
 )
 
 
@@ -593,10 +594,12 @@ def _start_db_run(c, actor, row):
     }
 
 
-def _schedule(c, actor, sid, had=None):
+def _schedule(c, actor, sid, had=None, who=None):
     """Keep a database query source's daily run in step with it: a schedule automation whose one step is a turn by the
     bot granted the database. Made when it connects, changed when its bot or query changes, removed when it is retired
-    or stops being a database query source (`had`: the automation its map named before the change)."""
+    or stops being a database query source (`had`: the automation its map named before the change). Making or changing
+    it follows the automation rule for its bot (`who`, automations.may_change), as POST /api/v2/automations does: an
+    admin not above the bot may not schedule its turn through a source."""
     from . import automation_flow as F
     from . import automations as AU
 
@@ -623,9 +626,7 @@ def _schedule(c, actor, sid, had=None):
                     "id": "sync",
                     "type": "bot_turn",
                     "bot": "bot:" + bot,
-                    "prompt": DB_RUN_PROMPT.format(
-                        sid=sid, query=mapping["query"], database=mapping["database"], system=row["system"]
-                    ),
+                    "prompt": DB_RUN_PROMPT.format(sid=sid),
                 }
             ],
         }
@@ -633,15 +634,19 @@ def _schedule(c, actor, sid, had=None):
     if existing:
         before = AU.flow_of(existing)
         if {k: before.get(k) for k in flow} != flow:
+            if who is not None:
+                AU._require(c, who, flow, "schedule a daily run for " + flow["owner"])
             AU._save(c, actor, aid, flow, before, via=DB_RUN_VIA)
         return
+    if who is not None:
+        AU._require(c, who, flow, "schedule a daily run for " + flow["owner"])
     aid = "auto_" + H.new_id()
     AU._save(c, actor, aid, flow, None, via=DB_RUN_VIA)
     mapping["automation"] = aid
     c.execute("UPDATE gtm_sources SET sync_map=? WHERE id=?", (json.dumps(mapping, sort_keys=True), sid))
 
 
-def source_create(c, actor, body, catalog=None):
+def source_create(c, actor, body, catalog=None, who=None):
     H._writer(c, actor)
     reach = body.reach_kind or ("person" if body.sync_kind == "file" else None)
     if not reach:
@@ -671,11 +676,11 @@ def source_create(c, actor, body, catalog=None):
         row["id"],
         {"truth_for": body.truth_for, "system": body.system, "sync_kind": body.sync_kind},
     )
-    _schedule(c, actor, sid)
+    _schedule(c, actor, sid, who=who)
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (row["id"],)))
 
 
-def source_update(c, actor, sid, fields, retire=False, catalog=None):
+def source_update(c, actor, sid, fields, retire=False, catalog=None, who=None):
     H._writer(c, actor)
     row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
     if not row:
@@ -698,7 +703,7 @@ def source_update(c, actor, sid, fields, retire=False, catalog=None):
             f"UPDATE gtm_sources SET {', '.join(k + '=?' for k in changed)} WHERE id=?", list(changed.values()) + [sid]
         )
         H.event(c, actor, "growth.source." + ("retire" if retire else "update"), sid, changed)
-        _schedule(c, actor, sid, json.loads(row.get("sync_map") or "{}").get("automation"))
+        _schedule(c, actor, sid, json.loads(row.get("sync_map") or "{}").get("automation"), who)
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,)))
 
 
@@ -900,7 +905,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "adds a source")
-            return wrote(c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None)))
+            return wrote(c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None), who))
 
         return mutate(request, body, work)
 
@@ -917,6 +922,7 @@ def install(app, store, auth, mutate):
                 sid,
                 {k: getattr(body, k) for k in body.model_fields_set},
                 catalog=getattr(request.app.state, "integrations", None),
+                who=who,
             ))
 
         return mutate(request, body, work)

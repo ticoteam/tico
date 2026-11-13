@@ -469,7 +469,21 @@ def _source_body(api, args):
         body["sync_map"] = mapping
     if any(args.get(k) for k in db_keys):
         if not args.get("map"):
-            raise APIError("map", "--database, --query and --bot go with --map NUMBER=COLUMN for each number it fills")
+            # Changing only the bot, query or database keeps the columns the source already maps.
+            current = next(
+                (
+                    x
+                    for x in api.get("growth/sources").get("sources") or []
+                    if args.get("id") and x.get("id") == args["id"]
+                ),
+                None,
+            )
+            kept = (current or {}).get("map") or {}
+            if not kept.get("fields"):
+                raise APIError(
+                    "map", "--database, --query and --bot go with --map NUMBER=COLUMN for each number it fills"
+                )
+            body["sync_map"] = {k: kept[k] for k in ("month", "channel", "fields") if kept.get(k)}
         body["sync_map"].update({k: args[k] for k in db_keys if args.get(k)})
     return body
 
@@ -539,7 +553,8 @@ def growth_source_push(api, args):
 @tool(
     "tico_growth_source_sync",
     "Run a synced source now and answer the run's result. A file source runs its last file again; a database query "
-    "source starts its bot's run, whose result tico_growth_source_list then shows.",
+    "source only starts its bot's run (started is true and ok is null), whose result tico_growth_source_list then "
+    "shows.",
     {"id": _s("Source id")},
     required=("id",),
     writes=True,
