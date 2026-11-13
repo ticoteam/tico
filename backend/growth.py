@@ -805,7 +805,11 @@ def source_update(c, actor, sid, fields, retire=False, catalog=None, who=None):
         c.execute(
             f"UPDATE gtm_sources SET {', '.join(k + '=?' for k in changed)} WHERE id=?", list(changed.values()) + [sid]
         )
-        H.event(c, actor, "growth.source." + ("retire" if retire else "update"), sid, changed)
+        logged = dict(changed)
+        if "sync_map" in logged and (changed.get("sync_kind") or row.get("sync_kind")) == GF.KIND:
+            # The event log is read more widely than Finance: it says how many campaigns are mapped, never which.
+            logged["sync_map"] = json.dumps(GF.public_map(json.loads(logged["sync_map"] or "{}")), sort_keys=True)
+        H.event(c, actor, "growth.source." + ("retire" if retire else "update"), sid, logged)
         _schedule(c, actor, sid, json.loads(row.get("sync_map") or "{}").get("automation"), who)
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,)))
 

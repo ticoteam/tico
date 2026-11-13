@@ -16,7 +16,8 @@ health; this module only answers what a run of kind `finance_ad_spend` writes.
 - Runs. `sync` reads the months the engine's window asks for (the first good run 12 months back, later ones the
   current month and the two before) and hands the rows, or the reason it failed, to growth_sync.run. "Sync now" runs
   it, and so does `refresh`, which the app hangs on Finance's import (ad_import.AFTER_RUN): a restated day reaches
-  Growth within one refresh.
+  Growth within one refresh. A channel-month the source filled before that gets no spend now (a campaign remapped
+  away, Finance's import off) is set to 0, so Growth's month total keeps equal to Finance's.
 """
 
 import sqlite3
@@ -205,9 +206,30 @@ def sync(c: sqlite3.Connection, actor: str, source: dict[str, Any], at: datetime
         found = rows(c, mapping, start, end)
     except Failing as failed:
         return GS.run(c, actor, source, error=str(failed), at=at)
-    return GS.run(
-        c, actor, source, rows=[{"month": r.month, "channel": r.channel or "", "spend": r.spend} for r in found], at=at
-    )
+    sent = [{"month": r.month, "channel": r.channel or "", "spend": r.spend} for r in found]
+    sent += _emptied(c, str(source["id"]), found, oldest, at.strftime("%Y-%m"))
+    return GS.run(c, actor, source, rows=sent, at=at)
+
+
+def _emptied(c: sqlite3.Connection, sid: str, found: list[SpendRow], oldest: str, newest: str) -> list[dict[str, Any]]:
+    """A 0 for each channel-month in [oldest, newest] whose spend this source filled before and that gets none now (a
+    campaign remapped away, or Finance's import off), so Growth's month total keeps equal to Finance's."""
+    from . import growth_sync as GS
+
+    known = GS._channels(c)  # pyright: ignore[reportPrivateUsage]
+    now = {(r.month, known.get(r.channel.lower(), r.channel) if r.channel else "") for r in found}
+    out: list[dict[str, Any]] = []
+    for r in c.execute(
+        "SELECT k.month, coalesce(k.channel_id, '') AS channel_id, coalesce(ch.slug, '') AS slug "
+        "FROM growth_origins o JOIN growth_cohorts k ON k.id=o.cohort_id "
+        "LEFT JOIN growth_channels ch ON ch.id=k.channel_id "
+        "WHERE o.field='spend' AND o.origin='synced' AND o.source_id=? AND k.month BETWEEN ? AND ? "
+        "ORDER BY k.month, slug",
+        (sid, oldest, newest),
+    ):
+        if (str(r["month"]), str(r["channel_id"])) not in now:
+            out.append({"month": str(r["month"]), "channel": str(r["slug"]), "spend": 0.0})
+    return out
 
 
 def refresh(store: Any, at: str) -> None:

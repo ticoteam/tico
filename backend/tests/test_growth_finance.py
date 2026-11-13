@@ -323,3 +323,50 @@ def test_finance_ad_spend_fills_spend_only_and_keeps_its_campaign_map(api: Any):
     assert row["map"]["campaigns_mapped"] == 1 and "meta_ads:111" not in str(
         get(api, "growth/sources", token="cara-test")
     )
+
+
+def test_a_remap_moves_spend_so_growth_still_equals_finance(api: Any):
+    """Review 1: after every campaign is remapped to another channel, the channels they left (search-ads, Unknown) go to
+    0 on the next run instead of keeping their old spend, so Growth's month total still equals Finance's; switching
+    Finance's import off empties them the same way."""
+    from backend import growth_sync as GS
+    from backend.tests.helpers.api import get, post
+
+    store: Store = api.app.state.store
+    month = GS.this_month()
+    day = f"{month}-01"
+    _finance_with_spend(store, [(day, "brand", 421000), (day, "retarget", 188000), (day, "podcast", 31000)])
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
+    post(api, "growth/channels", {"slug": "social", "name": "Social"})
+    keys = ["meta_ads:111:brand", "meta_ads:111:retarget"]
+    body = {"truth_for": "spend", "system": "Finance ad spend", "sync_kind": GF.KIND}
+    src = post(api, "growth/sources", {**body, "sync_map": {"campaigns": dict.fromkeys(keys, "search-ads")}})
+    assert post(api, f"growth/sources/{src['id']}/sync", {})["ok"]
+
+    def spends() -> dict[str, float | None]:
+        rows = get(api, f"growth/cohorts?month={month}")["cohorts"]
+        return {str(r["channel"] or "unknown"): r["spend"] for r in rows}
+
+    assert spends() == {"search-ads": 6090.0, "unknown": 310.0}
+    every = {"campaigns": dict.fromkeys([*keys, "meta_ads:111:podcast"], "social")}
+    r = api.patch(f"/api/v2/growth/sources/{src['id']}", json={"sync_map": every}, headers=_headers())
+    assert r.status_code == 200, r.text
+    assert post(api, f"growth/sources/{src['id']}/sync", {})["ok"]
+    assert spends() == {"search-ads": 0.0, "social": 6400.0, "unknown": 0.0}
+    with store.read() as c:
+        logged = [str(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='growth.source.update'")]
+    assert logged and not any("meta_ads:111" in p for p in logged)  # the log names no campaign (AC-15)
+    with store.read() as c:
+        finance_total = sum(SA.account_spend(c, "meta-ads", day, day).values())
+    assert round(sum(v or 0 for v in spends().values()) * 100) == finance_total
+
+    with store.transaction() as c:
+        c.execute("UPDATE fin_ad_imports SET enabled=0")
+    assert post(api, f"growth/sources/{src['id']}/sync", {})["ok"]
+    assert spends() == {"search-ads": 0.0, "social": 0.0, "unknown": 0.0}
+
+
+def _headers() -> dict[str, str]:
+    from backend.tests.helpers.api import headers
+
+    return headers()
