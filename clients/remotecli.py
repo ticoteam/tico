@@ -1510,6 +1510,34 @@ def _table(rows, cols):
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip() for row in cells)
 
 
+def _source_health(row):
+    """A synced source's health in a few words: fresh, stale since, failing with the reason, waiting; - when typed."""
+    state = row.get("health")
+    if not state or state == "not_synced":
+        return "-"
+    if state == "failing":
+        return f"failing: {row.get('last_error') or ''}".rstrip(": ")
+    if state == "stale":
+        return f"stale since {(row.get('health_since') or '')[:16]}".rstrip()
+    return state
+
+
+def _source_run(result):
+    """One run's result: what it wrote and held, the rows it did not write, or why it failed."""
+    if not result.get("ok"):
+        return f"Failing: {result.get('error')}. Nothing changed; 0 numbers written."
+    lines = [f"Synced: {result.get('written', 0)} numbers written, {result.get('held', 0)} held beside a typed number."]
+    for row in result.get("not_written") or []:
+        lines.append(
+            f"  not written: row {row.get('row')} {row.get('channel') or 'Unknown'} {row.get('month')}: "
+            f"{row.get('reason')}"
+        )
+    more = (result.get("not_written_count") or 0) - len(result.get("not_written") or [])
+    if more > 0:
+        lines.append(f"  and {more} more rows not written")
+    return "\n".join(lines)
+
+
 def growth_text(fn, result):
     """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
     `--json` prints the API response instead."""
@@ -1546,10 +1574,14 @@ def growth_text(fn, result):
                 ("system", "system"),
                 ("reach", lambda r: f"{r.get('reach_kind')}:{r.get('reach_ref') or ''}".rstrip(":")),
                 ("may", "may"),
+                ("fills", lambda r: ", ".join(r.get("fills") or []) or "typed by hand"),
+                ("health", lambda r: _source_health(r)),
             ],
         )
         conflicts = result.get("conflicts") or []
         return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
+    if fn in ("growth source push", "growth source sync"):
+        return _source_run(result)
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
         head = f"Month: {result.get('month') or 'none yet'}"

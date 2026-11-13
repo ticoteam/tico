@@ -273,7 +273,7 @@
     null
    ]
   ],
-  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stdout": "id  truth for      system         reach    may  fills          health\ns1  ad spend       Google Ads     mcp:ads       typed by hand  -\ns4  new customers  Signups sheet  person        new_customers  failing: column \"channel\" not found\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
   "stderr": "",
   "exit": 0
  },
@@ -300,7 +300,7 @@
     null
    ]
   ],
-  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stdout": "id  truth for      system         reach    may  fills          health\ns1  ad spend       Google Ads     mcp:ads       typed by hand  -\ns4  new customers  Signups sheet  person        new_customers  failing: column \"channel\" not found\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
   "stderr": "",
   "exit": 0
  },
@@ -405,6 +405,132 @@
     "POST",
     "growth/sources/id-1/retire",
     {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "new customers",
+   "--system",
+   "Signups sheet",
+   "--sync",
+   "file",
+   "--map",
+   "new_customers=signups",
+   "--map",
+   "channel=source"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "map": [
+      "new_customers=signups",
+      "channel=source"
+     ],
+     "operation_id": null,
+     "sync_kind": "file",
+     "system": "Signups sheet",
+     "truth_for": "new customers"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "new customers",
+     "system": "Signups sheet",
+     "sync_kind": "file",
+     "sync_map": {
+      "fields": {
+       "new_customers": "signups"
+      },
+      "channel": "source"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "sync",
+   "s1"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_sync",
+    {
+     "id": "s1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "growth/sources/s1/sync",
+    {}
+   ]
+  ],
+  "stdout": "Synced: 4 numbers written, 1 held beside a typed number.\n  not written: row 4 podcast 2026-10: no such channel\n",
+  "stderr": "tico: 1",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "resolve",
+   "--channel",
+   "search-ads",
+   "--month",
+   "2026-10",
+   "--field",
+   "new_customers",
+   "--keep",
+   "typed"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_resolve",
+    {
+     "channel": "search-ads",
+     "field": "new_customers",
+     "keep": "typed",
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "growth/cohorts/conflicts",
+    {
+     "channel": "search-ads",
+     "month": "2026-10",
+     "field": "new_customers",
+     "keep": "typed"
+    }
    ]
   ],
   "stdout": "ok: True\n",

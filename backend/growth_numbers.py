@@ -60,6 +60,7 @@ SERIES_KEYS = (
     "quality",
     "revenue_month",
     "margin_pct",
+    "origins",  # each number's origin (backend/growth_sync.py origins_view); {} for every channel together
 )
 
 

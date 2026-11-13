@@ -90,9 +90,25 @@ ANSWERS = {
     "GET growth/channels": {"channels": [_CHANNEL]},
     "GET growth/sources": {
         "sources": [
-            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"}
+            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"},
+            {
+                "id": "s4",
+                "truth_for": "new customers",
+                "system": "Signups sheet",
+                "reach_kind": "person",
+                "fills": ["new_customers"],
+                "health": "failing",
+                "last_error": 'column "channel" not found',
+            },
         ],
         "conflicts": [{"truth_for": "bookings", "sources": ["s2", "s3"]}],
+    },
+    "POST growth/sources/s1/sync": {
+        "ok": True,
+        "written": 4,
+        "held": 1,
+        "not_written": [{"row": 4, "channel": "podcast", "month": "2026-10", "reason": "no such channel"}],
+        "not_written_count": 1,
     },
     "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},
     "GET growth/economics": {

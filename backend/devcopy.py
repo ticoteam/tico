@@ -620,7 +620,9 @@ KEEP = (
             "gtm_sources",
             "growth_channels",
             "growth_cohorts",
+            "growth_origins",
             "growth_settings",
+            "growth_sync_runs",
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",
