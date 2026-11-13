@@ -531,7 +531,8 @@ function rrFrom(p: string, eff: ReachEff, f: string) {
   const at = eff.from?.[f];
   return at === p ? '' : at ? 'from ' + rrName(at) : 'default';
 }
-const rrFromTag = (p: string, eff: ReachEff, f: string) => { const w = rrFrom(p, eff, f); return w ? `<span class="rr-from">${esc(w)}</span>` : ''; };
+// The panel's source tag reads as a state on its label line: "Default", "From Sales".
+const rrFromTag = (p: string, eff: ReachEff, f: string) => { const w = rrFrom(p, eff, f); return w ? `<span class="rr-from">${esc(w[0]?.toUpperCase() + w.slice(1))}</span>` : ''; };
 const rrMay = (p: string) => ruOpen().reach.mayEdit.has(p);
 // A hub from before Reach has no /v2/reach: its rules still list.
 const rrError = (e: unknown) => errorStatus(e) === 404 ? 'Reach needs a newer hub.' : errorMessage(e, 'Something went wrong.');
@@ -541,8 +542,10 @@ const rrLinesOf = (p: string | null, R: ReachNormal = ruOpen().reach) => R.lines
   .sort((a, b) => (a.dir === 'to' ? 0 : 1) - (b.dir === 'to' ? 0 : 1));
 const rrTone = (l: ReachLine) => l.per_day === 0 ? 'zero' : l.per_day != null ? 'cap' : l.rule?.text ? 'rule' : 'open';
 const rrCount = (l: ReachLine) => l.per_day != null ? `${l.per_day} a day` : l.rule?.text ? '' : 'Allowed';
-const rrCut = (s: string, n: number) => s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s;
-const rrChip = (l: ReachLine) => [rrCount(l), l.rule?.text ? rrCut(l.rule.text, 30) : ''].filter(Boolean).join(' · ');
+// A line's chip says its count ("3 a day", "Allowed"), or "Rule" for a rule alone; the rule's words are in its title and
+// in the panel's row, never cut on the line.
+const rrChip = (l: ReachLine) => rrCount(l) || 'Rule';
+const rrWords = (l: ReachLine) => [rrCount(l), l.rule?.text || ''].filter(Boolean).join(' · ');
 // Who a rule names, as the Add rule dialog takes it.
 const rrScope = (p: string) => {
   const kind = rrKind(p), id = rrId(p);
@@ -579,7 +582,7 @@ function rrGroupBlock(by: Parameters<typeof rdoNode>[0], g: OrgGroup, ctx: Param
 const rrChartHtml = () => rdoChartHtml(rdoTree(rrLead), {seen: new Set(), group: rrGroupBlock});
 // A card's ref (rdoCard: person:<id> or bot:<id>) as a party.
 const rrOfRef = (ref: string) => ref.startsWith('person:') ? 'human:' + ref.slice(7) : ref;
-// A box in the chart's own (unscaled) pixels.
+// A box in the chart's own pixels.
 function rrBox(el: HTMLElement, cv: HTMLElement): RrBox {
   let x = 0, y = 0;
   for (let e: HTMLElement | null = el; e && e !== cv; e = e.offsetParent as HTMLElement | null) { x += e.offsetLeft; y += e.offsetTop; }
@@ -591,22 +594,21 @@ function rrEdge(b: RrBox, tx: number, ty: number): [number, number] {
   const k = Math.min(dx ? (b.w / 2 + 3) / Math.abs(dx) : Infinity, dy ? (b.h / 2 + 3) / Math.abs(dy) : Infinity, 1);
   return [cx + dx * k, cy + dy * k];
 }
-// The chart fits the pane's width down to a readable size (past that it scrolls); the selected party, the parties it
-// has lines with, and the search's matches are marked, and the lines and chips drawn.
+// The chart is drawn at its own size, never shrunk: past the pane it scrolls and a mouse drags it (dragPan). The
+// selected party, the parties it has lines with, and the search's matches are marked, and the lines and chips drawn.
+// The rest are muted only while a team, person or bot is selected or a search runs (Everyone dims nothing).
 function rrMapPaint() {
   const map = RU?.root.querySelector<HTMLElement>('.rr-map');
   if (!map || !map.offsetParent) return;
   const pane = ruFind('.rr-pane', map), sz = ruFind('.rr-sz', map), cv = ruFind('.rr-cv', map);
-  const s = Math.max(0.6, Math.min(1, (pane.clientWidth - 2) / Math.max(1, cv.offsetWidth)));
-  cv.style.transform = `scale(${s})`;
-  sz.style.width = Math.ceil(cv.offsetWidth * s) + 'px'; sz.style.height = Math.ceil(cv.offsetHeight * s) + 'px';
+  sz.style.width = cv.offsetWidth + 'px'; sz.style.height = cv.offsetHeight + 'px';
   const R = ruOpen().reach, p = R.party, q = R.q;
   const nodes = [...cv.querySelectorAll<HTMLElement>('[data-rr-party]')], at = (party: string | null) => nodes.find(n => n.dataset.rrParty === party);
   const lines = rrLinesOf(p);
   const tone = new Map(lines.map((x): [string, string] => [x.other, rrTone(x.l)]));
   const team = rrKind(p) === 'group' ? cv.querySelector(`[data-rr-team="${CSS.escape(p ?? '')}"]`) : null;
   const hits = q ? new Set(rrFind(q).map(x => x.party)) : null;
-  map.classList.toggle('has-sel', !!p);
+  map.classList.toggle('has-sel', !!p && p !== '*');
   map.classList.toggle('searching', !!q);
   for (const n of nodes) {
     const party = n.dataset.rrParty ?? '';
@@ -621,6 +623,9 @@ function rrMapPaint() {
   const marks = ['zero', 'cap', 'rule', 'open'].map(k => `<marker id="rr-mk-${k}" class="rr-mk ${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>`).join('');
   let paths = '', labels = '';
   const spans: [number, number, number, number][] = [];   // each chip's line (from the selected party's end), for placing it below
+  // A card not wholly in the pane's view: its chip leads with its name, so the line says where it goes.
+  const view = pane.getBoundingClientRect(), vx = view.left + pane.clientLeft, vy = view.top + pane.clientTop;
+  const unseen = (el: HTMLElement) => { const r = el.getBoundingClientRect(); return r.left < vx - 1 || r.top < vy - 1 || r.right > vx + pane.clientWidth + 1 || r.bottom > vy + pane.clientHeight + 1; };
   if (from) {
     const a = rrBox(from, cv), both = new Set(lines.filter(x => lines.some(y => y !== x && y.other === x.other)).map(x => x.other));
     for (const {l, dir, other} of lines) {
@@ -635,26 +640,28 @@ function rrMapPaint() {
       paths += `<line class="rr-ln ${k}" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" marker-end="url(#rr-mk-${k})"/>`;
       const cx = ax + (bx - ax) * 0.55 + ox * 3, cy = ay + (by - ay) * 0.55 + oy * 3;
       spans.push([ax + ox * 3, ay + oy * 3, bx + ox * 3, by + oy * 3]);
-      const words = (dir === 'to' ? rrName(p) + ' to ' + rrName(other) : rrName(other) + ' to ' + rrName(p)) + ': ' + rrChip(l);
-      labels += `<button type="button" class="rr-chip ${k}" data-rr-line="${esc(l.id)}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px" aria-label="${esc(words)}" title="${esc(words)}"${l.may_edit ? '' : ' aria-disabled="true"'}>${esc(rrChip(l))}</button>`;
+      const words = (dir === 'to' ? rrName(p) + ' to ' + rrName(other) : rrName(other) + ' to ' + rrName(p)) + ': ' + rrWords(l);
+      const name = unseen(to) ? `<span class="rr-cn">${esc(rrName(other))}</span> · ` : '';
+      labels += `<button type="button" class="rr-chip ${k}" data-rr-line="${esc(l.id)}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px" aria-label="${esc(words)}" title="${esc(words)}">${name}${esc(rrChip(l))}</button>`;
     }
   }
   // A party picked from the search or a link, off screen in a chart wider than the pane (a phone): bring it into view.
   if (R.shown !== p && (R.shown = p) && from) {
-    const b = rrBox(from, cv), l = b.x * s, t = b.y * s, r = (b.x + b.w) * s, btm = (b.y + b.h) * s;
+    const b = rrBox(from, cv), l = sz.offsetLeft + b.x, t = b.y, r = l + b.w, btm = b.y + b.h;
     if (l < pane.scrollLeft || r > pane.scrollLeft + pane.clientWidth || t < pane.scrollTop || btm > pane.scrollTop + pane.clientHeight)
       pane.scrollTo({left: (l + r - pane.clientWidth) / 2, top: (t + btm - pane.clientHeight) / 2});
   }
   svg.innerHTML = `<defs>${marks}</defs>${paths}`;
   chips.innerHTML = labels;
-  // A chip goes where it covers no card and no chip already placed: along its line first (the middle outward), then
-  // above, below or beside it; where nothing is clear it keeps the first spot that misses the chips.
+  // A chip goes where it covers no card and no chip already placed: along its line first (90px past the selected card,
+  // then the middle outward), then above, below or beside it; where nothing is clear it keeps the first spot that
+  // misses the chips. Near the selected card it stays on screen however far its line runs.
   const cards = nodes.filter(n => n.offsetParent).map(n => rrBox(n, cv)), placed: RrBox[] = [];
   const over = (r: RrBox, x: number, y: number, w: number, h: number, pad: number) => Math.abs(r.x + r.w / 2 - x) < (r.w + w) / 2 + pad && Math.abs(r.y + r.h / 2 - y) < (r.h + h) / 2 + pad;
   chips.querySelectorAll<HTMLElement>(':scope > *').forEach((c, i) => {
     const w = c.offsetWidth, h = c.offsetHeight, [x1, y1, x2, y2] = spans[i] ?? [0, 0, 0, 0];
-    const tries: [number, number][] = [];
-    for (const t of [0.55, 0.45, 0.65, 0.35, 0.75, 0.5]) for (const dy of [0, h + 4, -(h + 4), 2 * (h + 4), -2 * (h + 4)])
+    const tries: [number, number][] = [], near = Math.min(0.55, (90 + w / 2) / (Math.hypot(x2 - x1, y2 - y1) || 1));
+    for (const t of [near, 0.55, 0.45, 0.65, 0.35, 0.75, 0.5]) for (const dy of [0, h + 4, -(h + 4), 2 * (h + 4), -2 * (h + 4)])
       for (const dx of [0, w * 0.6, -w * 0.6]) tries.push([x1 + (x2 - x1) * t + dx, y1 + (y2 - y1) * t + dy]);
     const freeOfChips = ([x, y]: [number, number]) => !placed.some(r => over(r, x, y, w, h, 3));
     const at = tries.find(q => freeOfChips(q) && !cards.some(r => over(r, q[0], q[1], w, h, 2))) || tries.find(freeOfChips) || tries[0];
@@ -699,7 +706,9 @@ function rrPanelDraw(note = '') {
       <button type="button" class="rr-inh-h" data-rr-inh="${esc(k)}" aria-expanded="${open}"><span class="rr-cx" aria-hidden="true">›</span><span class="rr-inh-t">${esc(label)}</span><span class="ru-n">${rules.length}</span></button>
       ${open ? `<div class="rr-inh-l">${rules.map(r => rule(r, 'rr-rule rr-sub')).join('')}</div>` : ''}</div>`; }).join('');
   // Who bots may book is a bot's calendar rule: a person's own has nothing to limit, so none is shown for one.
-  const book = rrKind(p) === 'human' ? '' : `<div class="rr-book"><span class="rr-book-l">Who bots may book</span>${ruSegHTML('rr-book', RR_BOOKS, eff.book, !may)}${rrFromTag(p, eff, 'book')}</div>`;
+  // Each control under its label line, the source of its value at the line's right; the control on one row.
+  const head = (label: string, f: string) => `<div class="rr-row-h"><span class="rr-row-l">${esc(label)}</span>${rrFromTag(p, eff, f)}</div>`;
+  const book = rrKind(p) === 'human' ? '' : `<div class="rr-row rr-book">${head('Who bots may book', 'book')}${ruSegHTML('rr-book', RR_BOOKS, eff.book, !may)}</div>`;
   const lines = rrLinesOf(p), E = R.edit;
   const row = ({l, dir, other}: ReturnType<typeof rrLinesOf>[number]) => {
     const body = `<span class="rr-lt"><span class="rr-dir">${dir === 'to' ? 'To' : 'From'}</span><span class="rr-who">${esc(rrName(other))}</span>
@@ -713,7 +722,7 @@ function rrPanelDraw(note = '') {
   side.innerHTML = `<div class="rr-panel" data-party="${esc(p)}">
     <div class="rr-h"><a class="ru-x rr-back" href="${ruHref('internal')}" aria-label="Back">‹</a><h2>${esc(rrName(p))}</h2></div>
     ${R.error ? `<p class="err">${esc(R.error)}</p>` : ''}
-    <div class="rr-set">${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}${rrFromTag(p, eff, 'mode')}${book}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
+    <div class="rr-set"><div class="rr-row rr-reach">${head('Reach', 'mode')}${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}</div>${book}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
     <section class="rr-sec" aria-label="Rules"><header><h3 class="ru-lbl">Rules</h3>${human ? '<button class="ghost small" type="button" data-rr-add-rule>+ Add rule</button>' : ''}</header>
       ${groups}${mine.map(r => rule(r)).join('')}${groups || mine.length ? '' : '<p class="rr-none">None.</p>'}</section>
     <section class="rr-sec" aria-label="Exceptions"><header><h3 class="ru-lbl">Exceptions</h3>${R.mayEdit.size && !R.adding && !E ? '<button class="ghost small" type="button" data-rr-add-line>+ Add exception</button>' : ''}</header>
@@ -768,6 +777,10 @@ function ruDrawInternal(filters: HTMLElement, list: HTMLElement) {
       requestAnimationFrame(() => { queued = false; if (pane.isConnected) rrMapPaint(); });
     }).observe(pane);
     document.fonts?.ready.then(() => { if (pane.isConnected) rrMapPaint(); });
+    // A mouse drags the map about; once it comes to rest the chips are drawn again, naming the cards now out of view.
+    dragPan(pane);
+    let still = 0;
+    pane.addEventListener('scroll', () => { clearTimeout(still); still = window.setTimeout(() => { if (pane.isConnected) rrMapPaint(); }, 120); }, {passive: true});
   }
   rrSearchPaint();
   rrPanelDraw();
@@ -836,6 +849,19 @@ function rrEdit(id: string) {
   rrMapPaint(); rrPanelDraw();
   ruOpen().root.querySelector<HTMLInputElement>('.rr-ed input[name=per_day]')?.focus();
 }
+// A chip on the map: a line the viewer may change opens its editor; any other closes an open editor and shows the
+// line's row in the panel, lit for a moment.
+function rrChipGo(id: string) {
+  const R = ruOpen().reach, x = rrLinesOf(R.party).find(y => y.l.id === id);
+  if (!x) return;
+  if (x.l.may_edit) { rrEdit(id); return; }
+  if (R.edit || R.adding) { Object.assign(R, {adding: false, edit: null}); rrMapPaint(); rrPanelDraw(); }
+  const row = ruOpen().root.querySelector<HTMLElement>(`.rr-panel [data-rr-line="${CSS.escape(id)}"]`);
+  if (!row) return;
+  row.scrollIntoView({block: 'nearest'});
+  row.classList.add('lit');
+  setTimeout(() => row.classList.remove('lit'), 1200);
+}
 /** The selected party of the open panel; every control that uses it lives inside that panel. */
 function rrParty(): string {
   const p = ruOpen().reach.party;
@@ -875,6 +901,8 @@ function rrClick(ev: Event) {
     ruOpen().root.querySelector<HTMLInputElement>('.rr-ed input[name=per_day]')?.focus();
     return true;
   }
+  const chip = t.closest<HTMLElement>('.rr-chip[data-rr-line]');
+  if (chip) { rrChipGo(chip.dataset.rrLine ?? ''); return true; }
   const line = t.closest<HTMLElement>('[data-rr-line]');
   if (line) { rrEdit(line.dataset.rrLine ?? ''); return true; }
   const way = t.closest<HTMLButtonElement>('[data-rr-dir]');
