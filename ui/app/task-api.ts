@@ -78,6 +78,8 @@ interface PipelineRec {
   preset: string | null;
   settings_version: number;
   retired_at: string | null;
+  /** Each active bot's model family ("Claude", "GPT"; "" when unknown), for a stage's One of several: read only. */
+  bot_families?: Record<string, string>;
   stages: PipelineStageRec[];
   done: {id: string; name: string} | null;
   closed: {id: string; name: string} | null;

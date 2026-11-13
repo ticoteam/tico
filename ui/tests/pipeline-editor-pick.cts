@@ -83,12 +83,22 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
       // One of several, with two Builders, taking turns, Prefer Anyone, owning the task.
       await build.locator('[data-pe-sf="owner"]').selectOption('pick');
       const bot = (id: string) => build.locator(`[data-pe-pick-bot="bot:${id}"]`);
-      await bot('builder').check();
       await bot('builder-2').check();
+      await bot('builder').check();
       await build.locator('[data-pe-pick="owns_task"]').check();
       await build.locator('[data-pe-pick="limit_each"]').fill('3');
-      await build.locator('[data-pe-seg="pick_prefer"][data-v="new"]').click();
+      // A switch keeps the keyboard where it was: Space chooses, the arrow keys move along it, and focus stays on it.
+      await build.locator('[data-pe-seg="pick_prefer"][data-v="anyone"]').focus();
+      await page.keyboard.press('ArrowRight');
+      const focused = () => page.evaluate(() => { const a = document.activeElement as HTMLElement | null; return `${a?.dataset['peSeg']}:${a?.dataset['v']}`; });
+      assert.equal(await focused(), 'pick_prefer:new', `${width}: the arrow key moves to the next choice and keeps focus`);
       assert.equal(await build.locator('[data-pe-seg="pick_prefer"][data-v="new"]').getAttribute('aria-checked'), 'true');
+      assert.equal(await build.locator('[data-pe-seg="pick_prefer"][data-v="anyone"]').getAttribute('tabindex'), '-1', 'one tab stop per switch');
+      await build.locator('[data-pe-seg="pick_how"][data-v="random"]').focus();
+      await page.keyboard.press('Space');
+      assert.equal(await focused(), 'pick_how:random', `${width}: Space keeps focus on the switch`);
+      await page.keyboard.press('ArrowLeft');
+      assert.equal(await focused(), 'pick_how:turns');
       assert.equal(await build.locator('.pe-pick-next').innerText(), 'Save to see who gets the next task.');
       await dialog.locator('[data-pe-save]').click();
       await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
@@ -109,7 +119,7 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
 
       // Closed: "One of 2" where the owner's name was.
       await build.locator('> summary').click();
-      if (width > 720) assert.equal(await build.locator('.pe-stage-owner').innerText(), 'One of 2');
+      assert.equal(await build.locator('.pe-stage-owner').innerText(), 'One of 2', `${width}: the closed row says it, phone included`);
       assert.equal(await build.locator('.pe-stage-owner').getAttribute('title'), 'Builder, Builder 2');
       await page.close();
     }

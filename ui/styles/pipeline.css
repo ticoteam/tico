@@ -285,7 +285,7 @@
 .pe-foot{display:flex;justify-content:space-between;gap:var(--s2)}
 @media (max-width:720px){
   .pe-dialog{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:14px 14px 0 0}
-  .pe-stage-owner>span{display:none}
+  .pe-stage-owner:not(.pe-stage-pool)>span{display:none}
   .pe-stage-body{padding-left:var(--s3)}
   .pe-row>.pe-f-name{flex:1 1 100%}
   .pe-seg{border-radius:12px}

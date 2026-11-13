@@ -165,11 +165,11 @@ function peOnEnterOptions(state: PeState, stage: PipelineStageRec): string {
     + opt('act:github.queue', 'Queue PRs', queue);
 }
 
-/** A segmented switch for a choice of two or three: [[value, label]], the chosen one aria-checked. A click sets the
-    stage's `seg` (peClick). */
+/** A segmented switch for a choice of two or three: [[value, label]], the chosen one aria-checked and the one tab stop
+    (the arrow keys move along it, peSegKey). A click sets the stage's `seg` (peClick). */
 function peSeg(seg: string, label: string, options: [string, string][], value: string, at: string): string {
   return `<div class="theme-seg pe-seg" role="radiogroup" aria-label="${esc(label)}" data-pe-seg-of="${seg}">`
-    + options.map(([v, l]) => `<button type="button" role="radio" data-v="${esc(v)}" aria-checked="${v === value}" data-pe-seg="${seg}" ${at}>${esc(l)}</button>`).join('')
+    + options.map(([v, l]) => `<button type="button" role="radio" data-v="${esc(v)}" aria-checked="${v === value}" tabindex="${v === value ? 0 : -1}" data-pe-seg="${seg}" ${at}>${esc(l)}</button>`).join('')
     + '</div>';
 }
 
@@ -187,7 +187,8 @@ const pePickOwn = (pick: PipelinePickRec): PipelinePickRec =>
     next task in one sentence. The sentence is the server's, for the setting as saved: an unsaved change says so. */
 function pePickHTML(state: PeState, stage: PipelineStageRec, at: string): string {
   const pick = stage.pick ?? pePickFresh();
-  const families = pick.families ?? {};
+  // Every bot's family, so one not ticked yet shows it too; a stage's own list where the record has no such map.
+  const families = {...pick.families, ...state.draft.bot_families};
   const bots = peBots();
   for (const id of pick.bots) if (!bots.some(b => b.id === id)) bots.push({id, name: actorLabel(id) || id});
   const list = bots.map(b => `<label class="pe-check"><input type="checkbox" data-pe-pick-bot="${esc(b.id)}" ${at}${pick.bots.includes(b.id) ? ' checked' : ''}> ${esc(b.name)} `
@@ -240,7 +241,7 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   const meta = `<span class="pe-stage-meta">`
     + (reqs.length ? `<span class="pe-stage-reqs" title="${esc(reqs.join(', '))}" aria-label="${reqs.length} to leave">✓ ${reqs.length}</span>` : '')
     + (owner ? `<span class="pe-stage-owner">${actorAvatar(owner, 18)}<span>${esc(actorLabel(owner) || owner)}</span></span>` : '')
-    + (picks ? `<span class="pe-stage-owner" title="${esc(pool.map(b => actorLabel(b) || b).join(', '))}"><span>One of ${pool.length}</span></span>` : '')
+    + (picks ? `<span class="pe-stage-owner pe-stage-pool" title="${esc(pool.map(b => actorLabel(b) || b).join(', '))}"><span>One of ${pool.length}</span></span>` : '')
     + `</span>`;
   const tools = `<span class="pe-tools"><button type="button" class="ghost" data-pe-up ${at} aria-label="Move up"${si === 0 ? ' disabled' : ''}>↑</button>`
     + `<button type="button" class="ghost" data-pe-down ${at} aria-label="Move down"${si === count - 1 ? ' disabled' : ''}>↓</button>`
@@ -328,7 +329,12 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   const bot = el.dataset['pePickBot'], pk = el.dataset['pePick'];
   if (stage.pick && (bot || pk)) {
     const pick = stage.pick;
-    if (bot) pick.bots = checked ? [...pick.bots.filter(b => b !== bot), bot] : pick.bots.filter(b => b !== bot);
+    if (bot) {
+      // The list keeps the order the window shows (peBots), so ticking a bot again never changes whose turn is next.
+      const on = new Set(checked ? [...pick.bots, bot] : pick.bots.filter(b => b !== bot));
+      const shown = peBots().map(b => b.id);
+      pick.bots = [...shown.filter(b => on.has(b)), ...[...on].filter(b => !shown.includes(b))];
+    }
     else if (pk === 'limit_each') pick.limit_each = Number(value) > 0 ? Math.round(Number(value)) : null;
     else if (pk === 'owns_task') pick.owns_task = checked;
     peNextSaid(state, stage);
@@ -442,6 +448,8 @@ function peClick(state: PeState, target: Element): void {
     } else if (seg === 'pick_how' && stage.pick && (v === 'turns' || v === 'random')) stage.pick.how = v;
     else if (seg === 'pick_prefer' && stage.pick && (v === 'anyone' || v === 'new' || v === 'family')) stage.pick.prefer = v;
     peDraw(state);
+    // The redraw replaces the window's content: the keyboard stays on the choice just made.
+    document.getElementById('pe-body')?.querySelector<HTMLElement>(`[data-pe-si="${si}"][data-pe-seg="${seg}"][data-v="${v}"]`)?.focus();
     return;
   }
   const swap = (by: number): void => {
@@ -500,9 +508,10 @@ function peStageOwn(stage: PipelineStageRec): PipelineStageRec {
   return pick ? {...own, pick: pePickOwn(pick)} : own;
 }
 
-/** The draft as it is sent: an answer's empty choices left out, and a stage as a person set it (peStageOwn). */
+/** The draft as it is sent: an answer's empty choices left out, no bot families, and a stage as a person set it (peStageOwn). */
 function peOut(draft: PipelineRec): PipelineRec {
   const out = peCopy(draft);
+  delete out.bot_families;
   out.stages = out.stages.map(peStageOwn);
   for (const stage of out.stages) for (const req of stage.requirements)
     if (req.choices) req.choices = req.choices.map(c => c.trim()).filter(Boolean);
@@ -538,6 +547,18 @@ async function peSave(state: PeState): Promise<void> {
     }
     peDraw(state);
   }
+}
+
+/** The arrow keys in a segmented switch choose the choice beside the one in focus, as in any radio group. */
+function peSegKey(ev: KeyboardEvent): void {
+  const on = ev.target instanceof HTMLElement ? ev.target.closest<HTMLElement>('[data-pe-seg]') : null;
+  const by = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1}[ev.key];
+  if (!on || !by) return;
+  const all = [...(on.parentElement?.querySelectorAll<HTMLElement>('[data-pe-seg]') ?? [])];
+  const next = all[(all.indexOf(on) + by + all.length) % all.length];
+  if (!next || next === on) return;
+  ev.preventDefault();
+  next.click();
 }
 
 // ---------------------------------------------------------------- opening
@@ -579,6 +600,7 @@ async function openPipelineEditor(pipelineId: string, stageId = ''): Promise<voi
   const choice = (t: EventTarget | null): boolean => t instanceof HTMLSelectElement || (t instanceof HTMLInputElement && t.type === 'checkbox');
   dialog.addEventListener('input', ev => { if (!choice(ev.target)) onField(ev); });
   dialog.addEventListener('change', ev => { if (choice(ev.target)) onField(ev); });
+  dialog.addEventListener('keydown', peSegKey);
   dialog.showModal();
   try {
     const [rec, factories, all] = await Promise.all([

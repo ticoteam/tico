@@ -299,6 +299,10 @@ const factories = (async () => {
   assert.match(body, /<option value="pick" selected>One of several<\/option>/);
   assert.match(body, /<input type="checkbox" data-pe-pick-bot="bot:b1"[^>]* checked> Builder <span class="pe-family muted">Claude<\/span>/);
   assert.match(body, /<input type="checkbox" data-pe-pick-bot="bot:r1"[^>]*> Reviewer 1 <\/label>/, 'a bot not on the list, its family not read yet');
+  state.draft.bot_families = {'bot:b1': 'Claude', 'bot:b2': 'Claude', 'bot:r1': 'GPT'};
+  assert.match(html(1), /data-pe-pick-bot="bot:r1"[^>]*> Reviewer 1 <span class="pe-family muted">GPT<\/span>/, 'a bot not ticked yet shows its family when the record has them all');
+  assert.equal('bot_families' in plain(ctx.peOut(state.draft)), false, 'the families are the server\'s');
+  delete state.draft.bot_families;
   assert.match(body, /aria-label="Pick"[^>]*><button[^>]*data-v="turns" aria-checked="true"[^>]*>Take turns<\/button><button[^>]*data-v="random" aria-checked="false"[^>]*>Random<\/button>/);
   assert.match(body, /aria-label="Prefer"[^>]*><button[^>]*data-v="anyone" aria-checked="true"[^>]*>Anyone<\/button><button[^>]*data-v="new"[^>]*>New to the task<\/button><button[^>]*data-v="family"[^>]*>A different model family<\/button>/);
   assert.match(body, /<span>Limit each<\/span><input type="number"[^>]*data-pe-pick="limit_each"[^>]*value="" placeholder="None">/);
@@ -308,7 +312,7 @@ const factories = (async () => {
   assert.doesNotMatch(html(2), /data-pe-pick|pe-pick-next/);
 
   // The closed row: "One of 2" where its owner's name was, the bots named when pointed at.
-  assert.match(body, /<span class="pe-stage-owner" title="b1, b2"><span>One of 2<\/span><\/span>/);
+  assert.match(body, /<span class="pe-stage-owner pe-stage-pool" title="b1, b2"><span>One of 2<\/span><\/span>/);
 
   // Editing it: the draft follows, the sentence waits for a save, and the save leaves out what the server writes.
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false, type = 'text') =>
