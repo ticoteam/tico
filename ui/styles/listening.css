@@ -78,4 +78,3 @@
 /* The owner's Chat button (page-chat.ts); the chat itself is the shared column (page-chat.css). */
 .au-lst .au-chat{display:inline-flex;margin-left:6px}
 .au-lst .au-chat:empty{display:none}
-.au-lst:has(.lst-empty) .au-new{display:none}   /* one green action while there is none */

@@ -86,8 +86,9 @@ function lstListHTML(state: AutomationsState): string {
   const rows = all.filter(a => !q || [a.name, lstLimitsWords(a.trigger?.limits), ...(a.trigger?.sources || []).flatMap(s => [s.site, s.target])]
     .join(' ').toLowerCase().includes(q));
   if (state.list === null) return '';
+  // The header's New listening is the one green action and never moves (the shared page header); this one is plain.
   if (!all.length) return `<div class="empty-state lst-empty">${EMPTY_ART.listening}<p>Watches the sites and searches you pick, and posts what matters to Updates.</p>
-    <button type="button" class="primary" data-lst-new>New listening</button></div>`;
+    <button type="button" class="ghost" data-lst-new>New listening</button></div>`;
   if (!rows.length) return `<p class="muted au-pad">No matches</p>`;
   return `<div class="lst-list" role="list">${rows.map(a => {
     const ok = lstOk(a), last = a.last_run?.started_at;
