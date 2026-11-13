@@ -604,8 +604,36 @@ def test_a_worker_whose_thread_died_hands_the_github_steps_back_to_the_beat(api,
     worker = outside_of(api, scheduler).start()
     beat(api, scheduler, AT)
     assert not set(OUTSIDE) & set(ran), "a live worker takes them"
-    worker.halt(5)  # the thread ends, as a crash outside a pass would end it
-    assert not worker.alive()
+    worker.halt(5)
+    assert not worker.alive() and worker.is_set()
     ran.clear()
+    beat(api, scheduler, AT + timedelta(minutes=5))
+    assert not set(OUTSIDE) & set(ran), "a stopping worker keeps them: no GitHub call inline during a shutdown"
+    worker.stop.clear()  # a thread that ended without being stopped, as a crash outside a pass would end it
     beat(api, scheduler, AT + timedelta(minutes=10))
     assert [k for k in ran if k in OUTSIDE] == OUTSIDE, "the beat runs them again, in its order"
+
+
+def test_a_dead_worker_hands_the_release_check_back_to_the_loops_rest_pass():
+    import threading
+
+    class _Scheduler:
+        outside = None
+        step_marks: dict = {}
+        store = execution = github_app = None
+
+    now, calls = [0.0], []
+    worker = HB.Outside(_Scheduler(), also=lambda: calls.append(now[0]), clock=lambda: now[0])
+    worker.rest_fallback()
+    assert calls == [], "an unstarted worker (a test driving pass_once) keeps it"
+    worker.thread = threading.Thread(target=lambda: None)
+    worker.thread.start()
+    worker.thread.join()
+    for t in (0.0, 5.0, 10.0):
+        now[0] = t
+        worker.rest_fallback()
+    assert calls == [0.0, 10.0], "dead: the rest pass runs it, still at most every 10 s"
+    worker.stop.set()
+    now[0] = 30.0
+    worker.rest_fallback()
+    assert calls == [0.0, 10.0], "not while stopping"

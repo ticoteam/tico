@@ -368,6 +368,9 @@ def create_app(settings=None):
                 if rest.due(ctx):
                     try:
                         await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
+                        if scheduler.outside is not None:
+                            # The release check, here only while the worker's thread is dead.
+                            await asyncio.to_thread(scheduler.outside.rest_fallback)
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging

@@ -482,7 +482,8 @@ def _lane(ctx: Context, outside: bool) -> list[Step]:
     if outside:
         return [s for s in STEPS if s.outside]
     worker: Outside | None = getattr(ctx.scheduler, "outside", None)
-    taken = worker is not None and worker.alive()
+    # A stopping worker still holds them: a beat in the last second of a shutdown must not make GitHub calls inline.
+    taken = worker is not None and (worker.alive() or worker.is_set())
     return [s for s in STEPS if not (s.outside and taken)]
 
 
@@ -986,19 +987,31 @@ class Outside:
         self.running = True
         try:
             done = outside_pass(ctx)
-            if self.also is not None and (self._also_at is None or self.clock() - self._also_at >= REST_FLOOR):
-                self._also_at = self.clock()
-                try:
-                    self.also()
-                except Exception as exc:  # noqa: BLE001 - as on the loop: captured, and the next pass tries again
-                    _capture(self.telemetry, "scheduler", exc)
-                    LOG.error("Outside polls' release check failed: %s", type(exc).__name__)
+            self._also_once()
         finally:
             self.running = False
             self.passes += 1
             with self._lock:
                 self._failures = (self._failures + ctx.failures)[-CARRY_MAX:]
         return done
+
+    def _also_once(self) -> None:
+        """`also` (the release check and update feeds), at most every REST_FLOOR seconds; a failure is captured and
+        the next pass tries again, as on the loop."""
+        if self.also is None or (self._also_at is not None and self.clock() - self._also_at < REST_FLOOR):
+            return
+        self._also_at = self.clock()
+        try:
+            self.also()
+        except Exception as exc:  # noqa: BLE001 - as on the loop: captured, and the next pass tries again
+            _capture(self.telemetry, "scheduler", exc)
+            LOG.error("Outside polls' release check failed: %s", type(exc).__name__)
+
+    def rest_fallback(self) -> None:
+        """The loop's rest pass calls this: while the worker's thread is dead (and not stopping), `also` runs there,
+        as the beat takes back the GitHub steps (`_lane`), so the release check never stops unnoticed."""
+        if not self.alive() and not self.is_set():
+            self._also_once()
 
     def run(self) -> None:
         """The worker's thread until `stop`: a pass per wake."""
