@@ -495,14 +495,17 @@ def run(
 
 # ----------------------------------------------------------------------------- typing and conflicts
 def live_owner(c: Any, cohort_id: str, field: str) -> dict[str, Any] | None:
-    """The live synced source that filled this number, if any."""
+    """The live synced source that filled this number and still fills it, if any; a remap that drops the number
+    hands it back to typing."""
     row = H._one(
         c,
         "SELECT s.* FROM growth_origins o JOIN gtm_sources s ON s.id=o.source_id WHERE o.cohort_id=? AND o.field=? "
         "AND o.origin='synced' AND s.sync_kind IS NOT NULL AND s.retired_at IS NULL",
         (cohort_id, field),
     )
-    return cast(dict[str, Any], row) if row else None
+    if not row or field not in fills(cast(dict[str, Any], row)):
+        return None
+    return cast(dict[str, Any], row)
 
 
 def refuse_typed(c: Any, cohort: dict[str, Any] | None, fields: list[str], channel: str, month: str) -> None:

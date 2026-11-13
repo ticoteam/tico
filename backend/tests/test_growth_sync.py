@@ -257,3 +257,21 @@ def test_sync_runs_the_last_file_again_after_a_remap(api):
     again = post(api, f"growth/sources/{src['id']}/sync", {})
     assert again["ok"] and again["written"] == 1
     assert cohort(api, "search-ads", m)["revenue_month"] == 88
+
+
+def test_a_number_remapped_away_from_its_source_can_be_typed_again(api):
+    """AC-11 holds only while the source fills the number: once an owner remaps a field away, typing it is accepted and
+    the number becomes typed, while the source keeps the numbers it still fills."""
+    channels(api)
+    src = connect(api)
+    m = month(1)
+    push(api, src["id"], f"month,channel,signups,revenue\n{m},search-ads,131,90\n")
+    r = api.patch(
+        f"/api/v2/growth/sources/{src['id']}",
+        json={"sync_map": {"fields": {"revenue_month": "revenue"}}},
+        headers=headers(),
+    )
+    assert r.status_code == 200 and r.json()["fills"] == ["revenue_month"]
+    typed = put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "new_customers": 120})
+    assert typed["new_customers"] == 120 and typed["origins"]["new_customers"]["origin"] == "typed"
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "revenue_month": 95}, expected=409)
