@@ -6,7 +6,7 @@ The standing method for managing your team's pipelines. Each one's stages, owner
 ## How a task moves without you
 - A task always starts in its pipeline's first stage, and its owner becomes the stage's owner.
 - {{app_name}} moves a task to the next stage the moment every requirement is met and the next stage has room.
-- When a bot owner's turn ends with nothing changed, it is woken again after 2 minutes, 15 minutes and 1 hour. After three
+- When a bot owner's turn ends with nothing changed, it is woken again after 2 minutes, 15 minutes and 50 minutes. After three
   tries with no change, you get the task. After your three tries with no change, a person gets it.
 - A task is Late once it has been in its stage longer than the stage's expected time. Snoozed time does not count. At
   the expected time you get it once; at three times that, a person gets it once.

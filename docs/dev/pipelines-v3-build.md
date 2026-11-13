@@ -364,7 +364,7 @@ reconnect, and over a limit.
 ## never_stuck.py
 
 ```python
-GAPS = (120, 900, 3600)   # seconds a bot is left alone before try 1, 2 and 3
+GAPS = (120, 900, 3000)   # seconds a bot is left alone before try 1, 2 and 3
 TRIES = 3
 OWNER_RUNS = 4            # the owner's start and 3 tries
 RUNS = 7                  # then the manager bot's 3 tries: bot runs one visit may start between two changes

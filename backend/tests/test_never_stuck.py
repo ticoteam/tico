@@ -102,7 +102,7 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_a_per
     assert later(seconds=899) == {}
     assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 2)
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=3599) == {}
+    assert later(seconds=2999) == {}  # the third try comes back within the hour its session stays cached
     assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 3)
     X.ran(c, task_id, BUILDER)
     assert later(seconds=119) == {}
@@ -111,7 +111,8 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_a_per
     X.ran(c, task_id, MANAGER)
     assert later(seconds=900) == {"woken": 1}
     X.ran(c, task_id, MANAGER)
-    assert later(seconds=3600) == {"woken": 1} and _ladder(c, task_id) == ("manager", 3)
+    assert later(seconds=2999) == {}
+    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("manager", 3)
     X.ran(c, task_id, MANAGER)
     assert later(seconds=120) == {"to_person": 1} and _ladder(c, task_id)[0] == "person"
     assert [(w.who, w.line) for w in W.waiting_on(c, task_id)] == [
@@ -139,12 +140,12 @@ def test_an_owner_who_never_answers_the_stages_question_climbs_the_same_ladder(c
     stages = ({"name": "Build", "owner": BUILDER, "requirements": [{"kind": "answer", "settings": settings}]},)
     X.pipeline(c, "eng", "Engineering", stages, manager=MANAGER)
     task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
-    for seconds in (120, 900, 3600):
+    for seconds in (120, 900, 3000):
         X.ran(c, task_id, BUILDER)
         assert later(seconds=seconds) == {"woken": 1}
     X.ran(c, task_id, BUILDER)
     assert later(seconds=120) == {"to_manager": 1, "woken": 1} and _ladder(c, task_id) == ("manager", 1)
-    for seconds in (900, 3600):
+    for seconds in (900, 3000):
         X.ran(c, task_id, MANAGER)
         assert later(seconds=seconds) == {"woken": 1}
     X.ran(c, task_id, MANAGER)
@@ -1087,7 +1088,7 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     assert later(seconds=10) == {"to_person": 1} and _visit(c, nobodys)["person_id"] == ANA
     assert H.task_readers(H.task(c, nobodys)) == [] and X.wakes(c, nobodys, MANAGER) == []
     built = _private(c, "Draft the salary review", BUILDER)
-    for gap in (0, 120, 900, 3600):
+    for gap in (0, 120, 900, 3000):
         if gap:
             assert later(seconds=gap) == {"woken": 1}
         X.ran(c, built, BUILDER)
@@ -1096,7 +1097,7 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     assert H.task_readers(H.task(c, built)) == [] and X.wakes(c, built, MANAGER) == []
     shared = _private(c, "Draft the bonus plan", BUILDER)
     H.set_task_readers(c, ANA, shared, add=[MANAGER])  # a person shared it with the manager bot
-    for gap in (0, 120, 900, 3600):
+    for gap in (0, 120, 900, 3000):
         if gap:
             assert later(seconds=gap) == {"woken": 1}
         X.ran(c, shared, BUILDER)
@@ -1195,7 +1196,7 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
     made = H.task_create(c, REVIEWER, "Draft the salary review", "Only us.", BUILDER, private=True, lint=False)
     task_id = made["id"]
     assert H.task_readers(H.task(c, task_id)) == [] and not NS._reads(c, ANA, E.task(c, task_id))
-    for gap in (0, 120, 900, 3600):
+    for gap in (0, 120, 900, 3000):
         if gap:
             assert step(seconds=gap) == {"woken": 1}
         X.ran(c, task_id, BUILDER)
