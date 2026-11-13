@@ -87,6 +87,10 @@ const kept = (page: Page) => page.evaluate(() => {
   return [document.documentElement.outerHTML, store(localStorage), store(sessionStorage),
     (document.querySelector('.tt-pgc .p-text') as HTMLTextAreaElement | null)?.value || '', location.href].join('\n');
 });
+// "Sent names only" shows as the saves finish, just before the message posts: wait for the post itself.
+async function messageSent(sent: Sent[], n = 1): Promise<void> {
+  for (let i = 0; i < 100 && sent.filter(s => typeof s.text === 'string').length < n; i++) await new Promise(r => setTimeout(r, 50));
+}
 const shot = async (page: Page, name: string) => {
   const dir = process.env.TICO_UI_SHOTS;
   if (dir) { fs.mkdirSync(dir, {recursive: true}); await page.screenshot({path: path.join(dir, `tools-chat-keys-${name}.png`)}); }
@@ -140,6 +144,7 @@ async function openChat(page: Page) {
         ['/api/v2/credentials', 'GH_DEPLOY_TOKEN', 'token', '', 'tools-chat'],
       ]);
       assert.deepEqual([saved[0]?.body.secret, saved[1]?.body.secret], [PASSWORD, TOKEN], 'each value went to Credentials, and only there');
+      await messageSent(sent);
       const message = sent.find(s => typeof s.text === 'string');
       assert.equal(message?.text, 'for jira user chris / [saved JIRA_LOGIN for Jira] and [saved GH_DEPLOY_TOKEN for GitHub]');
       assert.equal(await page.locator('.tt-pgc [data-kd-proof]').innerText(), 'Sent names only: JIRA_LOGIN, GH_DEPLOY_TOKEN.');
@@ -173,6 +178,7 @@ async function openChat(page: Page) {
       await page.locator('.tt-pgc .p-send').click();
       await page.waitForFunction(() => /Sent names only/.test(document.querySelector('.tt-pgc [data-kd-proof]')?.textContent || ''));
       assert.deepEqual(saved.map(s => s.body.name), ['POSTHOG_API_KEY', 'JIRA_LOGIN'], 'the saved one is not saved twice');
+      await messageSent(sent);
       assert.equal(sent.filter(s => typeof s.text === 'string').length, 1, 'the message goes once');
       // AC-7: a dropped file is refused with one line.
       await page.locator('.tt-pgc .thv-ask').evaluate(el => {

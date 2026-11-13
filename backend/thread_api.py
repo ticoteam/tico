@@ -118,6 +118,12 @@ class ThreadUpload(BaseModel):
     defer_for: str | None = None
 
 
+def _unmarked(who, body):
+    """The suspects a person un-marked in the Tools chat (backend/secret_drop.py), which the backstop lets through only
+    from the web chat: a post made with a personal access token is an API client, whose suspects are refused (AC-15)."""
+    return [] if getattr(who, "via_token", False) else list(getattr(body, "unmarked", None) or [])
+
+
 def _delivery_words(body):
     """The `delivery` and `defer_for` a post named, checked before anything is read: 422 when they do not hold together."""
     if wrong := delivery.check(body.delivery, body.defer_for):
@@ -458,7 +464,7 @@ def install(app, store, auth, mutate, rule_check):
                 who.actor,
                 body.text,
                 None,
-                getattr(body, "unmarked", None),
+                _unmarked(who, body),
                 audit=False,
             )
         if getattr(body, "in_reply_to", None):
@@ -777,7 +783,7 @@ def install(app, store, auth, mutate, rule_check):
                 checked=rc,
                 reach=True,
                 in_reply_to=replying,
-                unmarked=body.unmarked,
+                unmarked=_unmarked(who, body),
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message

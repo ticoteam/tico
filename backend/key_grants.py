@@ -79,13 +79,22 @@ def _person(c: Any, thread: Row, owner: str) -> str | None:
     return people[0] if len(people) == 1 else None
 
 
+def drop_owner(c: Any, who: Any, credential_id: str) -> None:
+    """The Tools owner's grants on a credential go: a key dropped in its chat (a new one, or a value that replaced a
+    stored credential's) is never the owner's, whatever it held before."""
+    owner = _owner(c)
+    if owner:
+        _api_tools()._revoke(c, who, credential_id, owner)
+
+
 def _credential(c: Any, ref: object, person: str) -> Any:
-    """A key the person saved from this chat, by its name or variable."""
+    """A key the person saved from this chat, by its name or variable: one they added there, or a stored one whose value
+    they replaced there."""
     name = str(ref or "").strip()
     row = c.execute(
-        "SELECT * FROM credentials WHERE source='tools-chat' AND created_by=? AND (upper(name)=upper(?) OR env=?) "
-        "AND kind!='login' ORDER BY updated_at DESC LIMIT 1",
-        (person, name, name),
+        "SELECT * FROM credentials WHERE source='tools-chat' AND (created_by=? OR updated_by=?) "
+        "AND (upper(name)=upper(?) OR env=?) AND kind!='login' ORDER BY updated_at DESC LIMIT 1",
+        (person, person, name, name),
     ).fetchone()
     if not row:
         raise Problem("proposal", f"No key named {name or '(none)'} was saved in this chat", 422)
@@ -176,17 +185,19 @@ def _who(c: Any, subject: str) -> str:
 def _replaced(c: Any, row: Row, owner: str) -> Row | None:
     """The tool's key at the row's level that this key replaces, and who keeps their access on the new key (every bot
     and person who holds it) or loses it (the owner bot, which holds none of these keys, and every-computer grants)."""
-    old = c.execute(
-        "SELECT id, name FROM credentials WHERE tool_id=? AND access_level=? AND id<>? LIMIT 1",
+    olds = c.execute(
+        "SELECT id, name FROM credentials WHERE tool_id=? AND access_level=? AND id<>? ORDER BY name",
         (row["tool_id"], row["level"], row["credential_id"]),
-    ).fetchone()
-    if not old:
+    ).fetchall()
+    if not olds:
         return None
-    holders = _holders(c, old["id"])
+    holders: list[Row] = []
+    for old in olds:  # every key at that level moves off the tool, so each one's holders are named
+        holders += [h for h in _holders(c, old["id"]) if h not in holders]
     keeps = [h for h in holders if h["subject"].startswith(("bot:", "human:")) and h["subject"] != owner]
     loses = [h for h in holders if h not in keeps]
     return {
-        "key": old["name"],
+        "key": ", ".join(str(o["name"]) for o in olds),
         "keeps": [_who(c, h["subject"]) for h in keeps],
         "loses": [_who(c, h["subject"]) for h in loses],
     }
@@ -258,6 +269,7 @@ def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
         # would drop the username and fail.
         c.execute("UPDATE tools SET auth_scheme='basic_password' WHERE id=?", (row["tool_id"],))
         H.event(c, who.actor, "tool.updated", row["tool_id"], {"auth_scheme": "basic_password", "via": "tools-chat"})
+    drop_owner(c, who, row["credential_id"])  # a backstop: the key itself never stays with the Tools owner
     for held in moving:
         if held["subject"] not in [b["id"] for b in row["bots"]]:
             kept = "read" if "read" in (row["level"], held["level"]) else "read_write"  # never above the key's level

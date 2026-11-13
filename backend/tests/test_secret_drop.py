@@ -225,3 +225,91 @@ def test_a_key_that_replaces_the_tools_key_keeps_everyone_who_had_it_and_the_car
             "SELECT credential_id FROM credential_grants WHERE subject='bot:support' AND revoked_at IS NULL"
         ).fetchall()
         assert [r['credential_id'] for r in held] == [saved['id']]
+
+
+def test_replace_in_the_tools_chat_takes_the_key_from_the_tools_owner(api, monkeypatch):
+    # Review 2: Replace kept every grant on the stored credential, so a key dropped in the chat reached the Tools owner
+    # when it had held the old value. The write drops the owner's grant, and the key can still be proposed.
+    dm, tid, _, bot, _, _ = _proposal_world(api, monkeypatch)
+    stored = post(
+        api, 'credentials', {'name': 'GITHUB_TOKEN', 'env': 'GITHUB_TOKEN', 'secret': 'acme-synthetic-old-1234567'}
+    )
+    post(api, f"credentials/{stored['id']}/grants", {'subject': 'bot:ops'})
+    post(
+        api,
+        f"credentials/{stored['id']}",
+        {
+            'name': 'GITHUB_TOKEN',
+            'env': 'GITHUB_TOKEN',
+            'kind': 'token',
+            'secret': KEY,
+            'source': 'tools-chat',
+            'expected_revision': 1,
+        },
+    )
+    with api.app.state.store.read() as c:
+        assert not c.execute(
+            "SELECT 1 FROM credential_grants WHERE credential_id=? AND subject='bot:ops' AND revoked_at IS NULL",
+            (stored['id'],),
+        ).fetchone()
+    _propose(api, dm, [{'key': 'GITHUB_TOKEN', 'tool': tid, 'level': 'read', 'bots': ['support']}], bot)
+
+
+def test_a_dropped_key_for_a_tool_that_has_a_key_makes_no_extra_tool(api, monkeypatch):
+    # Review 2: the vault put a dropped key on a new tool when its service's tool already had a key; it stayed in
+    # Problem after Grant moved the key. A tools-chat key waits for Grant to place it.
+    from backend.tests.helpers.api_tools import key
+
+    dm, tid, _, bot, _, _ = _proposal_world(api, monkeypatch)
+    key(api, tid, 'acme-close-synthetic-rw-0011223344')
+    before = len(get(api, 'tool-index')['rows'])
+    post(
+        api,
+        'credentials',
+        {
+            'name': 'CLOSE_API_KEY',
+            'env': 'CLOSE_API_KEY',
+            'secret': 'acme-close-new-9988776655',
+            'source': 'tools-chat',
+        },
+    )
+    assert len(get(api, 'tool-index')['rows']) == before
+    card = _propose(api, dm, [{'key': 'CLOSE_API_KEY', 'tool': tid, 'level': 'read_write', 'bots': ['support']}], bot)
+    post(api, f"tools-chat/proposals/{card['id']}/grant", {})
+    assert len(get(api, 'tool-index')['rows']) == before
+
+
+def test_the_owner_loses_the_old_key_and_a_holder_never_gets_more_than_the_keys_level(api, monkeypatch):
+    # Review 2's mutations: the owner among the old key's holders is dropped (and the card says so), and a holder
+    # with a wider grant on a Read key keeps Read on the new one.
+    from backend import api_tools
+    from backend.tests.helpers.api_tools import key
+
+    dm, tid, saved, bot, _, _ = _proposal_world(api, monkeypatch)
+    old = key(api, tid, 'acme-close-synthetic-ro-5566778899', 'read')
+    post(api, f"credentials/{old['id']}/grants", {'subject': 'bot:ops'})
+    post(api, f"credentials/{old['id']}/grants", {'subject': 'bot:support'})  # a direct grant: Read and write
+    card = _propose(api, dm, [{'key': 'JIRA_LOGIN', 'tool': tid, 'level': 'read', 'bots': ['support']}], bot)
+    replaces = card['refs']['key_grant']['rows'][0]['replaces']
+    assert (replaces['keeps'], replaces['loses']) == (['Support'], ['ops'])  # the fixture's ops bot has no display name
+    post(api, f"tools-chat/proposals/{card['id']}/grant", {})
+    with api.app.state.store.read() as c:
+        assert api_tools.subject_level(c, tid, 'bot:ops') is None
+        assert api_tools.subject_level(c, tid, 'bot:support') == 'read'
+        assert not c.execute(
+            "SELECT 1 FROM credential_grants WHERE credential_id=? AND subject='bot:ops' AND revoked_at IS NULL",
+            (saved['id'],),
+        ).fetchone()
+
+
+def test_a_suspect_unmarked_through_a_personal_token_is_refused(api, monkeypatch):
+    # Review 2's question, AC-15: the API is not the web chat, so a token's un-mark digests let nothing through.
+    from backend.auth import Identity
+
+    _, dm = _tools_dm(api)
+    api.app.state.store.settings.test_identities['ana-pat'] = Identity(
+        'human:ana', 'owner', 'ana@acme.example', via_token=True
+    )
+    body = {'text': 'build ' + SUSPECT, 'unmarked': [secret_drop.digest(SUSPECT)]}
+    post(api, f"threads/{dm['id']}/messages", body, 'ana-pat', expected=422)
+    post(api, f"threads/{dm['id']}/messages", body)
