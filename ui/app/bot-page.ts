@@ -23,6 +23,10 @@ const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings']
 const BOT_TABS = ['home', 'dm', 'tasks', ...BOT_DETAIL_TABS];
 const BOT_WORK_TABS = ['home', 'dm', 'tasks'];
 const BOT_TAB_LABELS: Record<string, string> = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'More'};
+// The top line's tabs are icons everyone knows (#282, Chris 13 Nov): chat, the app's Tasks check, ⋯ for More.
+const BOT_MORE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+const BOT_TAB_ICON: Record<string, string> = {home: '<span class="nav-icon" aria-hidden="true">chat_bubble</span>', dm: '<span class="nav-icon" aria-hidden="true">chat_bubble</span>',
+  tasks: '<span class="nav-icon" aria-hidden="true">task_alt</span>', info: BOT_MORE_SVG};
 // The assistant is talked to only on each person's own Assistant page (#/assistant), and its helpers take their work
 // from it: neither has a DM, and the assistant has no Home.
 const botTabs = (slug: string): string[] => {
@@ -277,7 +281,8 @@ async function pageBot(slug: string, tab: string | undefined) {
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || e.slug)}">
       ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
-        return `<button type="button" data-bt="${t}" role="tab">${t === 'home' && talkTabs.length > 1 ? 'Chat' : label}</button>`; }).join('')}
+        const name = t === 'home' && talkTabs.length > 1 ? 'Chat' : label;
+        return `<button type="button" data-bt="${t}" role="tab" aria-label="${name}" title="${name}">${BOT_TAB_ICON[t] || name}</button>`; }).join('')}
     </div>
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
@@ -518,6 +523,23 @@ const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 // card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
+// The private chat's Archive sits in More (#282, Chris 13 Nov), not in the top line: a worded button in More's top row
+// when the bot has a private chat the viewer may archive; Unarchive when it is archived.
+async function botDmArchiveLoad(slug: string): Promise<void> {
+  if (!$('#bot-incognito')) return;
+  let t: ThvThread | null = null;
+  try { const r = await get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?create=false&with=' + encodeURIComponent('bot:' + slug), {fresh: true}); t = r?.thread !== undefined ? r.thread : r; }
+  catch { return; }
+  $('#bot-dm-arch')?.remove();
+  const host = $('#bot-more-top'); if (!host || !t?.id || !thvArchivable(t) || BOT?.slug !== slug) return;
+  host.insertAdjacentHTML('beforeend', `<button type="button" class="bot-learn" id="bot-dm-arch"><span class="bl-label">${t.archived_at ? 'Unarchive private chat' : 'Archive private chat'}</span></button>`);
+  const id = t.id, archived = !!t.archived_at;
+  $('#bot-dm-arch').onclick = async () => {
+    try { if (archived) threadsUnarchived(await patch(thvPath(id), {archived: false})); else await threadsArchive(id); }
+    catch (e) { toast(errorMessage(e, ''), true); }
+    void botDmArchiveLoad(slug);
+  };
+}
 function placeBotHead() {
   const host = $('#bot-more-top'), top = $('#bot-top');
   if (!host || !top) return;
@@ -589,6 +611,7 @@ function showBotTab(tab: string | null | undefined) {
   $('#pane-tasks').setAttribute('role', split ? 'complementary' : 'region');
   $('#bot-details').hidden = work;
   $('#pane-more').hidden = view !== 'info';
+  if (view === 'info') void botDmArchiveLoad(BOT.slug);
   $('#pane-docs').hidden = view !== 'instructions';
   for (const t of ['history', 'rules', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
   $('#bot-detail-tabs').querySelectorAll('[data-bot-detail-tab]').forEach((button: HTMLElement) => {

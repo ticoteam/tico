@@ -57,11 +57,10 @@
 .upd-deck-dot[aria-current]::after{background:var(--ink);width:16px;border-radius:3px}
 .upd-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;margin:6px 0 0 -8px}
 .upd-actions:not(:has(*)){display:none}
-/* Reply, Mark read and Archive sit quietly at the card's top right. */
-.upd-corner{display:inline-flex;gap:0;margin:-6px -8px -6px auto;opacity:.55;transition:opacity .15s}
-.upd-card:hover .upd-corner,.upd-corner:focus-within{opacity:1}
+/* One worded action (Reply, Edit or New update) and ⋯ at the card's top right, never faded (#282). */
+.upd-corner{display:inline-flex;align-items:center;gap:2px;margin:-6px -8px -6px auto}
 .upd-corner .upd-act{min-width:30px;height:30px;padding:0 6px}
-/* the reports' toggle ("8 >") follows Archive on the name's line, outside the corner so it never fades */
+/* the reports' toggle ("8 reports >") follows the corner on the name's line */
 .upd-meta>.upd-corner:not(:last-child){margin-right:0}
 .upd-meta>.upd-kids{height:30px;margin:-6px -8px -6px 0}
 /* A nested card is narrow on a phone: the top line does not wrap, and the name and time give way (ellipsis) so the corner stays on it.
@@ -170,3 +169,6 @@
 .upd-card.upd-flash{animation:upd-flash 2.4s var(--ease)}
 @keyframes upd-flash{0%,40%{box-shadow:0 0 0 3px var(--ink);background:color-mix(in srgb,var(--ink) 6%,var(--surface))}}
 @media (prefers-reduced-motion:reduce){.upd-card.upd-flash{animation:none;box-shadow:0 0 0 3px var(--ink)}}
+
+.upd-corner .upd-word{min-width:0;padding:0 8px;font-size:var(--t-sm);color:var(--muted)}
+@media (max-width:760px){.upd-n-w{display:none}}

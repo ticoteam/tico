@@ -328,21 +328,27 @@ function updAuthor(key: string): UpdAuthor {
 // is written on the Daily tab any day and on the Weekly tab on Friday.
 const updToday = (): string => new Date().toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const updCanWrite = (state: UpdState): boolean => state.kind === 'daily' || new Date(updToday() + 'T12:00:00Z').getUTCDay() === 5;
-// The actions are icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
-// on a phone). Reply, Mark read and Archive sit on the name's line; Mark read and Archive are swapped in place, so
-// they have their own builders.
-const updReadBtn = (read: boolean): string => read
-  ? '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark unread" title="Mark unread"><span class="nav-icon" aria-hidden="true">mark_email_unread</span></button>'
-  : '<button type="button" class="upd-act" data-upd-toggle aria-label="Mark read" title="Mark read"><span class="nav-icon" aria-hidden="true">mark_email_read</span></button>';
-const updArchiveBtn = (restore: boolean, busy: boolean): string => `<button type="button" class="upd-act" data-upd-archive aria-label="${restore ? 'Restore' : 'Archive'}" title="${restore ? 'Restore to Inbox' : 'Archive'}"${busy ? ' disabled' : ''}>${
-  restore ? '<span class="nav-icon" aria-hidden="true">unarchive</span>' : '<span class="nav-icon" aria-hidden="true">archive</span>'}</button>`;
+// One worded action on the name's line (Reply on a bot's card, Edit on your own today), then ⋯ with the rest.
 function updReplyBtn(u: UpdUpdate): string {
   const n = u.replies || 0, label = n ? `Reply, ${n} repl${n === 1 ? 'y' : 'ies'}` : 'Reply';
-  return `<button type="button" class="upd-act" data-upd-reply aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">chat_bubble</span>${n ? `<span class="upd-n">${n}</span>` : ''}</button>`;
+  return `<button type="button" class="upd-act upd-word" data-upd-reply aria-label="${label}">Reply${n ? ` <span class="upd-n">${n}</span>` : ''}</button>`;
 }
 function updWriteBtn(u: UpdUpdate): string {
   const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
-  return `<button type="button" class="upd-act" data-upd-write aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">edit</span></button>`;
+  return `<button type="button" class="upd-act upd-word" data-upd-write aria-label="${label}">${u.day === updToday() ? 'Edit' : 'New update'}</button>`;
+}
+// ⋯ holds the card's other actions, each a word: Mark read or Mark unread, then Archive or Restore to Inbox.
+const UPD_MORE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+const updMoreBtn = (): string => `<button type="button" class="upd-act upd-dots" data-upd-menu aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${UPD_MORE_SVG}</button>`;
+function updMenuOpen(state: UpdState, btn: HTMLElement, id: string): void {
+  const u = state.data?.updates?.find(x => x.id === id); if (!u) return;
+  const items: [string, string][] = [['read', u.read ? 'Mark unread' : 'Mark read']];
+  if (!state.archivePending.has(id)) items.push(['archive', state.view === 'archive' ? 'Restore to Inbox' : 'Archive']);
+  const again = THV_MENU?.button === btn;
+  thvMenuClose(); if (again) return;           // a second click on ⋯ closes it
+  // After a pick the card is redrawn: focus goes back to its new ⋯.
+  const refocus = () => document.querySelector<HTMLElement>(`#upd-feed [data-upd="${CSS.escape(id)}"] [data-upd-menu]`)?.focus({preventScroll: true});
+  thvMenuShow(btn, items, async k => { await (k === 'read' ? updToggle(state, id) : updArchive(state, id)); refocus(); });
 }
 // Bots often write Blocked: and Suggestion: lines with no bullet; markdown would fold each into the bullet above it.
 const updNormalizeBody = (body: string | null | undefined): string => String(body ?? '').replace(/^[ \t]*(Blocked|Suggestion):/gm, '- $1:');
@@ -359,9 +365,8 @@ function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
       <div class="upd-meta"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
-        <span class="upd-corner">${who.person ? '' : updReplyBtn(u)}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span>${kids}</div>
+        <span class="upd-corner">${who.person ? (u.own && updCanWrite(state) ? updWriteBtn(u) : '') : updReplyBtn(u)}${updMoreBtn()}</span>${kids}</div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(updNormalizeBody(body), {shortLinks: true})}</div>` : ''}
-      <div class="upd-actions">${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}</div>
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
           <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
@@ -468,7 +473,7 @@ function updTreeHTML(state: UpdState): string {
     // "8" and a chevron at the right of the card open its reports' cards (the chevron turns when they are open).
     const label = `${open ? 'Hide' : 'Show'} ${kids.count} report${kids.count === 1 ? '' : 's'}${kids.unread ? ', unread' : ''}`;
     const toggle = kids.count ? `<button type="button" class="upd-act upd-kids" data-upd-kids="${esc(n.key)}" aria-expanded="${open}" aria-label="${label}" title="${label}">
-        <span class="upd-n">${kids.count}</span><span class="nav-icon" aria-hidden="true">chevron_right</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
+        <span class="upd-n">${kids.count}<span class="upd-n-w"> report${kids.count === 1 ? '' : 's'}</span></span><span class="nav-icon" aria-hidden="true">chevron_right</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
     let card: string;
     if (own && state.editing) card = updEditor(u?.day === updToday() ? u : null, n, state, toggle);
     else if (u) { card = updCard(u, items.length, state, toggle); items.push(u); }
@@ -635,6 +640,7 @@ async function updGoTo(state: UpdState, id: string): Promise<void> {
   if (el) { el.classList.remove('upd-flash'); void el.offsetWidth; el.classList.add('upd-flash'); setTimeout(() => el.classList.remove('upd-flash'), 2600); }
 }
 function updRender(state: UpdState): void {
+  if (THV_MENU?.button.closest('#upd-feed')) thvMenuClose();   // a redraw replaces the ⋯ the menu hangs from
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
   updSaveDrafts();
   const data = state.data;
@@ -691,7 +697,6 @@ function updSeen(state: UpdState, id: string): void {
   u.read = true; state.pending.add(id);
   const el = document.querySelector<HTMLElement>(`#upd-feed [data-upd="${CSS.escape(id)}"]`);
   el?.classList.remove('unread', 'upd-quiet'); el?.querySelector('.upd-meta .upd-dot')?.remove();
-  const t = el?.querySelector<HTMLElement>('[data-upd-toggle]'); if (t) t.outerHTML = updReadBtn(true);
   if (!u.quiet) updBadge(Math.max(0, (S.updUnread || 1) - 1));
   clearTimeout(state.flush);
   state.flush = setTimeout(() => updFlush(state), 900);
@@ -749,8 +754,6 @@ async function updArchive(state: UpdState, id: string): Promise<void> {
   if (!update || state.archivePending.has(id)) return;
   const archived = state.view !== 'archive';
   state.archivePending.add(id); state.loadSeq++; state.mutationSeq++;
-  const button = document.querySelector<HTMLButtonElement>(`#upd-feed [data-upd="${CSS.escape(id)}"] [data-upd-archive]`);
-  if (button) button.disabled = true;                  // no repaint: an open reply draft stays put
   try {
     await post('/v2/updates/archive', {ids: [id], archived});
     updCacheClear();                                    // another view/scope must not paint stale state
@@ -775,10 +778,6 @@ async function updArchive(state: UpdState, id: string): Promise<void> {
   } catch (e) {
     state.mutationSeq++;
     state.archivePending.delete(id);
-    if (UPD === state) {
-      const current = document.querySelector<HTMLButtonElement>(`#upd-feed [data-upd="${CSS.escape(id)}"] [data-upd-archive]`);
-      if (current) current.disabled = false;
-    }
     toast(errorMessage(e, archived ? 'Could not archive the update' : 'Could not restore the update'), true);
   }
 }
@@ -845,8 +844,8 @@ function updBind(state: UpdState): void {
     }
     const id = card.dataset.upd!;
     if (target?.closest('[data-upd-reply]')) return void updOpen(state, id, true);
-    if (target?.closest('[data-upd-toggle]')) return void updToggle(state, id);
-    if (target?.closest('[data-upd-archive]')) return void updArchive(state, id);
+    const menu = target?.closest<HTMLElement>('[data-upd-menu]');
+    if (menu) return void updMenuOpen(state, menu, id);
     if (target?.closest('.upd-body') && !target.closest('a')) return void updOpen(state, id);
   });
   feed.addEventListener('submit', (ev: SubmitEvent) => {
@@ -891,6 +890,7 @@ function updBind(state: UpdState): void {
   state.keys = (ev: KeyboardEvent) => {
     if (UPD !== state || !$('#upd-feed')) return document.removeEventListener('keydown', state.keys!);
     if (eventElement(ev)?.closest('input, textarea, select, [contenteditable]') || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (THV_MENU) return;                        // the ⋯ menu has the keys while it is open
     const cur = (state.list || [])[state.sel];
     if (ev.key === 'j') { ev.preventDefault(); updSelect(state, state.sel + 1); }
     else if (ev.key === 'k') { ev.preventDefault(); updSelect(state, state.sel - 1); }
