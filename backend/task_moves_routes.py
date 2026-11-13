@@ -550,7 +550,10 @@ def register(
         with store.read() as c:
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            return {"rounds": page_rounds.rounds(c, task_id, requirement_id)}
+            return {
+                "rounds": page_rounds.rounds(c, task_id, requirement_id),
+                "notices": page_rounds.notices(c, task_id, requirement_id),
+            }
 
     @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/give")
     def task_give(request: Request, tid: str, requirement_id: str, body: M.TaskAskGive):

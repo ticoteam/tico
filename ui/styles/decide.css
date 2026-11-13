@@ -70,6 +70,7 @@ button.dc-jev{cursor:pointer}
 .dc-jev[data-v="unsure"],.dc-jev[data-v="failed"]{border-color:color-mix(in srgb,var(--wait) 40%,var(--line));background:var(--wait-bg);color:var(--wait-ink,var(--ink))}
 .dc-jev[data-v="not_met"]{border-color:color-mix(in srgb,var(--fail) 40%,var(--line));background:var(--fail-bg);color:var(--fail)}
 .dc-jev-wait{border-style:dashed;color:var(--muted);font-weight:400}
+.dc-notice{margin:0;padding:6px 10px;border-left:3px solid var(--wait,var(--line));border-radius:4px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-size:var(--t-sm);overflow-wrap:anywhere}
 .dc-jev-why{margin:-4px 0 0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
 .dc-hist{margin:0 -4px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
 .dc-hist ol{display:flex;gap:6px;margin:0;padding:2px 4px 6px;list-style:none}

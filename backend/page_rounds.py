@@ -197,3 +197,25 @@ def rounds(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> lis
             }
         )
     return out
+
+
+def notices(conn: "sqlite3.Connection", task_id: str, requirement_id: str) -> list[str]:
+    """What the person's ask of this page says besides the send back and Jev, each one sentence, for the decision view
+    to keep when it draws the rounds instead of the ask's line: new commits since an OK, a bot's read of them
+    (`Standing.notices`), and a merge conflict their OK hands to the Builder (pr_conflicts, as Needs you adds it)."""
+    from . import pr_conflicts
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    task = E.task(conn, task_id)
+    if not task or task.get("status") != "open":
+        return []
+    standings = R.standings(conn, task)
+    mine = next((s for s in standings if str(s.requirement.get("id")) == requirement_id), None)
+    if mine is None or mine.met:
+        return []
+    out = list(mine.notices)
+    held = next((s for s in standings if pr_conflicts.held(s)), None)
+    if held is not None:
+        out.append(pr_conflicts.ask_line(conn, held, str(mine.requirement.get("kind") or "")))
+    return out

@@ -38,6 +38,9 @@ interface AskOkView {
       page, and its diff. */
   rounds: DecRound[] | null;
   since: DecSince | null;
+  /** What the ask says besides the send back and Jev (new commits since an OK, a bot's read of them, a merge conflict),
+      kept on the face when the rounds replace the ask's line. */
+  notices: string[];
 }
 /** One version of a page on a page requirement, as backend/page_rounds.py gives it. */
 interface DecRound {
@@ -530,7 +533,7 @@ function decidePaintSide(st: DecState) {
   const open = taskId && kind !== 'mention' ? `<button type="button" class="linkish dc-open-task" data-dc="task">Open task${num ? ` #${num}` : ''} ↗</button>` : '';
   // A page with its rounds read: the right side in parts (decideRoundsHTML), and the stage's paragraph is gone.
   const okView = kind === 'ok' && page ? st.ok.get(decideOkKey(it)) : undefined;
-  const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version) : null;
+  const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices) : null;
   const head = parts ? `<h3 class="dc-q">${esc(title)}</h3>${parts.sub}${open}${parts.body}`
     : `<h3 class="dc-q">${esc(title || typed?.question || it.line)}</h3><p class="dc-sub">${sub}</p>${open}`
     + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
@@ -620,14 +623,16 @@ function decideRoundAnswer(r: DecRound, last: boolean): string {
 }
 /** The right side of a page's OK, in parts: "Version N · date" with Jev's chip, the review history, What changed in vN,
     Your note on vN−1, Your points. Each part is left out when it has nothing to say. */
-function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], version: number): {sub: string; body: string} {
+function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], version: number, notices: string[] = []): {sub: string; body: string} {
   let at = decideRoundAt(rounds, version);
   if (at < 0) at = rounds.length - 1;
   const now = rounds[at]!, me = myActor(), jevOpen = st.open.has(`${it.id}:jev`);
   const stage = decideStageName(it.task?.stage_id), date = shortDate(now.at);
   const sub = `<div class="dc-ver"><p class="dc-sub">${[esc(stage), `Version ${now.version}${date ? ` · ${esc(date)}` : ''}`].filter(Boolean).join(' · ')}</p>`
     + `${decideJevChip(now.jev, jevOpen)}</div>`
-    + (jevOpen && now.jev.reason ? `<p class="dc-jev-why">${esc(now.jev.reason)}</p>` : '');
+    + (jevOpen && now.jev.reason ? `<p class="dc-jev-why">${esc(now.jev.reason)}</p>` : '')
+    // Why they are asked again, and a conflict their OK hands to the Builder: said before anything else is read.
+    + notices.map(n => `<p class="dc-notice" role="note">${esc(n)}</p>`).join('');
   const parts: string[] = [];
   if (rounds.length > 1) {
     // One step per version: its date, Jev's chip and the answer it got. A click opens that version in the page viewer.
@@ -803,7 +808,7 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
 async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
   const rid = decideRid(it), key = decideOkKey(it);
   const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [],
-    page: decidePage(it), shows: decideShows(it), rounds: null, since: null};
+    page: decidePage(it), shows: decideShows(it), rounds: null, since: null, notices: []};
   const before = st.ok.get(key);
   if (before) decideOkLet(before);
   st.ok.set(key, v);
@@ -937,8 +942,9 @@ async function decideRoundsRead(v: AskOkView, it: NeedsEntry): Promise<string[] 
   const taskId = decideTaskId(it), rid = decideRid(it), page = it.ask?.page;
   if (!taskId || !page) return null;
   try {
-    const r = await get<{rounds?: DecRound[]}>(`/v2/tasks/${encodeURIComponent(taskId)}/asks/${encodeURIComponent(rid)}/rounds`, {fresh: true});
+    const r = await get<{rounds?: DecRound[]; notices?: string[]}>(`/v2/tasks/${encodeURIComponent(taskId)}/asks/${encodeURIComponent(rid)}/rounds`, {fresh: true});
     v.rounds = Array.isArray(r.rounds) && r.rounds.length ? r.rounds : null;
+    v.notices = Array.isArray(r.notices) ? r.notices.filter(n => typeof n === 'string' && n.trim()) : [];
   } catch { v.rounds = null; }
   const now = decideRoundAt(v.rounds, page.version);
   if (!v.rounds || now < 0) return null;

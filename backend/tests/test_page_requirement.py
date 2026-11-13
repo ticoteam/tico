@@ -13,6 +13,7 @@ import pytest
 from backend import answers as A
 from backend import decide_groups as DG
 from backend import item_metadata as IM
+from backend import page_rounds as PR
 from backend import page_verdicts as V
 from backend import pipeline_judges as PJ
 from backend import task_engine as E
@@ -710,7 +711,7 @@ def _review_wakes(c, row):
     return [(key, to) for key, to in X.wakes(c, row["id"]) if ":review_new:" in key]
 
 
-def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked(c, store):
+def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked(c, store, monkeypatch):
     """Live, rc.7 (Nov 12, 00:48Z): the Builder pushed dce5a62 in QA, after both reviews; Jev was unsure (p 0.51)
     and the pre-release OK went to the person with no bot's review of that commit, which broke an acceptance criterion.
     Now the bot that wrote the newest review reads only the new commits first; the person is asked after it OKs them."""
@@ -742,7 +743,21 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
         "reviewer reviewed the commits since the reviews: Read dce5a62: sign() fixed, the tests cover 0. "
         "Jev is unsure: Can't tell"
     )
+    # The decision view draws the page's rounds instead of this line: the bot's read stays on the face as a notice,
+    # and so does a merge conflict the person's OK hands to the Builder (as Needs you adds it to the line).
+    read = "reviewer reviewed the commits since the reviews: Read dce5a62: sign() fixed, the tests cover 0."
+    assert standing.notices == (read,)
+    assert PR.notices(c, row["id"], rid) == [read]
+    from backend import pr_conflicts as PC
+
+    held = R.Standing({"id": "conflict:x", "kind": PC.KIND}, R.NOT_MET, WRITER)
+    standings = R.standings
+    monkeypatch.setattr(R, "standings", lambda conn, task: [held, *standings(conn, task)])
+    monkeypatch.setattr(PC, "held", lambda s: s is held)
+    assert PR.notices(c, row["id"], rid) == [read, "The PR has a merge conflict: writer fixes it after your OK."]
+    monkeypatch.undo()
     A.answer(c, row["id"], rid, BEN, "ok")
+    assert PR.notices(c, row["id"], rid) == [], "nothing to say once it is OK'd"
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 

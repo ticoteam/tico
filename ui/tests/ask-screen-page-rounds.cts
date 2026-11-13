@@ -45,6 +45,8 @@ const pages: Record<string, string> = {
   'pa@3': body('<p>The evidence has counts and sources.</p><p>Decide: OK this page.</p>'),
   'pb@1': '<h1>Paste images spec</h1><p>Paste.</p>',
 };
+// What the ask says besides the send back and Jev: kept on the face when the parts replace the line.
+const CONFLICT = 'The PR has a merge conflict: Builder fixes it after your OK.';
 const round = (version: number, day: number, verdict: string | null, reason: string, answers: unknown[], more: Record<string, unknown> = {}) => ({
   file_id: 'pa', version, at: `2026-11-${day}T09:00:00Z`, by: 'bot:pm', replaced: version < 3, note: '', changed: [], answered: [],
   jev: {verdict, reason}, answers, ...more});
@@ -75,10 +77,11 @@ async function open(page: Page, errors: string[]) {
     if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: 2, version: '1', next: null, items: [
       need('t-a', 'Decision view: a page that comes back', 'pa', 3, 10,
-        'Version 3, after the send back: "' + NOTE + '". Jev is unsure: p 0.73, between 0.2 and 0.75. OK Ana (version 3)'),
+        'New commits since Ana\'s OK. Version 3, after the send back: "' + NOTE + '". Jev is unsure: p 0.73, between 0.2 and 0.75. '
+        + 'OK Ana (version 3) ' + CONFLICT),
       need('t-b', 'Paste images', 'pb', 1, 11, 'OK Ana (version 1)')]});
     if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);
-    if (p === `/api/v2/tasks/t-a/asks/${RID}/rounds`) return json({rounds});
+    if (p === `/api/v2/tasks/t-a/asks/${RID}/rounds`) return json({rounds, notices: ["New commits since Ana's OK.", CONFLICT]});
     if (p === `/api/v2/tasks/t-b/asks/${RID}/rounds`) return json({rounds: [{...round(1, 13, null, '', []), file_id: 'pb', replaced: false}]});
     if (p === '/api/v2/pages/pa') return json({page: {file_id: 'pa', title: 'Decision view', version: 3, kind: 'page', created_at: '2026-11-11T09:00:00Z',
       updated_at: '2026-11-13T09:00:00Z', owner: 'bot:pm'}, pinned: [], can_manage: false, can_delete: false});
@@ -107,6 +110,9 @@ async function open(page: Page, errors: string[]) {
     const dialog = await open(page, errors);
     const side = dialog.locator('.dc-side');
     assert.equal(await side.locator('.dc-said').count(), 0, "the paragraph of today is gone");
+    // Why Ana is asked again, and the conflict her OK hands to the Builder, stay on the face, before the history.
+    assert.deepEqual(await side.locator('.dc-notice').allInnerTexts(), ["New commits since Ana's OK.", CONFLICT]);
+    assert.ok(await side.locator('.dc-notice + * .dc-step, .dc-notice ~ .dc-hist').count() > 0, 'the notices come before the history');
     assert.doesNotMatch(await side.innerText(), /p 0\.73|between 0\.2/, 'no p-value on the face');
     assert.doesNotMatch(await side.innerText(), /Version 3, after the send back/, "their note is not quoted back in the heading");
     assert.match(await side.locator('.dc-ver .dc-sub').innerText(), /^Spec · Version 3 · Nov 13$/);
