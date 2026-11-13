@@ -21,6 +21,7 @@ interface DecAboutTask {
   created_at?: string | null;
   attachments?: {id: string; name?: string | null}[] | null;
   links?: {url: string; title?: string | null; kind?: string | null}[] | null;
+  tags?: {owner?: string | null}[] | null;
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
@@ -54,7 +55,11 @@ function decideAboutLoad(taskId: string) {
     } catch (e) { v.state = 'failed'; v.error = errorMessage(e, 'This task could not be read.'); }
     if (DEC_ABOUT.get(taskId) !== v) return;
     const st = DEC, it = st ? decideCurrent(st) : null;
-    if (st && it && decideTaskId(it) === taskId && decideKind(it) !== 'ok') { decidePaintBody(st); decidePaintSide(st); }
+    if (!st || !it || decideTaskId(it) !== taskId) return;
+    // An OK shows its own content, not the task's text; only its 👎 sheet (Give to…'s suggestions) reads the task.
+    const ok = decideKind(it) === 'ok';
+    if (!ok) decidePaintBody(st);
+    if (!ok || st.sheet) decidePaintSideKeepGive(st, it);
   })();
 }
 /** The item on screen, and ahead of it the next item that shows a task's text (an OK shows its own content). */

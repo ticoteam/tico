@@ -804,13 +804,28 @@ function decideTypedHTML(typed: NonNullable<TaskReq['typed']>, choices: string[]
   }
   return `<textarea id="dc-other" rows="3" maxlength="4000" aria-label="${esc(typed.question || typed.name)}"></textarea>${send}`;
 }
+/** What Give to…'s suggestions read: the whole task the screen loads (its body and area tags), else the item's brief
+    while that read is on its way or failed. */
+const decideGiveTask = (it: NeedsEntry): GiveToTask | null => decideAboutOf(it)?.task || it.task || null;
+/** Draws the right side again once the task's read arrives, without losing Give to…: while its picker is open the side
+    stays (redrawing would take the picker's button away, and a pick would land nowhere) and the field's next opening
+    reads the whole task; a pick not yet given is kept on the new field. */
+const decideGiveBtn = () => $('.decide button[data-give-to]') as HTMLButtonElement | null;
+function decidePaintSideKeepGive(st: DecState, it: NeedsEntry) {
+  const btn = decideGiveBtn();
+  if (btn?.getAttribute('aria-expanded') === 'true') { GIVE_TO_TASKS.set(btn.dataset.giveTo || '', decideGiveTask(it)); return; }
+  const to = decideTo();
+  decidePaintSide(st);
+  const now = decideGiveBtn(), e = to ? giveToEntries(to).find(x => giveToIs(x, to)) : undefined;
+  if (now && e) giveToFieldSet(now, e);
+}
 /** Snooze, Give to… and Move back open their choices under the buttons. */
 function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   const busy = st.busy ? ' disabled' : '';
   if (st.more === 'snooze')
     return `<div class="dc-more">${decideBtn('snooze-1', 'Tomorrow', false, busy)}${decideBtn('snooze-7', 'Next week', false, busy)}</div>`;
   if (st.more === 'give')
-    return `<div class="dc-more">${giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task, current: it.task?.owner_id})}${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
+    return `<div class="dc-more">${giveToFieldHTML({id: 'dc-to', label: 'Give to', task: decideGiveTask(it), current: it.task?.owner_id})}${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
   if (st.more === 'back') {
     const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.id === it.task?.pipeline_id);
     const at = p ? p.stages.findIndex(s => s.id === it.task?.stage_id) : -1;
@@ -831,7 +846,7 @@ function decideSheetHTML(st: DecState, it: NeedsEntry): string {
   const chips = DEC_CHIPS.map(([k, label]) => `<button type="button" class="dc-chip" data-dc-chip="${k}" aria-pressed="${sh.chip === k}"${busy}>${esc(label)}</button>`).join('');
   const give = sh.chip === 'person';
   return `<div class="dc-chips">${chips}</div><textarea id="dc-why" data-dc-note rows="3" maxlength="4000" aria-label="What was wrong">${esc(sh.note)}</textarea>
-    ${give ? giveToFieldHTML({id: 'dc-to', label: 'Give to', task: it.task, current: it.task?.owner_id}) : ''}
+    ${give ? giveToFieldHTML({id: 'dc-to', label: 'Give to', task: decideGiveTask(it), current: it.task?.owner_id}) : ''}
     <div class="dc-acts">${give ? decideBtn('why-give', 'Give to…', true, ' data-dc-needs="#dc-to" disabled')
       : decideBtn('why-back', 'Send back', true, busy)}${feedbackRuleOn(it) ? decideBtn('why-rule', 'Make a rule', false, busy) : ''}</div>`;
 }
@@ -1227,6 +1242,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       return;
     case 'down':
       st.sheet = st.sheet ? null : {step: 'why', chip: '', note: '', feedbackId: '', rule: '', allBots: false};
+      // An OK's task is not read for its left side; the sheet's Give to… suggests from it, so read it now (once).
+      if (st.sheet) decideAboutLoad(decideTaskId(it));
       decidePaintHead(st); decidePaintSide(st); return;
     case 'why-back': await decideDo(st, it, 'Sent back', () => taskThumbs(taskId, rid, false, decideWhy(st.sheet))); return;
     case 'why-give': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskGiveAsk(taskId, rid, to, ver)); return; }

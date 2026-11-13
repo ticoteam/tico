@@ -13,6 +13,7 @@ declare function giveToMatch(q: string, entries: unknown[]): {name: {name: strin
 declare function giveToSuggest(entries: unknown[], task: unknown, recent: string[]): {entry: {name: string}; why: string}[];
 declare function openTaskCreate(owner?: string, opts?: Record<string, unknown>): void;
 declare function decideOpen(id?: string, items?: unknown[]): boolean;
+declare const DEC_ABOUT: Map<string, {state: string}>;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {open} = require('./task-code.cts') as {open: (browser: Browser, opts?: Record<string, unknown>) => Promise<{page: Page; errors: string[]; data: {tasks: Record<string, unknown>[]}}>};
@@ -212,6 +213,16 @@ async function phone(browser: Browser): Promise<void> {
   console.log('give-to: phone ok');
 }
 
+// A Give answers, then Needs you reads itself again in the background (decideDo's v2Refresh). A case that then swaps the
+// list waits for that read and its redraw first: one landing late redraws the screen under the next case's picker.
+async function giveAndSettle(page: Page, click: () => Promise<void>): Promise<void> {
+  const needs = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/needs-you');
+  const status = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/status');
+  await click();
+  await Promise.all([needs, status]);
+  await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+}
+
 // Needs you (decide.ts): Give to… on a task of yours. Suggested is who asked and the bots the title names; the current
 // owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give sends the pick.
 async function needsYou(browser: Browser): Promise<void> {
@@ -252,9 +263,31 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});
   assert.equal(await give.isDisabled(), false);
-  await give.click();
-  for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(100);
+  await giveAndSettle(page, () => give.click());
   assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['botops'], 'Give sends the value the old list sent');
+
+  // Suggested reads the whole task the screen loads, not only the item's brief (title and requester): a bot named only
+  // in the body and the area tag's owner are suggested too, the same as the task's Owner menu (#385 in production).
+  const bare = {...brief, id: 't-body', number: 9, title: 'The board shows the wrong stage', owner_id: 'bot:jev'};
+  const full = {...bare, body: 'BotOps sees it on every run; Engineer last touched the stage code.', tags: [{id: 'g-bugs', key: 'bugs', owner: 'bot:b-release'}]};
+  const bodyItem = {id: 't-body', kind: 'task', line: bare.title, since: now, task: bare, task_id: 't-body'};
+  let reads = 0;
+  await page.route('**/api/v2/tasks/t-body', route => { reads++; return route.fulfill({json: {task: full}}); });
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [bodyItem]}}));
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 't-body'));
+  assert.equal(await page.evaluate(i => decideOpen('t-body', [i]), bodyItem), true);
+  await page.locator('.decide .dc-md').waitFor();
+  assert.equal(reads, 1, 'the screen read the task once');
+  await page.locator('.decide [data-dc="give"]').click();
+  await field.click();
+  await pop.waitFor();
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gv-name')?.textContent}: ${r.querySelector('.gv-why')?.textContent}`)),
+    ['Sam: Asked for it', 'BotOps: Named in the task', 'Engineer: Named in the task', 'Release Owner: Owns its area']);
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
+  assert.equal(reads, 1, 'opening the picker made no network call');
 
   // 👎 on a bot's question, Wrong person: the same field, ✓ on the task's owner, and Give to… sends the pick.
   const ask = {kind: 'ask', id: 'r-ny', task_id: 't-ask', requirement_id: 'r-ny', line: 'Which day does the beta start?', since: now,
@@ -264,10 +297,12 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.unroute('**/api/v2/needs-you**');
   await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [ask]}}));
   const given: unknown[] = [];
+  await page.route('**/api/v2/tasks/t-ask', route => route.fulfill({json: {task: {...ask.task, body: 'API Engineer has the dates.'}}}));
   await page.route('**/api/v2/tasks/t-ask/asks/r-ny/give', route => { given.push(route.request().postDataJSON()); return route.fulfill({json: {task: ask.task}}); });
   await page.evaluate(() => v2NeedsRead());
   await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ny'));
   assert.equal(await page.evaluate(i => decideOpen('r-ny', [i]), ask), true);
+  await page.locator('.decide .dc-md').waitFor();
   await page.locator('.decide [data-dc="down"]').click();
   await page.locator('.decide [data-dc-chip="person"]').click();
   const why = page.locator('.decide button[data-give-to]'), whyGive = page.locator('.decide [data-dc="why-give"]');
@@ -276,12 +311,76 @@ async function needsYou(browser: Browser): Promise<void> {
   await pop.waitFor();
   assert.deepEqual(await pop.locator('[aria-checked=true] .gv-name').allTextContents(), ['Jev'], "the task's owner shows ✓");
   assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="finance"]').count(), 1, 'a bot the title names is suggested');
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 1, 'a bot only the body names is suggested');
   await page.keyboard.type('sam');
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});
-  await whyGive.click();
-  for (let i = 0; i < 50 && !given.length; i++) await page.waitForTimeout(100);
+  await giveAndSettle(page, () => whyGive.click());
   assert.deepEqual(given.map(b => (b as {to: string}).to), ['human:sam']);
+
+  // 👎 on a bot's OK ask: an OK shows its own content, so the task is read only when 👎 opens; Suggested then has the
+  // bot its body names. The read lands while the picker is open: the picker stays and its pick is the one given.
+  const okAsk = {...ask, id: 'r-ok', requirement_id: 'r-ok', task_id: 't-ok', line: 'OK to start the beta?',
+    task: {...ask.task, id: 't-ok', number: 10, title: 'Start the beta'},
+    ask: {...ask.ask, requirement_id: 'r-ok', kind: 'ok', line: 'OK to start the beta?', may: ['ok', 'no', 'give', 'thumbs']}};
+  let okReads = 0, release: () => void = () => {};
+  const held = new Promise<void>(r => { release = r; });
+  await page.route('**/api/v2/tasks/t-ok', async route => { okReads++; await held; return route.fulfill({json: {task: {...okAsk.task, body: 'API Engineer has the dates.'}}}); });
+  const okGiven: unknown[] = [];
+  await page.route('**/api/v2/tasks/t-ok/asks/r-ok/give', route => { okGiven.push(route.request().postDataJSON()); return route.fulfill({json: {task: okAsk.task}}); });
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [okAsk]}}));
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ok'));
+  assert.equal(await page.evaluate(i => decideOpen('r-ok', [i]), okAsk), true);
+  await page.locator('.decide [data-dc="down"]').click();
+  for (let i = 0; i < 50 && !okReads; i++) await page.waitForTimeout(100);
+  assert.equal(okReads, 1, '👎 on an OK reads its task');
+  await page.locator('.decide [data-dc-chip="person"]').click();
+  await why.click();
+  await pop.waitFor();
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 0, 'before the read lands: the brief only');
+  release();
+  await page.waitForFunction(() => DEC_ABOUT.get('t-ok')?.state === 'ready');
+  await page.waitForTimeout(200);
+  assert.equal(await pop.isVisible(), true, 'the read landing does not close the open picker');
+  await page.keyboard.type('sam');
+  await page.keyboard.press('Enter');
+  await pop.waitFor({state: 'detached'});
+  assert.equal(await why.locator('.gv-name').textContent(), 'Sam', 'the pick is on the field on screen');
+  await why.click();
+  await pop.waitFor();
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 1, 'opened again: a bot only the body names is suggested');
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
+  await giveAndSettle(page, () => whyGive.click());
+  assert.deepEqual(okGiven.map(b => (b as {to: string}).to), ['human:sam'], 'the pick made while the read was on its way is given');
+  assert.equal(okReads, 1, 'one read for the task');
+
+  // The read lands after a pick, with the picker closed: the side draws again and keeps the pick, Give still on.
+  const ok2 = {...okAsk, id: 'r-ok2', requirement_id: 'r-ok2', task_id: 't-ok2', task: {...okAsk.task, id: 't-ok2', number: 11},
+    ask: {...okAsk.ask, requirement_id: 'r-ok2'}};
+  let release2: () => void = () => {};
+  const held2 = new Promise<void>(r => { release2 = r; });
+  await page.route('**/api/v2/tasks/t-ok2', async route => { await held2; return route.fulfill({json: {task: {...ok2.task, body: 'API Engineer has the dates.'}}}); });
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [ok2]}}));
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ok2'));
+  assert.equal(await page.evaluate(i => decideOpen('r-ok2', [i]), ok2), true);
+  await page.locator('.decide [data-dc="down"]').click();
+  await page.locator('.decide [data-dc-chip="person"]').click();
+  await why.click();
+  await pop.waitFor();
+  await page.keyboard.type('sam');
+  await page.keyboard.press('Enter');
+  await pop.waitFor({state: 'detached'});
+  await page.evaluate(() => { document.querySelector('.decide button[data-give-to]')!.setAttribute('data-before-read', ''); });
+  release2();
+  await page.waitForFunction(() => DEC_ABOUT.get('t-ok2')?.state === 'ready');
+  await page.waitForFunction(() => !document.querySelector('.decide [data-before-read]'));
+  assert.equal(await why.locator('.gv-name').textContent(), 'Sam', 'the pick survives the side drawing again');
+  assert.equal(await whyGive.isDisabled(), false, 'Give stays on');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('give-to: needs you ok');
