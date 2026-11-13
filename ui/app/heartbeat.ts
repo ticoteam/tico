@@ -116,8 +116,8 @@ function renderAccount(): void {
   const signOut: HTMLElement | null = $('#sign-out');
   if (signOut) signOut.hidden = !me.proxy_session;
 }
-// The company app gets a browser nudge; a generic build is only a manual-setup option in
-// the account menu. Neither appears inside the app. Dismissal hides the nudge for a week.
+// Only the company's own app is offered: a menu link and a browser nudge. Neither appears
+// inside the app. Dismissal hides the nudge for a week.
 const visitorOS = (): string => /Win/.test(navigator.platform) ? 'windows' : /Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent) ? 'linux' : /Mac/.test(navigator.platform) ? 'mac' : '';
 const OS_WORDS: Record<string, string> = {mac: 'Mac', windows: 'Windows', linux: 'Linux'};
 interface DownloadInfo {
@@ -144,19 +144,18 @@ async function renderDownloadLink(): Promise<void> {
   try {
     const r = await fetch('/api/download/' + os, {credentials: 'same-origin'});
     const d: DownloadInfo | null = r.ok ? await r.json() : null;
-    if (request !== downloadRequest || !eligible() || !d?.available || typeof d.url !== 'string' || !d.url.trim()) return;
+    if (request !== downloadRequest || !eligible() || !d?.available || d.app_kind !== 'company' || typeof d.url !== 'string' || !d.url.trim()) return;
     // The API validates the installer source. Use that exact version, without selecting a
     // manifest again, and never turn a non-web URL into an executable link.
     const url = new URL(d.url, location.href);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return;
-    const company = d.app_kind === 'company';
-    const label = company ? `Download Tico for ${companyName()}` : 'Generic Tico · manual setup';
+    const label = `Download Tico for ${companyName()}`;
     a.href = d.url;
     a.textContent = '';
     a.insertAdjacentHTML('beforeend', `<span class="nav-icon" aria-hidden="true">download</span>${esc(label)}${os === 'mac' ? betaPill('mac_app') : ''}`);
-    a.title = `${company ? appName() : 'Generic Tico'} ${d.version || ''} for ${OS_WORDS[os]} (${d.size_mb || '?'} MB)${company ? '' : '. Requires manual server setup'}${d.notarized || os !== 'mac' ? '' : '. First open: System Settings → Privacy & Security → Open Anyway'}`;
+    a.title = `${appName()} ${d.version || ''} for ${OS_WORDS[os]} (${d.size_mb || '?'} MB)${d.notarized || os !== 'mac' ? '' : '. First open: System Settings → Privacy & Security → Open Anyway'}`;
     a.hidden = false;
-    if (!nudge || !company) return;
+    if (!nudge) return;
     let snoozed = 0;
     try { snoozed = Number(localStorage.getItem('hub.app-nudge.until') || 0); } catch {}
     if (snoozed > Date.now()) { nudge.hidden = true; return; }
