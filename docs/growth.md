@@ -88,7 +88,38 @@ the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goal
 ## Sources
 
 **Sources** lists the systems that hold each number (spend, customers, retention) and which number each one is the truth
-for. The numbers are entered from them each week; the rows stay in those systems.
+for. A source that only names a system is typed by hand: someone reads its numbers and enters them.
+
+**Synced sources.** A source can fill its numbers itself. Today that is a **file**: a CSV with a `month` column
+(`YYYY-MM`), a `channel` column (a channel's slug or name; blank or `unknown` is Unknown) and one column per number. Map
+each number to its column once; the month and channel columns may have other names too:
+
+```
+tico growth source add --truth-for "new customers" --system "Signups sheet" --sync file \
+  --map new_customers=signups --map revenue_month=revenue --map channel=source
+tico growth source push <id> --file signups.csv
+```
+
+- **Months.** The first good run fills up to 12 months back. Later runs rewrite only the current month and the two
+  before it, for late data and restatements. A future month is never written.
+- **Rows it does not write.** A row naming a channel Growth does not have is not written; the run lists it, with
+  the rows outside the months it may write.
+- **Where each number came from.** Every number records whether it was synced (which source, when) or typed (by whom),
+  and whether it is actual or an estimate. `tico growth cohort list --json` and `tico growth numbers --json` show it
+  under `origins`.
+- **Who wins.** A number a synced source filled belongs to it: typing it is refused, naming the source, until the source
+  is retired. A sync never overwrites a number someone typed as actual. When the two differ, the typed number stays and
+  the source's value is held beside it, and the source's owner or an admin keeps one
+  (`tico growth cohort resolve ... --keep typed|source`). A value they chose not to use is not raised again. A typed
+  estimate is replaced by the synced actual.
+- **One source per number.** Two live synced sources never fill the same number.
+- **Health.** `tico growth source list` shows each synced source as fresh, waiting (never run), stale (no good run in
+  twice its refresh time, `--refresh-hours`; a file's is a week) or failing, with the reason. A failed run changes
+  nothing already written. The source's owner gets one notice when it starts failing and one when it recovers.
+- **Run again.** `tico growth source sync <id>` runs a file source's last file again, after a remap say.
+
+The owner and admins connect, remap and retire a synced source. The owner, an admin or the source's own owner sends it
+rows.
 
 ## Marketing tasks
 
@@ -156,6 +187,9 @@ tico growth numbers                       the page: each month's rows, Unknown a
 tico growth setup                         the four first-run steps, each done or not, and the next one
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
 tico growth source list | add | update ID | retire ID
+tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
+tico growth source push ID --file FILE.csv | sync ID
+tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N]
                  [--d30 N] [--d90 N] [--d180 N] [--revenue N] [--margin N]

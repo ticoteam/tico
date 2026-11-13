@@ -6,7 +6,8 @@ they add up to, and the sources each number's truth lives in.
   monthly budget, the source its numbers come from, and an optional guardrail (a KPI that must stay at or under a max).
   A channel's marketing work is the open tasks labelled `channel:<slug>` (backend/marketing_tasks.py).
 - Sources (`gtm_sources`): which system is the truth for what, and how a bot reaches it. Two live sources for the
-  same thing are a conflict the page shows.
+  same thing are a conflict the page shows. A source with a sync kind fills numbers itself, and each number records
+  where it came from (backend/growth_sync.py).
 - Cohorts (`growth_cohorts`): one row per channel per month (no channel is Unknown). `economics` turns them into CAC,
   LTV and payback.
 - The KPI tree is four columns on `kpis` (parent, growth role, funnel stage, loop): at most one North Star.
@@ -20,6 +21,7 @@ import math
 
 from fastapi import Request
 
+from . import growth_sync as GS
 from . import hubdb as H
 from . import models as M
 from .brand import admin
@@ -104,6 +106,7 @@ def economics_row(cohort, settings):
         "payback_months": round(cac / per_month, 2) if cac is not None and per_month else None,
         "quality": cohort.get("quality") or "actual",
         "sources": cohort.get("sources") or {},
+        "origins": cohort.get("origins") or {},
     }
 
 
@@ -155,6 +158,7 @@ def aggregate(cohorts, settings):
         "profit_month": weighted(profit),
         "quality": "estimate" if any(c.get("quality") == "estimate" for c in cohorts) else "actual",
         "sources": {},
+        "origins": {},
     }
     if total["new_customers"] is not None:
         total["new_customers"] = int(total["new_customers"])
@@ -212,13 +216,14 @@ def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
 
 
 def source_view(row):
-    return {k: row.get(k) for k in SOURCE_FIELDS}
+    """A source and, when it syncs, its kind, what it fills, its mapping and health (backend/growth_sync.py)."""
+    return {**{k: row.get(k) for k in SOURCE_FIELDS}, **GS.view(row)}
 
 
 def sources(c, include_retired=False):
     rows = H._rows(
         c.execute(
-            "SELECT * FROM gtm_sources"
+            f"SELECT {GS.listed(c)} FROM gtm_sources"
             + ("" if include_retired else " WHERE retired_at IS NULL")
             + " ORDER BY truth_for COLLATE NOCASE, system COLLATE NOCASE"
         )
@@ -233,7 +238,7 @@ def sources(c, include_retired=False):
     }
 
 
-def _cohort_view(row, slugs):
+def _cohort_view(row, slugs, origins=None):
     return {
         "id": row["id"],
         "channel": slugs.get(row["channel_id"]) if row["channel_id"] else None,
@@ -253,6 +258,7 @@ def _cohort_view(row, slugs):
             )
         },
         "sources": json.loads(row["sources"] or "{}"),
+        "origins": (origins or {}).get(row["id"], {}),
         "updated_by": row["updated_by"],
         "updated_at": row["updated_at"],
     }
@@ -286,7 +292,8 @@ def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
             args + [limit],
         )
     )
-    return [_cohort_view(r, slugs) for r in rows]
+    origins = GS.origins_view(c, [r["id"] for r in rows])
+    return [_cohort_view(r, slugs, origins) for r in rows]
 
 
 def _latest_value(c, kpi_id):
@@ -364,11 +371,11 @@ def economics(c, month=None, hidden=()):
     if not rows:
         # A month with no numbers yet still lists every active channel and Unknown, each blank, for the first entry.
         rows = [
-            {"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
+            {"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}, "origins": {}}
             for ch in by_slug.values()
             if not ch.get("retired_at")
         ]
-        rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
+        rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}, "origins": {}})
     rows.sort(key=lambda r: (r["channel"] == UNKNOWN, (by_slug.get(r["channel"]) or {}).get("sort", 0), r["name"]))
     total = economics_total(inputs, conf)
     if not inputs:
@@ -503,20 +510,44 @@ def channel_retire(c, actor, slug):
     return channel_view(channel(c, slug))
 
 
+def _sync_fields(c, fields, sid, kind):
+    """A synced source's mapping, checked (backend/growth_sync.py check_map), as the JSON column holds it."""
+    mapping = fields.get("sync_map")
+    if hasattr(mapping, "model_dump"):
+        mapping = mapping.model_dump(exclude_none=True)
+    return json.dumps(GS.check_map(c, kind, mapping, sid), sort_keys=True)
+
+
 def source_create(c, actor, body):
     H._writer(c, actor)
+    reach = body.reach_kind or ("person" if body.sync_kind == "file" else None)
+    if not reach:
+        raise Problem("validation", "reach_kind is mcp, credential, url or person", 422)
+    sid = H.new_id()
     row = {
-        "id": H.new_id(),
+        "id": sid,
         "truth_for": body.truth_for,
         "system": body.system,
-        "reach_kind": body.reach_kind,
+        "reach_kind": reach,
         "reach_ref": body.reach_ref,
         "may": body.may,
         "owner_ref": _owner_ref(c, body.owner_ref),
         "created_at": H.now(),
     }
+    if body.sync_kind:
+        row.update(
+            sync_kind=body.sync_kind,
+            sync_map=_sync_fields(c, {"sync_map": body.sync_map}, sid, body.sync_kind),
+            refresh_hours=body.refresh_hours,
+        )
     c.execute(f"INSERT INTO gtm_sources ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
-    H.event(c, actor, "growth.source.create", row["id"], {"truth_for": body.truth_for, "system": body.system})
+    H.event(
+        c,
+        actor,
+        "growth.source.create",
+        row["id"],
+        {"truth_for": body.truth_for, "system": body.system, "sync_kind": body.sync_kind},
+    )
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (row["id"],)))
 
 
@@ -530,6 +561,10 @@ def source_update(c, actor, sid, fields, retire=False):
     for required in ("truth_for", "system", "reach_kind", "reach_ref", "may"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
+    if "sync_map" in fields or "sync_kind" in fields:
+        kind = fields.get("sync_kind", row.get("sync_kind"))
+        mapping = fields.get("sync_map") if "sync_map" in fields else json.loads(row.get("sync_map") or "{}")
+        fields["sync_map"] = _sync_fields(c, {"sync_map": mapping}, sid, kind) if kind else "{}"
     if retire and not row["retired_at"]:
         fields["retired_at"] = H.now()
     changed = {k: v for k, v in fields.items() if row.get(k) != v}
@@ -556,6 +591,7 @@ def cohort_set(c, actor, body):
     fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources")}
     if "quality" in fields and fields["quality"] is None:
         fields["quality"] = "actual"
+    GS.refuse_typed(c, row, [k for k in fields if k in GS.FIELDS], slug or UNKNOWN, body.month)
     sources = dict(json.loads(row["sources"] or "{}")) if row else {}
     if body.sources is not None:
         for key, text in body.sources.items():
@@ -577,8 +613,14 @@ def cohort_set(c, actor, body):
             f"INSERT INTO growth_cohorts ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
             list(fields.values()),
         )
+    if "quality" in fields:
+        c.execute("UPDATE growth_origins SET quality=? WHERE cohort_id=? AND origin='typed'", (fields["quality"], cid))
+    saved = H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)) or {}
+    GS.record_typed(
+        c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
+    )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
-    return _cohort_view(H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)), _slugs(c))
+    return _cohort_view(saved, _slugs(c), GS.origins_view(c, [cid]))
 
 
 def settings_update(c, actor, fields):
@@ -622,18 +664,18 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
-    from . import growth_setup as GS
+    from . import growth_setup as SETUP
     from .goal_routes import _hidden_owners, kpi_editable
 
     def answer(who, out, seen=False):
         """A read's answer with what the caller may do and Growth's setup (backend/growth_setup.py)."""
-        return GS.attach(store, auth, who, out, seen=seen)
+        return SETUP.attach(store, auth, who, out, seen=seen)
 
     def wrote(c, who, result):
         """After a write: the setup steps it finished get their first done date, and the answer says what is next,
         so the four steps chain without a read between them."""
-        GS.record(c, who.actor)
-        return {**result, "setup": GS.block(c, auth, who)}
+        SETUP.record(c, who.actor)
+        return {**result, "setup": SETUP.block(c, auth, who)}
 
     def reader(who):
         auth.domain(who)
@@ -758,6 +800,41 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
+    @app.post("/api/v2/growth/sources/{sid}/rows")
+    def growth_source_rows(request: Request, sid: str, body: M.GrowthSourceRows):
+        """Owner, admin or the source's own owner: one run of a synced source from a CSV, rows, or the error its
+        fetch ended with. A run that cannot write answers ok false with the reason; nothing it wrote changes."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            row = GS.may_run(c, sid, who.actor, admin(auth, who))
+            sent = [k for k in ("csv", "rows", "error") if getattr(body, k) is not None]
+            if len(sent) != 1:
+                raise Problem("validation", "Send one of csv, rows or error", 422)
+            return GS.run(c, who.actor, row, rows=body.rows, csv_text=body.csv, error=body.error)
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/growth/sources/{sid}/sync")
+    def growth_source_sync(request: Request, sid: str, body: M.Empty):
+        """Owner, admin or the source's own owner: run a synced source now. A file source runs its last file again
+        (after a remap, say)."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            row = GS.may_run(c, sid, who.actor, admin(auth, who))
+            if row["sync_kind"] == "file":
+                if not row.get("last_payload"):
+                    raise Problem(
+                        "conflict", f"{row['system']} has no file yet: send one with tico growth source push", 409
+                    )
+                return GS.run(c, who.actor, row, csv_text=row["last_payload"])
+            raise Problem("conflict", f"{row['system']} cannot be run from here yet", 409)
+
+        return mutate(request, body, work)
+
     @app.get("/api/v2/growth/cohorts")
     def growth_cohorts(
         request: Request, channel: str | None = None, month: str | None = None, limit: int = COHORTS_PAGE
@@ -780,6 +857,30 @@ def install(app, store, auth, mutate):
             if who.role != "bot" and not admin(auth, who):
                 raise Problem("forbidden", "The owner, an admin or a bot records a cohort", 403)
             return wrote(c, who, cohort_set(c, who.actor, body))
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/growth/cohorts/conflicts")
+    def growth_cohort_conflict(request: Request, body: M.GrowthConflictResolve):
+        """The source's owner or an admin: a number someone typed as actual that a synced source disagrees with. Keep
+        the typed number (the source's value is not raised again) or use the source's (it then belongs to it)."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            slug = body.channel if body.channel not in (None, "", UNKNOWN) else None
+            channel_id = ""
+            if slug:
+                found = channel(c, slug)
+                if not found:
+                    raise Problem("not_found", f"No channel {slug}", 404)
+                channel_id = found["id"]
+            row = H._one(
+                c, "SELECT id FROM growth_cohorts WHERE coalesce(channel_id,'')=? AND month=?", (channel_id, body.month)
+            )
+            if not row:
+                raise Problem("not_found", f"No numbers for {slug or UNKNOWN} in {body.month}", 404)
+            return GS.resolve(c, who.actor, admin(auth, who), row["id"], body.field, body.keep)
 
         return mutate(request, body, work)
 
@@ -833,4 +934,4 @@ def install(app, store, auth, mutate):
         reader(who)
         answer(who, {})  # the first open, when it is one
         with store.read() as c:
-            return GS.show(c, auth, who)
+            return SETUP.show(c, auth, who)
