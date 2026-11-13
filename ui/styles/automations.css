@@ -5,11 +5,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 #main.au-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .au{display:flex;flex-direction:column;height:100%;min-height:0}
-/* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
-.au-ph{display:flex;align-items:center;gap:12px;padding:8px 28px;min-height:48px}
-.au-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
-/* a phone's two header rows (tabs and range; search, filters and + New); a computer lays their parts out in one row */
-.au-hrow{display:contents}
+/* The page header is the shared one (page-head.ts/.css, hook .au-ph); the filter button in its tools is a phone's. */
 .au-fbtn{display:none}
 .au-sp{flex:1}
 .au-sp-phone{display:none}
@@ -20,10 +16,8 @@
 .au:not(.ed-open) .au-side{display:none}
 .au [hidden]{display:none!important}
 
-/* the range: 5m, 1h, 24h, 7d */
-.au-range button{padding:3px 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer}
-.au-range{height:var(--ctl)}
-.au-range button[aria-pressed="true"]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+/* the range: 5m, 1h, 24h, 7d, on the Automations | Runs row; its look is .ph-seg (page-head.css) */
+.au-range button{font-variant-numeric:tabular-nums}
 
 /* the filters */
 .au-rail{display:flex;flex-direction:column;min-height:0;overflow-y:auto;border-right:1px solid var(--line)}
@@ -45,8 +39,10 @@
 .au[data-screen="detail"] .au-ov,.au:not([data-screen="detail"]) :is(.au-crumb,.au-hd,.au-pane){display:none}
 .au-ctl{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:8px 16px;border-bottom:1px solid var(--line)}
 .au-tabs{display:flex;gap:2px}
-.au-tabs button{padding:4px 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-weight:600;cursor:pointer}
-.au-tabs button[aria-selected="true"]{background:var(--surface2);color:var(--ink)}
+/* .ph-tab's look (page-head.css scopes .ph-tab under .ph, and this row sits below the header) */
+.au-tabs .ph-tab{padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font:inherit;font-size:var(--t-base);font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer}
+.au-tabs .ph-tab:hover{background:var(--surface2);color:var(--ink)}
+.au-tabs .ph-tab[aria-selected="true"]{background:var(--surface2);color:var(--ink);font-weight:600}
 .au-sels{display:contents}
 .au-sel{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-sm)}
 .au-sel select{width:auto;height:28px;padding:0 6px;font-size:var(--t-sm)}
@@ -147,9 +143,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-ver{color:var(--muted)}
 .au-help{position:relative;flex:none;width:18px;height:18px;padding:0;border:1px solid var(--line);border-radius:50%;background:none;color:var(--muted);font-size:var(--t-xs);line-height:16px;cursor:pointer}
 .au-help:hover::after,.au-help.on::after{content:attr(data-help);position:absolute;top:calc(100% + 6px);right:-8px;width:200px;padding:6px 9px;border-radius:8px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);line-height:var(--lh);text-align:left;white-space:normal;z-index:20;pointer-events:none}
-.au-seg{display:inline-flex;background:var(--surface2);border-radius:8px;padding:2px}
-.au-seg a{padding:3px 12px;border-radius:6px;color:var(--muted);font-weight:600;font-size:var(--t-sm);text-decoration:none}
-.au-seg a[aria-selected="true"]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.au-seg{display:inline-flex}   /* a flow's Flow | Runs: no track, radius or shadow; the look is .ph-seg (page-head.css) */
 .au-icon{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border:0;border-radius:7px;background:none;color:var(--muted);cursor:pointer;text-decoration:none}
 .au-icon:hover{background:var(--surface2);color:var(--ink)}
 .au-icon .nav-icon{font-size:20px;width:20px;height:20px}
@@ -396,23 +390,16 @@ button.au-chip:hover{background:var(--surface2)}
 @media (max-width:760px){
   #main.au-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .au{height:auto;min-height:0}
-  /* the header: Automations | Runs and the range, then the search, the filter button and + New */
-  .au-ph{flex-direction:column;align-items:stretch;gap:8px;padding:8px 12px;--add-w:40px;--add-h:40px}
-  .au-ph h1,.au-ph>.au-sp{display:none}
-  .au-hrow{display:flex;align-items:center;gap:8px;min-width:0}
-  .au-hrow .au-tabs{flex:none}
-  .au-hrow .au-tabs button{height:36px;padding:0 10px}
-  .au-hrow .au-range{margin-left:auto;height:36px}
-  .au-hrow .au-range button{height:32px;padding:0 9px}
-  .au-hrow .au-s{flex:1;min-width:0;padding:0}
-  .au-hrow .au-q{width:100%;min-width:0}
+  /* the header's tools: the search (moved there by auPlace) and the filter button */
+  .ph-tools>.au-s{flex:1;min-width:0;padding:0}
+  .ph-tools .au-q{width:100%;min-width:0}
   .au-fbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);cursor:pointer}
   .au-fbtn[aria-expanded="true"]{background:var(--surface2)}
   .au-fbtn .nav-icon{font-size:18px;width:18px;height:18px}
   .au-fbn{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:var(--t-2xs);font-weight:600;line-height:16px;font-variant-numeric:tabular-nums;text-align:center}
   .au-body{display:block}
   .au-rail,.au-c,.au-side{display:none;border:0}
-  .au:not([data-screen="list"]) .au-ph{display:none}
+  .au:not([data-screen="list"])>.ph{display:none}
   .au[data-screen="list"].filters-open .au-rail{display:flex;overflow:visible;border-bottom:1px solid var(--line)}
   .au[data-screen="list"] .au-c,.au[data-screen="detail"] .au-c{display:flex}
   /* the filters: one column of sections, each a header that opens its list */
@@ -424,8 +411,11 @@ button.au-chip:hover{background:var(--surface2)}
   .au-fh .au-chev{margin-left:auto;font-size:18px;width:18px;height:18px;color:var(--muted)}
   .au-fh[aria-expanded="true"] .au-chev{transform:var(--chev-open)}
   .au-fb{min-height:40px}
-  /* the tabs moved to the header and the bar's Group and Sort are a computer's */
-  .au-ctl{display:none}
+  /* the bar keeps Automations | Runs and the range; its Group and Sort are a computer's */
+  .au-ctl{padding:4px 12px}
+  .au-sels{display:none}
+  .au-tabs .ph-tab{min-height:40px}
+  .au-ctl .au-range button{min-height:36px}
   /* the table scrolls sideways in its own box; the page scrolls down */
   .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:24px}
   .au-tbl-t{min-width:min(820px, calc(var(--au-cols, 9) * 92px))}
@@ -466,8 +456,8 @@ button.au-chip:hover{background:var(--surface2)}
 }
 /* a small phone: the tabs and the range tighten to share their row */
 @media (max-width:360px){
-  .au-hrow .au-tabs button{padding:0 8px}
-  .au-hrow .au-range button{padding:0 6px}
+  .au-tabs .ph-tab{padding:0 8px}
+  .au-ctl .au-range button{padding:0 6px}
 }
 .au-mono textarea{font-family:var(--mono,ui-monospace,monospace);font-size:var(--t-sm)}
 

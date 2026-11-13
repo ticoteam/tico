@@ -171,11 +171,12 @@ function pageUsage(): void {
                        department: saved.department || '', group: 'bot', sort: 'cost', filters: {}, custom: {from: span.from, to: span.to}, open: '', data: null, load: 0,
                        view: 'spend', edit: null};
   $('#main').innerHTML = `<div class="use-page">
-    <div class="use-head"><h1>Usage</h1>
-      <div class="use-tabs" role="tablist" aria-label="View" hidden><button type="button" role="tab" data-use-view="spend" aria-selected="true">Spend</button><button type="button" role="tab" data-use-view="limits" aria-selected="false">Limits</button></div></div>
+    ${pageHead({title: 'Usage', hook: 'use-head',
+      tabs: [{label: 'Spend', cur: true, attrs: 'data-use-view="spend"'}, {label: 'Limits', attrs: 'data-use-view="limits"'}],
+      tabsHook: 'use-tabs', tabsAttrs: 'aria-label="View" hidden'})}
     <div id="use-limits" hidden></div>
     <div id="use-spend"><div class="use-bar-row">
-      <div class="use-seg" role="tablist" aria-label="Range">${USE_RANGES.map(([k, label]) =>
+      <div class="use-seg ph-seg" role="tablist" aria-label="Range">${USE_RANGES.map(([k, label]) =>
         `<button type="button" role="tab" data-use-range="${k}" aria-selected="${k === state.range}">${label}</button>`).join('')}</div>
       <span class="use-custom" hidden><input type="date" id="use-from" aria-label="From"><input type="date" id="use-to" aria-label="To"></span>
       <span class="use-filter-at">
@@ -293,7 +294,7 @@ async function useLimits(): Promise<void> {
 function useView(view: string, focus?: string): void {
   const state = USE; if (!state) return;
   state.view = view;
-  for (const b of $('#main').querySelectorAll('[data-use-view]')) b.setAttribute('aria-selected', String(b.dataset.useView === view));
+  for (const b of $('#main').querySelectorAll('[data-use-view]')) { b.setAttribute('aria-selected', String(b.dataset.useView === view)); b.classList.toggle('cur', b.dataset.useView === view); }
   $('#use-spend').hidden = view !== 'spend';
   $('#use-limits').hidden = view !== 'limits';
   if (view !== 'limits') return;

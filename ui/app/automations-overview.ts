@@ -241,15 +241,14 @@ function auCtlDraw(): void {
       <label class="au-sel">Sort <select data-sort>${opts(AU_SORTS, AU.sort)}</select></label>`
     : `<label class="au-sel">Status <select data-rstatus>${opts([['', 'All'], ['failed', 'Failed'], ['waiting', 'Waiting'], ['running', 'Running'], ['done', 'Done']], AU.rstatus)}</select></label>`;
 }
-// A phone's header holds the Automations | Runs tabs and the search, which a computer shows above the table and in the
-// filters: one of each, moved when the width crosses over, so a typed search and the tab's focus stay put.
+// A phone's header tools hold the search, which a computer shows in the filters: one search, moved when the width
+// crosses over, so a typed search stays put. Listening's search sits in the header's tools at every width.
 function auPlace(): void {
   auDrawn(AU);
-  // G: the shell (auShell) always has these parts: two header rows, the tabs, the search, the bar and the rail.
-  const r = AU.root, rows = r.querySelectorAll('.au-ph .au-hrow'), tabs = auEl(r, '.au-tabs'), s = auEl(r, '.au-s');
-  if (AU.lst) { auNeed(rows[1], '.au-hrow').prepend(s); return; }   // Listening: the search beside its +, at every width
-  if (auPhone()) { auNeed(rows[0], '.au-hrow').insertBefore(tabs, r.querySelector('.au-range')); auNeed(rows[1], '.au-hrow').prepend(s); }
-  else { auEl(r, '.au-ctl').prepend(tabs); auEl(r, '.au-rail').prepend(s); }
+  // G: the shell (auShell) always has these parts: the header's tools, the search and the rail.
+  const r = AU.root, tools = auEl(r, '.au-ph > .ph-tools'), s = auEl(r, '.au-s');
+  if (AU.lst || auPhone()) tools.prepend(s);
+  else auEl(r, '.au-rail').prepend(s);
 }
 // The overview's parts: the filters, the bar above the table and the table (skipped while an automation is open).
 function auDrawList(): void {
