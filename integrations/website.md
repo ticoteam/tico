@@ -78,7 +78,9 @@ to do next. `--json` prints the answer as JSON. Exit 0 is done, 2 refused, 1 whe
 - Sign in:
   1. `tico browser open <site>`, then `tico browser read <site>`. Already signed in? You are done.
   2. `tico login fill <site> username --ref <box>`, `tico login fill <site> password --ref <box>`, then click the
-     sign-in button.
+     sign-in button. A refusal `no_password` (or `no_username`) means a person signs in to this account by hand
+     (Google or SSO sign-in, an emailed code, a passkey): run `tico browser needs-you <site> "Sign in to <site>"`,
+     end the turn, and read again when their Done wakes you.
   3. Read again. A 2FA box: `tico login fill <site> code --ref <box>`, then `tico browser press <site> Enter`.
   4. A texted or emailed code, a captcha or "is this you?": `tico browser needs-you`, then end the turn.
   5. Read again to check you are in.
@@ -94,6 +96,8 @@ to do next. `--json` prints the answer as JSON. Exit 0 is done, 2 refused, 1 whe
 - `tico login fill` without `--ref` types into the focused box: click it first.
 - A password box reads with no value, even after a fill.
 - "No account" means nobody shared one with you: ask a person on your task to share an account or add yours.
+- An account may have no password (or no username): a person signs in to it by hand. Fill and copy of it are refused
+  with `no_password`; never ask for a password, use `tico browser needs-you` so they sign in through the live view.
 - The browser host offline means wait, or ask a person to start it. On your own computer the browser needs Google
   Chrome (or Chromium on Linux) installed.
 - Screenshots and downloads are saved on the computer you run on; a download never overwrites a file of the same name

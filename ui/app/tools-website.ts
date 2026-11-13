@@ -16,7 +16,7 @@
 interface TwWho {subject: string; kind: string; id: string; name?: string | null; initials?: string}
 interface TwSession {state?: string; where?: string | null; computer?: string | null; by?: TwWho | null}
 interface TwAccount {
-  id: string; kind: string; username?: string | null; has_totp?: boolean; holder?: TwWho | null; access?: TwWho[];
+  id: string; kind: string; username?: string | null; has_password?: boolean; has_totp?: boolean; holder?: TwWho | null; access?: TwWho[];
   session?: TwSession | null; can_use?: boolean; can_manage?: boolean;
 }
 interface TwHost {runner_id: string; label: string; online: boolean}
@@ -43,8 +43,8 @@ const twVerb = (v: string) => TW_VERBS[v] || v;
 const twWhere = (r: TwRow) => [r.account === 'own' ? 'own' : r.account ? 'shared' : '', r.where === 'own' ? 'own browser' : r.where ? 'central' : ''].filter(Boolean).join(' · ');
 const twFace = (w: TwWho | null | undefined, size = 22) => w ? toolsFace({kind: w.kind === 'bot' ? 'bot' : 'person', id: w.id, name: w.name || w.id}, size) : '';
 const twName = (w: TwWho | null | undefined) => w ? w.name || w.id : '';
-// An account's line: a shared login's username; an own one's holder.
-const twAcctName = (a: TwAccount) => a.kind === 'own' ? twName(a.holder) || a.username || '' : a.username || '';
+// An account's line: a shared login's username (the tool's name when it has none); an own one's holder.
+const twAcctName = (a: TwAccount) => a.kind === 'own' ? twName(a.holder) || a.username || '' : a.username || TW?.data?.tool.name || '';
 const twMine = (a: TwAccount) => a.kind === 'own' && a.holder?.subject === 'human:' + (S.me?.id || '');
 // The account a person's Open browser uses: their own, else a shared one they can use.
 const twOpenable = (d: TwData | null): TwAccount | undefined => (d?.accounts || []).filter(a => a.can_use).sort((a, b) => Number(twMine(b)) - Number(twMine(a)))[0];
@@ -245,7 +245,7 @@ function twAcctMenu(state: TwState, a: TwAccount, anchor: HTMLElement): void {
     if (a.kind === 'shared') items.push(['access', 'Who can use it']);
   }
   // The hub lets whoever uses the account, or manages it, read its password (people only, logged).
-  if (a.can_use || a.can_manage) items.push(['reveal', 'Reveal password · logged']);
+  if (a.has_password !== false && (a.can_use || a.can_manage)) items.push(['reveal', 'Reveal password · logged']);
   if (a.can_manage) items.push(['remove', 'Remove', true]);
   if (!items.length) return;
   twMenu(anchor, twAcctName(a), items, key => {
@@ -421,8 +421,8 @@ function twLoginFields(canShare: boolean): string {
       <button type="button" role="radio" aria-checked="true" data-tw-kind="shared">Shared</button><button type="button" role="radio" aria-checked="false" data-tw-kind="own">Own</button></div>` : ''}
     <input type="hidden" name="kind" value="${canShare ? 'shared' : 'own'}">
     <label data-tw-own${canShare ? ' hidden' : ''}>Whose<select name="holder">${holders.map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join('')}</select></label>
-    <label>Username<input name="username" maxlength="250" required autocomplete="off" spellcheck="false" autocapitalize="off"></label>
-    <label>Password<input name="password" type="password" required autocomplete="new-password" spellcheck="false"></label>
+    <label>Username<input name="username" maxlength="250" autocomplete="off" spellcheck="false" autocapitalize="off"></label>
+    <label>Password<input name="password" type="password" autocomplete="new-password" spellcheck="false"></label>
     <label>2FA key (optional)<input name="totp" type="password" autocomplete="off" spellcheck="false" placeholder="Setup key or otpauth:// link"></label>
     ${canShare ? `<div class="tw-who-field" data-tw-shared><label>Who can use it<select data-tw-who-pick aria-label="Who can use it"><option value="">Add…</option>${twWhoOptions(new Set())}</select></label>
       <div class="tw-chips" data-tw-chips></div></div>` : ''}`;
@@ -457,7 +457,9 @@ function twLoginBind(dialog: HTMLDialogElement): Set<string> {
 // The account's write: the login, then each grant. A grant that fails leaves the account; the toast says so.
 async function twAddAccount(toolId: string, data: FormData, picked: Set<string>): Promise<void> {
   const own = data.get('kind') === 'own', totp = String(data.get('totp') || '').trim();
-  const made: {id?: string} = await post(twPath(toolId, '/accounts'), {username: String(data.get('username') || '').trim(), password: String(data.get('password') || ''),
+  const username = String(data.get('username') || '').trim(), password = String(data.get('password') || '');
+  // No password: an account a person signs in to by hand (Google or SSO, an emailed code, a passkey).
+  const made: {id?: string} = await post(twPath(toolId, '/accounts'), {...(username ? {username} : {}), ...(password ? {password} : {}),
     ...(totp ? {totp} : {}), ...(own ? {holder: String(data.get('holder') || '')} : {})});
   if (own || !made?.id || !picked.size) return;
   const aid = made.id;
@@ -500,8 +502,8 @@ function toolsWebsiteCreate(): void {
 }
 // Replace login: a new username, password or 2FA key; a blank one keeps what is stored, which is never shown.
 function twReplaceDialog(state: TwState, a: TwAccount): void {
-  const dialog = whDialog('Replace login', `<label>Username<input name="username" maxlength="250" required autocomplete="off" spellcheck="false" autocapitalize="off" value="${esc(a.username || '')}"></label>
-    <label>Password<input name="password" type="password" autocomplete="new-password" spellcheck="false" placeholder="Unchanged"></label>
+  const dialog = whDialog('Replace login', `<label>Username<input name="username" maxlength="250" autocomplete="off" spellcheck="false" autocapitalize="off" value="${esc(a.username || '')}"></label>
+    <label>Password<input name="password" type="password" autocomplete="new-password" spellcheck="false"${a.has_password === false ? '' : ' placeholder="Unchanged"'}></label>
     <label>2FA key<input name="totp" type="password" autocomplete="off" spellcheck="false" placeholder="${a.has_totp ? 'Unchanged' : 'Setup key or otpauth:// link'}"></label>
     ${a.has_totp ? '<label class="tw-central"><input type="checkbox" name="no_totp"> Remove 2FA</label>' : ''}`,
     '<button class="primary" type="submit">Save</button>');

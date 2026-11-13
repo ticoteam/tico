@@ -4,6 +4,8 @@
 A website tool is a `tools` row with `kind` 'website', its `sites` (JSON list of hostnames; a subdomain matches; an
 `http://host` entry allows that host over plain http) and `central_only` (only the company's browser host opens it).
 An account is a vault credential of kind `login` on the tool: its username, and sealed JSON {"password", "totp"?}.
+Either may be empty: an account a person signs in to by hand (Google or SSO sign-in, an emailed code, a passkey) has
+no password (`has_password` 0, sealed password ''), and fill or copy of it is refused with `no_password`.
 A shared account (`holder` NULL) is used by whoever it is granted to; an own account only by its holder (and that
 person's Assistant). The pick rule for a caller and a site: their own account on the tool, else the oldest shared
 account granted to them, else 403 `no_account`.
@@ -76,6 +78,7 @@ class Picked(TypedDict):
     sites: list[str]
     central_only: bool
     username: str
+    has_password: bool
     has_totp: bool
     holder: str | None
 
@@ -338,6 +341,7 @@ def _picked(tool: Any, account: Any) -> Picked:
         "sites": sites_of(tool),
         "central_only": bool(tool["central_only"]),
         "username": str(account["username"] or ""),
+        "has_password": bool(account["has_password"]),
         "has_totp": bool(account["has_totp"]),
         "holder": account["holder"] or None,
     }
@@ -497,19 +501,43 @@ def _totp_of(c: Any, vault: Any, row: Any) -> T.Totp:
     return found
 
 
+def require_value(picked: Picked, field: str) -> None:
+    """409 `no_username` or `no_password` when the account stores no such value: a person signs in to it by hand, so
+    the bot asks one through the live view instead."""
+    missing = (field == "username" and not picked["username"]) or (field == "password" and not picked["has_password"])
+    if not missing:
+        return
+    sites = picked["sites"]
+    site = _host_of(sites[0]) if sites else picked["name"]
+    raise Problem(
+        "no_" + field,
+        f"This account has no {field}; a person signs in by hand, so run "
+        f'tico browser needs-you {site} "Sign in to {site}" and end the turn.',
+        409,
+    )
+
+
 def secret(
     conn: Any, vault: Any, account_id: str, field: Literal["username", "password", "code"], *, charge: bool = True
 ) -> str:
     """The value a fill or copy sends: the username, the password, or the current 2FA code (409 `no_2fa` when the
-    account has none). A password or a code counts toward the account's hourly limit (429 `slow_down`). The caller
-    checked who may use it (`pick`, `picked_account`). Never logged."""
+    account has none, `no_username` or `no_password` likewise). A password or a code counts toward the account's hourly
+    limit (429 `slow_down`). The caller checked who may use it (`pick`, `picked_account`). Never logged."""
     row = _login_row(conn, account_id)
+    if field in ("username", "password"):
+        tool = conn.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
+        if tool is None:
+            raise Problem(
+                "not_found", "This account is unavailable; choose an account in Tools or ask an admin for access.", 404
+            )
+        require_value(_picked(tool, row), field)
     if field == "username":
         return str(row["username"] or "")
     if field == "password":
+        password = cast(dict[str, str], vault.open_login(conn, row))["password"]
         if charge:
             spend(row["id"])
-        return cast(dict[str, str], vault.open_login(conn, row))["password"]
+        return password
     if field == "code":
         found = _totp_of(conn, vault, row)
         if charge:
@@ -622,6 +650,7 @@ def _account_view(
         "id": account["id"],
         "kind": "own" if holder else "shared",
         "username": account["username"] or "",
+        "has_password": bool(account["has_password"]),
         "has_totp": bool(account["has_totp"]),
         "holder": _who(holder, label.get(holder)) if holder else None,
         "access": [_who(s, label.get(s)) for s in users],
@@ -825,10 +854,11 @@ class WebsiteToolUpdate(Contract):
 
 
 class WebsiteAccountCreate(Contract):
-    # Password spaces are significant; SecretStr keeps a value out of repr and logs.
+    # Password spaces are significant; SecretStr keeps a value out of repr and logs. Both may be left out (or empty)
+    # for a site a person signs in to by hand.
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
     username: str = Field(default="", max_length=250)
-    password: SecretStr = Field(min_length=1, max_length=10_000)
+    password: SecretStr | None = Field(default=None, max_length=10_000)
     totp: SecretStr | None = Field(default=None, max_length=2_000)
     holder: ID | None = None
 
@@ -953,15 +983,13 @@ def add_account(
             "own_account_exists", "That teammate already has an account here; use Replace login instead.", 409
         )
     password = _secret_text(body.password)
-    if not password:
-        raise Problem("password", "Enter the password.", 422)
     totp_text = _totp_checked(body.totp)
     aid, now = H.new_id(), H.now()
     ciphertext, nonce = _seal(c, vault, aid, password, totp_text)
     username = body.username.strip()
     c.execute(
         "INSERT INTO credentials(id,name,username,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,"
-        "updated_by,created_by,tool_id,has_totp,holder) VALUES(?,?,?,?,'','',?,?,?,?,?,?,?,?,?,?)",
+        "updated_by,created_by,tool_id,has_totp,holder,has_password) VALUES(?,?,?,?,'','',?,?,?,?,?,?,?,?,?,?,?)",
         (
             aid,
             username or str(tool["name"]),
@@ -977,6 +1005,7 @@ def add_account(
             tool["id"],
             int(bool(totp_text)),
             holder,
+            int(bool(password)),
         ),
     )
     H.event(c, who.actor, "credential.created", aid, {"kind": LOGIN, "tool": tool["id"], "own": bool(holder)})
@@ -994,7 +1023,8 @@ def update_account(
     admins: Iterable[str],
     auth: Any,
 ) -> dict[str, Any]:
-    """Replace login: the username, the password, the 2FA key (null removes it). Whoever may manage the account."""
+    """Replace login: the username, the password (added to an account that had none), the 2FA key (null removes it).
+    Whoever may manage the account."""
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
     if not can_manage(c, who, account, admins, auth):
@@ -1003,6 +1033,7 @@ def update_account(
     changed_secret = body.password is not None or totp_set
     username = account["username"] if body.username is None else body.username.strip()
     ciphertext, nonce, has_totp = account["ciphertext"], account["nonce"], account["has_totp"]
+    has_password = 1 if body.password is not None else account["has_password"]
     if changed_secret:
         old = cast(dict[str, str], vault.open_login(c, account))
         password = _secret_text(body.password) if body.password is not None else old["password"]
@@ -1010,14 +1041,15 @@ def update_account(
         ciphertext, nonce = _seal(c, vault, account["id"], password, totp_text)
         has_totp = int(bool(totp_text))
     c.execute(
-        "UPDATE credentials SET username=?,name=?,ciphertext=?,nonce=?,has_totp=?,revision=revision+1,updated_at=?,"
-        "updated_by=? WHERE id=?",
+        "UPDATE credentials SET username=?,name=?,ciphertext=?,nonce=?,has_totp=?,has_password=?,revision=revision+1,"
+        "updated_at=?,updated_by=? WHERE id=?",
         (
             username,
             username or str(tool["name"]),
             ciphertext,
             nonce,
             has_totp,
+            has_password,
             H.now(),
             who.actor,
             account["id"],

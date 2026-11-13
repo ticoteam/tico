@@ -1251,6 +1251,8 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                     left = int(wt.expires_in(c, vault(), picked["account_id"]))
                     return picked, None, {"ok": True, "where": "own", "text": code, "expires_in": left}
                 args = clean_args(verb, body.args, list(picked["sites"]), wt.site_matches)
+                if verb in ("fill", "copy"):
+                    wt.require_value(picked, str(args["field"]))  # before the browser is held or placed
                 spot = place(c, who, picked, verb)
                 by = who_of(c, who.actor)
                 if verb != "copy":
