@@ -246,8 +246,12 @@ function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   const of = state.pipeline ? {pipeline: state.pipeline} : {};
   if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of, ...state.narrow};
   if (state.pipeline) return {status: 'open', snoozed: 'all', ...of, ...state.narrow};
+  // A bot's read-only view has no Needs you (a person's list): its You is the bot's own open tasks.
+  if (tasksViewOnly()) return {status: 'open', snoozed: 'all', owner: 'bot:' + (S.me?.id || ''), ...state.narrow};
   return null;
 }
+/** A bot's read-only view of the app (backend/app_view.py). */
+const tasksViewOnly = (): boolean => !!S.me?.read_only_view;
 /** The search and the filters as the server takes them (backend/task_match.py): the same meaning as taskFilterMatch, so
  * the server answers only the matches, a page at a time. */
 function tasksNarrow(state: Pick<TasksPageState, 'q' | 'filters'>): TaskBriefQuery {
@@ -431,13 +435,17 @@ async function tasksReview(state: TasksPageState): Promise<void> {
   if (!stage || !await decideStageOpen(stage)) toast(`Nothing waits on you in ${p.name}`);
 }
 function tasksHeadPaint(state: TasksPageState) {
-  const p = tasksPipeline(state);
+  // A bot's read-only view has no Needs you: its scope is the bot's own open tasks, with their count.
+  const p = tasksPipeline(state), view = tasksViewOnly(), own = view ? state.tasks.length : 0;
+  const you = view ? S.me?.name || 'Bot' : 'You';
   const scope = $('#task-scope');
-  const label = `<span class="tl-scope-l">${esc(p ? p.name : 'You')}</span>`;
+  const label = p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
+    : `<span class="tl-scope-l">${esc(you)}</span>${own ? `<span class="cnt tnum">${own}${state.more ? '+' : ''}</span>` : ''}`;
   if (scope.dataset.label !== label) { scope.dataset.label = label; scope.innerHTML = label + TL_ICON.caret; }
-  scope.setAttribute('aria-label', `Showing ${p ? p.name : 'You'}`);
+  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing ${you}${own ? `, ${own}` : ''}`);
   // ▶ is always on the row and keeps one width: its count is the one count of what waits on the person.
   const n = tasksReviewCount(state), play = $('#task-play');
+  play.hidden = view;                       // a view reviews nothing: no Needs you, no answers
   play.classList.toggle('none', !n);
   play.querySelector('.tl-review-n')!.textContent = n ? (n > 99 ? '99+' : String(n)) : '';
   play.setAttribute('aria-label', n ? `Review: ${n} wait${n === 1 ? 's' : ''} on you` : 'Review: nothing waits on you');
@@ -502,6 +510,7 @@ function tasksRender(state: TasksPageState | null) {
     : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
     : state.archive ? tasksArchiveHTML(state)
     : state.pipeline ? tasksPipelineHTML(state)
+    : tasksViewOnly() ? tasksOwnHTML(state)
     : tasksYouHTML(state);
   if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
 }
@@ -571,6 +580,20 @@ function tasksYouHTML(state: TasksPageState): string {
   const chips = state.q.trim() || taskFiltersOn(state.filters) ? '' : tasksStageChipsHTML(state);
   return chips + tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review')) + tasksGroupHTML('Do', of('do'));
 }
+/** A bot's read-only view in place of You: a line that Needs you is a person's list, then the bot's open tasks by stage,
+    in the pipelines' order, then Other. */
+function tasksOwnHTML(state: TasksPageState): string {
+  const name = S.me?.name || 'This bot';
+  const note = `<p class="muted tk-view-note">Needs you is a person's list. These are ${esc(name)}'s open tasks.</p>`;
+  const shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
+  if (!shown.length) return note + tasksNone(state);
+  const known = new Set<string>(), groups: string[] = [];
+  for (const p of state.pipelines) for (const st of p.stages) {
+    if (st.id) known.add(st.id);
+    groups.push(tasksGroupHTML(st.name, shown.filter(t => t.stage_id === st.id).map(t => taskRowHTML(t))));
+  }
+  return note + groups.join('') + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || '')).map(t => taskRowHTML(t)));
+}
 /** A pipeline's open tasks by stage, in the pipeline's order, until task-pipelines.ts draws it. */
 function tasksPipelineHTML(state: TasksPageState): string {
   const p = tasksPipeline(state), shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
@@ -615,7 +638,7 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
 function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
   const item = (attr: string, label: string, on: boolean, count = 0) => `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" ${attr}><span class="tl-mi-t">${esc(label)}</span>${count ? `<span class="tl-mi-n tnum">${count}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Show">
-    ${item('data-scope=""', 'You', !state.pipeline, state.needs.length)}<div class="tl-menu-sep" role="separator"></div>
+    ${item('data-scope=""', tasksViewOnly() ? S.me?.name || 'Bot' : 'You', !state.pipeline, tasksViewOnly() ? state.tasks.length : state.needs.length)}<div class="tl-menu-sep" role="separator"></div>
     ${state.pipelines.map(p => item(`data-scope="${esc(p.id)}"`, p.name, state.pipeline === p.id)).join('')}</div>`, pop => {
     pop.onclick = ev => {
       const b = eventElement(ev)?.closest<HTMLElement>('[data-scope]');

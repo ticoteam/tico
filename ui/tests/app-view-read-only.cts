@@ -1,0 +1,137 @@
+// A bot's read-only view of the app (backend/app_view.py) on a real hub (ui/tests/support/real-hub.cts). The bot's run
+// opens a view and the page is signed in with the view's token, as `tico bot app-shot` does. On Tasks, a task window,
+// Company › Mine, Company › Dashboard and a thread, every visible, enabled button and field is a read on this test's
+// allowlist: New task, Follow, the page +, answer buttons and the message box do not show, and the box is a grey
+// "Read-only view" line. Tasks reads the bot's name and its open tasks by stage, with a line that Needs you is a
+// person's list; Company › Mine is one card of the bot's tasks. A Company place that fails to load says "This page
+// couldn't load." with Try again, never the server's text. A person sees New task and the message box as before.
+import type {Page} from 'playwright';
+import type * as RealHubSupport from './support/real-hub.cts';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
+declare const S: {me?: {name?: string}};
+
+const BOT = 'builder-claude';
+const OWN = 'The bot works on this';
+
+async function call<T = Record<string, unknown>>(hub: RealHubSupport.Hub, token: string, method: string, p: string, body?: unknown): Promise<T> {
+  const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + token, 'content-type': 'application/json',
+    ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})}, body: (body === undefined ? undefined : JSON.stringify(body)) as string});
+  const json = await r.json().catch(() => ({}));
+  assert.ok(r.status < 300, `${method} ${p}: ${r.status} ${JSON.stringify(json)}`);
+  return json as T;
+}
+
+// The reads a view may offer, by what the control is: moving between places, opening, searching, filtering, closing
+// and showing more. Anything else visible and enabled is a write a screenshot must not offer.
+const READS = [
+  '#side a', '#side button', '#account', '#side-search', '#nav-toggle',
+  '#task-scope', '#task-q', '#task-filter', '#task-archive', '#task-layout button', '#task-archives button',
+  '.tl-mi', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
+  '.dash-tabs a', '.dash-tabs button', '[role="tab"]', '.tmodal [aria-label="Close"]', '.tmodal .x',
+  '[data-show-more]', '.linkish[data-open]', 'a[href]',
+];
+
+// Every visible, enabled control under the main page and any open dialog, as a short description, when it is not a read.
+const writesShown = (page: Page) => page.evaluate((reads: string[]) => {
+  const out: string[] = [];
+  const shown = (el: Element) => { const r = (el as HTMLElement).getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+  for (const el of document.querySelectorAll('button, input, textarea, select, [contenteditable="true"], [role="button"], [role="checkbox"], [role="switch"], [role="menuitem"], [role="menuitemradio"]')) {
+    if (!shown(el)) continue;
+    if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('[inert]')) continue;
+    if (reads.some(sel => el.matches(sel) || el.closest(sel) === el)) continue;
+    if (el.closest('#side')) continue;
+    out.push(`${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).join('.') : ''} "${((el as HTMLElement).innerText || el.getAttribute('aria-label') || (el as HTMLInputElement).placeholder || '').trim().slice(0, 40)}"`);
+  }
+  return out;
+}, READS);
+
+const go = async (page: Page, hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); };
+const ready = (page: Page) => page.waitForFunction(() => {
+  const who = document.querySelector('#account .account-email')?.textContent || '';
+  return who !== '' && who !== 'Signing in…' && (document.querySelector('#main')?.children.length as number) > 0;
+}, null, {timeout: t(20000)});
+
+(async () => {
+  const hub = await startHub({seeds: ['org']});
+  let browser: import('playwright').Browser | undefined;
+  try {
+    const dana = hub.tokens.dana!;
+    // The bot owns one open task, and an owner turns its view on.
+    await call(hub, dana, 'POST', '/v2/tasks', {title: OWN, body: 'Its own work.', owner: BOT});
+    await call(hub, dana, 'POST', `/v2/bots/${BOT}/app-view`, {on: true});
+    // Its run, claimed and started as its computer would, opens the view.
+    const {attempt} = await call<{attempt?: {id: string; token: string}}>(hub, hub.runner, 'POST', '/v2/jobs/claim', {bot: BOT, start_places: true});
+    if (!attempt) throw new Error('the bot has a run to claim');
+    await call(hub, hub.runner, 'POST', `/v2/attempts/${attempt.id}/started`, {thread_id: 'local-thread'});
+    const view = await call<{token: string}>(hub, attempt.token, 'POST', '/v2/app-view', {});
+    assert.ok(view.token.startsWith('tico_av_'));
+
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
+    const context = await browser.newContext({viewport: {width: 1280, height: 800}, serviceWorkers: 'block', extraHTTPHeaders: {Authorization: 'Bearer ' + view.token}});
+    const page = await context.newPage();
+    const writes: string[] = [];
+    page.on('request', r => { if (!['GET', 'HEAD', 'OPTIONS'].includes(r.method()) && r.url().startsWith(hub.url)) writes.push(`${r.method()} ${r.url()}`); });
+    await page.goto(hub.url + '/#/tasks');
+    await ready(page);
+    const name = await page.evaluate(() => S.me?.name || '');
+    assert.ok(name, 'the view knows the bot by name');
+
+    // Tasks: the bot's name with its count, the line about Needs you, and its open task under its stage.
+    await page.locator('#task-body .tk-row', {hasText: OWN}).waitFor({timeout: t(15000)});
+    assert.match(await page.locator('#task-scope').innerText(), new RegExp(`^${name}\\s*1`), 'the scope is the bot, with its count');
+    assert.match(await page.locator('#task-body').innerText(), /Needs you is a person's list/);
+    assert.ok(await page.locator('#task-body .tk-group').count() >= 1, 'its tasks are grouped by stage');
+    assert.deepEqual(await writesShown(page), [], 'Tasks offers nothing that writes');
+
+    // A task window: no Follow, no page +, no answer buttons, no box; the box is a grey "Read-only view" line.
+    await page.locator('#task-body .tk-row', {hasText: OWN}).click();
+    await page.locator('.tmodal[open]').waitFor({timeout: t(15000)});
+    await page.locator('.tmodal[open] .view-only-line').waitFor({timeout: t(15000)});
+    assert.equal(await page.locator('.tmodal[open] .view-only-line').innerText(), 'Read-only view');
+    assert.deepEqual(await writesShown(page), [], 'the task window offers nothing that writes');
+    await page.keyboard.press('Escape');
+
+    // Company › Mine: one card, the bot's tasks, and no error.
+    await go(page, '#/home');
+    await page.locator('#dash-grid', {hasText: OWN}).waitFor({timeout: t(15000)});
+    const grid = await page.locator('#dash-grid').innerText();
+    assert.ok(grid.includes(`${name}'s tasks`) && !/No such place/.test(grid), grid);
+    assert.deepEqual(await writesShown(page), [], 'Company › Mine offers nothing that writes');
+
+    // Company › Dashboard.
+    await go(page, '#/overview');
+    await page.locator('#dash-grid .dash-pin, #dash-grid .dash-failed, #dash-grid .empty').first().waitFor({timeout: t(15000)});
+    assert.deepEqual(await writesShown(page), [], 'the Dashboard offers nothing that writes');
+
+    // A thread: the bot's own DM page.
+    await go(page, `#/bot/${BOT}`);
+    await page.waitForTimeout(t(1500));
+    assert.deepEqual(await writesShown(page), [], 'a thread offers nothing that writes');
+    assert.deepEqual(writes, [], 'the view sent no write');
+    await context.close();
+
+    // A person: New task and the message box are there; a place that fails says so plainly.
+    const person = await pageAs(browser, hub, 'dana');
+    await ready(person);
+    await go(person, '#/tasks');
+    await person.locator('#task-new').waitFor({state: 'visible', timeout: t(15000)});
+    await person.route('**/api/v2/places/dashboard*', r => r.fulfill({status: 404, contentType: 'application/json',
+      body: JSON.stringify({error: {code: 'not_found', message: 'No such place: places are dashboard, team:<group>'}})}));
+    await go(person, '#/overview');
+    const failed = person.locator('#dash-grid .dash-failed');
+    await failed.waitFor({timeout: t(15000)});
+    assert.match(await failed.innerText(), /^This page couldn't load\.\s*Try again$/);
+    await person.unroute('**/api/v2/places/dashboard*');
+    await failed.getByRole('button', {name: 'Try again'}).evaluate(b => (b as HTMLButtonElement).click());
+    await failed.waitFor({state: 'detached', timeout: t(15000)});
+    await person.context().close();
+    console.log('ok app-view-read-only');
+  } finally {
+    await browser?.close();
+    await hub.stop();
+  }
+})().catch(e => { console.error(e); process.exit(1); });
