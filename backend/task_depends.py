@@ -217,14 +217,15 @@ def release(conn: "sqlite3.Connection", ended_id: str, by: str) -> int:
     """`ended_id` ended: each dependency on it comes off, with a history row on both tasks, so a dependency holds only
     until its task first ends (reopening that task blocks nothing again). Then each task that depended on it and has no
     open dependency left moves on, or its owner is woken once (`release_one`). Returns how many were released."""
-    from . import task_relations as TR
+    from . import task_relations
 
+    TR: Any = task_relations  # untyped module
     waiting = dependents(conn, ended_id)
     for task_id in waiting:
         conn.execute(
             "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (task_id, ended_id, RELATION)
         )
-        TR._history(conn, by, task_id, ended_id, RELATION, False, "it ended")  # pyright: ignore[reportPrivateUsage]
+        TR._history(conn, by, task_id, ended_id, RELATION, False, "it ended")
     found: Any = conn.execute("SELECT number, status FROM tasks WHERE id=?", (ended_id,)).fetchone()
     said = (DONE if found and found[1] == "done" else CLOSED).format(
         ref=ref({"id": ended_id, "number": found[0] if found else None})
