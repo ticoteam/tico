@@ -851,12 +851,18 @@ impl ClaudeHost {
                 tokio::process::Command::new(reaper(std::path::Path::new("")).remove(0))
             }
             Some(path) => {
-                let mut c = crate::isolation::command_under(&reaper(path), &argv[0]);
+                // The reaping parent goes inside the turn's scope too, with the shells it keeps.
+                let parent: Vec<_> = crate::turn_limits::prefix()
+                    .into_iter()
+                    .flatten()
+                    .chain(reaper(path))
+                    .collect();
+                let mut c = crate::isolation::command_under(&parent, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
             None => {
-                let mut c = crate::isolation::command(&argv[0]);
+                let mut c = super::harness_command(None, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }

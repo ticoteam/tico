@@ -254,7 +254,7 @@ impl AntigravityHost {
         provider: Option<&str>,
     ) -> Result<Command, HostError> {
         let argv = argv(&self.0.cmd, settings, effort, provider)?;
-        let mut command = crate::isolation::command(&argv[0]);
+        let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())

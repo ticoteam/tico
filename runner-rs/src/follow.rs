@@ -605,7 +605,7 @@ fn update_log(path: &Path, message: &str) {
 }
 
 /// A lingering user manager need not inherit a login shell's bus variables. Keep explicit settings intact.
-fn user_bus_env(env: &crate::env::Env, uid: u32) -> crate::env::Env {
+pub(crate) fn user_bus_env(env: &crate::env::Env, uid: u32) -> crate::env::Env {
     if !env.contains_key("XDG_RUNTIME_DIR") {
         if let Some(address) = env
             .get("DBUS_SESSION_BUS_ADDRESS")

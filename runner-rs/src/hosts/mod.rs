@@ -841,6 +841,30 @@ impl Stopper {
     }
 }
 
+/// A harness process: `program` as `identity` (or the bot user when isolation is on), inside a limited scope of its
+/// own where this runner limits turns (crate::turn_limits), else exactly as `isolation::command_as`.
+pub fn harness_command(
+    identity: Option<(u32, u32)>,
+    program: impl AsRef<std::ffi::OsStr>,
+) -> tokio::process::Command {
+    match crate::turn_limits::prefix() {
+        Some(parent) => crate::isolation::command_after(&parent, identity, program),
+        None => crate::isolation::command_as(identity, program),
+    }
+}
+
+/// `harness_command` for a harness that runs as this runner's own user even when isolation is on.
+pub fn own_user_harness_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    match crate::turn_limits::prefix() {
+        Some(parent) => {
+            let mut cmd = tokio::process::Command::new(&parent[0]);
+            cmd.args(&parent[1..]).arg(program);
+            cmd
+        }
+        None => tokio::process::Command::new(program),
+    }
+}
+
 /// Makes the process `command` starts the leader of a new session and process group, so a stop (`own`) reaches
 /// what it starts (tool commands, MCP servers, a browser) as well as itself. A turn's standard streams are piped, so
 /// losing the controlling terminal costs nothing, and nothing it runs can stop on a read from one.

@@ -2433,6 +2433,10 @@ impl Runner {
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            if crate::turn_limits::active() {
+                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
+                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
+            }
             let made = if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).

@@ -243,7 +243,7 @@ impl GrokHost {
 
     /// Start `grok agent` with `cmd` in `env` and say `initialize`.
     async fn launch(&self, cmd: Vec<String>, env: Env) -> Result<(), HostError> {
-        let mut command = crate::isolation::command(&cmd[0]);
+        let mut command = super::harness_command(None, &cmd[0]);
         let mut full = env.clone();
         full.extend(
             NO_OPERATOR_MCP

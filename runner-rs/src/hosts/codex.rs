@@ -309,7 +309,7 @@ impl CodexHost {
         if self.running() {
             self.stop_and_reap().await;
         }
-        let mut command = crate::isolation::command("codex");
+        let mut command = super::harness_command(None, "codex");
         command
             .arg("app-server")
             .stdin(Stdio::piped())

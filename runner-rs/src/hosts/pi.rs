@@ -1427,7 +1427,7 @@ impl PiHost {
                 "cannot prepare the private Gateway configuration",
             ));
         }
-        let mut command = crate::isolation::command_as(settings.identity, &argv[0]);
+        let mut command = super::harness_command(settings.identity, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
