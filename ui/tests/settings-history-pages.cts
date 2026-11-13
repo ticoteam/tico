@@ -4,6 +4,8 @@ import type {Route} from 'playwright';
 // its rows below the ones shown; the control goes after the last page. Undo works on a row from a later page, and the
 // list then reads its first page again. The Log (GET /api/v2/history) opens from a shared address with its filters
 // set, asks with them, pages with Show older, offers the CSV of the same filters, and writes a new filter back.
+// Health's Failed runs opens Runs with only the day's failed runs (GET /api/runs?failed=true), and Show all runs reads
+// every run again.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,6 +26,7 @@ declare function settingsHistoryShow(view?: string): void;
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
     const errors: unknown[] = [], calls: unknown[] = [], undos: unknown[] = [], logCalls: unknown[] = [], csvCalls: unknown[] = [];
     let csvRows = 0;
+    const runsCalls: string[] = [];
     page.on('pageerror', (error: Error) => errors.push(error.message));
     const at = (minutes: number) => new Date(Date.parse('2026-10-28T12:00:00Z') - minutes * 60000).toISOString();
     // Newest first, as the server sends them. Ana renamed both bots; the owner's list holds both, the card one only.
@@ -100,6 +103,13 @@ declare function settingsHistoryShow(view?: string): void;
         Object.assign(row, {can_undo: false, undone_at: at(0)});
         const revision = bots.find(b => b.name === row.bot)!.revision + 1;
         return json({undone: true, bot: row.bot, field: row.field, revision});
+      }
+      if (p === '/api/runs') {
+        const failed = url.searchParams.get('failed') || '';
+        runsCalls.push(failed);
+        const run = (id: string, exit: number, outcome: string) => ({id, employee: 'ops', state: outcome, exit, outcome,
+          failure_reason: exit ? 'Your Ops couldn\'t start on Test Mac; check that Computer' : '', finished_at: at(3)});
+        return json(failed ? [run('r-failed', 1, 'failed')] : [run('r-done', 0, 'completed'), run('r-failed', 1, 'failed')]);
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -219,6 +229,18 @@ declare function settingsHistoryShow(view?: string): void;
     await page.evaluate(() => setDrawer(false));
     assert.equal(await showMore(card).isVisible(), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    // Health's Failed runs link: Runs with only the failures, its address kept; Show all runs reads every run.
+    await page.goto('https://tico-ui.test/#/settings/history?view=runs&failed=1');
+    const runRows = (n: number) => page.waitForFunction(count => document.querySelectorAll('#set-runs .run-row:not(.run-head)').length === count, n);
+    await runRows(1);
+    assert.equal(runsCalls.at(-1), 'true');
+    assert.match(await page.locator('#set-runs .runs-filter').textContent() || '', /Failed runs in the last day/);
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/history?view=runs&failed=1');
+    await page.locator('#set-runs .runs-filter a').click();
+    await runRows(2);
+    assert.equal(runsCalls.at(-1), '');
+    assert.equal(await page.locator('#set-runs .runs-filter').count(), 0);
+    assert.equal(await page.evaluate(() => location.hash), '#/settings/history?view=runs');
     // A role lost while the owner's controls are still painted hides Changes and CSV; the old Runs link still opens Runs.
     await page.goto('https://tico-ui.test/#/settings/history?view=changes');
     await waitForChanges(owner, 2);

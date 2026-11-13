@@ -362,7 +362,7 @@ function pageSettings() {
   settingsSearchBind();
   $('#settings-history-view')?.addEventListener('click', (event: Event) => {
     const button = eventElement(event)?.closest<HTMLElement>('[data-history-view]');
-    if (button) settingsHistoryShow(button.dataset.historyView);
+    if (button) { SETTINGS_RUNS_FAILED = false; settingsHistoryShow(button.dataset.historyView); }
   });
   $('#settings-tabs').onclick = (event: Event) => {
     const button = eventElement(event)?.closest<HTMLElement>('[data-settings-tab]');
@@ -424,7 +424,7 @@ function settingsShow(tab: string) {
   if (tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL)) tab = 'models';
   const generalCard = SETTINGS_GENERAL[tab];
   if (generalCard) { SETTINGS_REVEAL = generalCard; tab = 'general'; }
-  if (tab === 'runs') { tab = 'history'; SETTINGS_HISTORY_VIEW = 'runs'; }   // the Runs page moved here
+  if (tab === 'runs') { tab = 'history'; SETTINGS_HISTORY_VIEW = 'runs'; SETTINGS_RUNS_FAILED = false; }   // the Runs page moved here
   const tabs = [...document.querySelectorAll<HTMLElement>('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
