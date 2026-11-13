@@ -179,6 +179,17 @@
     return st;
   };
 
+  // Where a link goes, so a bot can cite it (a message's permalink): http(s) only, and never the query or fragment,
+  // which may carry a token.
+  const address = (a) => {
+    try {
+      const u = new URL(a.href);
+      return u.protocol === 'http:' || u.protocol === 'https:' ? clip(u.origin + u.pathname, 200) : '';
+    } catch (_) {
+      return '';
+    }
+  };
+
   const emit = (el, role, control) => {
     const c = control || el;
     refs.push(el);
@@ -188,6 +199,10 @@
     const ph = squash(c.getAttribute('placeholder'));
     if (!name) name = ph ? clip(ph, 120) : clip(squash(c.getAttribute('name')), 60);
     if (name) it.name = name;
+    if (role === 'link' && c.tagName === 'A') {
+      const to = address(c);
+      if (to) it.to = to;
+    }
     if (ph && ph !== name) it.ph = clip(ph, 80);
     const tag = c.tagName;
     if ((role === 'textbox' || role === 'combobox') && (tag === 'INPUT' || tag === 'TEXTAREA')) {

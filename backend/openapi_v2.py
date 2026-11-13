@@ -1057,7 +1057,8 @@ STABLE = [
         "relateTask",
         "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take "
         "the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and "
-        "on depends_on, in any stage (Blocked by task until it ends)",
+        "on depends_on, in any stage (Blocked by task until it ends; with until: released, until production runs a "
+        "release that holds task's merged PRs)",
         "TaskResult",
     ),
     (
@@ -1341,7 +1342,9 @@ STABLE = [
         "get",
         "Files",
         "listBotFiles",
-        "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page",
+        "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; "
+        "q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) "
+        "narrow the same list",
         "BotFileList",
     ),
     (
@@ -2120,7 +2123,7 @@ STABLE = [
         "getUsage",
         "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
         "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
-        "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
+        "or own. ?bot=<bot id or slug> is that bot's daily series, top routines, top 10 tasks (the rest summed) and models instead",
         "Usage",
     ),
     (
@@ -2806,6 +2809,18 @@ SCHEMAS = {
             "who": "n",
             "asked_by": "n",
             "choices": {"type": ["array", "null"], "items": {"type": "string"}},
+            # A bot's question to a person: why it matters, a line per choice on what happens (in the choices' order)
+            # and the choice it recommends (backend/ask_shape.py). Absent on an ask that carried none.
+            "brief": obj(
+                {
+                    "why": "s",
+                    "details": {"type": ["array", "null"], "items": {"type": "string"}},
+                    "recommend": "n",
+                },
+                required=["why", "details", "recommend"],
+            ),
+            # The ask's short title (at most 60 characters), the decision view's heading. Absent on an ask without one.
+            "title": "s",
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
@@ -3045,12 +3060,29 @@ SCHEMAS = {
                             "unlock_cloud",
                             "add_credit",
                             "open_computers",
+                            "open_ask",
                             None,
                         ]
                     },
+                    "task": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}, "title": {"type": "string"}},
+                        "description": "The task a planned bot is being made on, for a caller who may open it",
+                    },
+                    "ask": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"enum": ["ok", "answer"]},
+                            "mine": {"type": "boolean"},
+                            "line": {"type": "string"},
+                        },
+                        "description": "The ask on that task the bot waits on: whether it is the caller's, and its "
+                        "words for a caller who may open the task",
+                    },
                 },
                 "description": "For a caller who can read it: why the bot can't run (a sentence) and the one fix, "
-                "or null while it can run",
+                "or null while it can run. A bot being made on a task names it (`task`) and the ask it waits on "
+                "(`ask`); `open_ask` opens that ask on its task",
             },
             "access": ref("Access"),
             "onboarding_state": "s",
@@ -4064,6 +4096,10 @@ SCHEMAS = {
             "synced": "b",
             "size": {"type": ["integer", "null"]},
             "name": "n",
+            "thumb_blob_id": {
+                "type": ["string", "null"],
+                "description": "set when an image has a small preview at /api/v2/files/{id}/thumb",
+            },
             "open": {
                 "type": ["object", "null"],
                 "description": "{type: tico|external, url}: "
@@ -4732,6 +4768,27 @@ SCHEMAS = {
             "name": "s",
             "daily": items({"type": "object", "additionalProperties": True}),
             "routines": items({"type": "object", "additionalProperties": True}),
+            "tasks": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: its top 10 tasks by spend, as group=task names them (value and name), plus runs with no task, "
+                    "each with the usage figures and `share`, its part of the bot's spend",
+                    "additionalProperties": True,
+                }
+            ),
+            "tasks_more": {
+                "type": "object",
+                "description": "?bot only: `count`, the tasks past the top 10, and their usage figures summed",
+                "additionalProperties": True,
+            },
+            "models": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: every model it used, value (null when not recorded) and name, with "
+                    "the usage figures and `share`",
+                    "additionalProperties": True,
+                }
+            ),
         },
         required=["from", "to", "prices_as_of", "totals"],
     ),
@@ -7974,7 +8031,12 @@ SCHEMAS['ToolIndexRow'] = obj(
         'detail': 's',
         'way': 's',
         'status': TOOL_STATUS,
-        'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's', 'initials': 's'})),
+        'who': items(
+            obj(
+                {'kind': {'enum': ['bot', 'person', 'group']}, 'id': 's', 'name': 's', 'initials': 's', 'members': 'i'},
+                required=['kind', 'id', 'name', 'initials'],
+            )
+        ),
         'who_total': 'i',
         'needs_you': 'b',
         'href': 's',
@@ -8157,8 +8219,19 @@ STABLE.extend(
             'put',
             'Tools',
             'setWebsiteAccountAccess',
-            'Give a shared account to a person or a bot, or take it away (on: false)',
+            'Give a shared account to a person, a bot or a group (group:<id>, credential administrators; every person '
+            'and bot in it and in the groups under it uses it), or take it away (on: false). Answers the account\'s '
+            'whole access list',
             'WebsiteAccountAccessSet',
+        ),
+        (
+            '/api/v2/website-tools/groups',
+            'get',
+            'Tools',
+            'listWebsiteToolGroups',
+            'Each group with its member count and its people and bots (actors), nested groups included, for Who can use '
+            'it (credential administrators)',
+            'WebsiteToolGroups',
         ),
         (
             '/api/v2/website-tools/{tool_id}/accounts/{account_id}/code',
@@ -8175,7 +8248,22 @@ WEBSITE_WHO = obj({'subject': 's', 'kind': {'enum': ['person', 'bot']}, 'id': 's
 SCHEMAS['WebsiteToolCreated'] = obj({'id': 's'})
 SCHEMAS['WebsiteDeleted'] = obj({'deleted': 'b', 'id': 's'})
 SCHEMAS['WebsiteAccountSaved'] = obj({'id': 's'})
-SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b'})
+# One row of an account's Who can use it: a person, a bot or (to an administrator) a granted group with its member count.
+# `via` names the granted groups a person or bot granted directly is also in.
+WEBSITE_ACCESS = obj(
+    {
+        'subject': 's',
+        'kind': {'enum': ['person', 'bot', 'group']},
+        'id': 's',
+        'name': 's',
+        'initials': 's',
+        'members': 'i',
+        'via': items(_t('s')),
+    },
+    required=['subject', 'kind', 'id', 'name', 'initials'],
+)
+SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b', 'access': items(WEBSITE_ACCESS)})
+SCHEMAS['WebsiteToolGroups'] = items(obj({'id': 's', 'name': 's', 'members': 'i', 'actors': items(_t('s'))}))
 SCHEMAS['WebsiteCode'] = obj({'code': 's', 'expires_in': 'i'})
 SCHEMAS['WebsiteToolSettings'] = obj(
     {'id': 's', 'name': 's', 'kind': {'enum': ['website']}, 'sites': items(_t('s')), 'central_only': 'b'}
@@ -8206,7 +8294,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'has_password': 'b',
                     'has_totp': 'b',
                     'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
-                    'access': items(WEBSITE_WHO),
+                    'access': items(WEBSITE_ACCESS),
                     'session': obj(
                         {
                             'state': {'enum': ['needs_you', 'in_use', 'unknown']},
@@ -11196,7 +11284,8 @@ SCHEMAS.update(
                 "task_id": "s",
                 "title": "s",
                 "kind": {"enum": "started finished".split()},
-                "outcome": {"enum": ["won", "lost", "inconclusive", "dropped", None]},
+                "outcome": {"enum": ["won", "lost", "inconclusive", "kept", "dropped", None]},
+                "result": {"enum": ["failed", "worked-once", "watching", None]},
                 "at": "s",
                 "channels": items({"type": "string"}),
                 "goal_id": "n",

@@ -217,8 +217,6 @@ pub struct Settings {
     pub background_wait: Option<std::time::Duration>,
     /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
     pub require_existing_session: bool,
-    /// Packet-only tidy turns have no checkout tools or Hub MCP server.
-    pub packet_only: bool,
     /// Where Claude Code keeps its auto memory for this turn: `memory/claude/` in the turn's checkout of the bot's
     /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
     /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).

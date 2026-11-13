@@ -240,6 +240,15 @@ estimate; CAC, LTV and payback name the sources of the numbers they are worked o
 with shows both values, and the source's owner or an admin picks **Keep** or **Use**, on the card or in a month's
 numbers under Settings, where a synced number is locked.
 
+**A signed address for a file source.** `POST /api/v2/growth/sources/<id>/address` (the owner, an admin or the source's
+owner) gives a file source an address and a signing secret, shown once; a new one stops the old. A script posts the CSV
+as the request body to `/api/v2/growth/in/<id>` with `X-Signature: sha256=<HMAC-SHA256 of the body under the secret>`, and
+the result is the same as an upload. A missing or wrong signature is refused with 401 and writes nothing.
+
+**Bot cost.** A `bot_cost` source (`tico growth source add --sync bot_cost`) fills only bot cost: each month, the run cost
+of the bot that owns a channel goes on that channel. A bot that owns several channels cannot be split, so its cost goes on
+Unknown and the run result carries a note. `sync` runs it.
+
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
@@ -255,10 +264,18 @@ Ads and Social Ads (the growth channel packs in the same section).
 - **Ending.** A measured experiment is Done; one stopped before it is measured is Closed with the reason. A Monitoring
   task that can no longer be fixed is Closed with the reason, and an idea is filed for what to try instead.
 
+The page reads both forms. An open task in Growth Experiments or Growth Monitoring shows on the Growth board in the
+lane its stage gives (Running is Live, Watching and Slipping are Working, with Slipping marked, Building is In
+development, Ideas is On deck) and on its channel's row; a move into Running is a test's start marker, and a move from
+Growth Experiments to Done (kept, with its `result:` tag) or Closed (dropped) its finish marker. A stage a team added
+to Growth Experiments or Monitoring reads as that pipeline's first stage. Success Experiments and
+Success Monitoring are not read here.
+
 The older form, an idea as a General task with a stage label (`growth:ideas` or `idea:on-deck`, `idea:in-development`,
 `growth:running` or `idea:live`, `idea:working`, `growth:measuring`, `idea:paused`; backend/marketing_tasks.py), is still
-read: a test's start and finish markers on the charts come from those labels. The Growth Manager and the segment
-Marketing Owners still file ideas that way.
+read the same way: taking a running label starts a test, and Done or Closed finishes it. A task in a Growth pipeline
+that also carries a stage label shows once, where its pipeline stage says, and starts by its moves alone. The Growth Manager and the segment Marketing
+Owners still file ideas that way.
 
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.

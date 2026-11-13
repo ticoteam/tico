@@ -113,6 +113,8 @@ let DECIDE_WANT = '';                       // a deep link's item (#/decide?item
 let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
 const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 const DEC_UNDO_MS = 10_000;
+// The two answers Tico adds to every bot's question to a person (backend/answers.py DONT_KNOW, GIVE_BACK).
+const DEC_DONT_KNOW = "I don't know, explain", DEC_GIVE_BACK = 'Give it back';
 const DEC_FILES_MAX = 10;                   // files on one note
 let DEC_FILE_KEY = 0;
 const DEC_CHIPS: [AskSheet['chip'], string][] = [['exist', "Shouldn't exist"], ['person', 'Wrong person'], ['written', 'Badly written']];
@@ -566,6 +568,8 @@ function decidePaintSide(st: DecState) {
       ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
   } else if (typed) {
     body = decideTypedHTML(typed, it.ask?.choices || [], st.busy);
+  } else if (kind === 'question' && asker.startsWith('bot:')) {
+    body = decideBotAskHTML(st, it, asker);
   } else if (kind === 'question') {
     const choices = it.ask?.choices || [];
     body = `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>
@@ -683,6 +687,26 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
       `<li data-done="${p.done}"><span class="dc-mark" aria-label="${p.done ? 'Done' : 'Not done'}">${p.done ? '✓' : '✗'}</span><span><b>${esc(p.point)}</b> ${esc(p.why)}</span></li>`).join('')}</ul></section>`);
   }
   return {sub, body: parts.join('')};
+}
+/** A bot's question (Tasks spec "Bots ask people a question with choices", picture 2): why it matters, each choice
+    with its line and "Recommended" on the one the bot recommends, then "Write to <bot>" and Send, which reaches the bot
+    on the task and leaves the question open (AC-13), then the two answers Tico adds to every bot's question, on the
+    row Skip joins: "I don't know, explain" and "Give it back" (AC-4, AC-5; answers.DONT_KNOW and GIVE_BACK). */
+function decideBotAskHTML(st: DecState, it: NeedsEntry, asker: string): string {
+  const busy = st.busy ? ' disabled' : '', brief = it.ask?.brief || null;
+  const choices = it.ask?.choices || [], details = brief?.details || [];
+  const why = brief?.why ? `<p class="dc-why">Why it matters: ${esc(brief.why)}</p>` : '';
+  const choice = (c: string, i: number) => {
+    const rec = brief?.recommend === c, line = details[i] || '';
+    return `<button type="button" class="dc-choice${rec ? ' dc-rec' : ''}" data-dc-choice="${esc(c)}"${busy}>`
+      + `<span class="dc-choice-head"><span class="dc-choice-name">${esc(c)}</span>${rec ? '<span class="dc-rec-tag">Recommended</span>' : ''}</span>`
+      + (line ? `<span class="dc-choice-line">${esc(line)}</span>` : '') + '</button>';
+  };
+  return `${why}${choices.length ? `<div class="dc-choice-list">${choices.map(choice).join('')}</div>` : ''}
+    <label class="dc-notes"><span>Write to ${esc(actorLabel(asker))}</span><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" placeholder="Something else, or tell it what's wrong"></textarea></label>
+    ${decideFilesHTML(st)}<div class="dc-send">${DEC_SENT === it.id ? `<span class="dc-sent" role="status">Sent to ${esc(actorLabel(asker))}</span>` : ''}${
+      decideBtn('write', 'Send', false, ' data-dc-needs="#dc-other" disabled')}</div>${decideHeldHTML(it, '#dc-other')}
+    <div class="dc-acts dc-fixed">${decideBtn('dont-know', DEC_DONT_KNOW, false, busy)}${decideBtn('give-back', DEC_GIVE_BACK, false, busy)}</div>`;
 }
 /** A file added or finished redraws only the files row, so the note keeps its focus, caret and text. */
 function decideFilesPaint(st: DecState) {
@@ -1179,6 +1203,9 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     }
     case 'reply': await decideReplySend(st, it, '#dc-reply'); return;
     case 'askback': await decideReplySend(st, it, '#dc-other'); return;
+    case 'write': await decideReplySend(st, it, '#dc-other', decideRid(it)); return;
+    case 'dont-know': await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, DEC_DONT_KNOW, ver), decideUndoAnswer); return;
+    case 'give-back': await decideDo(st, it, 'Given back', () => taskAnswer(taskId, rid, DEC_GIVE_BACK, ver), decideUndoAnswer); return;
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;
     case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;

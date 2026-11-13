@@ -27,6 +27,8 @@ const longPress = (page: Page, selector: string) => page.evaluate(async (sel: st
     {
       const {page, errors, writes} = await openStrategy(browser, {viewport: PHONE, hash: HASH});
       await page.locator('#goal-tree .gt-row[data-goal="g-co"]').waitFor();
+      // A goal line is the tree's grid (its goal under the name), not a row of another list sharing its class names.
+      assert.equal(await page.locator('#goal-tree .gt-row[data-goal="g-sales"]').evaluate(r => getComputedStyle(r).display), 'grid', 'a goal line is a grid');
       assert.equal(await page.locator('#goal-strategy, .gst').count(), 0, 'no Strategy line');
       const plus = (await page.locator('#goal-new').boundingBox())!, h1 = (await page.locator('.rd-strat-head h1').boundingBox())!;
       assert(Math.abs((plus.y + plus.height / 2) - (h1.y + h1.height / 2)) < 12, '+ Goal sits beside the title');

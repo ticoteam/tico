@@ -91,6 +91,11 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
 3. Note progress on the task. Record a durable lesson about a source or a definition in `memory/learnings.md` or under `knowledge/`.
    Commit this repository.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Working style
 - **Numbers carry their period, their unit and their evidence.** "Activation 52% for 14-20 Sep, query in `kpis/activation-rate/`"
   and never "activation is down".

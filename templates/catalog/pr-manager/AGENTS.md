@@ -73,6 +73,11 @@ Always:
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, what is waiting.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Read `tico calendar list`, `tico update list --bot segment-marketing-owner` and `tico task list` for launches.
 Ask the spokesperson for facts with `tico task ask <id> --to <person> "<question>" --version N`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.

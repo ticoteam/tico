@@ -265,6 +265,23 @@ def test_depends_on_takes_three_words_and_unrelate_takes_it_off(monkeypatch):
         hubtools.task_relate(Recorder(), {"id": "T1", "task": "depends_on", "other": "T2", "kind": "follow_up"})
 
 
+def test_depends_on_until_released_goes_to_the_api_from_the_cli_and_the_mcp_tool(monkeypatch):
+    """`tico task relate <id> depends_on <task> --until released` and the MCP tool's `until` send `until: released`; it
+    goes with depends_on only."""
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    remotecli.run(hubcli.parser().parse_args(["task", "relate", "T1", "depends_on", "T2", "--until", "released"]))
+    write = ("POST", "tasks/T1/relations", {"task": "T2", "kind": "depends_on", "remove": False, "until": "released"})
+    assert cli.writes() == [write]
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "depends_on", "until": "released"})
+    assert api.writes() == [write]
+    assert hubtools.BY_NAME["tico_task_relate"]["inputSchema"]["properties"]["until"]["enum"] == ["released"]
+    with pytest.raises(ValueError, match="goes with depends_on"):
+        hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": "follow_up", "until": "released"})
+
+
 def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatch, capsys):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     sent = []
@@ -359,6 +376,69 @@ def test_an_ask_names_who_and_the_line_before_anything_is_sent():
     with pytest.raises(ValueError, match="give to and line"):
         hubtools.task_ask(api, {"id": "T1", "version": 3})
     assert api.calls == []
+
+
+def test_a_bots_question_to_a_person_sends_its_why_each_choice_with_what_happens_and_the_recommendation():
+    """`tico task ask --why ... --choice "Label|what happens" --recommend Label` (asks-not-todos, For the engineer)."""
+    argv = [
+        "task",
+        "ask",
+        "T1",
+        "Which tone?",
+        "--to",
+        "chris",
+        "--why",
+        "It goes out Friday.",
+        "--choice",
+        "Plain|Safe for customers",
+        "--choice",
+        "Playful | Stands out",
+        "--recommend",
+        "Plain",
+        "--version",
+        "3",
+    ]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, args)
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/asks",
+            {
+                "to": "chris",
+                "line": "Which tone?",
+                "version": 3,
+                "why": "It goes out Friday.",
+                "recommend": "Plain",
+                "choices": ["Plain", "Playful"],
+                "details": ["Safe for customers", "Stands out"],
+            },
+        )
+    ]
+    with pytest.raises(ValueError, match="not both"):
+        hubtools.task_ask(Recorder(), {**args, "choices": ["A", "B"]})
+
+
+def test_an_asks_short_title_is_sent_and_an_ask_without_one_sends_none():
+    """`tico task ask ... --title "<at most 60 characters>"`: the decision view's heading (task #390)."""
+    argv = ["task", "ask", "T1", "Which tone should the launch note take?", "--to", "chris", "--version", "3"]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, "--title", "Launch note tone"])).items()}
+    args = {k: v for k, v in args.items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, args)
+    [(_, _, body)] = api.writes()
+    assert body["title"] == "Launch note tone"
+    plain = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, plain)
+    [(_, _, body)] = api.writes()
+    assert "title" not in body, "an ask without a title sends none, as older clients do"
+    bound = {**plain, "kind": "ok", "subject": "hq_reply:t-1", "content": {"text": "hi"}, "title": "Reply"}
+    api = Recorder()
+    with pytest.raises(ValueError, match="title"):
+        hubtools.task_ask(api, bound)
+    assert api.calls == [], "an OK bound to a subject has no title: refused, not dropped"
 
 
 TASK = {

@@ -103,12 +103,12 @@ def _runs_commands(by: str) -> bool:
 
 
 # The commands a refusal may offer, by name (`_then`).
-THEN = ("push", "back", "ask", "file", "snooze", "close", "show")
+THEN = ("push", "back", "ask", "file", "snooze", "close", "show", "depends")
 
 
 def _then(row: Row, *which: str) -> list[str]:
     """The commands a refusal offers, for this task at its version: `push` (go on anyway), `back`, `ask`, `file`,
-    `snooze`, `close`, `show` (THEN)."""
+    `snooze`, `close`, `show`, `depends` (blocked by another task, no date) (THEN)."""
     ident, version = row["id"], row.get("version")
     said = {
         "push": f'tico task move {ident} next -m "why" --version {version}',
@@ -118,6 +118,7 @@ def _then(row: Row, *which: str) -> list[str]:
         "snooze": f'tico task snooze {ident} -m "why" --version {version}',
         "close": f'tico task close {ident} -m "why" --version {version}',
         "show": f"tico task show {ident}",
+        "depends": f"tico task relate {ident} depends_on <task>",
     }
     return [said[name] for name in which]
 
@@ -363,15 +364,41 @@ def told(conn: "sqlite3.Connection", by: str, row: Row, said: Row) -> str:
     return f"{said['cause']}. {fix_for(conn, by, row, said)}."
 
 
+def names(stage_row: Row, bot: str | None) -> bool:
+    """Whether the pipeline names `bot` to hold `stage_row`: the stage's fixed owner bot, or a bot on its "One of
+    several" list. Such a bot reads a private task while it holds the stage, as its owner (spec: a private task's stage
+    bot can read it while it holds the stage). Never a person, a group, the task's assignee on an "assignee" stage, or
+    the General Manager."""
+    if not bot or stage_row.get("kind", "work") != "work" or not is_bot(bot) or bot == _h().GENERAL_MANAGER:
+        return False
+    pick = stage_pick.config(stage_row)
+    if pick:
+        return bot in pick.bots
+    return stage_row.get("owner") == bot
+
+
+def stage_read(conn: "sqlite3.Connection", task_id: str, stage_row: Row) -> None:
+    """The history line of a private task that enters a stage whose named bot reads it only while it holds the stage:
+    "Reviewer 1 can read this while it holds Review 1". Who can see does not change."""
+    H = _h()
+    row = H.task(conn, task_id)
+    bot = row.get("owner_id") if row else None
+    if not row or not H.task_private(conn, row) or not names(stage_row, bot) or not H.stage_read_only(conn, bot, row):
+        return
+    line = f"{H.actor_name(conn, bot)} can read this while it holds {stage_row['name']}"
+    _event(conn, task_id, SYSTEM, "stage_read", None, bot, line, {"stage": stage_row["id"], "bot": bot})
+
+
 def shut_out(
     conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None, *, new: bool = False
 ) -> Row | None:
     """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
     it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
     tasks. Same engine. Who can see them doesn't change."), so the task stops before a stage whose owner, or someone the
-    stage asks, cannot read it, and waits until a person who can see it shares it. `owner` is who would own it there
-    (`owner_for`). A task the new owner keeps private by default is judged as it will be: private. `new`: the task is
-    being made (`enter`), so whoever makes it is told to add the reader as they do."""
+    stage asks, cannot read it, and waits until a person who can see it shares it. A bot the pipeline names for the
+    stage (`names`) is the exception: it reads the task while it holds the stage, and only then (`stage_read`).
+    `owner` is who would own it there (`owner_for`). A task the new owner keeps private by default is judged as it will
+    be: private. `new`: the task is being made (`enter`), so whoever makes it is told to add the reader as they do."""
     H = _h()
     if target["kind"] != "work":
         return None
@@ -385,7 +412,7 @@ def shut_out(
     full: Row = H.task(conn, row["id"]) or row
     after: Row = {**full, "owner_id": owner, "private": 1}
     blocked: list[tuple[str, str]] = []
-    if private and new_owner and not H.task_private_readable(conn, new_owner, full):
+    if private and new_owner and not names(target, new_owner) and not H.task_private_readable(conn, new_owner, full):
         blocked.append((new_owner, "owns"))
     for requirement in R.on_stage(conn, target["id"]):
         who = R.person_of(conn, requirement, "") if requirement["kind"] in ("ok", "answer") else None
@@ -670,6 +697,7 @@ def pick_again(conn: "sqlite3.Connection", task_id: str) -> bool:
         fields["assignee_id"] = choice.bot
     _write(conn, task_id, **fields)
     _picked(conn, task_id, str(visit["id"]), row["stage"], choice)
+    stage_read(conn, task_id, row["stage"])
     _reset_ladder(conn, visit, ts, SYSTEM)
     _owned(conn, row, _task(conn, task_id), SYSTEM)
     moved = _task(conn, task_id)
@@ -757,6 +785,7 @@ def enter(
     entered_visit = _open_visit(conn, task_id, first["id"], "new", ts)
     if picked:
         _picked(conn, task_id, entered_visit, first, picked[0])
+    stage_read(conn, task_id, first)
     if above:
         conn.execute(
             "INSERT INTO links (id, from_task_id, to_task_id, visit_id, kind, created_at) VALUES (?,?,?,?,?,?)",
@@ -1129,6 +1158,8 @@ def move(
     entered_visit = _open_visit(conn, task_id, target["id"], how, ts)
     if picked:
         _picked(conn, task_id, entered_visit, target, picked[0])
+    if target["kind"] == "work":
+        stage_read(conn, task_id, target)
     revision = _event(
         conn,
         task_id,
@@ -1751,6 +1782,8 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     restored_visit = _open_visit(conn, task_id, target["id"], how, ts)
     if picked:
         _picked(conn, task_id, restored_visit, target, picked[0])
+    if status == "open":
+        stage_read(conn, task_id, target)
     _event(conn, task_id, by, "move", None, target["id"], "Restored", {"move": "restored", "owner": fields["owner_id"]})
     if status == "open":
         _owned(conn, {**row, "owner_id": was.get("owner_id")}, _task(conn, task_id), by)
@@ -1945,8 +1978,12 @@ def add_requirement(
     shows: object = None,
     seen_version: int | str | None = None,
     for_action: bool = False,
+    brief: Row | None = None,
+    title: str | None = None,
 ) -> Row:
-    """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
+    """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
+    choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
+    requirement's settings. The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
     `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
     (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
@@ -1995,7 +2032,7 @@ def add_requirement(
     requirement_id = H.new_id()
     conn.execute(
         "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
-        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "settings, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             requirement_id,
             visit["id"],
@@ -2007,6 +2044,7 @@ def add_requirement(
             line.strip(),
             None if shows is None else json.dumps(shows),
             None if choices is None else json.dumps(choices),
+            json.dumps({**({"brief": brief} if brief else {}), **({"title": title} if title else {})}),
             ts,
         ),
     )

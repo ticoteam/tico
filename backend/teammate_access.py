@@ -138,12 +138,14 @@ def _narrowest(c, stored, legacy):
 
 
 def forget_group(c, actor, gid):
-    """A deleted group's access goes with it, and no other teammate's audience names it any more: a group made later
-    with the same id starts from the defaults. What it was stays in the audit log."""
+    """A deleted group's access goes with it, and no other teammate's audience names it any more, nor does any website
+    login it was granted: a group made later with the same id starts from the defaults. What it was stays in the audit log."""
     from . import audit_log
     from . import pages
+    from . import website_tools
 
     pages.forget_audience_member(c, actor, "teams", gid)
+    website_tools.forget_group(c, actor, gid)  # its website logins, as a removal takes them
     for row in list(stored_rows(c).values()):
         kind, ident = row["target_type"], row["target_id"]
         before = _complete(row["access"], kind, ident)

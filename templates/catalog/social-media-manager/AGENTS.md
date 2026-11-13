@@ -79,6 +79,11 @@ Always:
    the posts saved and each source that was blocked. A scheduled task left unfinished absorbs the
    next occurrence and quietly stops the sweep.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as scheduled tasks. What a sweep read leaves through `tico listening save` and nothing
 else: no digest and no child tasks. Listening sends what its rules keep to whoever its steps name. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.

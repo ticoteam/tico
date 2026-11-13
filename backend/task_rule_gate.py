@@ -35,6 +35,8 @@ LOG = logging.getLogger("tico.task_rule_gate")
 # An ask a rule covers is refused under this rule. Starting with `task_`, it is a 409 that says what to do instead and
 # never counts toward quarantine (hubdb._escalate).
 COVERS = "task_rule"
+# The write a `kind:ask` rule meets, when a bot makes it to a person: a question on a task.
+ASKS = "task_ask"
 FAILED = "The rule check could not run, so nothing was written. Try again."
 # Answers that are buttons, not words: nothing to check.
 BUTTONS = {"ok", "no", "again", "done"}
@@ -186,6 +188,18 @@ def warn_on(gate: Row | None, text: str) -> str:
     return org_rule_check.warned_text(gate, text) if gate and gate.get("warn") else text
 
 
+class Place:
+    """A task write's place, read inside the check (`place_for`). `asks_person` says, before it is read, that the write
+    is a bot's question to a person (org_rule_check.asking): no other write pays for a `kind:ask` rule."""
+
+    def __init__(self, row: Row | None, ask: bool) -> None:
+        self.row, self.asks_person = row, ask
+
+    def __call__(self, c: Any, author: Any, recipients: Any) -> Any:
+        found: Row = org_rule_check.place_for(c, author, recipients, (self.row or {}).get("conversation_id") or "")
+        return {**found, "ask": True} if self.asks_person else found
+
+
 class TaskRules:
     """The check of a task write, built once per app (backend/app.py) from its rule check and audience."""
 
@@ -210,13 +224,10 @@ class TaskRules:
         return self.rule_task_audience(c, row, who.actor, "", *extra, *(also(c) if also else ()))
 
     @staticmethod
-    def place(row: Row | None) -> Callable[[Any, Any, Any], Any]:
-        """A task write's place, as `where:` reads it: its task's conversation, the thread its comments are in."""
-
-        def place(c: Any, author: Any, recipients: Any) -> Any:
-            return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
-
-        return place
+    def place(row: Row | None, ask: bool = False) -> "Place":
+        """A task write's place, as `where:` reads it: its task's conversation, the thread its comments are in. `ask`:
+        it is a bot's question to a person, which a `kind:ask` rule meets (the built-in "Asks to a person")."""
+        return Place(row, ask)
 
     def check(
         self,
@@ -246,7 +257,14 @@ class TaskRules:
             if not any(value for _, value in said) and not hands_over:
                 return None
             with self.store.read() as c:
-                if not org_rule_check.in_force(c):
+                ask = (
+                    operation == ASKS
+                    and H.is_bot(str(who.actor))
+                    and bool(to)
+                    and org_rule_check.in_force(c, True)
+                    and H.is_human(str(self.rule_target(c, who, to) or ""))
+                )
+                if not org_rule_check.in_force(c, ask):
                     return None  # no rule in force: nothing read, nothing asked
                 try:
                     row: Row = self.auth.task(c, who, self.auth.resolve_task(c, who, tid))
@@ -267,7 +285,7 @@ class TaskRules:
                     reached,
                     obj=f"{row['id']}@{row['version']}",
                     context={"task": row["title"]},
-                    place=self.place(row),
+                    place=self.place(row, ask),
                     track_route=True,  # the audience is kept even when no rule matches: apply compares it
                     **({"late": True} if late else {}),
                 )

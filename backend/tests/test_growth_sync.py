@@ -284,9 +284,10 @@ def test_the_source_list_columns_leave_out_the_stored_file():
     kept."""
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE gtm_sources (id TEXT, system TEXT, last_payload TEXT, retired_at TEXT)")
+    c.execute("CREATE TABLE growth_source_secrets (source_id TEXT, signing_secret TEXT)")
     c.execute("INSERT INTO gtm_sources VALUES ('s1', 'Signups sheet', 'month,channel\n', NULL)")
     cols = GS.listed(c)
     assert "last_payload," not in cols + "," and "id" in cols and "retired_at" in cols
     row = c.execute(f"SELECT {cols} FROM gtm_sources").fetchone()
-    assert row == ("s1", "Signups sheet", None, 1)
+    assert row == ("s1", "Signups sheet", None, 1, 0)
     assert GS.listed(c, "s").startswith("s.id, s.system")

@@ -15,6 +15,7 @@ from backend.tests.helpers.org_rules import org, rule as post_rule
 from clients import hubcli, hubtools, remotecli
 from clients.tico import APIError
 from backend.tests.helpers.org_rules_surfaces import cli, mcp
+from backend.tests.helpers.org_rules import builtin_off
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,6 +29,7 @@ def hide_quote(api, rule_id):
 
 
 def test_the_cli_adds_reads_and_lists_a_rule_the_same_way_the_mcp_does(api):
+    builtin_off(api)
     org(api)
     added = cli(
         api,
@@ -89,6 +91,7 @@ def test_a_bot_suggests_over_the_mcp_and_cannot_accept_it(api):
 
 
 def test_mine_on_the_mcp_is_the_bots_rules_and_settings_as_read_only_sentences(api):
+    builtin_off(api)
     org(api)
     cli(api, "ana-test", "add", "--kind", "internal", "--text", "Ops answers within a day.", "--who", "ops")
     _, mine = mcp(api, "tico_rules_list", {"mine": True}, token="ops-test")
@@ -132,6 +135,7 @@ def test_the_cli_turns_a_due_dates_routine_on_and_off(api):
 
 
 def test_a_retired_rule_is_no_longer_in_force_and_its_due_dates_come_back(api):
+    builtin_off(api)
     org(api)
     rule = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Ops answers within a day.", "--who", "ops")
     cli(api, "ana-test", "due", "add", rule["id"], "--first", "2026-06-01", "--repeats", "yearly", "--owner", "ops")
@@ -200,6 +204,7 @@ def test_the_assistant_refuses_an_everyone_rule_for_a_plain_member_and_suggests_
 
 
 def test_botops_mine_is_its_own_rules_and_settings_not_its_requesters(api, botops):
+    builtin_off(api)
     org(api)
     post_rule(api, {"kind": "internal", "text": "BotOps answers in its own channel.", "who": {"bots": ["botops"]}})
     post_rule(api, {"kind": "internal", "text": "Cara's own rule.", "who": {"people": ["cara"]}})

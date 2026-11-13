@@ -46,6 +46,8 @@ GROUPS = ("bot", "day", "routine", "task", *DIMENSIONS)
 MAX_DAYS = 366
 TOP_ROUTINES = 10
 TOP_TASKS = 25
+# The opened bot's detail lists its top tasks; the rest are one count and one sum.
+DETAIL_TASKS = 10
 
 # A priced run whose estimate may be low: its model's long prompts cost more and the runner did not send every
 # request's tokens (providers.estimate). A run recorded before that was marked is judged by its model alone.
@@ -102,6 +104,23 @@ def figures(row):
         "subscription_equiv_usd": money(row["subscription_usd"]),
         "unpriced_runs": row["api_unpriced"],
         "low_estimate_runs": row["low_priced"],
+    }
+
+
+def tokens(item):
+    return item["input_tokens"] + item["cached_tokens"] + item["cache_write_tokens"] + item["output_tokens"]
+
+
+def raw(item):
+    """A shown row back as the sums `figures` reads, so rows can be added up again (the detail's rest of its tasks)."""
+    cost = item["est_cost_usd"]
+    return {
+        **{k: item[k] for k in ("runs", "input_tokens", "cached_tokens", "cache_write_tokens", "output_tokens")},
+        "api_usd": cost or 0,
+        "subscription_usd": item["subscription_equiv_usd"],
+        "api_priced": 0 if cost is None else 1,
+        "api_unpriced": item["unpriced_runs"],
+        "low_priced": item["low_estimate_runs"],
     }
 
 
@@ -490,15 +509,43 @@ def install(app, store, auth, mutate, settings):
                     ),
                     key=lambda r: (-spend(r), -r["runs"]),
                 )
+                total = totals(query(c, "'all'", "", {bot}, first, last, filters))
+                whole = spend(total)
+
+                def ranked(rows):
+                    for row in rows:
+                        row["share"] = round(spend(row) / whole, 4) if whole else 0.0
+                    return sorted(rows, key=lambda r: (-spend(r), -tokens(r), -r["runs"], r["name"]))
+
+                tasks = ranked(
+                    [
+                        {"value": r["k"] or None, "name": r["k"] or "Chats and other runs", **figures(r)}
+                        for r in query(c, task_key(auth.task_sql(c, who)), "", {bot}, first, last, filters)
+                    ]
+                )
+                # Runs with no task keep their own row: the rest line counts tasks only.
+                named = [t for t in tasks if t["value"]]
+                rest = named[DETAIL_TASKS:]
+                tasks = [t for t in tasks if t not in rest]
+                rest_figures = totals([raw(r) for r in rest]) if rest else dict(EMPTY_DAY)
+                models = ranked(
+                    [
+                        {"value": r["k"] or None, "name": r["k"] or "Not recorded / not applicable", **figures(r)}
+                        for r in query(c, DIMENSIONS["model"], "", {bot}, first, last, filters)
+                    ]
+                )
                 return {
                     **base,
                     "bot": bot,
                     "name": names[bot],
                     "department": depts.get(bot) or None,
                     "limit": limit_view(c, who, bot, usage_limits.company(c), allowed),
-                    "totals": totals(query(c, "'all'", "", {bot}, first, last, filters)),
+                    "totals": total,
                     "daily": series,
                     "routines": routines[:TOP_ROUTINES],
+                    "tasks": tasks,
+                    "tasks_more": {"count": len(rest), **rest_figures},
+                    "models": models,
                 }
             only = {
                 (H.resolve_bot(c, s) or {}).get("id", s)

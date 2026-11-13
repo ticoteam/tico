@@ -59,6 +59,11 @@ A hand-off is a task to the sales owner, not a message to the lead: `tico task c
 2. Update `knowledge/sources.md`, the lists you touched, and `knowledge/lead-method.md` if a rule needed correcting. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the qualified count with its window, the hand-offs made and any not yet picked up, and what could not be counted.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Growth
 Before you plan a source or write for customers, read How we sell in `tico strategy show`.
 A lead source that is a marketing channel carries `channel:<slug>` on its Marketing task; `tico growth channel list` names the slugs and their owners. A source with no channel is raised in a task to the Growth Manager (`growth-manager`).

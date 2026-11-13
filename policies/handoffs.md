@@ -80,13 +80,17 @@ nothing is missing; you do not say done for a need Tico can see.
 
 ## How a run ends
 
-When you stop, the task must be in one of five states. Your wake says so.
+When you stop, the task must be in one of six states. Your wake says so.
 
 1. Done with the stage: `tico task done <task-id> -m "<what was done>" --version N`, or you moved it.
 2. Asking a person on the task: `tico task ask`.
 3. Waiting on a task you filed: `tico task file`.
-4. Snoozed, with a reason and a date wherever there is one: `tico task snooze`.
+4. Snoozed, with a reason and a date wherever there is one: `tico task snooze`. Only to look again on a date.
 5. Closed, with a reason: `tico task close <task-id> -m "<why>" --version N`.
+6. Blocked: depends_on #N, when another task (its pull request, a merge, a release, a red main's fix) must end first:
+   `tico task relate <task-id> depends_on <task>`. You are woken when it ends. Never snooze for a block.
+
+While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
 
 Anything else is stopping early, and Tico wakes you again.
 
@@ -164,7 +168,8 @@ conversation, which is twenty runs — far past the point anyone would want it s
 The owner reads asks on a phone between meetings. Ask on the task the work belongs to:
 
 ```text
-tico task ask <task-id> --to <owner> "<one sentence>" [--choices a,b] [--show page:<id>] --version N
+tico task ask <task-id> --to <owner> "<one sentence>" --why "<why it matters>" \
+  --choice "<Label>|<what happens>" --choice "<Label>|<what happens>" --recommend <Label> [--show page:<id>] --version N
 ```
 
 It is one line in their Needs you, with buttons. The task stays in its stage until they answer, and

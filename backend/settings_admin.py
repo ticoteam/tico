@@ -810,7 +810,23 @@ class SettingsAdmin:
                 declared["session"] = card["session"]
             BS.write(c, bot_id, declared)
             MessageBots.link(c, who.actor, bot_id, who.actor)  # BotOps built it for them: it is their message bot
+        self._note_making_task(c, bot_id)
         return {**result, **self.definition(c, bot_id), "created": True}
+
+    @staticmethod
+    def _note_making_task(c, bot_id):
+        """BotOps registering a bot while it works an open task (the one it cites, H.DELEGATION) is making the bot on
+        that task: say so in the bot's settings (setup_live.MADE_ON), so the bot counts as being set up and its page
+        names the task and any ask on it until it goes live."""
+        from .setup_live import MADE_ON
+
+        cited = str((H.DELEGATION.get() or {}).get("cited") or "")
+        if not cited or not c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (cited,)).fetchone():
+            return
+        declared = BS.read(c, bot_id) or {}
+        if declared.get("setup_task_id") or declared.get(MADE_ON):
+            return
+        BS.update(c, bot_id, {MADE_ON: cited})
 
     @staticmethod
     def _bot_being_set_up(c, template):

@@ -255,11 +255,16 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     [row] = dream_rows(api, "ops")
     r = api.post(
         f"/api/v2/tasks/{row['id']}/asks",
-        json={"to": "human:ben", "line": QUESTIONS, "version": row["version"]},
+        json={
+            "to": "human:ben",
+            "line": QUESTIONS,
+            "version": row["version"],
+            "why": "It sets what goes out on launch day.",
+        },
         headers=headers(token),
     )
     assert r.status_code == 200, r.text
-    assert "ingest" not in r.json() and model.calls == []
+    assert "ingest" not in r.json() and [x for x in model.calls if x["label"] != "rule-check@1"] == []
     with api.app.state.store.read() as c:
         waits = H.task_waits(c, [row["id"]])[row["id"]]
         assert [(w.state, w.who, w.ask) for w in waits][:1] == [("person", "human:ben", True)]

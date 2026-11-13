@@ -139,9 +139,12 @@ async function botCantRunLoad(slug: string, force = false) {
   if (BOT?.slug === slug && alert) patchLiveHTML(alert, botAlertHTML(slug));
 }
 const BOT_BILLING = '#/settings/billing';
-function botCantRunFixHTML(slug: string, fix: BotCantRun['fix']): string {
+function botCantRunFixHTML(slug: string, cant: BotCantRun): string {
   const more = `#/bot/${encodeURIComponent(slug)}/info`, cls = 'primary bot-alert-resume';
-  switch (fix) {
+  const task = cant.task?.id ? `#/task/${encodeURIComponent(cant.task.id)}` : '';
+  switch (cant.fix) {
+    // A bot being made on a task waits on an ask there that is the viewer's: the button opens it on its task (#411).
+    case 'open_ask': return task ? `<a class="${cls}" href="${task}" data-bot-ask${cant.ask?.line ? ` title="${esc(cant.ask.line)}"` : ''}>${cant.ask?.kind === 'ok' ? 'Review OK' : 'Answer'}</a>` : '';
     case 'resume': return `<button class="${cls}" type="button" data-bot-unpause>Unpause</button>`;
     case 'release_quarantine': return `<button class="${cls}" type="button" data-quarantine-resume>Resume bot</button>`;
     case 'release_hold': return botReleaseButton(slug, cls);
@@ -151,13 +154,14 @@ function botCantRunFixHTML(slug: string, fix: BotCantRun['fix']): string {
     case 'unlock_cloud': return `<a class="${cls}" href="${BOT_BILLING}">Unlock</a>`;
     case 'add_credit': return `<a class="${cls}" href="${BOT_BILLING}">Add credit</a>`;
     case 'open_computers': return `<a class="${cls}" href="#/settings/computers">Computers</a>`;
-    default: return '';
+    // Nothing is the viewer's to do: the task making the bot, as a link, and no button.
+    default: return task ? ` · <a href="${task}" data-bot-making>${esc(cant.task?.title || 'Its task')}</a>` : '';
   }
 }
 function botCantRunHTML(slug: string): string {
   const cant = BOT_CANT_RUN.slug === slug ? BOT_CANT_RUN.value : null;
   if (!cant?.cause) return '';
-  return `<span class="bot-alert bot-cant-run" role="status"><span class="tk-mark tk-mark-cant" aria-hidden="true"></span> ${esc(cant.cause)}</span>${botCantRunFixHTML(slug, cant.fix)}`;
+  return `<span class="bot-alert bot-cant-run" role="status"><span class="tk-mark tk-mark-cant" aria-hidden="true"></span> ${esc(cant.cause)}</span>${botCantRunFixHTML(slug, cant)}`;
 }
 function botAlertHTML(slug: string) {
   const cantRun = botCantRunHTML(slug);

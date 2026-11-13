@@ -853,6 +853,9 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A file source's signed address (backend/growth.py): its HMAC signature is the right to post.
+            if request.url.path.startswith("/api/v2/growth/in/") and request.method == "POST":
+                return await call_next(request)
             # A listening's push address carries its own token (backend/listening.py).
             if request.url.path.startswith(LISTENING_PUSH_PATH) and request.method == "POST":
                 return await call_next(request)
@@ -2516,7 +2519,7 @@ def create_app(settings=None):
         if not track_route and (not output or not author):
             return None
         with store.read() as c:
-            in_force = org_rule_check.in_force(c)
+            in_force = org_rule_check.in_force(c, org_rule_check.asking(place))
             if not track_route and not in_force:
                 return None  # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:

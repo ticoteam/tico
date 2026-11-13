@@ -100,7 +100,16 @@ def test_send_anyway_of_a_held_done_note_finishes_the_task_for_the_reviewer_only
 def test_withdrawing_an_ask_with_a_forbidden_why_is_held(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(api, f"tasks/{task['id']}/asks", {"to": "ana", "line": "Which launch day suits you?", "version": 1})
+    asked = ops(
+        api,
+        f"tasks/{task['id']}/asks",
+        {
+            "to": "ana",
+            "line": "Which launch day suits you?",
+            "version": 1,
+            "why": "It sets what goes out on launch day.",
+        },
+    )
     color_rule(api)
     r = api.request(
         "DELETE",
@@ -213,7 +222,7 @@ def all_slots_busy(monkeypatch):
 def bots_ask(api, task, line="May I say our favorite color is red?", expected=200):
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": line, "version": task["version"]},
+        json={"to": "ana", "line": line, "version": task["version"], "why": "It sets what goes out on launch day."},
         headers=headers("ops-test"),
     )
     assert r.status_code == expected, r.text
@@ -224,6 +233,27 @@ def asks_on(api, task):
     return sql(
         api, "SELECT id FROM requirements WHERE visit_id IN (SELECT id FROM visits WHERE task_id=?)", (task["id"],)
     )
+
+
+def test_a_bots_ask_whose_short_title_alone_breaks_a_rule_is_refused(ruled):
+    """The person reads the title first, so the check reads it with the line (task #390)."""
+    api, judge = ruled
+    color_rule(api)
+    task = task_for_ops(api)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={
+            "to": "ana",
+            "line": "Which line should the launch post lead with?",
+            "title": "Our favorite color is red: say it?",
+            "version": task["version"],
+            "why": "It sets what goes out on launch day.",
+        },
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert judge.calls, "the check was asked"
+    assert asks_on(api, task) == []
 
 
 @pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
@@ -449,7 +479,11 @@ def test_a_rule_scoped_to_the_tasks_thread_holds_a_write_on_the_task(ruled):
 def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "Which color do we use?", "version": 1})
+    asked = ops(
+        api,
+        f"tasks/{task['id']}/asks",
+        {"to": "ben", "line": "Which color do we use?", "version": 1, "why": "It sets what goes out on launch day."},
+    )
     with api.app.state.store.transaction() as c:  # asked by another bot on the task than its owner
         c.execute("UPDATE requirements SET added_by_id='bot:finance' WHERE id=?", (asked["requirement_id"],))
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {"bots": ["finance"]}})
@@ -465,7 +499,11 @@ def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
 def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(ruled):
     api, _ = ruled
     task = task_for_ops(api)
-    asked = ops(api, f"tasks/{task['id']}/asks", {"to": "cara", "line": "Which color do we use?", "version": 1})
+    asked = ops(
+        api,
+        f"tasks/{task['id']}/asks",
+        {"to": "cara", "line": "Which color do we use?", "version": 1, "why": "It sets what goes out on launch day."},
+    )
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
     before = row(api, task["id"])
     r = api.post(

@@ -77,6 +77,11 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 2. Update `knowledge/`, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline and the export dates used.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Exports arrive as task attachments; ask for this week's with `tico task ask <id> --to <person> "<question>" --version N` when they are
 missing. Read supplier price lists with `tico doc search`. When an order is ready for review, attach it to the task and

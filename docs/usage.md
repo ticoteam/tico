@@ -29,6 +29,29 @@ A run on a ChatGPT or Claude sign-in (Codex "Signed in with ChatGPT", Claude wit
 account) is `billing: subscription`. It costs nothing extra, so its figure is shown as "API-equivalent" and kept out of the estimate of what
 was spent.
 
+## A bot's detail
+
+Click a bot on the Usage page to see what explains its spend, under the page's range and filters, from one request
+(`GET /api/v2/usage?bot=<slug>`):
+
+- **A summary**: its API-equivalent cost, runs, tokens and cache rate.
+- **Tokens**: one bar split into four parts, with a legend giving each part's count and share of all tokens.
+  - **Cache reads**: input the provider read from its prompt cache (`cached_tokens`). On most models these cost about a
+    tenth of new input.
+  - **Cache writes**: input written to the cache for later turns (`cache_write_tokens`; 0 on runtimes that report none).
+  - **New input**: input sent fresh, neither read from nor written to the cache (`input_tokens`).
+  - **Output**: what the model wrote back (`output_tokens`).
+- **Cache rate** = cache reads ÷ (new input + cache reads + cache writes): the share of input tokens read from cache, as a
+  whole percent. A dash when no input tokens were reported. A runtime that counts cache reads differently (or not at all)
+  reads lower.
+- **Tasks**: the bot's top 10 tasks by cost, each with its runs, tokens, cache rate, cost and share of the bot's cost, then
+  how many more and what they cost. Runs with no task always keep their own row. Runs are grouped by task title, so a routine's runs add up on one row; a private
+  task reads "A private task", one you can't open "A task you can't open", and runs with no task "Chats and other runs".
+- **Models**: every model the bot used, with the same columns; a model with no list price shows a dash for cost.
+- **Cost per day**, only when the range has two days or more; hover a column for its cost, runs and cache rate.
+- **Automations**, and **Export CSV**: the bot's days with their token counts, costs and `cache_rate` (0 to 1, empty
+  when no input tokens were reported).
+
 ## Who sees it
 
 The owner and the admins see every bot. Anyone else sees the bots they own. A bot's own credentials cannot read it.

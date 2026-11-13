@@ -371,6 +371,14 @@ class TaskAsk(Contract):
         default=None, min_length=2, max_length=6
     )
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
+    # A bot's question to a person (backend/ask_shape.py): why it matters, a line per choice on what happens on it (in
+    # the choices' order) and the choice it recommends. Required there; anyone else may send them too.
+    why: Annotated[str, Field(max_length=200)] | None = None
+    details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
+    recommend: Annotated[str, Field(max_length=60)] | None = None
+    # A short title the decision view shows as the ask's heading, with `line` once under it. Optional: an ask without
+    # one is headed by its line.
+    title: Annotated[str, Field(max_length=60)] | None = None
     version: Version | None = None
 
 
@@ -550,6 +558,9 @@ class TaskComment(Contract):
     # may not direct the task's bots.
     delivery: Literal["steer", "queue", "defer", "goal"] | None = None
     defer_for: DeferFor | None = None
+    # A reply to a bot's question on this task (the ask's requirement id): written to the bot that asked, whom it
+    # wakes, and the question stays open (the decision view's "Write to <bot>").
+    ask: ID | None = None
 
 
 class TaskReaders(Contract):
@@ -587,11 +598,15 @@ class TaskLink(Contract):
 class TaskRelation(Contract):
     """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
     merges after task: in Merge its PRs are not queued until task has merged), depends_on (it is blocked until task
-    ends). The others are notes."""
+    ends; with until released, until production runs the release that holds task's merged PRs). The others are
+    notes."""
 
     task: ID
     kind: RelationKind = "related"
     remove: bool = False
+    # depends_on only: it stays blocked after task is Done, until production runs a release that holds task's merged
+    # PRs (backend/task_depends.py).
+    until: Literal["released"] | None = None
 
 
 class TaskMerge(Contract):
@@ -1533,7 +1548,9 @@ class Heartbeat(Contract):
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
-    # Nightly memory tidy pilot; a runner still sends them.
+    # Nightly memory tidy pilot's packet path: today's runner no longer sends it, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so it is accepted and ignored until 0.6.0 leaves the supported window
+    # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
             "assignment_instances_v1",
@@ -3492,9 +3509,9 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py): file import, database query and Finance ad spend
-# (backend/growth_finance.py); bot cost follows in a later part.
-GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
+# A synced source's kind (backend/growth_sync.py): file import, database query, Finance ad spend
+# (backend/growth_finance.py) and bot cost.
+GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend", "bot_cost"]
 
 
 class GrowthSyncMap(Contract):

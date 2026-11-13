@@ -197,8 +197,8 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
   task, or A different model family from everyone who worked on it) and whether the pick becomes the task's owner (its
   assignee, for life: Build) or holds only this stage (`visits.holder_id`: Review). Tico picks the moment a task enters,
   with no model call: a task it had someone here before goes back to them (a task with an owner keeps it); Prefer
-  narrows the list unless that leaves nobody free; then turns or random among bots that can run, can read the task and
-  are under their limit. Everyone full: the task waits ("Waiting for a free Reviewer", state `pick`) and nobody is
+  narrows the list unless that leaves nobody free; then turns or random among bots that can run and are under their
+  limit (each bot on the list reads a private task while it holds the stage: "Private tasks" below). Everyone full: the task waits ("Waiting for a free Reviewer", state `pick`) and nobody is
   woken; the never-stuck pass gives the oldest to the first with room. Nobody can take it (all paused, or none can read
   a private task): the manager is woken, told why. Each pick is a line on the task's history ("Build given to Builder 2
   · took turns"). Only a person changes who a stage picks from; the record shows `pick_next`, who gets the next task.
@@ -390,13 +390,19 @@ Two labels can sit on top of any state: **Late** and **Pushed past**. Two states
 
 ### How a bot's run may end
 
-A bot working a task must leave it in one of five states. Its wake says so.
+A bot working a task must leave it in one of six states. Its wake says so.
 
 1. Done with the stage: the requirement is met, or it moved the task.
 2. Asking a person, on the task.
 3. Waiting on a task it filed.
-4. Snoozed, with a reason, and to a date wherever there is one. For example "vendor replies by Nov 14".
+4. Snoozed, with a reason, and to a date wherever there is one: only to look again on a date. For example "couldn't
+   reproduce, try again Nov 16".
 5. Closed, with a reason.
+6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`), when another task must end first. It has
+   no date and its owner is woken when that task ends. Never snooze for a block (the stage rule Snooze only for a real
+   wait refuses it).
+
+While a task's own pull request checks run, its turn is GitHub's: that is a way to stop, and their end wakes the owner.
 
 Anything else is "stopped early", and the never-stuck check wakes it again.
 
@@ -1345,8 +1351,15 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 
 - **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…". A "Notes" box.
   Buttons "Approve" (main) and "Send back".
-- **A question:** heading "Which plan do new signups get?". Buttons "Free", "Pro trial", "Ask at signup". A box
-  "Something else".
+- **A question from a bot:** heading "Which plan do new signups get?". Under it "Why it matters: …", the bot's reason.
+  A card per choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, and "Recommended" on the
+  one the bot recommends. Then a box "Write to Builder" and Send at its right edge: the text is a comment on the task
+  written to the bot that asked, which wakes it, and the question stays open. Then one row: "I don't know, explain",
+  "Give it back" and Skip. "I don't know, explain" answers the question with those words, and the bot explains in a
+  new ask. "Give it back" closes it, and the bot is told "Ana gave it back: decide it yourself, or ask your manager".
+  A question with no choices is the same screen without the cards.
+- **A question from a person:** heading "Which colour?". Buttons for its choices and a box "Something else", whose
+  text is the answer.
 - **A one-tap fix:** heading "Connect Google for Scout". Line "Its Google login expired Nov 8." Button "Connect" (main).
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
@@ -1827,7 +1840,15 @@ How each one works on the engine.
 - **Moving a task to another pipeline.** It lands in that pipeline's first stage.
 - **Goals.** Not tasks. A goal links to the tasks that serve it.
 - **Private tasks.** Same engine. Who can see them doesn't change, except that entering a private pipeline adds its
-  manager and the company's owner.
+  manager and the company's owner. The bot a pipeline names for a stage (its fixed owner bot, or a bot on its "One of
+  several" list; never a person, a group, an "assignee" stage's assignee or the General Manager) reads a private task
+  while it holds that stage, as its owner, and its managers with it. That read is not on Who can see, ends when the
+  task moves on, and is a line on the task's history ("Reviewer 1 can read this while it holds Review 1"). A bot that
+  reads only that way shares nothing: it adds no reader, gives the task to nobody, and what it files from the task is
+  private with the task's readers, for itself or for someone who already reads the task. The filer keeps reading what
+  it filed after it leaves the stage, as any requester does, and shares that no more than the task it came from. On a pipeline holding an open private task only a person changes who holds a stage.
+  Anyone else a stage needs (a person asked for an OK or an answer, an assignee, the General Manager) must already
+  read the task: until someone shares it, the task waits and the line names who can.
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
 - **An idea you don't want yet.** Snooze it with no end date. It leaves the stage's count.
 

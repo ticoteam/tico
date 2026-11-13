@@ -501,40 +501,47 @@ def _own_ask(api, task_id, requirement=None):
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task, in one sentence: a question (with choices, or a typed answer) or an OK. The task "
-    "stays in its stage until they answer, it is one line in their Needs you, and their answer wakes you once. "
-    "Asking again in this stage replaces your earlier ask. A rule they set may refuse it with the rule's words: act on "
-    "the rule instead. `withdraw` takes your open ask back.",
+    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
+    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
     {
         "id": TASK_ID,
-        "to": _s("The person you ask: their id"),
-        "line": _s("The one sentence they are asked, readable on its own", maxLength=300),
+        "to": _s("The person's id"),
+        "line": _s("The one sentence asked, readable alone", maxLength=300),
         "kind": {
             "type": "string",
             "enum": ["answer", "ok"],
-            "description": "answer (the default): a question; ok: they approve it or send it back with a note",
+            "description": "answer (default): a question; ok: approve or send back",
         },
         "choices": {
             "type": "array",
             "items": {"type": "string", "maxLength": 60},
             "minItems": 2,
             "maxItems": 6,
-            "description": "The answers to pick from; they may also type their own",
+            "description": "Answers to pick; they may type their own",
         },
+        "choice": {
+            "type": "array",
+            "items": _s("Label|what happens", maxLength=221),
+            "minItems": 2,
+            "maxItems": 4,
+            "description": "Instead of choices",
+        },
+        "recommend": _s("The choice you recommend", maxLength=60),
+        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at to answer, shown with the ask",
+            "description": "What they look at, shown with the ask",
         },
         "subject": _s(
-            "An OK bound to what you will do, as <kind>:<id> (budget_raise:launch-video): the OK covers exactly "
-            "`content`, and you use it once with tico_ok_use just before you act"
+            "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
+            "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
-        "why": _s("With withdraw: why, in a sentence"),
+        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
+        "requirement": _s("With withdraw: the ask's requirement id, if several"),
+        "why": _s("Why it matters (with withdraw: why)"),
         "version": VERSION,
     },
     required=("id",),
@@ -552,13 +559,21 @@ def task_ask(api, args):
     if args.get("subject"):
         if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
             raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
+        if args.get("title"):
+            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show"):
+    for field in ("kind", "choices", "show", "why", "recommend", "title"):
         if args.get(field):
             body[field] = args[field]
+    if args.get("choice"):
+        if args.get("choices"):
+            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
+        pairs = [str(one).partition("|") for one in args["choice"]]
+        body["choices"] = [label.strip() for label, _, _ in pairs]
+        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 
@@ -885,7 +900,9 @@ def task_followers(api, args):
     "Relate another task to this one, read as `id kind task`: related (they belong together, the default), "
     "duplicate_of, follow_up (it was split off or followed up from task), or depends_on (this task cannot go on until "
     "task ends: it shows Blocked by it, with no date, nobody is woken for it, and its owner is woken once when task "
-    "ends; use it, never a snooze, when you wait on another task, its PR, a fix for main or a release). The other "
+    "ends; use it, never a snooze, when you wait on another task, its PR, a fix for main or a release). With until "
+    "released, a depends_on holds after task is Done, until production runs a release that holds its merged PRs: how a "
+    "Validate task waits for its work to reach production. The other "
     "relations are notes, and a task's parent is set when it is filed. `remove` takes the relation off. The reply's "
     "`readback` says what was stored, both ends: check it before reporting the link as fixed.",
     {
@@ -894,6 +911,11 @@ def task_followers(api, args):
         # No enum: blocks and blocked_by are answered with what to do instead, not with a list of choices.
         "kind": _s("related (the default), duplicate_of, follow_up or depends_on", default="related"),
         "remove": {"type": "boolean", "default": False},
+        "until": {
+            "type": "string",
+            "enum": ["released"],
+            "description": "depends_on only: stay blocked after task is Done, until production runs its release",
+        },
     },
     required=("id", "task"),
     writes=True,
@@ -910,11 +932,14 @@ def task_relate(api, args):
         raise ValueError(BLOCKING_GONE)
     if kind not in RELATION_KINDS:
         raise ValueError(f"A relation is {', '.join(RELATION_KINDS)}, not {kind}")
-    return api.post(
-        f"tasks/{args['id']}/relations",
-        {"task": str(args["task"]).lstrip("#"), "kind": kind, "remove": bool(args.get("remove"))},
-        key=_key(args),
-    )
+    body = {"task": str(args["task"]).lstrip("#"), "kind": kind, "remove": bool(args.get("remove"))}
+    if args.get("until"):
+        if kind != "depends_on" or args.get("remove"):
+            raise ValueError(
+                "--until released goes with depends_on: tico task relate <id> depends_on <task> --until released"
+            )
+        body["until"] = args["until"]
+    return api.post(f"tasks/{args['id']}/relations", body, key=_key(args))
 
 
 @tool(

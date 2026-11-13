@@ -36,6 +36,9 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 DONE, OK, NO, AGAIN, GIVE, PUSHED_PAST = "done", "ok", "no", "again", "give", "pushed_past"
+# The two answers Tico adds to every bot's question to a person (Tasks spec "Bots ask people a question with choices",
+# AC-4 and AC-5), beside the bot's own choices and never counted in them. Each closes the ask like any answer.
+DONT_KNOW, GIVE_BACK = "I don't know, explain", "Give it back"
 # The kinds a person (or a named bot) answers by hand. A page is answered once Jev has looked (task_requirements._page).
 BY_HAND = ("owner_done", "ok", "answer", "page")
 # Kinds that are an ask: they can name a person, and take a thumb (C29).
@@ -383,6 +386,12 @@ def _tell_bot(
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
         if is_bot(asker) and target != asker:
             lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}", asked by {_name(conn, asker)}: {value}'
+        if is_bot(asker) and value == GIVE_BACK:
+            # Give it back (AC-5): not an answer to act on. The bot decides, or asks the one it reports to.
+            lead = (
+                f"{_name(conn, by)} gave it back: decide it yourself, or ask your manager. "
+                f'The question was "{R.name_of(requirement)}".'
+            )
         _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 

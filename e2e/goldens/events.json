@@ -668,7 +668,7 @@
         "id": "<id13>",
         "message": {
           "answered_by_id": null,
-          "body": "This task is yours now. Yours.\nDraft the launch plan is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\nVersion 2. Send it with every command on this task.\nLeave the task in one of five states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one.\n5. Closed, with a reason.\nAnything else counts as stopped early and you are woken again.",
+          "body": "This task is yours now. Yours.\nDraft the launch plan is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\nVersion 2. Send it with every command on this task.\nLeave the task in one of six states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n5. Closed, with a reason.\n6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. Never snooze for a block.\nWhile your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\nAnything else counts as stopped early and you are woken again.",
           "conversation_id": "<id12>",
           "created_at": "<time>",
           "deleted_at": null,
@@ -896,7 +896,7 @@
         "id": "<id17>",
         "message": {
           "answered_by_id": null,
-          "body": "Check the vendor list is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\nVersion 1. Send it with every command on this task.\nLeave the task in one of five states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one.\n5. Closed, with a reason.\nAnything else counts as stopped early and you are woken again.",
+          "body": "Check the vendor list is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\nVersion 1. Send it with every command on this task.\nLeave the task in one of six states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n5. Closed, with a reason.\n6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. Never snooze for a block.\nWhile your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\nAnything else counts as stopped early and you are woken again.",
           "conversation_id": "<id16>",
           "created_at": "<time>",
           "deleted_at": null,
@@ -1150,7 +1150,7 @@
         "id": "<id24>",
         "message": {
           "answered_by_id": null,
-          "body": "Ana sent this back: Not now.\nCheck the vendor list is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\n- Spend $5 on ads for the launch test?: Sent back: Not now.\nVersion 1. Send it with every command on this task.\nLeave the task in one of five states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one.\n5. Closed, with a reason.\nAnything else counts as stopped early and you are woken again.",
+          "body": "Ana sent this back: Not now.\nCheck the vendor list is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\n- Spend $5 on ads for the launch test?: Sent back: Not now.\nVersion 1. Send it with every command on this task.\nLeave the task in one of six states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n5. Closed, with a reason.\n6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. Never snooze for a block.\nWhile your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\nAnything else counts as stopped early and you are woken again.",
           "conversation_id": "<id16>",
           "created_at": "<time>",
           "deleted_at": null,

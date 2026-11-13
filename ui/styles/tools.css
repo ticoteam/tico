@@ -4,9 +4,11 @@
 
 /* The list */
 .tt{min-width:0}
-.tt-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
-.tt-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.tt-head .spacer{flex:1}
+/* Tools' header is the one page header (ui/app/page-head.ts, hook .tt-head). Contacts and Skills still draw their own
+   .tt-head, so its old rules stay for them only (:not(.ph)). */
+.tt-head:not(.ph){display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
+.tt-head:not(.ph) h1{margin:0;font-size:var(--t-lg);font-weight:600}
+.tt-head:not(.ph) .spacer{flex:1}
 .tt-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px;min-width:0}
 .tt-bar .theme-seg{flex-wrap:wrap;max-width:100%;min-height:var(--ctl)}
 .tt-q{flex:0 1 240px;min-width:0;margin-left:auto}
@@ -40,7 +42,7 @@
 .tt-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 .tt-chev{width:16px;color:var(--muted);text-align:right}
 .tt-add{position:relative}
-.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;min-height:var(--ctl-sm, 32px);padding:0 12px;border-radius:8px;background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-sm)}
+.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;box-sizing:border-box;min-height:var(--ctl, 32px);padding:0 14px;border-radius:var(--r-ctl);background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-base)}
 .tt-add>summary::-webkit-details-marker{display:none}
 .tt-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--raised, var(--surface));box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
 .tt-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
@@ -60,6 +62,11 @@
 .tt-tabs a{padding:8px 0;color:var(--muted);text-decoration:none;font-weight:600;font-size:var(--t-sm);border-bottom:2px solid transparent;margin-bottom:-1px}
 .tt-tabs a:hover{color:var(--ink);text-decoration:none}
 .tt-tabs a.cur{color:var(--ink);border-bottom-color:var(--ink)}
+/* A tool's Overview / Activity are .ph-tab (the page header's one tab look); Contacts and Skills keep the underline. */
+.tt-tabs:has(>.ph-tab){gap:2px;padding:0 0 8px}
+.tt-tabs>a.ph-tab{margin:0;padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font-size:var(--t-base);font-weight:400;line-height:20px;white-space:nowrap}
+.tt-tabs>a.ph-tab:hover{background:var(--surface2);color:var(--ink)}
+.tt-tabs>a.ph-tab:is(.cur,[aria-current=page]){background:var(--surface2);color:var(--ink);font-weight:600}
 .tt-cols{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:0 16px;align-items:start}
 .tt-col{min-width:0}
 .tt-cols section.card>header,.ib-detail section.card>header{align-items:center}
@@ -116,10 +123,11 @@ section.card.tt-soon>header .pill{margin-left:auto}
 #mailbox-access{order:1}#inbox-sending{order:2}#inbox-waiting-to-send{order:3}#mailbox-keys{order:4}#mailbox-routines{order:5}#mailbox-recent{order:6}
 
 @media (max-width:760px){
-  .tt-head{min-height:0}
+  .tt-head:not(.ph){min-height:0}
   .tt-q{flex:1 1 100%;margin-left:0}
-  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. */
-  .tt-filters button{min-height:40px}
+  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. .ph-seg in the
+     selector outranks the shared filter look (page-head.css), which loads later and zeroes min-height. */
+  .tt-filters.ph-seg>button{min-height:40px}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */
   .tt-list thead,.tt-log thead,.tt-limits thead{display:none}
@@ -189,16 +197,26 @@ section.card.tt-soon>header .pill{margin-left:auto}
 .tw-central{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:var(--t-sm);cursor:pointer}
 .wh-dialog .task-rule-form>label.tw-central{display:flex;margin-top:4px}
 .tw-who-field{display:grid;gap:6px}
-.tw-who-field label{display:grid;gap:4px}
 .tw-seg{align-self:flex-start;margin-bottom:4px}
-.tw-chips{display:flex;flex-wrap:wrap;gap:6px}
-.tw-chips:empty{display:none}
-.tw-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 2px 2px 4px;border:1px solid var(--line);border-radius:999px;font-size:var(--t-sm)}
-.tw-chip .tt-x{width:22px;height:22px;min-width:22px;padding:0;border:0;background:none}
-.tw-access{display:flex;flex-direction:column;margin-bottom:8px}
-.tw-access-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
-.tw-access-row:first-child{border-top:0}
-.tw-access-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Who can use it (twWhoRow): a 24px face, the name in ink, its muted text, and a quiet × on the right that shows when
+   the row is hovered or has focus; it still takes Tab while hidden. On a touch screen it always shows, 36px. */
+.tw-access{display:flex;flex-direction:column}
+.tw-access:empty{display:none}
+.tw-access-row{display:flex;align-items:center;gap:8px;min-height:36px;font-size:var(--t-base)}
+.tw-who-n{flex:none;max-width:60%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.tw-who-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
+button.tw-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-width:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);opacity:0}
+.tw-x .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
+button.tw-x:hover{background:var(--surface2)}
+.tw-x:focus-visible{opacity:1;outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tw-access-row:hover .tw-x,.tw-access-row:focus-within .tw-x{opacity:1}
+.tw-nobody{margin:0}
+/* The picker's list floats in the top layer below the field: the dialog leaves room for seven options, so the list
+   never makes it scroll and never covers Done. */
+.tw-access-dialog .tw-access{min-height:240px;justify-content:flex-start}
+@media (hover:none){
+  button.tw-x{opacity:1;width:36px;height:36px;min-width:36px;margin-right:-6px}
+}
 .tw-code{margin:4px 0 0;font-size:var(--t-xl);font-weight:600;letter-spacing:.08em;text-align:center}
 .tw-code-left{margin:0;text-align:center}
 .tw-log .tt-who-name{display:flex;align-items:center;gap:6px}

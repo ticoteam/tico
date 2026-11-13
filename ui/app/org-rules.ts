@@ -384,7 +384,7 @@ async function pageRules() {
   main.classList.add('ru-layout');
   if (!RU || !document.body.contains(RU.root)) {
     main.innerHTML = `<div class="ru" id="ru-root">
-      <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
+      ${pageHead({title: 'Rules', hook: 'ru-ph', pad: true, tabsHook: 'ru-tabs', tabsAttrs: 'aria-label="Rules"'})}
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
     const root: HTMLElement | null = $('#ru-root');
@@ -412,23 +412,25 @@ async function pageRules() {
 }
 function rulesStop() { RU = null; }
 
+// The header (pageHead, drawn once by pageRules) keeps its title; each tab change fills its tabs, tools and button.
 function ruDrawHead() {
-  const ru = ruOpen();
+  const ru = ruOpen(), head = ruFind('.ru-ph', ru.root);
   const count = (k: RuleTab) => ru.groups?.groups?.find(g => g.key === k)?.count;
-  ruFind('.ru-tabs').innerHTML = RU_TABS.map(([k, label]) => { const n = count(k);
-    return `<a href="${ruHref(k)}" data-ru-tab="${k}"${ru.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}${n === undefined ? '' : ` <span class="ru-n tnum">${n}</span>`}</a>`; }).join('');
+  pageHeadSet(head, 'tabs', pageHeadTabs(RU_TABS.map(([k, label]) => ({label, href: ruHref(k), count: count(k), cur: ru.tab === k, attrs: `data-ru-tab="${k}"`}))));
   const human = S.me?.role !== 'bot';
   // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
-  if (ru.tab === 'internal' && ru.root.querySelector('.ru-acts .rr-q')) return;
-  const acts = {
+  if (ru.tab === 'internal' && head.querySelector('.ph-tools .rr-q')) return;
+  const toolsBy: Partial<Record<RuleTab, string>> = {
     internal: `<div class="rr-find"><input class="rr-q" type="search" placeholder="Search people, bots and teams" aria-label="Search people, bots and teams" autocomplete="off">
       <div class="rr-results" role="listbox" aria-label="Matches" hidden></div></div>`,
-    external: human ? '<button class="ghost small" type="button" data-ru-add>+ Add rule</button><button class="primary small" type="button" data-ru-add-doc>+ Add document</button>' : '',
-    due: human ? '<button class="primary small" type="button" data-ru-add-due>+ Add due date</button>' : '',
-    suggested: '',
-    stages: '', wakes: '', automations: '', builtin: '',
-  }[ruTab()];
-  ruFind('.ru-acts').innerHTML = acts;
+    external: human ? '<button class="ghost" type="button" data-ru-add>Add rule</button>' : '',
+  };
+  const primaryBy: Partial<Record<RuleTab, string>> = {
+    external: human ? '<button class="primary ph-go" type="button" data-ru-add-doc>Add document</button>' : '',
+    due: human ? '<button class="primary ph-go" type="button" data-ru-add-due>Add due date</button>' : '',
+  };
+  pageHeadSet(head, 'tools', toolsBy[ruTab()] || '');
+  pageHeadSet(head, 'primary', primaryBy[ruTab()] || '');
 }
 function ruDraw() {
   ruDrawHead();
@@ -675,7 +677,7 @@ function rrMapPaint() {
 }
 // The search's matches under the header box (a computer) and the list of parties (a phone).
 function rrSearchPaint() {
-  const R = ruOpen().reach, root = ruOpen().root, box = root.querySelector<HTMLElement>('.ru-acts .rr-results');
+  const R = ruOpen().reach, root = ruOpen().root, box = root.querySelector<HTMLElement>('.ru-ph .rr-results');
   if (box) {
     const found = R.q ? rrFind(R.q).slice(0, RR_MATCHES) : [];
     box.hidden = !R.q;

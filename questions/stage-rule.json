@@ -2,7 +2,7 @@
   "id": "stage-rule",
   "version": 1,
   "owner": "tasks-product-owner",
-  "summary": "A stage rule's Jev question on one task event (backend/stage_rules.py): is the rule's statement true of this task and this event? One noul per rule; every rule's question on one event goes in one call. The caller copies `rule` once per rule and puts the rule's own words in `question`. The default rule Snooze only for a real wait asks whether a bot snoozing a task is blocked rather than waiting.",
+  "summary": "A stage rule's Jev question on one task event (backend/stage_rules.py): is the rule's statement true of this task and this event? One noul per rule; every rule's question on one event goes in one call. The caller copies `rule` once per rule and puts the rule's own words in `question`. The default rule Snooze only for a real wait asks whether a bot snoozing a task waits on another task, a PR, a merge, a release, main, checks or a person, rather than only looking again on a date.",
   "state": ["task", "event"],
   "questions": {
     "rule": {

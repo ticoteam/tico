@@ -74,7 +74,7 @@ def assert_refused(api, response, before=None):
 # ---- the decision table, plain code ----------------------------------------------------------------------------
 
 
-def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=False, covered="new"):
+def answers(clear=True, kind="chore", meets="none", urgency=1, recommends=False, covered="new"):
     return {
         "clear": clear,
         "kind": kind,
@@ -105,6 +105,9 @@ def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=Fal
         (0, answers(kind="status"), (A.FYI, "status")),  # criterion 7
         (50, answers(kind="chore"), (A.SENT_BACK, "recommends")),  # criterion 8
         (0, answers(kind="own_work"), (A.SENT_BACK, "own_work")),  # criterion 9
+        (0, answers(kind="decision"), (A.SENT_BACK, "decision")),  # asked as a question instead (asks-not-todos AC-6)
+        (0, answers(kind="decision", urgency=3), (A.SENT_BACK, "decision")),
+        (4, answers(kind="setup"), (A.THROUGH, "under_budget")),
         (0, answers(clear=False), (A.SENT_BACK, "unclear")),
         (0, answers(clear=False, urgency=3), (A.THROUGH, "urgent")),
         (0, answers(clear=None), (A.FAILED_OPEN, "below_threshold")),

@@ -1028,12 +1028,26 @@ def parser():
         "--kind", choices=["answer", "ok"], help="answer (the default): a question; ok: approve or send back"
     )
     s.add_argument("--choices", type=choice_list, help="the answers to pick from, a,b")
+    s.add_argument(
+        "--choice",
+        action="append",
+        metavar="LABEL|WHAT HAPPENS",
+        help="one answer to pick from and what happens on it; repeat, 2 to 4 (a bot asking a person)",
+    )
+    s.add_argument(
+        "--recommend", metavar="LABEL", help="the choice you recommend (a bot asking a person, with choices)"
+    )
+    s.add_argument(
+        "--title", help="a short title, at most 60 characters: the heading above the question (not with --for)"
+    )
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
-    s.add_argument("-m", "--why", help="with --withdraw: why")
+    s.add_argument(
+        "-m", "--why", help="why it matters to them, in one line (a bot asking a person needs it); with --withdraw: why"
+    )
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
     s = task.add_parser("thumbs", help="was this ask worth asking: up or down; a down sends an open ask back")
@@ -1231,6 +1245,12 @@ def parser():
         )
         if change == "relate":
             s.add_argument("--remove", action="store_true", help="take it off instead")
+            s.add_argument(
+                "--until",
+                choices=("released",),
+                help="depends_on only: stay blocked after task is Done, until production runs a release that holds "
+                "its merged PRs (how a Validate task waits for its work to reach production)",
+            )
         s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
     s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
     s.add_argument("id", help="the task that merges later")

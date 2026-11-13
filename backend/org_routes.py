@@ -208,18 +208,27 @@ def register(app, auth, settings, settings_admin, store):
                 for bot, level in shown
             ]
 
-    def cant_run(c, bot):
+    def cant_run(c, bot, who):
         """The bot page's top line (docs/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
-        (task_wakes.cannot_run), and the one fix a person makes, or None while it can run."""
+        (task_wakes.cannot_run), and the one fix a person makes, or None while it can run. A bot being made on a task
+        says what that task waits on instead (`making`)."""
         from . import task_wakes as W
 
         cause = W.cannot_run(c, "bot:" + bot)
         if not cause:
             return None
+        if cause == W.BEING_SET_UP:
+            made = making(c, bot, who)
+            if made:
+                return made
+        if cause == W.STATE_CAUSES["planned"]:
+            # Nothing is making it: the Info tab has no step that finishes it, so say what does, with no button.
+            line = W.cause_line(c, "bot:" + bot, cause)
+            taker = "ask BotOps to take it live" if H.bot(c, H.FLEET_MAINTAINER) else "nobody is taking it live"
+            return {"cause": f"{line}: {taker}", "fix": None}
         fixes = {
             W.STATE_CAUSES["paused"]: "resume",
             W.STATE_CAUSES["quarantined"]: "release_quarantine",
-            W.STATE_CAUSES["planned"]: "finish_setup",
             W.ONBOARDING: "finish_setup",
             W.NO_COMPUTER: "assign_computer",
             W.CLOUD_STARTING: "open_computers",
@@ -231,6 +240,40 @@ def register(app, auth, settings, settings_admin, store):
             W.OUT_OF_CREDIT: "add_credit",
         }
         return {"cause": W.cause_line(c, "bot:" + bot, cause), "fix": fixes.get(cause)}
+
+    def making(c, bot, who):
+        """A planned bot being made on an open task (setup_live.making_task), as its page's top line says it: the ask
+        on that task the bot waits on, the viewer's own first ("Builder 3 is waiting for your OK", with `open_ask`, the
+        one button, opening it), else whose it is, else who is still making it. The task is named and linked only to
+        a viewer who may open it. None when no task is making it (its go-live waits on the repository)."""
+        from . import setup_live, task_engine as E, waiting_on as WO
+
+        task_id = setup_live.making_task(c, bot)
+        row = E.task(c, task_id) if task_id else None
+        if not row:
+            return None
+        name = H.actor_name(c, "bot:" + bot)
+        asks = [w for w in WO.of(c, row) if w.state == WO.PERSON and w.ask and w.who]
+        ask = next((w for w in asks if w.who == who.actor), None) or (asks[0] if asks else None)
+        task = {"id": row["id"], "title": row.get("title") or ""} if privacy.task_readable(c, who, row) else None
+        if ask:
+            found = c.execute("SELECT kind FROM requirements WHERE id=?", (ask.requirement_id,)).fetchone()
+            what = "OK" if found and found["kind"] in ("ok", "page") else "answer"
+            mine = ask.who == who.actor
+            whose = "your" if mine else H.actor_name(c, ask.who) + "'s"
+            out = {
+                "cause": f"{name} is waiting for {whose} {what}",
+                "fix": "open_ask" if mine and task else None,
+                # Its words only to a viewer who may open the task they are on.
+                "ask": {
+                    "kind": "ok" if what == "OK" else "answer",
+                    "mine": mine,
+                    **({"line": ask.line} if task else {}),
+                },
+            }
+        else:
+            out = {"cause": f"{H.actor_name(c, row['owner_id'])} is still setting up {name}", "fix": None}
+        return {**out, **({"task": task} if task else {})}
 
     @app.get("/api/v2/bots/{bot}")
     def bot_detail(request: Request, bot: str):
@@ -262,7 +305,7 @@ def register(app, auth, settings, settings_admin, store):
             if config and level["read"]:
                 value["goals"] = config["goals"] or ""
             if level["read"]:
-                value["cant_run"] = cant_run(c, bot)
+                value["cant_run"] = cant_run(c, bot, who)
                 value["routines"] = routines.of_bot(c, bot)
             reports = value.get("reports_to") or ""
             if reports.startswith("human:"):

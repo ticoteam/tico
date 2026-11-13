@@ -2,7 +2,7 @@
 // an older one, a launch plan on Dana's task and a signup funnel CSV (seed `pages`). Library › Files lists them, a kind
 // filter and a search narrow it, a page opens full size with Tico's status line, a replaced page links on, the task
 // shows the pages pinned to it at the top, the search box finds a file by its words, and the owner deletes a page for good. This hub
-// has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports in
+// has no visual address, so pages are plain rows; one framed page (its address faked) takes the height it reports in
 // the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
 import type {Page} from 'playwright';
 import type * as R from './support/redesign-e2e.cts';

@@ -81,6 +81,11 @@ Always:
 3. Finish with `tico task done <id> -m "..." --version N`: known-exploited count first, then the report
    path, then what you could not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Read Dependabot's own pull requests (`gh pr list -R <repo> --author app/dependabot --state open`, `gh pr view`),
 the lockfiles in a read-only clone, and each advisory's public page with `tico doc fetch <url>`. `gh api` is

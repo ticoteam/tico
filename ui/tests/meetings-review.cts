@@ -126,6 +126,7 @@ async function shot(page: Page, name: string) {
         assert.equal(await page.locator('#meet-review-bulk').isHidden(), true, 'one ticked row: the row actions are enough');
         await page.locator('[data-note-row=one] [data-review-action=approve]').click();
         await page.locator('[data-note-row=one]').waitFor({state: 'detached'});
+        await page.locator('.notes-head .ph-more').click();   // Settings is in the header's ⋯ (task #338)
         await page.locator('#meet-settings').click();
         const settings = page.getByRole('dialog', {name: 'Meeting settings'});
         await settings.locator('[name=personal]').selectOption('auto');
@@ -154,6 +155,7 @@ async function shot(page: Page, name: string) {
     await page.locator('[data-review-bulk=approve_all]').click();
     await page.locator('.notes-empty').waitFor();
     assert.equal(writes.at(-1)!.action, 'approve_all'); assert.deepEqual(writes.at(-1)!.ids, ['one', 'two', 'three']);
+    await page.locator('.notes-head .ph-more').click();   // Settings is in the header's ⋯ (task #338)
     await page.locator('#meet-settings').click();
     const settings = page.getByRole('dialog', {name: 'Meeting settings'});
     await settings.locator('[name=personal]').waitFor();
@@ -161,6 +163,7 @@ async function shot(page: Page, name: string) {
     await settings.locator('[name=personal]').selectOption('review');
     await settings.getByRole('button', {name: 'Save', exact: true}).click();
     await settings.waitFor({state: 'detached'}); assert.deepEqual(writes.at(-1)!.settings, {auto_share: false});
+    await page.locator('.notes-head .ph-more').click();   // Settings is in the header's ⋯ (task #338)
     await page.locator('#meet-settings').click();
     await settings.locator('[name=personal]').selectOption('default');
     await settings.getByRole('button', {name: 'Save', exact: true}).click();

@@ -65,6 +65,11 @@ Always:
 2. Note progress on the task, record decisions in `memory/decisions.md`, commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: open by severity, updates due, the path.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Read with `tico task show`, `tico task list`, `tico meeting search "<customer>"`, and the linked issue with
 read-only `gh issue view` where GitHub is connected. A bug for engineering is `tico task create --owner

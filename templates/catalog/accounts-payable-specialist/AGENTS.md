@@ -71,6 +71,11 @@ Always:
 2. Update `knowledge/bills.md`, note progress on the task, record decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the total proposed, the bills held and why, the flags, the path.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks. Ask for missing payment facts with `tico task ask <id> --to <person> "<question>" --version N`, one batched question per task. An action
 you lack access to (releasing a bank payment, calling a vendor back) is a task for the person who holds it:

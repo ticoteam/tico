@@ -195,7 +195,7 @@ function auMaintHead(hd: HTMLElement): void {
     <span class="au-sp"></span>
     <div class="au-hd2">
       <span class="au-sp au-sp-phone"></span>
-      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+      <div class="au-seg ph-seg" role="tablist" aria-label="View">${seg}</div>
       ${can ? `<button class="primary mt-now" type="button" data-mt-now${live || au?.mtStarting ? ' disabled' : ''}>${live || au?.mtStarting ? 'Running…' : 'Run now'}</button>` : ''}
     </div>`;
 }

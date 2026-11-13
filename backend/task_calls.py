@@ -21,7 +21,7 @@ engine's modules reach back to hubdb and the store.
 import functools
 import json
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
 
 from . import hubdb_core, task_effects
 
@@ -359,6 +359,8 @@ def task_reassign(
     if owner:
         H._botops_only(conn, actor, H.resolve_actor(conn, owner))
         target = H._reach(conn, actor, owner)
+    if target != row.get("owner_id"):
+        H.refuse_stage_reader(conn, actor, row)  # a bot that reads it only while it holds the stage gives it to nobody
     if target and target != row.get("owner_id"):
         if actor == H.GENERAL_MANAGER:
             from . import general_manager
@@ -414,9 +416,12 @@ def task_ask(
     seen_version: int | str | None = None,
     mover: bool | None = None,
     for_action: bool = False,
+    brief: Row | None = None,
+    title: str | None = None,
 ) -> Row:
     """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
-    "ok"). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
+    "ok"). `brief` is a question's why, its choices' lines and the one recommended (backend/ask_shape.py); `title` a
+    short heading for it (at most 60 characters). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
     carries `requirement_id`."""
     from . import task_engine as E
 
@@ -447,6 +452,8 @@ def task_ask(
         shows=shows,
         seen_version=seen_version,
         for_action=for_action,
+        brief=brief,
+        title=title,
     )
 
 
@@ -940,6 +947,8 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
                 "who": None,
                 "asked_by": None if private else requirement.get("added_by_id"),
                 "choices": None if private else requirement.get("choices"),
+                **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
+                **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
                 "shows": [] if private else requirement.get("shows") or [],
                 **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
                 "answer": _answer_view(conn, task_id, answer, private),
@@ -947,6 +956,24 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
             }
         )
     return out
+
+
+def _brief_of(requirement: Row) -> Row | None:
+    """A question's why, its choices' lines and the one recommended, as the bot asked it (backend/ask_shape.py), or
+    None for an ask that carried none."""
+    settings: Row = requirement.get("settings") or {}
+    brief: Any = settings.get("brief")
+    if not isinstance(brief, dict) or not cast("Row", brief).get("why"):
+        return None
+    found = cast("Row", brief)
+    return {"why": found.get("why"), "details": found.get("details"), "recommend": found.get("recommend")}
+
+
+def _title_of(requirement: Row) -> str | None:
+    """An ask's short title, as it was asked with one (models.TaskAsk.title), or None."""
+    settings: Row = requirement.get("settings") or {}
+    title: Any = settings.get("title")
+    return title if isinstance(title, str) and title else None
 
 
 def _leave_entry(
@@ -984,6 +1011,8 @@ def _leave_entry(
         "asked_by": None if private else requirement.get("added_by_id") if requirement.get("visit_id") else None,
         "choices": None if private else requirement.get("choices"),
         **({"typed": typed} if typed else {}),
+        **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
+        **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
         "shows": shows,
         # What it shows is where its words come from: a reader who may not open one of those pages reads
         # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).

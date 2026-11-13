@@ -1193,7 +1193,7 @@ def _close_idle(conns):
 
 
 # Secrets an answer shows once: never kept with the idempotency record, so a replay answers without them.
-SHOWN_ONCE = ("requester_token", "push_addresses", "push_address")
+SHOWN_ONCE = ("requester_token", "push_addresses", "push_address", "signing_secret")
 
 
 class Store:
@@ -2130,6 +2130,10 @@ class Store:
                 from .org_rules import ensure as ensure_org_rules
 
                 ensure_org_rules(c)
+                # The built-in rule "Asks to a person", once per team (org_rules.ensure_builtin).
+                from .org_rules import ensure_builtin as ensure_builtin_rules
+
+                ensure_builtin_rules(c)
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
 

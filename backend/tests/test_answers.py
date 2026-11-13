@@ -210,6 +210,43 @@ def test_an_answered_question_wakes_the_bot_that_asked_once_with_the_question_an
     assert '"Which plan do new signups get?": Ask at signup, with Free picked' in _body(c, key)
 
 
+def test_give_it_back_closes_a_bots_question_and_tells_it_to_decide_or_ask_its_manager(c, general):
+    """Tasks spec "Bots ask people a question with choices", AC-5: Tico adds Give it back to every bot's question."""
+    row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
+    asked = _bot_ask(
+        c, row["id"], "bot:builder", "answer", ANA, "Which plan do new signups get?", choices=["Free", "Pro trial"]
+    )
+    X.settled(c)
+    out = A.answer(c, row["id"], asked["requirement_id"], ANA, A.GIVE_BACK)
+    assert [s.state for s in R.standings(c, out)] == [R.NOT_MET, R.MET]  # the ask is closed
+    [(key, who)] = _answer_wakes(c, row["id"])
+    assert who == "bot:builder"
+    body = _body(c, key)
+    assert body.startswith("Ana gave it back: decide it yourself, or ask your manager"), body
+    assert '"Which plan do new signups get?"' in body and "answered" not in body
+
+
+def test_i_dont_know_closes_a_bots_question_with_that_answer_and_wakes_it(c, general):
+    """AC-4: the ask is answered "I don't know, explain"; the bot that asked is woken with it."""
+    row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
+    asked = _bot_ask(c, row["id"], "bot:builder", "answer", ANA, "Which plan?", choices=["Free", "Pro trial"])
+    X.settled(c)
+    out = A.answer(c, row["id"], asked["requirement_id"], ANA, A.DONT_KNOW)
+    assert [s.state for s in R.standings(c, out)] == [R.NOT_MET, R.MET]
+    [(key, who)] = _answer_wakes(c, row["id"])
+    assert who == "bot:builder" and f'"Which plan?": {A.DONT_KNOW}' in _body(c, key)
+
+
+def test_give_it_back_is_an_ordinary_answer_on_a_persons_question(c, general):
+    """Only a bot's question is given back: a person asking a person gets the words as an answer."""
+    row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
+    asked = E.add_requirement(c, row["id"], ANA, "answer", BEN, "Which plan?")
+    X.settled(c)
+    A.answer(c, row["id"], asked["requirement_id"], BEN, A.GIVE_BACK)
+    [(key, _)] = _answer_wakes(c, row["id"])
+    assert "gave it back" not in _body(c, key) and f'"Which plan?": {A.GIVE_BACK}' in _body(c, key)
+
+
 def test_no_is_an_ordinary_answer_to_a_question(c, general):
     row = X.new_task(c, ANA, "Send the invoice", assignee="bot:builder")
     rid = _bot_ask(c, row["id"], "bot:builder", "answer", ANA, "Send it today?", choices=["yes", "no"])[

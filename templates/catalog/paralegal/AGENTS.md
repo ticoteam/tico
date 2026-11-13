@@ -58,6 +58,11 @@ Never type a signature, a personal address or an id number into a file.
 2. Update `knowledge/executed-index.md`, note progress on the task, record decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the status first, the path after it.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 NDAs arrive as tasks with the file attached. Find templates and signed copies with `tico doc search
 "<party> NDA"`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Where the contracts mailbox

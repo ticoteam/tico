@@ -196,21 +196,24 @@ function pageUpdates(): void {
   const main = $('#main');
   main.innerHTML = '<div class="upd-col"></div>';
   const col = main.firstElementChild;
+  // The shared page header (page-head.ts): Daily and Weekly on the title line; Whole org, My bots and List stay chips in
+  // the tools; Archive is in ⋯, and the Archive is a sub-page whose "Updates ›" goes back to the inbox.
+  const inbox = UPDATES + (kind === 'weekly' ? '?kind=weekly' : '');
+  const tools = (day && updIsTree(state) ? `<button type="button" class="upd-chip" id="upd-day" title="Back to the latest day"><span class="upd-day">${esc(new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC'}))}</span><span class="upd-x" aria-hidden="true">×</span></button>` : '')
+    + `<button type="button" class="upd-chip" id="upd-scope" aria-pressed="${state.scope === 'all'}" aria-label="Whole org" title="Whole org: off shows only the cards below you"${updIsTree(state) ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">groups</span><span class="upd-lbl">Whole org</span></button>`
+    + `<button type="button" class="upd-chip" id="upd-mine" aria-pressed="${state.mine}" aria-label="My bots" title="My bots"${updIsTree(state) ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">person</span><span class="upd-lbl">My bots</span></button>`
+    + `<button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>`
+    + `<button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>`;
   col.innerHTML = `<div class="upd-page">
-    <div class="upd-head">
-      <h1>${view === 'archive' ? 'Archive' : 'Updates'}</h1>
-      <div class="upd-seg" role="tablist" aria-label="Kind">
-        <button type="button" role="tab" data-upd-kind="daily" aria-selected="${kind === 'daily'}" aria-label="Daily" title="Daily"><span class="nav-icon" aria-hidden="true">today</span><span class="upd-lbl">Daily</span></button>
-        <button type="button" role="tab" data-upd-kind="weekly" aria-selected="${kind === 'weekly'}" aria-label="Weekly" title="Weekly"><span class="nav-icon" aria-hidden="true">date_range</span><span class="upd-lbl">Weekly</span></button>
-      </div>
-      ${day && updIsTree(state) ? `<button type="button" class="upd-chip" id="upd-day" title="Back to the latest day"><span class="upd-day">${esc(new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC'}))}</span><span class="upd-x" aria-hidden="true">×</span></button>` : ''}
-      <span class="spacer"></span>
-      <button type="button" class="upd-chip" id="upd-scope" aria-pressed="${state.scope === 'all'}" aria-label="Whole org" title="Whole org: off shows only the cards below you"${updIsTree(state) ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">groups</span><span class="upd-lbl">Whole org</span></button>
-      <button type="button" class="upd-chip" id="upd-mine" aria-pressed="${state.mine}" aria-label="My bots" title="My bots"${updIsTree(state) ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">person</span><span class="upd-lbl">My bots</span></button>
-      <button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>
-      <button type="button" class="upd-chip upd-view" id="upd-view" aria-label="${view === 'archive' ? 'Open inbox' : 'Open archive'}" title="${view === 'archive' ? 'Inbox' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${view === 'archive' ? 'inbox' : 'archive'}</span><span class="upd-lbl">${view === 'archive' ? 'Inbox' : 'Archive'}</span></button>
-      <button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>
-    </div>
+    ${pageHead({
+      title: view === 'archive' ? 'Archive' : 'Updates',
+      back: view === 'archive' ? {label: 'Updates', href: inbox} : undefined,
+      hook: 'upd-head',
+      tabs: [{label: 'Daily', cur: kind === 'daily', attrs: 'data-upd-kind="daily"'}, {label: 'Weekly', cur: kind === 'weekly', attrs: 'data-upd-kind="weekly"'}],
+      tabsHook: 'upd-seg', tabsAttrs: 'aria-label="Kind"',
+      tools,
+      more: view === 'archive' ? '' : '<button type="button" class="upd-view" id="upd-view">Archive</button>',
+    })}
     <div id="upd-feed" class="upd-feed" aria-live="polite"></div>
   </div>`;
   if ($('#upd-day')) $('#upd-day').onclick = () => { location.hash = UPDATES + (state.kind === 'weekly' ? '?kind=weekly' : ''); };
@@ -220,7 +223,7 @@ function pageUpdates(): void {
     if (state.view === 'archive') q.set('view', 'archive');
     location.hash = UPDATES + (q.toString() ? '?' + q : '');
   };
-  $('#upd-view').onclick = () => {
+  if ($('#upd-view')) $('#upd-view').onclick = () => {
     const q = new URLSearchParams(); if (state.kind === 'weekly') q.set('kind', 'weekly');
     if (state.view !== 'archive') q.set('view', 'archive');
     location.hash = UPDATES + (q.toString() ? '?' + q : '');
@@ -930,6 +933,7 @@ function updBind(state: UpdState): void {
 // Only your direct reports' updates alert, one level down the org chart.
 async function updUnreadRefresh(): Promise<UpdData | null> {
   const asked = Date.now();
+  if (UPD?.pending.size) void updFlush(UPD);           // a read whose save failed is sent again, or its count stays held
   const r = await v2Get('/v2/updates/unread?scope=direct');
   if (r) {
     // A count asked for while this page's reads were unsent, or before they settled, still counts them: the next
@@ -940,19 +944,17 @@ async function updUnreadRefresh(): Promise<UpdData | null> {
   return r;
 }
 // The bot's latest update heads the Updates section of its right rail: its age, the text (long ones fold
-// behind a small "More"), and an icon to all of its updates. Once the rail shows it, it counts as read.
+// behind a small "More"), and "All updates" beside it, to all of its updates. Once the rail shows it, it counts as read.
 async function botLatestUpdate(slug: string): Promise<void> {
   const host = $('#bot-latest'); if (!host) return;
   const r: {updates?: UpdUpdate[]} | null = await v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`);
   const u = r?.updates?.[0];
   if (!$('#bot-latest') || BOT?.slug !== slug) return;
   if (!u) { host.hidden = true; host.innerHTML = ''; return; }
-  const all = `<a class="rail-ico" href="#/bot/${encodeURIComponent(slug)}/history" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a>`;
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
-      <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
-      <span class="spacer"></span>${all}</header>
+      <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}</header>
     <div class="upd-body md">${safeMd(updNormalizeBody(u.body), {shortLinks: true})}</div>
-    <button type="button" class="rail-more" data-latest-more hidden>More</button>`;
+    <div class="rail-foot"><button type="button" class="rail-more" data-latest-more hidden>More</button><a class="rail-more" href="#/bot/${encodeURIComponent(slug)}/history" data-latest-all>All updates</a></div>`;
   host.hidden = false;
   const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
   more.onclick = () => { const open = body.classList.toggle('open'); more.textContent = open ? 'Less' : 'More'; };

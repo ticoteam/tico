@@ -1,15 +1,15 @@
-/* ui/styles/usage.css — Usage page: range, total, a row per bot, a bot's daily chart
+/* ui/styles/usage.css — Usage page: range, total, a row per bot, a bot's detail (tokens, tasks, models, days)
    The cascade runs in the order index.html links these files; keep rules in order. */
-.use-page{max-width:860px;margin:0 auto}
-.use-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-.use-head h1{font-size:var(--t-lg)}
+.use-page{max-width:860px;margin:0}
 .use-bar-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:var(--s4)}
 .use-bar-row select{width:auto;min-width:150px}
 .use-bar-row input[type=date]{width:auto}
 .use-custom{display:inline-flex;gap:var(--s2)}
-.use-seg,.use-tabs{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px;max-width:100%;overflow-x:auto}
-.use-seg button,.use-tabs button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
-.use-seg button[aria-selected=true],.use-tabs button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.use-seg{display:inline-flex;max-width:100%;overflow-x:auto}
+/* The pill track below is Replay's range only (replay.ts, not yet on the shared header); Usage's and Budget's are .ph-seg. */
+.use-seg:not(.ph-seg){background:var(--surface2);border-radius:999px;padding:3px}
+.use-seg:not(.ph-seg) button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
+.use-seg:not(.ph-seg) button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .use-total{font-size:var(--t-lg);margin-bottom:var(--s4)}
 .use-total strong{font-weight:600}
 .use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:var(--track-normal)}
@@ -47,6 +47,35 @@ button.use-filter .nav-icon{font-size:18px}
 .use-share i{display:block;height:100%;border-radius:3px;background:var(--accent)}
 .use-detail{padding:var(--s2) var(--s4) var(--s4);display:flex;flex-direction:column;gap:var(--s3);align-items:flex-start}
 .use-detail[hidden]{display:none}
+.use-sum{font-size:var(--t-md)}
+.use-sum .use-cost{display:inline-flex;flex-direction:row;align-items:baseline;gap:var(--s1)}
+.use-cache{border-bottom:1px dotted var(--muted);cursor:help}
+.use-sec{width:100%;display:flex;flex-direction:column;gap:var(--s2)}
+.use-sec h3{margin:0;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.use-sec p{margin:0}
+/* The token split: one bar in four parts, the legend under it. Reads are the accent; the rest step down from it. */
+.use-mix{display:flex;gap:1px;height:12px;width:100%;border-radius:3px;overflow:hidden;background:var(--surface2)}
+.use-mix i{display:block;height:100%;min-width:0}
+.use-detail [data-part=read]{background:var(--accent)}
+.use-detail [data-part=write]{background:color-mix(in srgb,var(--accent) 45%,var(--surface))}
+.use-detail [data-part=new]{background:color-mix(in srgb,var(--ink) 55%,var(--surface))}
+.use-detail [data-part=output]{background:color-mix(in srgb,var(--ink) 25%,var(--surface))}
+.use-legend{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);font-size:var(--t-sm);color:var(--muted)}
+.use-legend li{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.use-legend li>i{width:10px;height:10px;border-radius:2px;flex:none}
+.use-legend b{font-weight:600;color:var(--ink)}
+/* Tasks and models: name, runs, tokens, cache, cost and a share bar. */
+.use-items{width:100%;border-collapse:collapse;font-size:var(--t-base)}
+.use-items th{text-align:left;font-weight:600;color:var(--muted);font-size:var(--t-sm);padding:4px 0}
+.use-items th:not(:first-child),.use-items td:not(:first-child){text-align:right;width:1%;white-space:nowrap;padding-left:var(--s4)}
+.use-items td{padding:5px 0;border-top:1px solid var(--line);vertical-align:middle}
+.use-items .use-c-name{overflow-wrap:anywhere}
+.use-items .use-c-share{width:72px;min-width:72px}
+.use-items .use-share{width:72px}
+.use-items tr.use-more td{color:var(--muted);text-align:left;width:auto}
+.use-plot{position:relative;width:100%;padding-top:18px}
+.use-top{position:absolute;top:0;left:0;font-size:var(--t-sm);color:var(--muted)}
+.use-plot::before{content:"";position:absolute;left:0;right:0;top:18px;border-top:1px dashed var(--line)}
 .use-chart{display:flex;align-items:flex-end;gap:2px;height:96px;width:100%;border-bottom:1px solid var(--line)}
 .use-col{flex:1 1 0;min-width:2px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px}
 .use-col:hover{opacity:.8}
@@ -60,10 +89,13 @@ button.use-filter .nav-icon{font-size:18px}
 .use-routines td{padding:5px 0;border-top:1px solid var(--line)}
 @media (max-width:760px){
   .use-page{max-width:none}
-  .use-seg button{padding:5px 8px;font-size:var(--t-base)}
+  .use-seg:not(.ph-seg) button{padding:5px 8px;font-size:var(--t-base)}
   .use-line{grid-template-columns:1fr auto;grid-template-areas:"who cost" "runs tok" "share share";gap:var(--s1) var(--s3);padding:var(--s3)}
   .use-who{grid-area:who}.use-cost{grid-area:cost}.use-runs{grid-area:runs}.use-tok{grid-area:tok;text-align:right}.use-share{grid-area:share;margin-top:var(--s1)}
   .use-detail{padding:var(--s2) var(--s3) var(--s3)}
+  .use-items .use-c-runs,.use-items .use-c-tok{display:none}
+  .use-items th:not(:first-child),.use-items td:not(:first-child){padding-left:var(--s2)}
+  .use-items .use-c-share,.use-items .use-share{width:40px;min-width:40px}
 }
 /* limits */
 .use-row{display:grid;grid-template-columns:minmax(0,1fr) 176px;align-items:center}
@@ -91,8 +123,6 @@ span.use-limit{display:block}
 .use-money.changed{border-color:var(--wait);background:color-mix(in srgb,var(--wait) 8%,var(--surface))}
 .use-money:has(input[aria-invalid]){border-color:var(--fail)}
 /* The Limits tab: one row per scope, a column per window. */
-.use-tabs{margin-left:auto}
-.use-tabs[hidden]{display:none}
 .use-lim{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);overflow:hidden}
 .use-lim-row{display:grid;grid-template-columns:minmax(150px,1fr) repeat(var(--use-n),96px) 32px;align-items:center;gap:var(--s2);padding:10px var(--s3) 12px}
 .use-lim-row+.use-lim-row{border-top:1px solid var(--line)}
@@ -125,7 +155,6 @@ span.use-limit{display:block}
   .use-row>.use-limit{grid-row:2;justify-self:start;margin:0 0 var(--s2) var(--s3)}
   span.use-limit{display:none}
   .use-row>.use-detail{grid-row:3}
-  .use-head{flex-wrap:wrap}
   .use-lim-row.use-lim-head{display:none}
   .use-lim-row{position:relative;display:flex;flex-wrap:wrap;gap:6px 8px;padding:10px var(--s3) 14px}
   .use-lim-who{flex:1 1 100%;padding-right:32px;min-height:28px}

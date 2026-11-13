@@ -165,8 +165,8 @@ const readable = (team: Row[], where: string) => {
     assert.equal(row.title, row.name, 'the tooltip has the whole name');
     assert.equal(row.pieces, 0, `${row.name} is one piece of text ${where}`);
     assert.equal(row.mark, false, `${row.name} has no harness mark ${where}`);
-    // A long name wraps; only past three lines does it end in "…".
-    assert.deepEqual([row.display, row.overflow], ['normal', '3'], `${row.name} wraps, up to three lines ${where}`);
+    // A long name wraps and never ends in "…": no line clamp, at any depth (sidebar-team-room.cts measures it).
+    assert.deepEqual([row.display, row.overflow], ['normal', 'none'], `${row.name} wraps and is never clamped ${where}`);
   }
 };
 

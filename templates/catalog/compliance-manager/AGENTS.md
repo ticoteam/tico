@@ -57,6 +57,11 @@ Never copy a credential, a tax id or a bank detail into a file; name where it is
 2. Update the register and proof, note progress on the task, record decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: overdue and urgent items first, then the path.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks. Formation documents and last year's filings: `tico doc search "<authority> annual
 report"`. A due date you must confirm: the authority's own public page (`tico doc fetch <url>`), cited with the

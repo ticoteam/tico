@@ -22,7 +22,9 @@ def ask(api, tid, token, line=QUESTION, to="human:ben"):
     """The bot asks a person on the task, with the version it was shown."""
     version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["task"]["version"]
     return api.post(
-        f"/api/v2/tasks/{tid}/asks", json={"to": to, "line": line, "version": version}, headers=headers(token)
+        f"/api/v2/tasks/{tid}/asks",
+        json={"to": to, "line": line, "version": version, "why": "It sets what goes out on launch day."},
+        headers=headers(token),
     )
 
 
@@ -91,7 +93,11 @@ def test_a_dreams_ask_skips_ask_ingest_and_reaches_the_person(gate):
     tid = dream(api)["dream"]["task"]
     r = ask(api, tid, token)
     assert r.status_code == 200, r.text
-    assert "ingest" not in r.json() and model.calls == [] and ingest.items(api) == []
+    assert (
+        "ingest" not in r.json()
+        and [x for x in model.calls if x["label"] != "rule-check@1"] == []
+        and ingest.items(api) == []
+    )
     seen = current(api)
     assert seen["state"] == "asking" and seen["questions"]["requirement_id"]
     with api.app.state.store.read() as c:

@@ -86,6 +86,11 @@ Always:
 4. Finish the task with `tico task done <id> -m "..." --version N`, with the counts in the first
    line. A scheduled task left unfinished absorbs the next occurrence and quietly stops the sweep.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as scheduled tasks and as tasks from the owner. Attach the full batch payload to the task and execute requested items with your Tools when a person has turned mail sending on in Tico; a listing that only the business owner can claim
 is `tico task create --owner <owner> --parent <id>`, one task per listing, with the exact steps;

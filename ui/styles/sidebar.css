@@ -204,16 +204,22 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 /* A Recruiting seat: a role with no bot yet (ui/app/sidebar.ts renderTree). */
 .tree .node.seat{flex:1;display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
 .tree .node.seat .seat-icon{font-size:16px;width:20px;text-align:center}
-/* The seat's state is a word at the end of its name, not a pill that takes the name's room. */
-.tree .node.seat .seat-word{color:var(--muted);font-size:var(--t-xs);font-weight:400}
+/* The seat's state word and its applicants count are a line under the name, not a pill or words after it: the name keeps
+   the row's whole width, so a long title three levels down at the 200px minimum takes three lines, not four. */
+.tree .node.seat .seat-text{display:flex;flex-direction:column;flex:1 1 auto;min-width:0}
+/* The state word is never split: where it and the count do not fit on one line, the count drops to the next. */
+.tree .node.seat .seat-line{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-width:0}
+.tree .node.seat .seat-word{color:var(--muted);font-size:var(--t-xs);font-weight:400;line-height:1.25;white-space:nowrap}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.tree .nm{min-width:0;white-space:normal;overflow-wrap:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;line-height:1.25}
-/* A name wraps between words and is never cut while its marks and counts can give way; its marks ride its last word
-   (ui/app/sidebar.ts treeName), so a mark never sits alone on a line. The clamp's "…" is a last resort. */
+.tree .nm{display:block;min-width:0;white-space:normal;overflow-wrap:break-word;line-height:1.25}
+/* A name wraps between words and is never cut, at any depth and at the 200px minimum: no line clamp, so a long title
+   deep in the tree takes a fourth line rather than ending in "…" (rc.31 clamped two seats three levels down). Its marks
+   ride its last word (ui/app/sidebar.ts treeName), so a mark never sits alone on a line. display:block because
+   thread-rail.css's global .nm is a flex column, which would stack the name's words one per line. */
 .tree .nm-end{white-space:nowrap}
 /* overflow:hidden puts an inline-block's baseline at its bottom edge, so the icon font's tall line box never makes the
-   name's line taller than the clamp allows (the onboarding gear did: 35px in a 33px name). */
+   name's line taller than its 1.25 line-height (the onboarding gear made a line 2px taller). */
 .tree a.node .nm .tree-goal,.tree a.node .nm .tree-setup{display:inline-block;vertical-align:-2px;margin-left:4px;width:13px;height:13px;font-size:13px;line-height:13px;overflow:hidden}
 .tree a.node .nm .tree-setup .nav-icon{display:block;width:13px;height:13px;font-size:13px;line-height:13px}
 .tree a.node .nm .org-branch{white-space:normal;margin-left:4px}

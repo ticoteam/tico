@@ -79,6 +79,11 @@ Always:
 3. Finish with `tico task done <id> -m "..." --version N`: the result first, the draft attached, and what you could
    not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Read team values and level guides with
 `tico doc ask "<topic>"` (the Librarian cites the page). Where the hiring mailbox is connected,

@@ -65,6 +65,9 @@ tico task ask <id> --to <person> --kind ok "Approve the launch post" --show page
 tico task ask <id> --withdraw -m "why"
 ```
 
+An ask may carry a short title of at most 60 characters (`--title "Launch note tone"`). The decision view shows it as
+the heading, with the full question once under it; an ask without one is headed by its question.
+
 A bot has one ask of its own open on a task at a time: asking again replaces it. An ask never expires. A person
 answers it from Needs you. A bot named on one answers with `tico task answer <id> <requirement> ok|no|again|<answer>`,
 or gives it to someone else with `tico task give <id> <requirement> --to <person>`.
@@ -135,7 +138,8 @@ there." Reopening it brings it back; what moved stays on the other task.
 
 ## When a bot stops early
 
-A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, or closed.
+A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, closed, or
+blocked on another task (depends_on; never a snooze). While its own pull request's checks run, the turn is GitHub's.
 Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
 minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in
 Needs you, with Try again, Reassign, Move back, Close and Snooze. Any change to the task starts the count again. See
@@ -253,6 +257,11 @@ Every task has its own thread. A comment is a post there and reaches the task's 
 tico task comment <id> "Use the August numbers." --steer
 tico task comment <id> "For later." --defer 4h
 ```
+
+A comment that names a bot's open question on the task (`ask`: its requirement id, in `POST
+/api/v2/tasks/{id}/comments`) is a reply to it: it is written to the bot that asked and wakes it, even when that bot is
+not the one the task's comments go to first, and the question stays open. The person the question waits on may wake
+the bot this way. The decision view's "Write to <bot>" box sends it.
 
 A comment is talk. It is not progress: a bot that only comments has still stopped early.
 
@@ -422,7 +431,7 @@ tico task done <id> -m "what was done" --version N
 tico task move <id> next|<stage>|done|closed|reopen -m "why" --version N
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
-tico task ask <id> --to <person> "line" [--kind ok] [--choices a,b] [--show page:12] --version N
+tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
 tico task ask <id> --withdraw
 tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N

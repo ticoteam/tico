@@ -285,7 +285,9 @@ def _screen(conn: "sqlite3.Connection", row: Row | None, stage: Row, pick: Pick)
     for bot in pick.bots:
         if task_wakes.cannot_run(conn, bot, seen):
             paused.append(bot)
-        elif private and not H.task_private_readable(conn, bot, row):
+        elif private and bot == H.GENERAL_MANAGER and not H.task_private_readable(conn, bot, row):
+            # Every other bot on the list is named by the pipeline: it reads a private task while it holds the stage
+            # (task_engine.names). The General Manager never gets that read.
             unreadable.append(bot)
         elif rule := refused_by(conn, row, stage, bot):
             if rule not in refused:

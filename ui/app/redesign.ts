@@ -202,10 +202,10 @@ function redesignStrategyHead(tab: string): string {
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
   const sub = tab === 'strategy' || tab === 'lenses'
     ? `<a class="strat-sub" href="${tab === 'lenses' ? '#/strategy' : LENSES_ROUTE}">${tab === 'lenses' ? 'Strategy' : 'Lenses'}</a>` : '';
-  return `<div class="strat-head rd-strat-head"><h1>Strategy</h1>
-      <nav class="tabs slim strat-tabs" aria-label="Strategy">${tabs.map(([id, href, label]) =>
-        `<a href="${href}" data-strat-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
-      <span class="spacer"></span>${sub}<div class="strat-actions" id="strat-actions"></div></div>`;
+  // The one page header (page-head.ts); #strat-actions is its button holder, which each tab fills.
+  return pageHead({title: 'Strategy', hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
+    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`})),
+    tools: sub, actId: 'strat-actions'});
 }
 
 // Org (ui/app/redesign-org.ts) and the Market page (ui/app/redesign-market.ts) are their own files.

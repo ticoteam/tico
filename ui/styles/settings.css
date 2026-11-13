@@ -284,6 +284,15 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo-list button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 8px;border-radius:4px;font-size:var(--t-sm);color:var(--ink);cursor:pointer}
 .settings-combo-list button[aria-selected=true],.settings-combo-list button:hover{background:var(--surface2)}
 .settings-combo-empty{padding:8px;color:var(--muted);font-size:var(--t-sm)}
+/* The who picker (ui/app/who-picker.ts): a text field with the search icon and no native clear button, and its list in
+   the top layer (popover), placed under the field by script; options carry a 24px face and a muted sub-label. */
+.settings-combo input.who-pick-q{width:100%;min-width:0;padding:7px 10px 7px 32px;font-size:var(--t-base);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237f8a96' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 10px center;color:var(--ink)}
+.settings-combo-list[popover]{position:fixed;inset:auto;right:auto;bottom:auto;margin:0;box-sizing:border-box;max-height:234px;color:var(--ink)}
+.settings-combo-list[popover]:popover-open{display:block}
+.settings-combo-opt{display:flex;align-items:center;gap:8px;min-height:32px;box-sizing:border-box;padding:4px 8px;border-radius:4px;font-size:var(--t-base);cursor:pointer}
+.settings-combo-opt[aria-selected=true],.settings-combo-opt:hover{background:var(--surface2)}
+.settings-combo-n{flex:none;max-width:70%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.settings-combo-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
 .settings-choice{min-width:0}
 .settings-model-choice{display:grid;gap:6px;min-width:0}
 .settings-model-choice label{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}

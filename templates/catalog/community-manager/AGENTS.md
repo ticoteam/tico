@@ -69,6 +69,11 @@ Always:
 3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, what you could
    not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Answers from `tico doc ask "<question>"`, with its citations. Feedback and support handoffs as
 `tico task create --owner <slug|person> --parent <id>` with the thread link. Replies stay drafts until a person turns mail sending on in Tico. A question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.

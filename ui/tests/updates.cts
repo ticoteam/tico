@@ -21,10 +21,14 @@ type Msg = {id: string; sender_id: string; body: string; created_at: string; con
 type Update = {id: string; bot: string; kind: string; day: string; headline: string; body: string; created_at: string; updated_at: string; read: boolean; replies: number; superseded?: boolean; slides?: unknown};
 type Gate = {held: Promise<unknown>; received: boolean};
 interface PageWin { __badges: (string | null)[]; __staleLoadDone: boolean }
-declare const UPD: {mine: boolean; loading: boolean; fromCache: boolean; archivePending: Set<string>};
+declare const UPD: {mine: boolean; loading: boolean; fromCache: boolean; archivePending: Set<string>; pending: Set<string>; io?: IntersectionObserver; manualUnread: Set<string>; data: {updates: {id: string; read: boolean}[]}};
+declare const UPD_READS: {sending: Set<string>};
 declare function updLoad(state: typeof UPD): Promise<unknown>;
 declare function updUnreadRefresh(): Promise<unknown>;
 declare function updRender(state: typeof UPD): void;
+declare function updSeen(state: typeof UPD, id: string): void;
+declare function updToggle(state: typeof UPD, id: string): Promise<unknown>;
+declare function updArchive(state: typeof UPD, id: string): Promise<unknown>;
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
 const day = (ms: number) => new Date(now + ms).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['game', 'Temp Game']].map(([name, display_name]) =>
@@ -56,7 +60,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
                              {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
   const archivedIds = new Set<string>(), archiveRequests: Body[] = [];
   let holdArchive: Promise<unknown> | null = null;
-  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, holdRead: Promise<unknown> | null = null, keepUnread: string | null = null;
+  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, holdRead: Promise<unknown> | null = null, readFails = false, keepUnread: string | null = null;
   const isArchived = (u: Update) => archivedIds.has(u.id) || !!u.superseded;
   const feed = (kind: string | null, archive = false, includeArchive = false) => {
     const source = kind === 'weekly' ? weekly : updates;
@@ -108,8 +112,9 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         return json(payload);                            // a real round trip; delayed replies can be stale
       }
       if (p === '/api/v2/updates/read') {
-        if (holdRead) await holdRead;                    // held: the server does not count these reads yet
         const body = req.postDataJSON(); posted.push({path: p, body});
+        if (holdRead) await holdRead;                    // held: the server does not count these reads yet
+        if (readFails) return json({error: {code: 'storage_unavailable', detail: 'Synthetic read failure'}}, 500);
         for (const u of updates) if ((body.all || body.ids.includes(u.id)) && u.id !== keepUnread) u.read = body.read !== false;
         return json({marked: body.ids.length, read: body.read !== false});
       }
@@ -286,8 +291,12 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.waitForFunction(() => (window as unknown as PageWin).__staleLoadDone);
     assert.equal(await page.locator('[data-upd="u-cmo"]').count(), 0, 'a delayed old inbox load cannot restore an archived card');
     assert.deepEqual(archiveRequests[1], {ids: ['u-cmo'], archived: true});
+    // Archive is in the header's ⋯ (the shared page header): it lists Archive, which opens the Archive as before.
+    await page.locator('.upd-head .ph-more').click();
+    assert.deepEqual(await page.locator('.upd-head .ph-menu :is(button,a)').allInnerTexts(), ['Archive'], '⋯ lists Archive');
     await page.locator('#upd-view').click();
     await page.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-cmo"]'));
+    assert.equal(await page.locator('.ph-menu:popover-open').count(), 0, 'choosing it closes ⋯');
     assert.equal(await page.locator('#upd-allread').isHidden(), true);
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Archive', 'the reader knows they are in the Archive');
     await more.click();
@@ -295,7 +304,9 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await menu.locator('[role=menuitem]', {hasText: 'Restore to Inbox'}).click();
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests[2], {ids: ['u-cmo'], archived: false});
-    await page.locator('#upd-view').click();
+    // The Archive is a sub-page: "Updates ›" before its title goes back to the inbox.
+    assert.equal(await page.locator('.upd-head .ph-back').innerText(), 'Updates ›');
+    await page.locator('.upd-head .ph-back').click();
     await page.locator('[data-upd="u-cmo"]').waitFor();
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Updates');
     await page.locator('[data-upd="u-cmo"] [data-upd-reply]').click();
@@ -386,11 +397,10 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.setViewportSize({width: 390, height: 844});
     await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
-    // Day, week, unread and my bots are icons on a phone.
-    for (const sel of ['[data-upd-kind="daily"]', '[data-upd-kind="weekly"]', '#upd-mine']) {
-      assert.equal(await p.locator(sel + ' .nav-icon').isVisible(), true, sel + ' shows its icon');
-      assert.equal(await p.locator(sel + ' .upd-lbl').isVisible(), false, sel + ' hides its word');
-    }
+    // My bots is an icon on a phone; Daily and Weekly are the header's tabs, in words on their own row.
+    assert.equal(await p.locator('#upd-mine .nav-icon').isVisible(), true, '#upd-mine shows its icon');
+    assert.equal(await p.locator('#upd-mine .upd-lbl').isVisible(), false, '#upd-mine hides its word');
+    for (const kind of ['daily', 'weekly']) assert.equal(await p.locator(`.upd-head .ph-tab[data-upd-kind="${kind}"]`).isVisible(), true, kind + ' tab shows');
     assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').evaluate(el => el.classList.contains('cur')), true);
     const card = (await p.locator('#upd-feed .upd-card').first().boundingBox())!;
     assert(card.x >= 8 && card.x + card.width <= 390 - 8, 'cards fit the phone with a gutter');
@@ -430,13 +440,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.locator('[data-upd="u-game"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests.at(-1), {ids: ['u-game'], archived: true});
     // The swipe's click guard applies only to that card; the Archive header remains usable.
+    await p.locator('.upd-head .ph-more').click();
     await p.locator('#upd-view').click();
     await p.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-game"]'));
     await p.locator('[data-upd="u-game"] [data-upd-menu]').click();
     await p.locator('.thv-pop[role=menu] [role=menuitem]', {hasText: 'Restore to Inbox'}).click();
     await p.locator('[data-upd="u-game"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests.at(-1), {ids: ['u-game'], archived: false});
-    await p.locator('#upd-view').click(); await p.locator('[data-upd="u-game"]').waitFor();
+    await p.locator('.upd-head .ph-back').click(); await p.locator('[data-upd="u-game"]').waitFor();
     const beforeDeckGesture = archiveRequests.length;
     await p.evaluate(() => { location.hash = '#/updates?kind=weekly'; });
     const phoneDeck = p.locator('[data-upd="w-seo"] [data-upd-deck]'); await phoneDeck.waitFor();
@@ -450,6 +461,84 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
+
+    // A feed reply counted before the seen cards' read was saved does not bring the badge back, or their unread dots.
+    for (const u of updates) u.read = u.id !== 'u-seo' && u.id !== 'u-fin';
+    posted.length = 0;
+    let saveRead!: (value?: unknown) => void; holdRead = new Promise(r => { saveRead = r; });
+    const race = await open({width: 1280, height: 900});
+    await race.page.goto('http://tico-ui.test/#/updates');
+    await race.page.waitForFunction(() => UPD && !UPD.loading && !UPD.fromCache);
+    await race.page.waitForFunction(() => !document.querySelector('#upd-feed .upd-card.unread'));
+    await race.page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.hidden === true);
+    for (const end = Date.now() + t(10000); !posted.some(x => x.path === '/api/v2/updates/read') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    assert(posted.some(x => x.path === '/api/v2/updates/read'), 'the read is sent and held');
+    await race.page.evaluate(() => updLoad(UPD));         // still counts u-seo and u-fin unread
+    assert.equal(await race.page.locator('.side-scroll [data-upd-badge]').evaluate(b => (b as HTMLElement).hidden), true, 'no stale badge');
+    assert.equal(await race.page.locator('#upd-feed .upd-card.unread').count(), 0, 'the seen cards stay read');
+    await race.page.evaluate(() => updUnreadRefresh());   // the 30 s count, asked for in the same window
+    assert.equal(await race.page.locator('.side-scroll [data-upd-badge]').evaluate(b => (b as HTMLElement).hidden), true, 'no stale badge from the count');
+    // A seen card marked unread by hand stays unread in such a reply, and counts.
+    await race.page.locator('[data-upd="u-fin"] [data-upd-menu]').click();
+    await race.page.locator('.thv-pop[role=menu] [role=menuitem]', {hasText: 'Mark unread'}).click();
+    await race.page.locator('#upd-feed [data-upd="u-fin"].unread').waitFor();
+    await race.page.evaluate(() => updLoad(UPD));
+    assert.deepEqual(await race.page.locator('#upd-feed .upd-card.unread').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.upd)), ['u-fin'], 'only the card marked unread');
+    assert.equal(await race.page.locator('.side-scroll [data-upd-badge]').innerText(), '1');
+    holdRead = null; saveRead();
+    // Once the read is saved, a later reply is the truth again: another device marking one unread shows.
+    await race.page.waitForFunction(() => !UPD.pending.size && !UPD_READS.sending.size);
+    for (const u of updates) if (u.id === 'u-seo' || u.id === 'u-fin') u.read = false;
+    await race.page.evaluate(() => updLoad(UPD));
+    await race.page.locator('#upd-feed [data-upd="u-seo"].unread').waitFor();
+    await race.page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.textContent === '2');
+    // A seen card marked unread, or archived, before its read is sent leaves nothing unsaved: the count still follows the hub.
+    await race.page.evaluate(() => UPD.io?.disconnect());   // no seeing from here on; let any seen timer and its read settle
+    await race.page.waitForTimeout(2500);
+    const hubUnread = () => updates.filter(u => !isArchived(u) && !u.read).length;
+    // Refreshes the count until the badge shows the hub's number (other replies of the archive may land in between);
+    // a badge that stopped following the hub never gets there.
+    const badgeFollowsHub = async () => {
+      let shown = '';
+      for (const end = Date.now() + t(5000); Date.now() < end;) {
+        await race.page.evaluate(() => updUnreadRefresh());
+        shown = await race.page.locator('.side-scroll [data-upd-badge]').evaluate(b => (b as HTMLElement).hidden ? '0' : b.textContent || '0');
+        if (shown === String(hubUnread())) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return shown;
+    };
+    await race.page.evaluate(async () => {
+      const u = UPD.data.updates.find(x => x.id === 'u-cmo')!; u.read = false;
+      updSeen(UPD, 'u-cmo'); await updToggle(UPD, 'u-cmo');   // marked unread inside the 900 ms before the read is sent
+    });
+    updates.find(u => u.id === 'u-game')!.read = false;       // a new unread on the hub
+    assert.equal(await badgeFollowsHub(), String(hubUnread()), 'the count follows the hub after Mark unread before the send');
+    await race.page.evaluate(async () => {
+      const u = UPD.data.updates.find(x => x.id === 'u-seo')!; u.read = false;
+      updSeen(UPD, 'u-seo'); await updArchive(UPD, 'u-seo');  // archived inside the same window
+    });
+    updates.find(u => u.id === 'u-game')!.read = true;        // read on another device, so the hub's count moves
+    assert.equal(await badgeFollowsHub(), String(hubUnread()), 'the count follows the hub after archiving before the send');
+    // A read whose save failed is sent again by the next count refresh, and the count after that follows the hub.
+    readFails = true;
+    const failed = race.page.waitForResponse(r => r.url().includes('/api/v2/updates/read') && r.status() === 500);
+    await race.page.evaluate(() => {
+      const u = UPD.data.updates.find(x => x.id === 'u-cmo')!; u.read = false; UPD.manualUnread.delete('u-cmo');
+      updSeen(UPD, 'u-cmo');
+    });
+    await failed;
+    await race.page.waitForFunction(() => UPD.pending.has('u-cmo'));   // the failed save has been put back to be sent again
+    readFails = false;
+    const resent = race.page.waitForResponse(r => r.url().includes('/api/v2/updates/read') && r.ok());
+    await race.page.evaluate(() => updUnreadRefresh());
+    await resent;
+    await race.page.waitForFunction(() => !UPD.pending.size && !UPD_READS.sending.size);
+    assert.equal(updates.find(u => u.id === 'u-cmo')!.read, true, 'the failed read was sent again');
+    updates.find(u => u.id === 'u-fin')!.read = true;         // read on another device, so the hub's count moves
+    assert.equal(await badgeFollowsHub(), String(hubUnread()), 'the count follows the hub after a failed read is resent');
+    assert.deepEqual(race.errors, []);
+    await race.page.close();
 
     // Nothing yet: one short line, with no sentence under it and no Chat with us (Support is the ? in the sidebar).
     updates = [];
