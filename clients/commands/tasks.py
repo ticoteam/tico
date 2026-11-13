@@ -502,7 +502,7 @@ def _own_ask(api, task_id, requirement=None):
 @tool(
     "tico_task_ask",
     "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
-    "wakes you once; asking again replaces your ask. A rule may refuse it: act on the rule. `withdraw` takes it back.",
+    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
@@ -535,11 +535,11 @@ def _own_ask(api, task_id, requirement=None):
             "description": "What they look at, shown with the ask",
         },
         "subject": _s(
-            "An OK bound to what you will do, <kind>:<id> (budget_raise:launch-video), covering exactly `content`; "
+            "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
             "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
+        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
         "requirement": _s("With withdraw: the ask's requirement id, if several"),
         "why": _s("Why it matters (with withdraw: why)"),
         "version": VERSION,
