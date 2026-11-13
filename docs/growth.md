@@ -200,6 +200,16 @@ may always start its own run). Retiring the source, or switching it to another k
 does it: that run exists only for the source, and the owner and admins must be able to stop a source. `tico growth source update <id> --bot BOT` moves the run to
 another bot and keeps the columns it maps. The owner, an admin, the source's own owner or its query's bot sends it rows.
 
+**On the web.** Sources shows each synced source's numbers and health (Fresh, Stale or Failing, and since when), and a
+source typed by hand as "not synced". **Connect a source** takes a name, a CSV and the column for each number (a picked
+file's columns that match a number's name are filled in), and runs the file at once, saying what it wrote, held and
+could not write. Opening a synced source changes its columns, takes a new file or runs its last one again. On Growth, a
+banner over the cards names each Stale or Failing source and the numbers it fills; each Number card has a line saying
+where its figure came from (the source and how long ago it synced, marked stale or failing, or who typed it, actual or
+estimate; CAC, LTV and payback name the sources of the numbers they are worked out from). A number a source disagrees
+with shows both values, and the source's owner or an admin picks **Keep** or **Use**, on the card or in a month's
+numbers under Settings, where a synced number is locked.
+
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
