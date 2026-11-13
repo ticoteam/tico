@@ -2713,3 +2713,60 @@ def test_a_finance_action_whose_wal_sync_fails_is_not_answered_as_done(api, monk
     with store.transaction() as c:
         c.execute("SELECT 1")
     assert len(synced) == 1
+
+
+def _finance_owner_pays(c):
+    """The built-in Finance Owner as an install gives it: its default rights, an Everything view and the seeded
+    "a bot's payment asks a finance admin" rule (bookkeeper.ensure)."""
+    from backend import bookkeeper as BK
+
+    FA.grant_defaults(c, BK.ACTOR, at=AT)
+    assert act(c, OWNER, "view_grant", {"subject": BK.ACTOR, "what": "everything"}).status == "committed"
+    assert BK.seed_bot_payment_rule(c, AT) is True
+    return BK.ACTOR
+
+
+def test_the_finance_owners_payment_to_a_known_vendor_asks_a_finance_admin_and_is_sent_once_approved(books):
+    """Security condition for its default Everything view: a $50 payment to a vendor already paid, under every other
+    gate, still waits for a finance admin; once approved it is sent once."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bot = _finance_owner_pays(c)
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+        first = act(c, OWNER, "payment_create", {**body, "amount": 1_000})
+        assert first.status == "committed", first
+        c.execute("UPDATE fin_payments SET status='settled' WHERE id=?", (first.result["payment_id"],))  # known now
+        asked = act(c, bot, "payment_create", {**body, "amount": 5_000})
+        assert (asked.status, asked.rule, asked.approver) == ("needs_approval", "rule:bot-payment", OWNER), asked
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE created_by=?", (bot,)).fetchone()[0] == 0
+        give(c, OWNER, asked.approval_id)
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+    sync_once(books, fake, HOURS[1])
+    sync_once(books, fake, HOURS[2])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [50]
+    with books.transaction() as c:  # a person with the pay right is not asked by this rule
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        mine = act(c, "human:ben", "payment_create", {**body, "amount": 5_000, "tags": {"team": "eng"}}, dry_run=True)
+        assert mine.rule != "rule:bot-payment", mine
+
+
+def test_a_payment_on_a_private_payroll_line_the_payer_cannot_see_in_full_is_refused(books):
+    """An Everything view gives no full detail on a private line: paying against one is refused, as reading it is.
+    The owner, who sees private detail, still pays it."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bot = _finance_owner_pays(c)
+        payroll = account(c, "6100")
+        made = act(c, OWNER, "private_lines_set", {"account_id": payroll, "private": True, "others_see": "hidden"})
+        assert made.status == "committed", made
+        body = {"recipient_id": rid, "account_id": payroll, "money_account_id": _checking(c), "amount": 5_000}
+        refused = act(c, bot, "payment_create", body)
+        assert (refused.status, refused.code, refused.reason) == ("failed", "not_found", "no such account"), refused
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE created_by=?", (bot,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == 0
+        assert act(c, OWNER, "payment_create", body).status == "committed"
