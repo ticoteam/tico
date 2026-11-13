@@ -917,7 +917,7 @@ def run(args, who=None):
                 },
                 delegate=asked,
             )
-        if sub == "relate":
+        if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
             if getattr(args, "req", None):

@@ -167,7 +167,7 @@ def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
         )
         c.executescript(TR.SCHEMA)
         c.executemany(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks','now')",
+            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'depends_on','now')",
             [(ids[0], ids[600]), (ids[700], ids[1]), (ids[0], ids[999])],
         )
         operations = [0]
@@ -178,6 +178,6 @@ def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
 
         c.set_progress_handler(budget, 1000)
         result = TR.grouped(c, ids[:400], 'private=0')
-        assert [r['id'] for r in result[ids[0]]['blocks']] == [ids[600]]
-        assert [r['id'] for r in result[ids[1]]['blocks']] == [ids[700]]
+        assert [r['id'] for r in result[ids[0]]['depends_on']] == [ids[600]]
+        assert [r['id'] for r in result[ids[1]]['depends_on']] == [ids[700]]
         assert result[ids[2]] == {}
