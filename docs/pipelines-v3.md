@@ -456,6 +456,12 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
   #3417 to land") merges or closes. Merge adds its own news (see Engineering, Merge). A person's snooze stays, and the
   bot's snooze count is as it was. *Added Nov 12: Tico Team's Builder slept in Fixes 1 to 08:00 waiting for #3417,
   which merged at 03:01.*
+- A bot's snooze on its own task never holds it once everything the stage asks is met: the checks it waited for
+  passing end the snooze even when that leaves nobody a turn, and the task moves on at once when the next stage has
+  room (else it waits for room like any other). The never-stuck check does the same on each pass for such a snooze no
+  event ended. A person's snooze, or another bot's, stays. A move the engine refuses is in the server log with its
+  rule, the task and the stage. *Added Nov 13: Tico Team's Build tasks sat for hours snoozed "until checks pass", their
+  checks passed and Review 1 unlimited, showing "Moving to Review 1", until a person moved them.*
 - Run now on a snoozed task ends the snooze, in the name of whoever pressed it, as Wake does.
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
@@ -1288,7 +1294,18 @@ Mark met, Message Product Owner twice. New: Approve and Send back.
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
 - **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Owner · version 2"; a
-  "Notes" box; buttons "Approve" (main) and "Send back".
+  "Open task #80 ↗" link; a "Notes" box; buttons "Approve" (main) and "Send back".
+
+**Opening a task opens its ask.** A task waiting on your own answer (any of its waits, not only the first) opens on this screen from anywhere (the board, a
+task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
+opens its page. "Open task #N ↗" opens the task's page, which stays open; its Answer comes back here.
+
+**Notes** is 7 lines in a 420 px column (4 lines on a phone) and grows with its text before it scrolls. A screenshot
+pasted into it, a file dropped on the right side or one picked with 📎 Attach (up to 10) uploads to the task's Files at
+once and shows under the note with ✕. Send back waits until they are up ("Uploading 1 of 2…"), names a failed one with
+Retry and sends nothing; the note it sends ends with each file's name and id, so the bot's wake lists them. A question's
+"Something else" box works the same way. Approve on an OK of exactly what was shown sends that OK alone, and says so under
+the files. Moving on with ‹ › or Skip leaves the uploaded files on the task's Files, and a toast says so.
 
 The phone view is in [S17](#s17-on-a-phone). What changed since the version you last saw is highlighted in the page.
 
@@ -1420,6 +1437,9 @@ Today: the Engineering and Product pipelines.
   - "In development", 2: "Guest checkout"; "Refund flow" with the Late tag.
   - "Validate", 1: "Address lookup" with a spinner.
 - In a column, the mark sits after the title.
+- A box (task #220) is the title on up to two lines, then a meta line: the asker's face and name, the marks, time in
+  this stage ("3d") and, when someone else owns it, the owner's face at the right ("Owner: name" when pointed at). The
+  marks sit on that meta line. Pointing at the box shows the whole title. A phone's stage shows the same boxes.
 
 **New, list, grouped by stage** (Engineering):
 

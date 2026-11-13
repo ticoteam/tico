@@ -5,6 +5,8 @@
 // A model choice as a bot row stores it (its own model, `fallback`, `task_model`): older rows say runtime and effort.
 interface SettingsBotChoice {
   harness?: string | null | undefined; runtime?: string | undefined; model?: string | null | undefined; reasoning_effort?: string | null | undefined; effort?: string | null | undefined;
+  // A fallback's own window (backend/harnesses.py normalize_fallback); absent is "Same as bot".
+  compact_at?: number | null | undefined;
 }
 // A bot's task settings (backend/task_models.py `stored`): a task model, a task effort and a task context length.
 interface SettingsTaskModel extends SettingsBotChoice { compact_at?: number | null; }

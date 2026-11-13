@@ -48,6 +48,31 @@ def test_a_list_keeps_a_pipelines_or_a_stages_tasks_and_those_pushed_past(api):
         assert r.status_code == 422, (bad, r.text)
 
 
+def test_a_list_row_says_when_it_entered_its_stage_not_when_it_last_changed(api):
+    """A board card's age is time in this stage (task #220): `stage_since` is when the task entered its stage, kept
+    through edits, else when it was filed."""
+    product(api)
+    filed = post(api, "tasks", {"title": "Saved carts", "body": "As discussed.", "owner": "ben", "pipeline": "product"})
+    moved = post(
+        api, "tasks", {"title": "Guest checkout", "body": "As discussed.", "owner": "ben", "pipeline": "product"}
+    )
+    general = post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
+    post(api, f"tasks/{moved['id']}/move", {"to": "build", "why": "The spec is in the PR"})
+
+    def rows():
+        return {t["id"]: t for t in get(api, "tasks?brief=true")["tasks"]}
+
+    before = rows()
+    # Filed into its first stage: it entered that stage as it was filed, before the next task was.
+    assert before[filed["id"]]["created_at"] <= before[filed["id"]]["stage_since"] < before[moved["id"]]["created_at"]
+    assert before[general["id"]]["created_at"] <= before[general["id"]]["stage_since"]
+    entered = before[moved["id"]]["stage_since"]
+    assert entered > before[moved["id"]]["created_at"], "a moved task counts from the move"
+    post(api, f"tasks/{moved['id']}/comments", {"text": "Checked the copy."})
+    after = rows()[moved["id"]]
+    assert after["stage_since"] == entered, "a comment is not a stage move"
+
+
 def test_a_bots_turn_says_whether_its_run_is_going_now(api):
     r = runner(api)
     assign(api, r, "ops")

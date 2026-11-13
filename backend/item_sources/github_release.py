@@ -231,19 +231,12 @@ def released(
         where = str(GS.release_repo(settings, str(link["repo"])))
         if repo is not None and where.lower() != repo.lower():
             continue
-        tag = next(
-            (
-                str(release["tag"])
-                for release in reversed(
-                    GS.releases(conn, where, prereleases=settings.get("prereleases", True) is not False)
-                )
-                if GS.included(conn, release["id"], str(metadata["merged_sha"]))
-            ),
-            None,
+        release = GS.release_of(
+            conn, where, str(metadata["merged_sha"]), prereleases=settings.get("prereleases", True) is not False
         )
-        if tag is None:
+        if release is None:
             return []
-        out.append(f"{tag} of {where}")
+        out.append(f"{release['tag']} of {where}")
     return sorted(set(out))
 
 
@@ -406,11 +399,10 @@ def cut(
     for link in merged:
         metadata: Row = link["metadata"]
         repo = GS.release_repo(settings, str(link["repo"]))
-        held = any(
-            GS.included(conn, release["id"], str(metadata["merged_sha"]))
-            for release in GS.releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)
+        held = GS.release_of(
+            conn, repo, str(metadata["merged_sha"]), prereleases=settings.get("prereleases", True) is not False
         )
-        if held:
+        if held is not None:
             continue
         if how[0] == "tag" and repo.lower() != str(link["repo"]).lower():
             refuse("task_requirement", f"A tag goes on this task's merge commit, and {repo} is another repository")

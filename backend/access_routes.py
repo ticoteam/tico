@@ -7,6 +7,7 @@ from .store import Problem
 from fastapi import Request
 from . import account_routes
 from . import org_routes
+from . import page_owners
 from . import team_rules
 from . import views
 
@@ -50,6 +51,19 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
         with store.read() as c:
             auth.sync_access(c)  # who is a credential administrator follows the rule
         return result
+
+    @app.get("/api/v2/page-owners")
+    def page_owners_read(request: Request):
+        """Each page's owner, the bot its Chat opens (backend/page_owners.py). Anyone on the team reads it."""
+        with store.read() as c:
+            return {"pages": page_owners.read(c)}
+
+    @app.put("/api/v2/page-owners/{page}")
+    def page_owner_set(request: Request, page: str, body: M.PageOwnerSet):
+        """Set or clear a page's owner. The owner or an admin; the page follows at its next load."""
+        who = request.state.identity
+        admin_only(who, "changes a page's owner")
+        return mutate(request, body, lambda c: page_owners.save(c, who.actor, page, body.bot))
 
     @app.put("/api/v2/access/allow")
     def access_allow_save(request: Request, body: M.AccessAllowUpdate):

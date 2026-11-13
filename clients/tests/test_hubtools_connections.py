@@ -152,6 +152,20 @@ def test_github_connect_writes_the_manifest_page_and_finish_and_installed_take_t
     assert code == 0 and printed["page"] == str(out) and "page_html" not in printed
     assert out.read_text() == page and printed["next"][0].startswith(f"Open {out} in a browser signed in to GitHub")
 
+    # Task #255: no account is a personal account. Nothing is named, and the page opens signed in as that account.
+    made = tool("tico_github_connect", api)
+    assert api.calls[-1] == ("GET", "github/app/manifest", None)
+    assert made["next"][0].startswith("Open the page in a browser signed in to GitHub as the account the App is for")
+    assert "tico_github_connect" in hubtools.BY_NAME and "org" not in hubtools.BY_NAME["tico_github_connect"].get(
+        "required", ()
+    )
+    code, printed = cli(monkeypatch, api, "github", "connect", "--html", str(out))
+    assert code == 0 and api.calls[-1] == ("GET", "github/app/manifest", None)
+    assert (
+        printed["next"][0]
+        == f"Open {out} in a browser signed in to GitHub as the account the App is for, and click Create GitHub App"
+    )
+
     code, printed = cli(monkeypatch, api, "github", "finish", "s1")
     assert code == 0 and printed["install_url"].startswith("https://github.com/apps/acme-tico")
     assert ("POST", "github/app/finish", {"state": "s1"}) in api.calls

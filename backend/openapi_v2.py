@@ -2623,6 +2623,10 @@ SCHEMAS = {
             "description": "On the task's own read: the stage it is in",
         },
         pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
+        stage_since={
+            "type": ["string", "null"],
+            "description": "On a list row: when it entered its stage, else when it was filed",
+        },
         waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
         to_leave=items(ref("TaskRequirement"))
         | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
@@ -3629,6 +3633,7 @@ SCHEMAS = {
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
             "snoozed": "b",
             "pushed_past": "b",
+            "stage_since": "n",
             "on_person": "b",
         }
     ),

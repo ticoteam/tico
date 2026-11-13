@@ -176,10 +176,10 @@ function pvPhoneHTML(state: PvState): string {
     return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}">`
       + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span></button>`;
   }).join('');
-  const rows = pvInStage(state, shown).map(pvRowHTML).join('');
+  const rows = pvInStage(state, shown).map(pvCardHTML).join('');   // the column's cards (task #220)
   const on = stages.find(s => s.id === shown), play = on ? pvPlayHTML(on) : '';
   const pill = pvPersonHTML(on ? pvPersonCount(state, on) : 0);
-  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${pill}${play}</div><div class="pv-rows pv-phone">${rows}</div>`;
+  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${pill}${play}</div><div class="pv-phone">${rows}</div>`;
 }
 
 function pvBarHTML(bar: PvBar | null): string {

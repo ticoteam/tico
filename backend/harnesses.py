@@ -128,7 +128,12 @@ def normalize_fallback(value):
     if not harness or not model:
         return None
     effort = str(value.get("reasoning_effort") or value.get("effort") or "").strip()
-    return {"harness": harness, "model": model, "reasoning_effort": effort, "runtime": runtime_of(harness)}
+    out = {"harness": harness, "model": model, "reasoning_effort": effort, "runtime": runtime_of(harness)}
+    compact = value.get("compact_at")
+    if isinstance(compact, int) and not isinstance(compact, bool) and compact > 0:
+        # Where it compacts while on the fallback; absent is "Same as bot".
+        out["compact_at"] = compact
+    return out
 
 
 def backfill_config(config, slug=None, runtime=None):

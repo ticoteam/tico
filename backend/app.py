@@ -3378,14 +3378,21 @@ def create_app(settings=None):
             check, unchecked = check_models.review_default(c, settings, owner, parent_id)
         # The task's own model, checked before anything is written (the same rights as the bot's model, a bot never).
         run_model = None
-        if body.model is not None or body.effort or body.harness:
+        if body.model is not None or body.effort or body.harness or body.compact_at:
             if not H.is_bot(owner):
                 raise Problem("owner", "Only a task a bot runs has a model to choose", 422)
-            if body.model is None:
+            if body.model is None and (body.effort or body.harness):
                 raise Problem("model", "Choose a model to pick an effort or harness for it", 422)
-            run_model = settings_admin.task_run_choice(
-                c, who, H.actor_id(owner), "set the model a new task runs on", body.model, body.effort, body.harness
-            )
+            if body.model is None:
+                # A window alone: its runs keep the bot's model (backend/task_run_models.py).
+                run_model = settings_admin.task_run_window(
+                    c, who, H.actor_id(owner), "set where a new task's runs compact", body.compact_at
+                )
+            else:
+                run_model = settings_admin.task_run_choice(
+                    c, who, H.actor_id(owner), "set the model a new task runs on", body.model, body.effort, body.harness
+                )
+                run_model["compact_at"] = body.compact_at
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None

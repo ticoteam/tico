@@ -354,6 +354,15 @@ installs the new version **between runs**: the copy is downloaded and checked be
 and switched in only at a moment no run in progress uses that harness (a run on another harness does not hold it
 back). A failed install keeps the working version and is retried after 30 minutes.
 
+A daily update also waits until **no turn has used that harness on the computer for 60 minutes**. A new Claude Code
+changes its system prompt and tools, so a session still inside its 1-hour prompt cache would write its whole
+conversation to the cache again at its next turn; after an hour idle that cache has expired anyway. If that moment does
+not come within 48 hours (counted from the first time the update was ready, kept across runner restarts), the update
+goes in at the next moment no run uses the harness, as before. The runner's log line says which: `Claude Code updated
+to 2.1.316 (no turn on this computer has used it for 64 minutes)` or `(no turn running; sessions stayed warm for 48
+hours)`. A first install and the owner's **Update** or pin do not wait, and pinning a harness drops a daily update
+still waiting for it.
+
 A harness can be **pinned** to a version: the runner keeps that version and only reports that a newer one exists.
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per
 computer.

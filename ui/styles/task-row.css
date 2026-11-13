@@ -19,11 +19,17 @@
 
 .tk-late{flex:none;padding:0 6px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-2xs);line-height:16px}
 
-/* A task in a column: a small one-line box; the mark comes after the title. */
-.tk-card{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);cursor:pointer}
+/* A task in a column (task #220): the title on up to two lines, then who asked, the marks, time in this stage and
+   the owner's face when someone else owns it. A snoozed one stays one line (task-pipelines.css). */
+.tk-card{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);cursor:pointer}
 .tk-card:hover,.tk-card:focus-visible{background:var(--hover)}
-.tk-card .tk-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tk-card .tk-who:empty{display:none}
+.tk-card .tk-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;line-height:var(--lh-tight)}
+.tk-meta{display:flex;align-items:center;gap:6px;min-width:0;color:var(--muted);font-size:var(--t-xs)}
+.tk-asker{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.tk-asker .tk-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-meta .tk-sp{flex:1 1 auto}
+.tk-meta .tk-age{min-width:0}
+.tk-owner{flex:none;display:inline-flex}
 
 /* A group heading: small, upper case, dimmed, the count beside it. */
 .tk-group{display:flex;gap:6px;align-items:baseline;margin:14px 10px 4px;color:var(--muted);font-size:var(--t-2xs);letter-spacing:var(--track-caps);text-transform:uppercase}

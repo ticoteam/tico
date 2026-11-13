@@ -91,7 +91,8 @@ connected, say) is left out of the list, runs and counts until its feature is se
   A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
   `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice
   ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)). Leave them out to use the bot's
-  task model. Naming a model needs the same right as changing the bot's model: someone without it sends the change for
+  task model. `"compact_at"` sets where that task's conversation compacts, one of the twelve sizes from `100000` to
+  `1000000` (on its own it keeps the bot's model); leave it out for the bot's own. Naming a model needs the same right as changing the bot's model: someone without it sends the change for
   a manager to approve as a pending version, and a bot's new automation starts off. Until a manager approves that
   version, someone without the right cannot turn the routine on or run it by hand; a manager who turns it on approves
   it.

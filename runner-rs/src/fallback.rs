@@ -46,6 +46,19 @@ pub fn configured(config: &Value) -> Option<Hop> {
     })
 }
 
+/// Where a turn on `hop` compacts: the bot's named fallback carries its own window (the server sends its saved size,
+/// or the bot's for "Same as bot", lowered to fit the fallback model: backend/providers.py with_compact_default); a
+/// hop the company's providers chose, or an older server's fallback without one, compacts where the turn does.
+pub fn compact_at(config: &Value, hop: &Hop) -> Value {
+    let named = &config["fallback"]["compact_at"];
+    let ours = !hop.default
+        && configured(config).is_some_and(|f| f.harness == hop.harness && f.model == hop.model);
+    if ours && !named.is_null() {
+        return named.clone();
+    }
+    config.get("compact_at").cloned().unwrap_or(Value::Null)
+}
+
 /// `configured`, unless the hop's runtime refused this bot's sign-in within REJECT_RECHECK: a refused login would be
 /// refused again, so the turn does not go there (signin.rs refusal_key). A delivered subscription for the runtime
 /// (`subscribed`) brings its own credentials, so its runtime's refusal does not apply.
@@ -676,6 +689,31 @@ mod tests {
             ("claude", "claude")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_named_fallback_compacts_at_its_own_window_and_any_other_hop_at_the_turns() {
+        let config = json!({"harness": "claude", "model": "m", "compact_at": 600_000,
+            "fallback": {"harness": "grok", "model": "grok-4.6", "compact_at": 500_000}});
+        let named = configured(&config).unwrap();
+        assert_eq!(compact_at(&config, &named), json!(500_000));
+        let company = Hop {
+            default: true,
+            ..named.clone()
+        };
+        assert_eq!(compact_at(&config, &company), json!(600_000));
+        let other = Hop {
+            model: "kimi-k3".into(),
+            ..named.clone()
+        };
+        assert_eq!(compact_at(&config, &other), json!(600_000));
+        // An older server sends no window on the fallback: the turn's.
+        let older =
+            json!({"compact_at": 400_000, "fallback": {"harness": "grok", "model": "grok-4.6"}});
+        assert_eq!(
+            compact_at(&older, &configured(&older).unwrap()),
+            json!(400_000)
+        );
     }
 
     #[test]

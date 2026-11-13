@@ -17,10 +17,13 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
 .pv-col{flex:1 1 0;min-width:200px;max-width:480px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;background:var(--surface2)}
 .pv-col-head{padding:2px 4px}
-.pv-col-body{display:flex;flex-direction:column;gap:6px;min-height:24px}
+.pv-col-body{display:flex;flex-direction:column;gap:8px;min-height:24px}
+/* A phone's stage: the same cards as a column, one under the other. */
+.pv-phone{display:flex;flex-direction:column;gap:8px}
 /* A snoozed task, last in its stage: dimmed, with a moon mark and the day it wakes (or On ice). */
 .pv-snoozed{color:var(--muted)}
-.tk-card.pv-snoozed{background:none;border-style:dashed}
+.tk-card.pv-snoozed{flex-direction:row;align-items:center;gap:6px;padding:6px 8px;background:none;border-style:dashed}
+.tk-card.pv-snoozed .tk-title{display:block;flex:1 1 auto;min-width:0;white-space:nowrap;text-overflow:ellipsis}
 .pv-snoozed .tk-title{opacity:.75}
 .pv-sleep{color:var(--muted)}
 .tk-card .pv-wake{min-width:0}

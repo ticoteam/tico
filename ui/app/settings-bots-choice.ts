@@ -9,13 +9,16 @@ interface SettingsChoiceBox extends HTMLElement { picker?: SettingsChoicePicker;
 
 // Keep the three choices local until Apply, so selecting a harness cannot start a transition. `none` allows no
 // choice at all, named by it when it is a string ("Same as bot" for a task model), else "None". `noEffort` hides the
-// Effort picker where another one stands beside it (a task model's is Task effort, settingsTaskParts).
-function settingsChoiceFields(current = '', disabled = false, none: boolean | string = false, label = 'Model settings', noEffort = false) {
+// Effort picker where another one stands beside it (a task model's is Task effort, settingsTaskParts). `compact` adds
+// a Compact select with "Same as bot" first (the Fallback's window, spec scope 5): its size rides in the value as a
+// fourth part, "harness::model::effort::300000", so Apply and the bot editor's Save see a window change like any other.
+function settingsChoiceFields(current = '', disabled = false, none: boolean | string = false, label = 'Model settings', noEffort = false, compact = false) {
   return `<div class="settings-model-choice" role="group" aria-label="${esc(label)}" data-choice-fields data-current="${esc(current)}" ${disabled ? 'data-readonly' : ''} ${none ? `data-allow-none="${esc(none === true ? 'None' : none)}"` : ''}>
     <label>Harness / provider<select data-choice-harness aria-label="Harness / provider" ${disabled ? 'disabled' : ''}></select></label>
     <label data-choice-model-label>Model<select data-choice-model aria-label="Model" ${disabled ? 'disabled' : ''}></select></label>
     <div class="settings-tier" data-choice-tier hidden></div>
     <label ${noEffort ? 'hidden' : ''}>Effort<select data-choice-effort aria-label="Effort" ${disabled ? 'disabled' : ''}></select></label>
+    ${compact ? `<label data-choice-compact-label>Compact<select data-choice-compact aria-label="Compact" ${disabled ? 'disabled' : ''}></select></label>` : ''}
     <div class="settings-choice-blocks" data-choice-blocks></div>
   </div>`;
 }
@@ -25,6 +28,10 @@ function settingsWireChoiceFields(fields: HTMLElement, onChange: (value: string,
   const effort = fields.querySelector<HTMLSelectElement>('[data-choice-effort]')!;
   const tierBox = fields.querySelector<HTMLElement>('[data-choice-tier]')!;
   const modelLabel = fields.querySelector<HTMLElement>('[data-choice-model-label]')!;
+  const compactPick = fields.querySelector<HTMLSelectElement>('[data-choice-compact]');
+  const compactLabel = fields.querySelector<HTMLElement>('[data-choice-compact-label]');
+  const compactOf = (v: string | undefined) => Number(String(v || '').split('::')[3]) || null;
+  let compact = compactOf(fields.dataset.current);
   const all = settingsAllChoices(), readonly = fields.hasAttribute('data-readonly');
   // The Gateway's picks are made in the tier controls; its rows stay out of the Model list (and one virtual
   // harness, "Tico AI Gateway", stands for them). `real` maps it back to the pi harness the bot runs them on.
@@ -109,15 +116,23 @@ function settingsWireChoiceFields(fields: HTMLElement, onChange: (value: string,
     harness.disabled = readonly;
     model.disabled = readonly || !picked.harness || !models.length;
     effort.disabled = readonly || efforts.length <= 1;
+    if (compactPick && compactLabel) {
+      // Only for a harness that compacts, and only the sizes the chosen model holds (spec scope 6 and 8).
+      compactLabel.hidden = !picked.model || !compactsOn(real().harness);
+      compactPick.innerHTML = compactOptions(compact, settingsModel(picked.model)?.context_tokens);
+      compactPick.disabled = readonly;
+    }
   };
-  const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
+  const base = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
+  const value = () => { const v = base(); return v && compact && compactPick && compactsOn(real().harness) ? `${v}::${compact}` : v; };
   const tierValid = () => { const t = settingsTierParse(picked.model);
     return !!t && (t.version === 'auto' || !!gw?.tiers[t.tier]?.versions.some(v => v.version === t.version)) && tierEfforts(t).list.includes(picked.effort) && !block('tico'); };
-  const valid = () => (inTier() ? tierValid() : (choices.some(row => row.value === value()) && !block(picked.harness)))
+  const valid = () => (inTier() ? tierValid() : (choices.some(row => row.value === base()) && !block(picked.harness)))
     || (!picked.harness && fields.hasAttribute('data-allow-none'));
   // Whether the three fields show something other than what the bot has, finished or not.
   const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current), now = real();
-    return now.harness !== was.harness || now.model !== was.model || now.effort !== was.effort; };
+    return now.harness !== was.harness || now.model !== was.model || now.effort !== was.effort
+      || compactOf(value()) !== compactOf(fields.dataset.current); };
   harness.onchange = () => {
     picked = {harness: harness.value, model: '', effort: ''};
     if (picked.harness === 'tico') {   // Medium, pinned to the current version
@@ -132,27 +147,33 @@ function settingsWireChoiceFields(fields: HTMLElement, onChange: (value: string,
     const own = row?.default_effort;
     picked = {harness: picked.harness, model: model.value,
       effort: efforts.includes(picked.effort) ? picked.effort : (own !== undefined && efforts.includes(own) ? own : efforts[0] || '')};
+    // The window picked stays, lowered to the largest size the new model holds (spec scope 8).
+    const window = row?.context_tokens || 0;
+    if (compact && window && compact > window) compact = COMPACT_SIZES.filter(([size]) => size <= window).pop()?.[0] || null;
     paint(); onChange(value(), valid());
   };
   effort.onchange = () => { picked.effort = effort.value; onChange(value(), valid()); };
+  if (compactPick) compactPick.onchange = () => { compact = Number(compactPick.value) || null; onChange(value(), valid()); };
   paint();
   return {value, valid, changed};
 }
 function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
   const spec = SETTINGS_CHOICE_KINDS[kind], selected = spec.of(e);
+  const own = kind === 'fallback' && selected?.compact_at ? `::${selected.compact_at}` : '';
   const current = selected?.model ? settingsChoiceValue(selected.harness || selected.runtime, selected.model,
-    selected.reasoning_effort || selected.effort) : '';
+    selected.reasoning_effort || selected.effort) + own : '';
   const manage = settingsCanManageBot(e);
   return `<div class="settings-choice" data-bot-choice="${esc(e.id)}" data-kind="${kind}" data-current="${esc(current)}">
     ${!current && !spec.none ? `<small class="muted">${esc(settingsDefaultLabel(e))}</small>` : ''}
-    ${settingsChoiceFields(current, !manage, spec.none || false, `${spec.name} for ${e.display_name || e.slug}`, kind === 'task')}
+    ${settingsChoiceFields(current, !manage, spec.none || false, `${spec.name} for ${e.display_name || e.slug}`, kind === 'task', kind === 'fallback')}
     ${manage ? '<button type="button" class="ghost" data-choice-apply disabled>Apply</button>' : ''}
   </div>`;
 }
 // In the bots table a model or fallback is one short line; its three pickers open in a popover under it.
 function settingsChoiceCell(e: SettingsBot, kind: SettingsChoiceKind) {
   const fallback = kind === 'fallback', selected = fallback ? e.fallback : e;
-  const label = selected?.model ? settingsChoiceLabel(selected.harness || selected.runtime, selected.model, selected.reasoning_effort || selected.effort)
+  const own = fallback ? e.fallback?.compact_at : null, window = own ? ` · ${compactWords(own)}` : '';
+  const label = selected?.model ? settingsChoiceLabel(selected.harness || selected.runtime, selected.model, selected.reasoning_effort || selected.effort) + window
     : fallback ? 'None' : settingsDefaultLabel(e);
   const text = `<span class="sb-pick-text${selected?.model ? '' : ' muted'}">${esc(label)}</span>`;
   if (!settingsCanManageBot(e)) return `<span class="sb-pick ro" title="${esc(label)}">${text}</span>`;
@@ -215,10 +236,11 @@ function settingsWireCombos(root: ParentNode, onPick: (box: SettingsChoiceBox, v
     mount();
   });
 }
-// The /fallback body for a picker value ('' is None); Apply and the bot editor's Save send the same.
+// The /fallback body for a picker value ('' is None); Apply and the bot editor's Save send the same. Its fourth part is
+// the fallback's own window; none is "Same as bot".
 function settingsFallbackBody(value: string) {
-  const choice = value ? settingsChoiceFromValue(value) : null;
-  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null;
+  const choice = value ? settingsChoiceFromValue(value) : null, compact_at = Number(value.split('::')[3]) || null;
+  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort, ...(compact_at ? {compact_at} : {})} : null;
 }
 async function settingsPickChoice(box: HTMLElement, value: string) {
   const slug = box.dataset.botChoice, e: SettingsBot | undefined = S.emps.find(row => row.id === slug);

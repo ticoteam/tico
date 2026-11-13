@@ -1,8 +1,8 @@
 // Tools > GitHub with a personal account (ui/github-connect.ts). Until the owner authorizes Tico for the account, the card
 // says Let Tico create repositories, with one Authorize button, and names the callback URL only when the App was set up
 // without it. Once authorized it says Tico can create them. Either way it names the waiting bot's repository and links to the App's
-// settings and the uninstall page on github.com/settings. Without a connection, the form asks for one account or organization
-// name. Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
+// settings and the uninstall page on github.com/settings. Without a connection, the form starts on My GitHub account with
+// nothing to type, and asks for a name only when An organization is chosen (task #255). Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
 import type {Locator, LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';
@@ -29,16 +29,30 @@ const PERSONAL = {
 };
 const AUTHORIZED = {...PERSONAL, authorized: true};
 // What GET /api/v2/github/app answers: the App, or the not-connected answer.
-type AppState = typeof PERSONAL | {connected: false};
+type AppState = typeof PERSONAL | {connected: false; app_name: string};
+// What the form asked of GET /api/v2/github/app/manifest, and where it then sent the browser.
+interface Asked {queries: URLSearchParams[]; github: string[]}
+const MANIFEST = {name: 'Acme Tico', url: 'https://tico.acme.example'};
 
 // The Tico page's theme switch (ui/app/theme.ts), run in the page.
 interface PageWin {ticoTheme: {set(value: string): void}}
 
 // The routes the Tools page needs; the GitHub App's answer is read from `state.app` so one page can change it.
-async function serve(page: Page, state: {app: AppState}) {
+async function serve(page: Page, state: {app: AppState}, asked: Asked = {queries: [], github: []}) {
   await page.route('**/*', (route: Route) => {
-    const req = route.request(), p = new URL(req.url()).pathname;
+    const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    if (url.hostname === 'github.com') {
+      asked.github.push(`${req.method()} ${url.origin}${p}`);
+      return route.fulfill({contentType: 'text/html', body: '<title>GitHub</title>'});
+    }
+    if (p === '/api/v2/github/app/manifest') {
+      asked.queries.push(url.searchParams);
+      const org = url.searchParams.get('org');
+      if (org === 'nobody-here') return json({error: {code: 'github_account_missing', detail: 'No GitHub account or organization named nobody-here'}}, 404);
+      const where = org ? `organizations/${org}/settings` : 'settings';
+      return json({action: `https://github.com/${where}/apps/new?state=s1`, manifest: MANIFEST, state: 's1'});
+    }
     if (isUiPath(p)) return serveUi(route, p);
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -80,9 +94,87 @@ async function themed(page: Page, locator: Locator, name: string) {
   await page.evaluate(() => (window as unknown as PageWin).ticoTheme.set('dark'));
 }
 
+// Not connected (task #255): the form opens on My GitHub account with no field to fill, and Connect GitHub goes straight
+// to GitHub's personal-account page. An organization asks for its name only once chosen.
+async function connectForm(viewport: {width: number; height: number}, tag: string) {
+  const page = await browser().newPage({viewport, serviceWorkers: 'block'});
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  const asked: Asked = {queries: [], github: []};
+  await serve(page, {app: {connected: false, app_name: 'Acme Tico'}}, asked);
+  await page.goto('https://tico-ui.test/#/library/tools/github');
+  const card = page.locator('section:has(#set-github)'), form = page.locator('[data-gh-form]');
+  await form.waitFor();
+  const choice = form.getByRole('radiogroup', {name: 'Create the app in'});
+  const mine = choice.getByRole('radio', {name: 'My GitHub account'}), theirs = choice.getByRole('radio', {name: 'An organization'});
+  // AC-1: My GitHub account is chosen, nothing to type, no App name, and Connect GitHub is enabled.
+  assert.equal(await mine.getAttribute('aria-checked'), 'true');
+  assert.equal(await theirs.getAttribute('aria-checked'), 'false');
+  assert.equal(await form.locator('input[type=text]:visible').count(), 0, 'no text field to fill');
+  assert.equal(await form.getByLabel('App name').count(), 0, 'no App name field');
+  assert.equal(await form.getByLabel('GitHub account or organization').count(), 0, 'the old account field is gone');
+  assert.ok(await form.getByRole('button', {name: 'Connect GitHub'}).isEnabled());
+  assert.match(await words(form), /use a separate account or organization/);
+  // AC-7: the name GitHub will propose, and that it can be changed there.
+  assert.equal(await words(form.locator('[data-gh-name]')), 'GitHub will name the app "Acme Tico". You can rename it on GitHub\'s page.');
+  await themed(page, card, `github-connect-personal-${tag}`);
+
+  // AC-4: An organization with no name stays in Tico and says what is missing.
+  await theirs.click();
+  assert.equal(await theirs.getAttribute('aria-checked'), 'true');
+  const org = form.getByLabel('Organization name');
+  assert.ok(await org.isVisible(), 'the organization name field shows once chosen');
+  await form.getByRole('button', {name: 'Connect GitHub'}).click();
+  assert.equal(await words(form.locator('[data-gh-status]')), 'Enter the organization\'s name');
+  assert.equal(asked.queries.length, 0, 'nothing asked of the server');
+  // AC-9: neither choice scrolls sideways on a phone.
+  if (tag === 'phone') {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(overflow <= 0, `no sideways scroll with An organization chosen (${overflow}px)`);
+  }
+  await themed(page, card, `github-connect-organization-${tag}`);
+
+  // AC-6: a name GitHub does not know keeps today's message, and the page stays.
+  await org.fill('nobody-here');
+  await form.getByRole('button', {name: 'Connect GitHub'}).click();
+  await form.locator('[data-gh-status]', {hasText: 'No GitHub account or organization named nobody-here'}).waitFor();
+  assert.equal(asked.github.length, 0, 'still in Tico');
+
+  // AC-5: an organization's name goes into GitHub's organization address.
+  await org.fill('acme-co');
+  await Promise.all([page.waitForURL(/github\.com/), form.getByRole('button', {name: 'Connect GitHub'}).click()]);
+  assert.equal(asked.queries.at(-1)!.get('org'), 'acme-co');
+  assert.deepEqual(asked.github, ['POST https://github.com/organizations/acme-co/settings/apps/new']);
+
+  // AC-2: back on Tools, My GitHub account sends no account at all and goes to GitHub's personal-account page.
+  await page.goto('https://tico-ui.test/#/library/tools/github');
+  await form.waitFor();
+  assert.equal(await theirs.getAttribute('aria-checked'), 'false', 'a fresh form starts on My GitHub account again');
+  if (tag === 'phone') {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(overflow <= 0, `no sideways scroll with My GitHub account chosen (${overflow}px)`);
+  }
+  await Promise.all([page.waitForURL(/github\.com/), form.getByRole('button', {name: 'Connect GitHub'}).click()]);
+  const personal = asked.queries.at(-1)!;
+  assert.equal(personal.has('org'), false, 'no account is sent for a personal account');
+  assert.equal(personal.get('administration'), 'true');
+  assert.deepEqual(asked.github.at(-1), 'POST https://github.com/settings/apps/new');
+
+  // A team with no name yet: no made-up app name is offered.
+  await serve(page, {app: {connected: false, app_name: ''}}, asked);
+  await page.goto('https://tico-ui.test/#/library/tools/github');
+  await form.waitFor();
+  assert.equal(await words(form.locator('[data-gh-name]')), 'Pick the app\'s name on GitHub\'s page.');
+  await page.close();
+  assert.deepEqual(errors, [], 'the connect form raised no errors');
+}
+
+let shared: import('playwright').Browser | null = null;
+const browser = () => shared!;
+
 (async () => {
   if (SHOTS) fs.mkdirSync(SHOTS, {recursive: true});
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
+  const browser = shared = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     const errors: string[] = [];
     for (const [tag, viewport] of Object.entries(VIEWPORTS)) {
@@ -141,21 +233,11 @@ async function themed(page: Page, locator: Locator, name: string) {
       assert.equal(await host.locator('[data-gh-authorize]').count(), 0);
       await themed(page, card, `github-personal-connected-${tag}`);
 
-      // Not connected: one field for the account or organization, and the App name and Administration choice beside it.
-      state.app = {connected: false};
-      await page.reload();
-      const form = page.locator('[data-gh-form]');
-      await form.waitFor();
-      const org = form.getByLabel('GitHub account or organization');
-      assert.equal(await org.getAttribute('placeholder'), 'your-name or your-org');
-      assert.equal(await form.getByLabel('Organization', {exact: true}).count(), 0, 'the old single-organization label is gone');
-      assert.match(await words(form), /use a separate account or organization/);
-      assert.equal(await form.getByLabel('App name').count(), 1);
-      await themed(page, card, `github-personal-connect-${tag}`);
       await page.close();
+      await connectForm(viewport, tag);
     }
     assert.deepEqual(errors, [], 'the page raised no errors');
-    console.log('github-personal: unauthorized, authorized and connect form ok');
+    console.log('github-personal: unauthorized, authorized, and connect form for an account and an organization ok');
   } finally {
     await browser.close();
   }

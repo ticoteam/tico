@@ -13,7 +13,7 @@
 .dc-icon:hover:not(:disabled),.dc-icon[aria-pressed="true"]{background:var(--surface2)}
 .dc-icon:disabled{color:var(--muted);opacity:.4;cursor:default}
 .dc-icon[hidden]{display:none}
-.dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px}
+.dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 420px}
 .dc-thing{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px;display:flex;flex-direction:column}
 .dc-thing>.dc-doc{flex:1 0 0}
 .dc-side{min-height:0;overflow-y:auto;padding:20px;border-left:1px solid var(--line);display:flex;flex-direction:column}
@@ -36,6 +36,23 @@
 .dc-notes{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .dc-side textarea,.dc-side select{width:100%;box-sizing:border-box;font:inherit}
 .dc-side textarea{resize:vertical;min-height:64px}
+/* the note starts at 7 lines (4 on a phone, rows in decide.ts) and grows with its text before it scrolls (decideGrow) */
+.dc-side textarea[data-dc-grow]{resize:none;overflow-y:auto}
+.dc-open-task{align-self:flex-start;margin:-4px 0 0;padding:0;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--t-sm);text-decoration:underline;cursor:pointer}
+/* screenshots and files with the note: each with its state and ✕, then 📎 Attach */
+.dc-files{display:flex;flex-direction:column;gap:6px;border-radius:8px}
+.dc-side.over{outline:2px dashed var(--line);outline-offset:-6px}
+.dc-files ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.dc-file{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 4px 4px 10px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm)}
+.dc-file-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-file[data-state="failed"] .dc-file-state{color:var(--fail,var(--ink))}
+.dc-file-x{flex:none;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.dc-file-x:hover{background:var(--surface2);color:var(--ink)}
+.dc-attach{align-self:flex-start;padding:4px 0;color:var(--muted);font-size:var(--t-sm);cursor:pointer}
+.dc-attach:hover{color:var(--ink)}
+.dc-attach.disabled{opacity:.5;cursor:default}
+.dc-status{margin:0;font-size:var(--t-sm)}
+.dc-file-note{margin:4px 0 0;font-size:var(--t-sm)}
 .dc-acts,.dc-choices,.dc-more,.dc-chips{display:flex;flex-wrap:wrap;gap:8px}
 .dc-acts button,.dc-choices button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
 .dc-more{padding-top:4px}
@@ -61,8 +78,13 @@
   .dc-wide{display:none}
   .dc-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
   .dc-thing{padding:16px}
-  .dc-side{max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  /* a field scrolled to (focus, the keyboard opening) stops above the sticky buttons, not under them */
+  .dc-side{scroll-padding-bottom:72px;max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
   .dc-q{font-size:var(--t-lg)}
+  .dc-file-x,.dc-attach,.dc-open-task{min-height:44px}
+  .dc-open-task{margin:-12px 0 -8px;display:inline-flex;align-items:center}
+  .dc-file-x{width:44px}
+  .dc-attach{display:inline-flex;align-items:center}
 }
 
 

@@ -404,9 +404,11 @@ def _start(flow, state, thread, step, services, who, prompt, wait, tail=""):
     None when the cap stops it."""
     values = values_of(state, thread)
     cap = (flow.get("spend_cap") or {}).get("per_30m")
-    # A bot_turn step's model, effort and harness are the model its task runs on (backend/task_run_models.py).
+    # A bot_turn step's model, effort, harness and window are what its task runs on (backend/task_run_models.py).
     run_model = (
-        {k: step[k] for k in ("model", "effort", "harness") if step.get(k)} if step.get("type") == "bot_turn" else {}
+        {k: step[k] for k in ("model", "effort", "harness", "compact_at") if step.get(k)}
+        if step.get("type") == "bot_turn"
+        else {}
     )
     return services.start_turn(
         who,

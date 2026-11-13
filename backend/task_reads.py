@@ -209,7 +209,8 @@ def _could_read(c, visible_sql, tid, ref):
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
-    `pushed_past` (it entered its stage pushed past a requirement) and `on_person` (it waits only on a person's OK or
+    `pushed_past` (it entered its stage pushed past a requirement), `stage_since` (when it entered its stage: its open
+    visit, else when it was filed; a board card's age) and `on_person` (it waits only on a person's OK or
     answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one read of the
     open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
     neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed turn's
@@ -223,12 +224,13 @@ def brief(c, rows, visible_sql="1"):
         return rows
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    late, pushed = {}, set()
+    late, pushed, entered = {}, set(), {}
     for r in c.execute(
-        "SELECT task_id, late_told_at, late_person_at, entered_how FROM visits WHERE left_at IS NULL "
-        "AND (late_told_at IS NOT NULL OR entered_how='pushed_past') AND task_id IN (SELECT value FROM json_each(?))",
+        "SELECT task_id, late_told_at, late_person_at, entered_how, entered_at FROM visits WHERE left_at IS NULL "
+        "AND task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
+        entered[r[0]] = r[4]
         if r[1]:
             late[r[0]] = {"since": r[1], "level": "person" if r[2] else "told"}
         if r[3] == "pushed_past":
@@ -267,6 +269,7 @@ def brief(c, rows, visible_sql="1"):
         row["late"] = late.get(row["id"])
         row["snoozed"] = row["id"] in snoozed
         row["pushed_past"] = row["id"] in pushed
+        row["stage_since"] = entered.get(row["id"]) or row.get("created_at")
         row["on_person"] = row["id"] in person
     return rows
 

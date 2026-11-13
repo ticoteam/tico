@@ -338,8 +338,9 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
   });
   await beforeGoto?.(page);
   await page.goto('https://tico-ui.test/' + hash);
+  // A task waiting on Ana's own answer opens on its ask (decideTaskOpen), any other on its page.
   const ready = hash.startsWith('#/task/')
-    ? page.locator('#task-modal[open] .tmodal-title').waitFor()
+    ? page.locator('#task-modal[open] .tmodal-title, #need-card[open] .dc-q').first().waitFor()
     : hash.startsWith('#/tasks')
       ? page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tk-row, #task-body .empty, #task-body .pv'))
       : Promise.resolve();

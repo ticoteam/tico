@@ -101,12 +101,109 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(10000)});
   const shown = await page.locator('#pg-view iframe.html-view').evaluate((f: HTMLIFrameElement) => f.srcdoc);
   assert.ok(shown.includes('Shipped 14 changes') && !shown.includes('steal()'), `${tag}: the cleaned page, no script`);
+  // One header line: back, title, the status line and ⋯; no sharing row or version picker; the page right below.
+  assert.equal(await page.locator('#pg-view .pg-head .pg-headline .pg-status').count(), 1, `${tag}: the status line is on the header line`);
+  assert.equal(await page.locator('#pg-view .pg-access, #pg-view .pg-ver, #pg-view .pg-body .pg-status').count(), 0, `${tag}: no sharing row, version picker or second status line`);
+  assert.equal(await page.locator('#pg-view > .pg-head + .pg-body').count(), 1, `${tag}: the page starts below the header`);
+  // One frame: no border, corner or white backdrop around the page.
+  const bare = await page.locator('#pg-view .pg-preview').evaluate(box => [box, box.querySelector('iframe')!].map(el => {
+    const c = getComputedStyle(el);
+    return [c.borderTopWidth, c.borderTopLeftRadius, c.backgroundColor];
+  }));
+  assert.deepEqual(bare, [['0px', '0px', 'rgba(0, 0, 0, 0)'], ['0px', '0px', 'rgba(0, 0, 0, 0)']], `${tag}: no box around the page`);
+  // ⋯ stays at the header's right edge.
+  const head = (await page.locator('#pg-view .pg-head').boundingBox())!, more = (await page.locator('#pg-view .pg-menu summary').boundingBox())!;
+  assert.ok(Math.abs(head.x + head.width - (more.x + more.width)) < 4, `${tag}: ⋯ on the right`);
+  // A manager's first item is who can see it, with the audience under it; a page of one version has no history or diff.
   await page.locator('#pg-view .pg-menu summary').click();
-  assert.deepEqual(await page.locator('#pg-view .pg-menu-list [role=menuitem]').allInnerTexts(),
-    ['Archive', 'Download', 'Delete for good'], `${tag}: the owner's menu`);
+  const menuNames = () => page.locator('#pg-view .pg-menu-list [role^=menuitem]').evaluateAll(els => els.map(el => (el.querySelector('.pg-mi-name') || el).textContent!.trim()));
+  assert.deepEqual(await menuNames(), ['Who can see it', 'Archive', 'Download', 'Delete for good'], `${tag}: the owner's menu`);
+  assert.equal(await page.locator('#pg-view [data-pg-act=access] .pg-mi-sub').innerText(), "Everyone who can see where it's filed");
   await page.locator('#pg-view .pg-menu summary').click();
+  // Keyboard: Enter on ⋯ opens the menu at its first item, the arrows walk it, Esc closes it and returns to ⋯.
+  await page.locator('#pg-view .pg-menu summary').focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.matches('#pg-view .pg-menu-list [data-pg-act=access]'), null, {timeout: t(5000)});
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Archive', `${tag}: the arrows move through the menu`);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#pg-view .pg-menu')!.hasAttribute('open')
+    && document.activeElement?.matches('#pg-view .pg-menu summary'), null, {timeout: t(5000)});
   assert.equal(await sideways(page), false);
   await shot(page, `${tag}-03-page`);
+
+  // Five versions (served here, as a bot would have published them): Version history and What's changed? in ⋯.
+  const html = (body: string, style = '') => `<!doctype html><html><head><style>${style}</style></head><body><h2>Engineering weekly</h2>${body}</body></html>`;
+  const bodies: Record<number, string> = {
+    1: html('<p>Shipped 9 changes.</p>'),
+    2: html('<p>Shipped 11 changes.</p><ul><li>Faster review</li></ul>'),
+    3: html('<p>Shipped 11 changes.</p><ul><li>Faster review</li></ul>', 'p{color:red}'),
+    4: html('<p>Shipped 12 changes.</p><ul><li>Faster review</li></ul><table><tr><td>Review</td><td>6h</td></tr></table>'),
+    5: html('<p>Shipped 14 changes.</p><ul><li>Faster review</li><li>Fewer reverts</li></ul><table><tr><td>Review</td><td>6h</td></tr></table>'),
+  };
+  const versions = [5, 4, 3, 2, 1].map(v => ({version: v, current: v === 5, actor: 'bot:engineering-manager', created_at: `2026-11-0${v}T10:00:00Z`}));
+  await page.route(url => new URL(url).pathname.endsWith('/api/v2/pages/' + weekly.file_id), async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({response, json: {...body, page: {...body.page, version: 5}}});
+  });
+  await page.route(url => new URL(url).pathname.endsWith(`/api/v2/files/${weekly.file_id}/versions`), route => route.fulfill({json: {versions}}));
+  await page.route(url => { const u = new URL(url); return u.pathname.endsWith('/api/v2/files/' + weekly.file_id) && u.searchParams.has('v'); },
+    route => route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="weekly.html"'},
+      body: bodies[Number(new URL(route.request().url()).searchParams.get('v'))] || ''}));
+  await go(page, '#/library/files');
+  await go(page, '#/page/' + weekly.file_id);
+  await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(10000)});
+  await page.locator('#pg-view .pg-menu summary').click();
+  await page.waitForFunction(() => document.querySelector('#pg-view [data-pg-act=history]'), null, {timeout: t(5000)});
+  assert.deepEqual(await menuNames(), ['Who can see it', "What's changed?", 'Version history', 'Archive', 'Download', 'Delete for good'], `${tag}: a paged page's menu`);
+  await page.locator('#pg-view [data-pg-act=history]').click();
+  assert.deepEqual(await menuNames(), ['Version history', 'v5 · latest', 'v4', 'v3', 'v2', 'v1'], `${tag}: every version, newest first`);
+  assert.equal(await page.locator('#pg-view [data-pg-v="3"] .pg-mi-sub').innerText(), 'Nov 3 · Engineering Lead', `${tag}: a version's date and publisher`);
+  await page.locator('#pg-view [data-pg-v="3"]').click();
+  await page.waitForFunction(() => document.querySelector('#pg-view .pg-head .pg-status')?.textContent === 'v3 · an older version · Latest', null, {timeout: t(5000)})
+    .catch(async () => assert.fail(`${tag}: v3's status line (${await status.innerText()})`));
+  await page.waitForFunction(() => /Shipped 11/.test(document.querySelector<HTMLIFrameElement>('#pg-view iframe.html-view')?.srcdoc || ''), null, {timeout: t(5000)});
+  // The oldest version has nothing to compare with: no What's changed?, Version history still there.
+  await page.locator('#pg-view .pg-menu summary').click();
+  await page.locator('#pg-view [data-pg-act=history]').click();
+  await page.locator('#pg-view [data-pg-v="1"]').click();
+  await page.waitForFunction(() => document.querySelector('#pg-view .pg-head .pg-status')?.textContent === 'v1 · an older version · Latest', null, {timeout: t(5000)});
+  assert.equal(await page.locator('#pg-view [data-pg-act=diff]').count(), 0, `${tag}: no What's changed? on the oldest version`);
+  assert.equal(await page.locator('#pg-view [data-pg-act=history]').count(), 1, `${tag}: Version history on the oldest version`);
+  await page.locator('#pg-view [data-pg-act=latest]').click();
+  await page.waitForFunction(() => /· v5/.test(document.querySelector('#pg-view .pg-head .pg-status')?.textContent || ''), null, {timeout: t(5000)});
+
+  // What's changed? on v5: v4 → v5, the removed line red with −, the added green with +; v2 → v5 on a pick; Esc closes.
+  await page.locator('#pg-view .pg-menu summary').click();
+  await page.locator('#pg-view [data-pg-act=diff]').click();
+  const diffLines = page.locator('#pg-view .pg-diff .tf-diff-lines');
+  await diffLines.waitFor({timeout: t(5000)});
+  assert.equal(await page.locator('#pg-view .pg-diff-from').inputValue(), '4');
+  assert.equal(await page.locator('#pg-view .pg-diff-to').innerText(), 'v5');
+  assert.deepEqual(await diffLines.locator('.del').allInnerTexts(), ['- Shipped 12 changes.'], `${tag}: the removed line`);
+  assert.deepEqual(await diffLines.locator('.add').allInnerTexts(), ['+ Shipped 14 changes.', '+ Fewer reverts'], `${tag}: the added lines, one per list item`);
+  assert.ok((await diffLines.locator('.ctx').allInnerTexts()).some(x => x.includes('Review | 6h')), `${tag}: a table row is one line`);
+  await shot(page, `${tag}-03b-diff`);
+  await page.locator('#pg-view .pg-diff-from').selectOption('2');
+  await page.waitForFunction(() => /Shipped 11 changes/.test(document.querySelector('#pg-view .pg-diff .del')?.textContent || ''), null, {timeout: t(5000)});
+  await page.keyboard.press('Escape');
+  await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(5000)});
+  assert.equal(await page.locator('#pg-view .pg-diff').count(), 0, `${tag}: Esc returns to the page`);
+  // A version that changed only its styles has no text changes; Close returns to the page.
+  await page.locator('#pg-view .pg-menu summary').click();
+  await page.locator('#pg-view [data-pg-act=history]').click();
+  await page.locator('#pg-view [data-pg-v="3"]').click();
+  await page.locator('#pg-view .pg-menu summary').click();
+  await page.locator('#pg-view [data-pg-act=diff]').click();
+  await page.locator('#pg-view .pg-diff-lines', {hasText: 'No text changes'}).waitFor({timeout: t(5000)});
+  await page.locator('#pg-view [data-pg-diff-close]').click();
+  await page.locator('#pg-view .pg-preview iframe.html-view').waitFor({timeout: t(5000)});
+  assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
+  await page.locator('#pg-view .pg-menu summary').click();
+  await shot(page, `${tag}-03c-menu`);
+  await page.keyboard.press('Escape');
+  await page.unrouteAll({behavior: 'wait'});
 
   // The older page says what replaced it and links there.
   await go(page, '#/page/' + old.file_id);
@@ -184,6 +281,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
     const priya = await open(browser, hub, 'priya', {phone, hash: '#/page/' + weekly.file_id});
     await priya.locator('#pg-view .pg-status').waitFor({timeout: t(5000)});
     await priya.locator('#pg-view .pg-menu summary').click();
+    // Neither Who can see it nor Archive for someone who cannot manage the page.
     assert.deepEqual(await priya.locator('#pg-view .pg-menu-list [role=menuitem]').allInnerTexts(), ['Download']);
     assert.deepEqual(priya.errors, []);
     await priya.context().close();

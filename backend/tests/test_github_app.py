@@ -1241,6 +1241,48 @@ def expire(api):
         c.execute("UPDATE github_user_token SET access_expires_at=?", ("2000-01-01T00:00:00.000Z",))
 
 
+def test_no_account_connects_the_signed_in_personal_account_without_asking_github_who_it_is(api, gh):
+    # Task #255: a blank account is a personal account. GitHub makes the App for whoever is signed in there, so Tico
+    # sends the person to the one personal address with no lookup, and keeps the login GitHub made the App for.
+    personal(gh, "octo-dev")
+    gh.account_down = True  # any lookup would fail: none is made
+    r = api.get("/api/v2/github/app/manifest", params={"administration": "false"}, headers=auth())
+    assert r.status_code == 200, r.text
+    asked = r.json()
+    assert asked["action"].startswith("https://github.com/settings/apps/new?state=")
+    assert asked["manifest"]["name"] == "Acme Tico"
+    assert asked["manifest"]["default_permissions"]["administration"] == "write"  # always asked for a personal account
+    assert not [call for call in gh.calls if call[1].startswith("/users/")]
+    blank = api.get("/api/v2/github/app/manifest", params={"org": " "}, headers=auth())
+    assert blank.status_code == 200 and blank.json()["action"].startswith("https://github.com/settings/apps/new?")
+    gh.account_down = False
+    back = api.get("/api/v2/github/app/callback", params={"code": "c", "state": asked["state"]}, headers=auth())
+    assert back.status_code == 302, back.text
+    status = api.get("/api/v2/github/app", headers=auth()).json()
+    assert status["org"] == "octo-dev" and status["account_type"] == "User"
+
+
+def test_a_personal_connect_whose_return_names_no_account_saves_no_app(api, gh):
+    # With no account typed, the conversion's owner is the only account there is: without it nothing is saved.
+    personal(gh, "octo-dev")
+    gh.conversion_owner = {}
+    state = api.get("/api/v2/github/app/manifest", headers=auth()).json()["state"]
+    api.get("/api/v2/github/app/callback", params={"code": "c", "state": state}, headers=auth())
+    assert api.get("/api/v2/github/app", headers=auth()).json()["connected"] is False
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM github_app").fetchone()[0] == 0
+
+
+def test_the_form_is_told_the_name_github_will_give_the_app_until_it_is_connected(api, gh):
+    assert api.get("/api/v2/github/app", headers=auth()).json() == {"connected": False, "app_name": "Acme Tico"}
+    api.app_state.store.settings.company_name = "Company"  # the team name was never set: no made-up name is offered
+    assert api.get("/api/v2/github/app", headers=auth()).json()["app_name"] == ""
+    api.app_state.store.settings.company_name = "Northwind Regional Logistics Cooperative"
+    named = api.get("/api/v2/github/app", headers=auth()).json()["app_name"]
+    assert named == api.get("/api/v2/github/app/manifest", headers=auth()).json()["manifest"]["name"]
+    assert len(named) == 34  # the form names the app GitHub is sent, not a longer one
+
+
 def test_a_personal_manifest_asks_for_the_authorization_callback_and_an_organization_does_not(api, gh):
     personal(gh, "ana-dev")
     body = manifest(api, org="ana-dev")["manifest"]

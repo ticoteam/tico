@@ -1191,7 +1191,79 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     target = next_stage(conn, row)
     if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
-    return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
+    H = _h()
+    try:
+        return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
+    except H.Refused as refused:
+        # Everything read as met and there was room, yet the move was refused: say why in the server log, or a task
+        # that never moves on leaves no trace (Nov 12: tasks sat in Build for hours with "Moving to Review 1").
+        log_refused_move(task_id, str(target["id"]), refused)
+        raise
+
+
+def log_refused_move(task_id: str, to: str, refused: Exception) -> None:
+    """The server log line for an automatic move the engine refused: its category (the refusal's rule), the task and
+    the stage it was going to, and the refusal's words with anything like a secret taken out, cut to 300 characters."""
+    from . import run_diagnostics
+
+    diagnostics: Any = run_diagnostics  # untyped module
+    rule = str(getattr(refused, "rule", type(refused).__name__))
+    detail = str(diagnostics.scrub(getattr(refused, "detail", "") or str(refused)))[:300]
+    LOG.warning("automatic move refused: category=%s task=%s to=%s detail=%s", rule, task_id, to, detail)
+
+
+def own_snooze(row: Row) -> bool:
+    """The task's snooze is one its owner bot set on its own task: how it waits for something (its PR's checks)."""
+    snooze: Row = row.get("snooze") or {}
+    owner = row.get("owner_id")
+    return bool(snooze) and snooze.get("by_id") == owner and is_bot(owner)
+
+
+def ready_but_snoozed(conn: "sqlite3.Connection", row: Row) -> bool:
+    """Whether the task, its snooze aside, has everything met and only waits for a slot in the next stage
+    (`waiting_on.all_met`): "Moving to Review 1" or "No room in Review 1"."""
+    from . import waiting_on as W
+
+    if row.get("status") != "open" or row["stage"].get("by_hand"):
+        return False
+    return W.all_met(W.of(conn, {**row, "snooze": None}))
+
+
+def move_on_past_own_snooze(conn: "sqlite3.Connection", task_id: str, why: str, hops: int = 20) -> bool:
+    """A snooze the owner bot set on its own task, now that everything the stage asks is met and the next stage has
+    room: the snooze was how the bot waited for that (its checks), so it ends, as SYSTEM, and the task moves on (and
+    through stages that need nothing, up to `hops`). Nothing changes when the move is refused or there is no room: the
+    snooze stays and the refusal is in the server log. True when it moved. *Nov 12: Tico Team's Build tasks sat for
+    hours, snoozed "until checks pass", with their checks passed and Review 1 unlimited.*"""
+    row = task(conn, task_id)
+    if not row or not own_snooze(row) or not ready_but_snoozed(conn, row):
+        return False
+    target = next_stage(conn, row)
+    if not target or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
+        return False
+    H = _h()
+    conn.execute("SAVEPOINT move_on_past_own_snooze")
+    try:
+        unsnooze(conn, task_id, SYSTEM, why)
+        moved = advance(conn, task_id) is not None
+    except H.Refused:  # logged by `advance`
+        moved = False
+    if not moved:
+        conn.execute("ROLLBACK TO move_on_past_own_snooze")  # the snooze stays as it was
+    conn.execute("RELEASE move_on_past_own_snooze")
+    if not moved:
+        return False
+    for _ in range(hops):  # stages that need nothing are passed in the same step, as the never-stuck check does
+        conn.execute("SAVEPOINT move_on_hop")
+        try:
+            hopped = advance(conn, task_id) is not None
+        except H.Refused:
+            conn.execute("ROLLBACK TO move_on_hop")
+            hopped = False
+        conn.execute("RELEASE move_on_hop")
+        if not hopped:
+            break
+    return True
 
 
 def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
