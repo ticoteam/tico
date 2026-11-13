@@ -460,7 +460,7 @@ def register(
                 """A task by its id or number (the number through its unique index). A page or file by its id (pages
                 are files), not archived, not a deleted page, and at the version it pins when it pins one."""
                 if kind == "task":
-                    number = int(ident) if ident.isdigit() else None
+                    number = int(ident) if ident.isdigit() and int(ident) < 2**63 else None
                     return (
                         c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
                     )

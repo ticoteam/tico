@@ -106,6 +106,8 @@ def test_one_refusal_names_every_part_an_ask_is_missing(ruled):
         "file:/etc/passwd",
         "page:file-not-there",
         "task:no-such-task",
+        "task:9223372036854775808",
+        "task:99999999999999999999999",
     ],
 )
 def test_a_question_that_shows_what_a_person_cannot_open_is_refused(ruled, ref):
