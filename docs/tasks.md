@@ -111,9 +111,9 @@ Done and Closed tasks are behind the archive button on the Tasks page. Nothing c
 ## When a bot stops early
 
 A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, or closed.
-Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and
-50 minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in Needs you, with Try again, Reassign, Move back,
-Close and Snooze. Any change to the task starts the count again. See
+Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
+minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in
+Needs you, with Try again, Reassign, Move back, Close and Snooze. Any change to the task starts the count again. See
 [The never-stuck check](pipelines-v3.md#the-never-stuck-check).
 
 A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/{id}/try-again`).
