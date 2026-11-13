@@ -47,14 +47,14 @@ interface GrState { load: number; sub: string; month: string; data: GrSourcesDat
 // The card data the Growth cards read (backend/cards.py growth_*). A Card's data is unknown per template, so each card's
 // reader casts it once to the shape written down here.
 type GrSeriesPoint = { month: string; value: number | null };
-type GrNumberData = { label?: string; channel_name?: string; value: number | null; prev: number | null; format: string; good: string | null; month: string; from?: string | null; series?: GrSeriesPoint[] };
+type GrNumberData = { label?: string; channel_name?: string; value: number | null; prev: number | null; format: string; good: string | null; month: string; from?: string | null; origin?: string | null; series?: GrSeriesPoint[] };
 type GrNorthStar = { id: string; name: string; value: number | null; unit: string; prev: number | null; target: number | null };
 type GrFunnelStage = { stage: string; label: string; kpi: string | null; name: string | null; value: number | null; unit: string; prev: number | null; conv: number | null; series?: GrValue[]; north_star?: boolean };
 type GrFunnelData = { stages: GrFunnelStage[]; north_star?: GrNorthStar | null };
 type GrTask = { id: string; title: string; stage: string };
-type GrChannelRow = { slug: string; name: string; new_customers: number | null; cac: number | null; ltv_cac: number | null; ltv_from?: string | null; series?: GrValue[]; tasks?: GrTask[]; more?: number | null };
+type GrChannelRow = { slug: string; name: string; new_customers: number | null; cac: number | null; ltv_cac: number | null; ltv_from?: string | null; origin?: Record<string, string | null>; series?: GrValue[]; tasks?: GrTask[]; more?: number | null };
 type GrChannelsData = { rows: GrChannelRow[] };
-type GrRetentionData = { columns: string[]; rows: Array<{ month: string; new_customers: number | null; kept: Array<number | null> }> };
+type GrRetentionData = { columns: string[]; rows: Array<{ month: string; new_customers: number | null; kept: Array<number | null> }>; computed?: GrxView };
 type GrBoardCard = { id: string; title?: string | null; channel?: string | null; owner_id?: string | null };
 type GrBoardData = { lanes: Array<{ stage: string; label: string; count: number; cards: GrBoardCard[] }> };
 // A KPI as the Goals views hand it over: its latest reading and unit.
@@ -285,13 +285,15 @@ DASH_HEADING.growth_number = card => {
 Object.assign(DASH_EMPTY, {growth_number: 'No numbers yet', growth_funnel: 'No KPIs yet', growth_channels: 'No channels yet',
   growth_retention: 'No retention yet', growth_board: 'No open marketing tasks'});
 
+// Whether a figure came from customer facts or was typed (backend/growth_numbers.py origins).
+const GR_ORIGIN: Record<string, string> = {computed: 'Computed', typed: 'Typed', mixed: 'Computed and typed'};
 // A Number: the picked month's value with its change from the month before and its trend; a value carried back from
-// an earlier month (retention, LTV) says which.
+// an earlier month (retention, LTV) says which, and every value says computed or typed.
 function grNumberCard(d: GrNumberData) {
   if (d.value == null) return `<p class="muted dash-none">None for ${esc(grMonth(d.month))}</p>`;
   const series = d.series || [], at = d.from ? series.findIndex(p => p.month === d.from) : series.length - 1;
   return `<div class="grc-num"><span class="grc-num-v">${esc(grFmt(d.format, d.value))}</span>${grSpark(series.map(p => p.value), at, {w: 72, h: 22})}</div>
-    <div class="grc-num-d">${grDelta(d.value, d.prev, {good: d.good, points: d.format === 'pct'})}${d.from ? `<span class="muted">${esc(grMonthShort(d.from))}</span>` : ''}</div>`;
+    <div class="grc-num-d">${grDelta(d.value, d.prev, {good: d.good, points: d.format === 'pct'})}${d.from ? `<span class="muted">${esc(grMonthShort(d.from))}</span>` : ''}${d.origin ? `<span class="muted grc-origin">${esc(GR_ORIGIN[d.origin] || d.origin)}</span>` : ''}</div>`;
 }
 // The Funnel: Reach to Refer, each stage's KPI with its share of the stage before; the North Star marked, and Refer
 // feeding Reach again.
@@ -311,16 +313,23 @@ function grFunnelCard(d: GrFunnelData) {
 function grChannelsCard(d: GrChannelsData) {
   const chip = (t: GrTask) => `<a class="grc-chip" href="${grTaskHref(t.id)}" title="${esc(grStageWord(t.stage))}: ${esc(t.title)}"><i class="grc-sq" data-stage="${esc(t.stage)}" aria-hidden="true"></i><span class="sr-only">${esc(grStageWord(t.stage))}: </span><span class="grc-chip-t">${esc(t.title)}</span></a>`;
   // data-k labels a number when a narrow card stacks the rows and drops the table's head.
-  const num = (k: string, v: number | null | undefined, fmt: (v: number) => string, from: string | null | undefined = '') => `<td class="grc-n${v == null ? ' muted' : from ? ' grc-old' : ''}" data-k="${k}"${from ? ` title="${esc(grMonth(from))}"` : ''}>${v == null ? '—' : esc(fmt(v))}</td>`;
-  const row = (r: GrChannelRow) => `<tr data-channel="${esc(r.slug)}"><th scope="row">${esc(r.name)}</th>${num('New', r.new_customers, v => grX(v, 0))}${num('CAC', r.cac, grUsd)}${num('LTV:CAC', r.ltv_cac, grRatio, r.ltv_from)}
+  // A computed figure is dotted, and each says computed or typed on hover.
+  const num = (k: string, v: number | null | undefined, fmt: (v: number) => string, from: string | null | undefined = '', origin: string | null | undefined = null) => {
+    const title = [from ? grMonth(from) : '', v != null && origin ? (origin === 'computed' ? 'Computed from customers' : 'Typed') : ''].filter(Boolean).join(' · ');
+    return `<td class="grc-n${v == null ? ' muted' : from ? ' grc-old' : ''}${v != null && origin === 'computed' ? ' grc-comp' : ''}" data-k="${k}"${v != null && origin ? ` data-origin="${esc(origin)}"` : ''}${title ? ` title="${esc(title)}"` : ''}>${v == null ? '—' : esc(fmt(v))}</td>`;
+  };
+  const row = (r: GrChannelRow) => `<tr data-channel="${esc(r.slug)}"><th scope="row">${esc(r.name)}</th>${num('New', r.new_customers, v => grX(v, 0), '', r.origin?.new_customers)}${num('CAC', r.cac, grUsd, '', r.origin?.cac)}${num('LTV:CAC', r.ltv_cac, grRatio, r.ltv_from, r.origin?.ltv_cac)}
     <td class="grc-sp">${grSpark(r.series || [], -1, {w: 72, h: 20})}</td>
     <td class="grc-tasks">${(r.tasks || []).map(chip).join('')}${r.more ? grBoardLink('grc-more', `+${r.more} more`, r.slug) : ''}</td></tr>`;
   return `<div class="grc-ch"><table class="grc-table"><thead><tr><th scope="col">Channel</th><th scope="col" class="grc-n">New</th><th scope="col" class="grc-n">CAC</th>
     <th scope="col" class="grc-n">LTV:CAC</th><th scope="col" class="grc-sp">6 mo</th><th scope="col" class="grc-tasks">Working on</th></tr></thead>
-    <tbody>${d.rows.map(row).join('')}</tbody></table></div>`;
+    <tbody>${d.rows.map(row).join('')}</tbody></table>${d.rows.some(r => Object.values(r.origin || {}).includes('computed'))
+    ? '<p class="grc-foot muted"><span class="grc-comp">Dotted</span> figures are computed from customers; the rest are typed.</p>' : ''}</div>`;
 }
-// Retention: each month's new customers and the share still with us at 30, 90 and 180 days, shaded by that share.
+// Retention: each month's new customers and the share still with us at 30, 90 and 180 days, shaded by that share. With
+// customer facts, the picked month's computed cohorts instead (growth-retention.ts).
 function grRetentionCard(d: GrRetentionData) {
+  if (d.computed) return grxCard(d.computed);
   const cell = (v: number | null | undefined) => v == null ? '<td class="grc-k grc-k-none"></td>'
     : `<td class="grc-k" style="--k:${Math.max(0, Math.min(100, Math.round(Number(v))))}">${esc(grPct(v))}</td>`;
   return `<div class="grc-ret"><table class="grc-table grc-ret-t"><thead><tr><th scope="col">Joined</th><th scope="col" class="grc-n">New</th>${d.columns.map(c => `<th scope="col" class="grc-k-h">${esc(c)}</th>`).join('')}</tr></thead>

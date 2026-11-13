@@ -71,6 +71,27 @@ const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
     {stage: 'scaling', label: 'Scaling', count: 1, cards: [{id: 't1', title: 'Search: long-tail landing pages', channel: 'Search', owner_id: 'human:ana'}]},
     {stage: 'idea', label: 'Idea', count: 0, cards: []}]}),
 };
+// Computed retention (backend/growth_computed.py): September 2026 cut by channel, segment or plan, monthly or weekly.
+// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status].
+const fig = (value: number | null, status = 'ok', more: Record<string, unknown> = {}) => ({value: status === 'ok' ? value : null, status, origin: 'computed', ...more});
+const KEYS = {still: ['cus_1042', 'cus_1047'], churned: [{key: 'cus_1044', churned: '2026-09-19'}]};
+function cohortOf(by: string, grain: string, value: string | null, n: number, kept: number, period = '2026-09', start = '2026-09-01', end = '2026-09-30') {
+  const few = n < 30;
+  return {cut: by, value, grain, period, start, end, computed_from: n, too_few: few, new_customers: fig(n),
+    kept_d30: fig(Math.round(kept * 1000 / n) / 10, few ? 'too_few' : 'ok', {count: kept, denominator: n, fills_on: '2026-10-30'}),
+    kept_d90: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2026-12-29'}), kept_d180: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2027-03-29'}),
+    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? fig(null, 'spend_monthly') : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
+}
+function computedView(by: string, grain: string, keys: boolean, customers: boolean) {
+  const cohorts = grain === 'week' ? [cohortOf(by, grain, 'search', 31, 25, '2026-09-28', '2026-09-28', '2026-10-04'), cohortOf(by, grain, 'search', 33, 27, '2026-09-21', '2026-09-21', '2026-09-27')]
+    : by === 'segment' ? [cohortOf(by, grain, 'agency', 64, 52), cohortOf(by, grain, 'studio', 41, 27), cohortOf(by, grain, 'solo', 19, 12)]
+    : by === 'plan' ? [cohortOf(by, grain, 'pro', 71, 56), cohortOf(by, grain, null, 53, 37)]
+    : [cohortOf(by, grain, 'search', 64, 52), cohortOf(by, grain, 'unknown', 19, 12)];
+  if (customers) for (const c of cohorts) Object.assign(c.kept_d30, {rule: `became customer ${c.start} to ${c.end}, ${by} ${c.value}, still paying on day 30`}, keys ? {customers: KEYS} : {});
+  return {by, grain, month: '2026-09', as_of: '2026-11-13', min_cohort: 30, computed_from: 124, cohorts, keys_visible: keys && customers,
+    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'spend is monthly' : null,
+    loads: [{source: 'upload', customers: 124, removed: 0, loaded_by: 'human:ana', loaded_at: '2026-11-13T06:00:00'}]};
+}
 const NAMES: Record<string, string> = {growth_number: 'Number', growth_funnel: 'Funnel', growth_channels: 'Channels', growth_retention: 'Retention', growth_board: 'Growth board', kpi: 'KPI'};
 const FIELDS: Record<string, string[]> = {growth_number: ['metric', 'channel'], growth_funnel: [], growth_channels: ['count'], growth_retention: ['months'], growth_board: ['count'], kpi: ['kpi']};
 const CHOICES = {templates: Object.entries(NAMES).map(([id, name]) => ({id, name, fields: FIELDS[id]})), teams: [], kpis: [{id: 'k2', name: 'Activated'}], pages: [],
@@ -79,12 +100,14 @@ const DEFAULTS: [string, string, CardSettings][] = [['growth_funnel', 'large', {
   ['growth_number', 'small', {metric: 'kept_d30'}], ['growth_channels', 'large', {count: 10}], ['growth_retention', 'medium', {months: 6}],
   ['growth_board', 'medium', {count: 3}]];
 
-function server(me: Person, pipelines: unknown[] = PIPELINES) {
+function server(me: Person, pipelines: unknown[] = PIPELINES, computed = false) {
   let n = 0, saved = false;
+  const keys = me.company_role !== 'member';
   let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
   const reads: unknown[] = [], writes: Write[] = [];
   const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: false,
-    data: DATA[c.template]!(c.settings, month)});
+    data: computed && c.template === 'growth_retention' ? {...(DATA[c.template]!(c.settings, month) as object), computed: computedView('channel', 'month', keys, false)}
+      : DATA[c.template]!(c.settings, month)});
   const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
     pins: pins.map(p => ({...p, card: draw(p.card, month)}))});
   const save = () => {
@@ -116,6 +139,15 @@ function server(me: Person, pipelines: unknown[] = PIPELINES) {
         card: {id: cid, template: body.template, settings: body.settings, title: body.title}});
       return [200, {card: draw(pins.at(-1)!.card, MONTHS.at(-1)!), pin: 'p' + n}];
     }
+    if (p === '/api/v2/growth/computed') {
+      reads.push(query.toString());
+      return [200, computedView(query.get('by') || 'channel', query.get('week') ? 'week' : query.get('grain') || 'month', keys, query.get('customers') === 'true')];
+    }
+    if (p === '/api/v2/growth/customers' && method === 'POST') {
+      const header = String((body as unknown as {csv?: string}).csv || '').split('\n')[0]!;
+      if (/email/.test(header)) return [422, {error: {code: 'customer_facts', detail: 'Nothing loaded. Growth keeps only: customer key, signed up, became customer, channel, segment, plan, churned, revenue per month. Remove these columns and load again: email, name.', rule: 'columns'}}];
+      return [200, {customers: 2, removed: 0, unknown_channel: 1}];
+    }
     if (p === '/api/v2/growth/settings') return [200, {unit: 'customers', revenue_month: 49, margin_pct: 80}];
     if (p === '/api/v2/growth/channels') return [200, {channels: CHANNELS.map(c => ({...c, stage: 'testing', owner_ref: 'human:ana', track: 'performance'})), may_edit: true}];
     if (p === '/api/v2/growth/cohorts') return [200, {cohorts: MONTHS.map((month, i) => ({channel: query.get('channel'), month, new_customers: SERIES.new_customers![i],
@@ -124,9 +156,9 @@ function server(me: Person, pipelines: unknown[] = PIPELINES) {
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[]} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], computed = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors: string[] = [], fake = server(me, pipelines);
+  const errors: string[] = [], fake = server(me, pipelines, computed);
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
   const config = {company_name: 'Acme'};
@@ -404,6 +436,90 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Growth cards: head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes');
+    {
+      // Computed retention: the card cuts by channel, segment or plan, monthly or weekly; "not yet" says when it fills; a
+      // cohort under the minimum shows counts; the foot says how many customers, when and from where; CAC says why not.
+      const {page, errors, fake} = await open(browser, {computed: true});
+      const card = page.locator('#dash-grid [data-grx]');
+      await card.locator('table').waitFor();
+      const rowsOf = () => card.locator('tbody tr:not(.grx-wk)').evaluateAll(els => els.map(el => [...el.children].map(c => (c as HTMLElement).innerText.trim())));
+      assert.deepEqual(await rowsOf(), [['Search', '64', '81%', 'not yet · 29 Dec', 'not yet · 29 Mar', '$540', '$45'], ['Unknown', '19', '12 of 19', 'not yet · 29 Dec', 'not yet · 29 Mar', 'too few', '—']]);
+      assert.match(await card.locator('.grx-foot').innerText(), /Computed from 124 customers · loaded 13 Nov 06:00 from an upload in Growth\./);
+      assert.match(await card.locator('.grx-foot').innerText(), /Under 30 customers a cohort shows counts only: too few for a rate\./);
+      assert.ok(await contrast(card.locator('td.grc-k').first()) >= 4.5, 'a computed share reads at 4.5:1');
+      await card.locator('[data-gr-seg="grx-by"] button[data-v="segment"]').click();
+      await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] thead th')?.textContent === 'Segment');
+      assert.deepEqual((await rowsOf()).map(r => [r[0], r[2], r[5], r[6]]), [['agency', '81%', '$612', 'not split'], ['studio', '66%', '$612', 'not split'], ['solo', '12 of 19', 'too few', 'not split']]);
+      assert.match(await card.locator('.grx-foot').innerText(), /CAC is per channel: spend is not split by segment\./);
+      await card.locator('[data-gr-seg="grx-by"] button[data-v="plan"]').click();
+      await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] thead th')?.textContent === 'Plan');
+      assert.deepEqual((await rowsOf()).map(r => r[0]), ['pro', 'No plan']);
+      await card.locator('[data-gr-seg="grx-by"] button[data-v="channel"]').click();
+      await card.locator('[data-gr-seg="grx-grain"] button[data-v="week"]').click();
+      await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] tr.grx-wk'));
+      assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of 28 Sep', 'Week of 21 Sep']);
+      assert.match(await card.locator('.grx-foot').innerText(), /Weekly CAC needs daily spend: spend is monthly\./);
+      assert.ok(fake.reads.includes('by=channel&grain=week&month=2026-09'), 'the weekly read asks for the month');
+      await shot(page, 'desktop-growth-computed');
+      // A figure opens its customers: the rule, still customers and churned with the date, counts matching the figure.
+      await card.locator('[data-gr-seg="grx-grain"] button[data-v="month"]').click();
+      await page.waitForFunction(() => !document.querySelector('#dash-grid [data-grx] tr.grx-wk') && document.querySelector('#dash-grid [data-grx] table'));
+      await card.locator('button.grx-open').first().click();
+      const dlg = page.locator('dialog.grx-dlg');
+      await dlg.waitFor();
+      assert.equal(await dlg.getAttribute('aria-label'), 'Search · Sep 2026 · day 30: 81% (52 of 64)');
+      assert.match(await dlg.innerText(), /Became customer 2026-09-01 to 2026-09-30, channel search, still paying on day 30\./);
+      assert.match(await dlg.innerText(), /Still customers \(52\)[\s\S]*cus_1042[\s\S]*Churned by day 30 \(12\)[\s\S]*cus_1044\s+19 Sep/i);
+      assert.ok(fake.reads.includes('by=channel&customers=true&month=2026-09'), 'the trace reads one period');
+      await shot(page, 'desktop-growth-trace');
+      await dlg.locator('[data-close]').first().click();
+      // Upload: a column outside the list loads nothing and names the columns; a good file says how many loaded.
+      await card.locator('[data-grx-upload]').click();
+      const up = page.locator('dialog.grx-dlg');
+      assert.match(await up.innerText(), /may tokenise keys/);
+      await up.locator('input[type=file]').setInputFiles({name: 'customers.csv', mimeType: 'text/csv', buffer: Buffer.from('customer_key,became_customer,channel,email,name\ncus_1,2026-09-01,search,a@b.example,Ann\n')});
+      await up.locator('button[type=submit]').click();
+      const refused = up.locator('[data-grx-refused]');
+      await refused.waitFor();
+      assert.match(await refused.innerText(), /^Nothing loaded\s+Growth keeps only: [\s\S]*Remove these columns and load again: email, name\.$/);
+      await shot(page, 'desktop-growth-refused');
+      await up.locator('input[type=file]').setInputFiles({name: 'customers.csv', mimeType: 'text/csv', buffer: Buffer.from('customer_key,became_customer,channel\ncus_1,2026-09-01,search\n')});
+      await up.locator('button[type=submit]').click();
+      await up.waitFor({state: 'detached'});
+      assert.equal(fake.writes.filter(w => w[1] === '/api/v2/growth/customers').length, 2);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A member opens a figure to its counts and rule, no keys; uploads nothing.
+      const {page, errors} = await open(browser, {computed: true, me: MEMBER});
+      const card = page.locator('#dash-grid [data-grx]');
+      await card.locator('table').waitFor();
+      assert.equal(await card.locator('[data-grx-upload]').count(), 0, 'no upload for a member');
+      await card.locator('button.grx-open').first().click();
+      const dlg = page.locator('dialog.grx-dlg');
+      await dlg.waitFor();
+      assert.match(await dlg.innerText(), /Still customers: 52\. Churned by day 30: 12\./);
+      assert.doesNotMatch(await dlg.innerText(), /cus_/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const theme of ['dark', 'light']) {
+      // Computed retention on a phone: nothing past the screen's edge but the table's own scroll, shares readable.
+      const {page, errors} = await open(browser, {viewport: PHONE, theme, computed: true});
+      const card = page.locator('#dash-grid [data-grx]');
+      await card.locator('table').waitFor();
+      assert.equal(await sideways(page), false, 'no sideways scroll');
+      for (const b of await card.locator('.grx-bar button').all()) {
+        const box = (await b.boundingBox())!;
+        assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width + 1 && box.height >= 24, 'the switches fit and can be tapped');
+      }
+      assert.ok(await contrast(card.locator('td.grc-k').first()) >= 4.5, `a computed share reads at 4.5:1 (${theme})`);
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, `phone-growth-computed-${theme}`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('Growth cards: computed retention (cut, grain, not yet, too few, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

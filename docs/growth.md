@@ -88,8 +88,8 @@ A team that knows its customers can load them instead of typing retention. Growt
 retention, LTV, CAC and payback itself, cut by channel, segment or plan, monthly or weekly, and each figure opens to the
 customers behind it.
 
-**Customer facts.** One row per customer, as a CSV (`tico growth customers load customers.csv`). Growth keeps only these
-columns:
+**Customer facts.** One row per customer, as a CSV: **Upload customers** in Growth's Settings or on the Retention card,
+or `tico growth customers load customers.csv`. Growth keeps only these columns:
 
 | Column | Required | What it holds |
 | --- | --- | --- |
@@ -133,11 +133,19 @@ Figures are worked out when they are read, so a load shows at once and day 90 an
 nobody typing. A two-week test shows its new customers and CAC by week; its day-30 retention appears 30 days after its
 last week ends.
 
+**On the Growth page.** With customer facts, the Retention card shows the picked month's cohorts. **Cut by** chooses
+channel, segment or plan, and **Weekly / Monthly** the grain; a month shows every whole week that touches it. Each row has
+its new customers, day 30, 90 and 180, LTV and CAC; the foot says how many customers the figures come from and when and
+where they were loaded. The month picker lists the months with customer facts too. Each Number card says whether its
+figure is computed, typed, or both (every channel together, some of each), and the Channels table dots its computed
+figures.
+
 **Computed beside typed.** A channel's month with customer facts shows the computed figures, each marked computed and
 with the number of customers it comes from. A typed estimate for the same month is replaced. A typed actual that differs
 is kept beside it. Channels and months with no customer facts read exactly as before. Every figure says which it is.
 
-**The customers behind a figure.** `--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
+**The customers behind a figure.** On the Retention card, a day's figure opens to its customers. In the CLI,
+`--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
 search-ads, still paying on day 30") and the customer keys, split into still customers and churned with the date. Anyone
 who reads Growth sees the counts and the rule; the keys and churn dates show only to the owner, admins and the people or
 bots they name (`--set key_readers=growth-product-owner`).

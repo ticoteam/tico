@@ -754,6 +754,7 @@ def growth_number(ctx, s):
     if s.get("channel"):
         rows = next((ch["series"] for ch in nums["channels"] if ch["slug"] == s["channel"]), [])
     by = {r["month"]: r.get(metric) for r in rows}
+    origin = {r["month"]: (r.get("origin") or {}).get(metric) for r in rows}
     cal = months_between(nums["months"][0], ctx.month)
     values = [by.get(m) for m in cal]
     fig = figure(values, cal, ctx.month, carry)
@@ -769,6 +770,8 @@ def growth_number(ctx, s):
         "value": fig["value"],
         "prev": fig["prev"],
         "from": fig["from"],
+        # computed (from customer facts), typed, or mixed (every channel together, some of each)
+        "origin": origin.get(fig["from"] or ctx.month) if fig["value"] is not None else None,
         "series": [{"month": m, "value": v} for m, v in zip(cal, values, strict=True)],
     }
 
@@ -896,6 +899,7 @@ def growth_channels(ctx, s):
         here = by.get(month, {})
         ltv = figure([by.get(m, {}).get("ltv_cac") for m in cal], cal, month, True)
         mine = tasks.get(ch["slug"], [])
+        origin = here.get("origin") or {}
         rows.append(
             {
                 "slug": ch["slug"],
@@ -904,6 +908,12 @@ def growth_channels(ctx, s):
                 "cac": here.get("cac"),
                 "ltv_cac": ltv["value"],
                 "ltv_from": ltv["from"],
+                # each figure computed from customer facts or typed (growth_numbers.origins)
+                "origin": {
+                    "new_customers": origin.get("new_customers"),
+                    "cac": origin.get("cac"),
+                    "ltv_cac": (by.get(ltv["from"] or month, {}).get("origin") or {}).get("ltv_cac"),
+                },
                 "series": [by.get(m, {}).get("new_customers") for m in cal[-6:]],
                 "tasks": mine[:3],
                 "more": max(0, len(mine) - 3),
@@ -913,15 +923,23 @@ def growth_channels(ctx, s):
 
 
 def growth_retention(ctx, s):
-    """Each of the newest cohort months' share kept at 30, 90 and 180 days, the newest last."""
+    """Each of the newest cohort months' share kept at 30, 90 and 180 days, the newest last. With customer facts, also
+    `computed`: the picked month's cohorts by channel, monthly (growth_computed.computed, no keys), which the web's Cut
+    by and Weekly / Monthly switches read again from GET /api/v2/growth/computed."""
+    from . import growth_computed as GX
+
     nums = ctx.growth(s["months"])
     kept = ("kept_d30", "kept_d90", "kept_d180")
     rows = [
         {"month": r["month"], "new_customers": r["new_customers"], "kept": [r[k] for k in kept]} for r in nums["series"]
     ]
-    if not any(v is not None for row in rows for v in row["kept"]):
+    computed = GX.computed(ctx.c, ctx.auth, ctx.who, month=ctx.month) if GX.has_facts(ctx.c) else None
+    if computed is None and not any(v is not None for row in rows for v in row["kept"]):
         return None
-    return {"columns": ["30 days", "90 days", "180 days"], "rows": rows}
+    out = {"columns": ["30 days", "90 days", "180 days"], "rows": rows}
+    if computed is not None:
+        out["computed"] = computed
+    return out
 
 
 def growth_board(ctx, s):

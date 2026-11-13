@@ -166,6 +166,21 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grc-ret-t td.grc-k,.grc-ret-t th.grc-k-h{text-align:center;white-space:nowrap}
 .grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--grr-ink);background:color-mix(in srgb,var(--grr-hi) calc(var(--k,0) * 1%),var(--grr-lo))}
 .grc-ret-t td.grc-k-none{background:var(--surface2)}
+/* computed retention (growth-retention.ts): Cut by and Weekly / Monthly over the cohorts; a figure opens its customers */
+.grx{display:flex;flex-direction:column;gap:8px}
+.grx-bar{display:flex;flex-wrap:wrap;gap:6px 10px}
+.grx-t td.grx-not,.grx-t td.grx-few{text-align:center;white-space:nowrap;font-size:var(--t-sm)}
+.grx-t tr.grx-wk th{padding-top:8px;font-size:var(--t-xs);color:var(--muted);font-weight:600;text-align:left}
+.grx-open{all:unset;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;border-radius:3px}
+.grx-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grx-foot,.grc-foot{margin:0;font-size:var(--t-xs);line-height:1.4}
+.grx-up{align-self:flex-start}
+.grc-comp{text-decoration:underline dotted;text-underline-offset:3px}
+.grc-origin{font-size:var(--t-xs)}
+.grx-rule{margin:0 0 8px}
+.grx-keys{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 12px;max-height:220px;overflow-y:auto;font-size:var(--t-sm)}
+.grx-keys code{overflow-wrap:anywhere}
+.grx-refused{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:6px;background:var(--surface2);border-left:3px solid var(--fail)}
 
 /* the Growth board: a lane per stage, its newest tasks */
 .grc-board{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
