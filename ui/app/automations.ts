@@ -232,9 +232,10 @@ function auShell() {
   auHave(AU);
   const lst = !!AU.lst;
   $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
-    <header class="au-ph"><div class="au-hrow"><h1>${lst ? 'Listening' : 'Automations'}</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span>
-      <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary add-ctl au-new" type="button" ${lst ? 'aria-label="New listening"' : 'aria-label="New automation" aria-haspopup="menu" aria-expanded="false"'}>${TL_ICON.plus}</button>
-      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>${lst ? '<span class="au-chat"></span>' : ''}</div></header>
+    ${pageHead({title: lst ? 'Listening' : 'Automations', hook: 'au-ph', pad: true,
+      tools: `<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>${lst ? '<span class="au-chat"></span>' : ''}`,
+      primary: `<span class="au-newbox"><button class="primary ph-go au-new" type="button"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}>${lst ? 'New listening' : 'New automation'}</button>`
+        + `<div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>`})}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="${lst ? 'Search listening' : 'Search automations'}"></div>
@@ -242,8 +243,8 @@ function auShell() {
       </aside>
       <section class="au-c" aria-live="polite">
         <div class="au-ov"><div class="au-ctl"><div class="au-tabs" role="tablist" aria-label="View">
-          <button type="button" role="tab" data-tab="list" aria-selected="true">Automations</button>
-          <button type="button" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><span class="au-sels"></span></div><div class="au-tbl"></div></div>
+          <button type="button" class="ph-tab" role="tab" data-tab="list" aria-selected="true">Automations</button>
+          <button type="button" class="ph-tab" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><div class="au-seg au-range ph-seg" role="group" aria-label="Time range"></div><span class="au-sels"></span></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
       ${lst ? '<aside class="au-pgc" hidden></aside>' : ''}
@@ -408,7 +409,7 @@ function auDrawHead() {
         : `<span class="au-chip"><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</span>`}
       <button class="au-help" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>`}
       <span class="au-sp au-sp-phone"></span>
-      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+      <div class="au-seg ph-seg" role="tablist" aria-label="View">${seg}</div>
     </div>
     <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>
     <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>

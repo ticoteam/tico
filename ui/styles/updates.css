@@ -1,14 +1,9 @@
 /* ui/styles/updates.css — Updates feed.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* updates feed: friendly, dense, fast; one column, like a feed */
-.upd-page{max-width:720px;margin:0 auto}
-.upd-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.upd-head h1{font-size:var(--t-lg);margin-right:4px}
-.upd-seg{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px}
-.upd-seg button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
-.upd-seg .nav-icon,.upd-chip .nav-icon{display:none;font-size:20px;width:20px;height:20px;color:inherit}
+.upd-page{max-width:720px;margin:0}
+.upd-chip .nav-icon{display:none;font-size:20px;width:20px;height:20px;color:inherit}
 .upd-chip{display:inline-flex;align-items:center;gap:6px}
-.upd-seg button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .upd-chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--muted)}
 .upd-chip[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .upd-allread{font-size:var(--t-base)}
@@ -100,10 +95,10 @@
 .bot-history-item .upd-meta{font-size:var(--t-sm)}
 @media (prefers-reduced-motion:reduce){.upd-deck-dot::after{transition:none}}
 @media (max-width:760px){:root{--upd-pad:12px;--upd-pad-y:12px}.upd-card{border-radius:12px}.upd-slide{padding:12px 12px 4px;min-height:150px}
-  .upd-deck-btn{display:none}.upd-slide ul.upd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.upd-head h1{font-size:var(--t-lg)}.upd-allread{display:none}
-  /* Day, week, unread and my bots are icons on a phone, on one row with the title at 390px */
-  .upd-seg .nav-icon,.upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
-  .upd-head{gap:6px}.upd-seg button{padding:6px 10px}.upd-chip{padding:6px 8px}}
+  .upd-deck-btn{display:none}.upd-slide ul.upd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.upd-allread{display:none}
+  /* Whole org, my bots and list are icons on a phone, on the header's tools row */
+  .upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
+  .upd-chip{padding:6px 8px}}
 /* Updates nested by the org chart: each report's card hangs under its manager's, opened by the "8 v" toggle at the
    right of the manager's card. The lines (tree-lines.css): a rail under the middle of the manager's avatar, from the
    bottom of its card (the update runs under the avatar, so the line does not cross it), and an elbow to each report's

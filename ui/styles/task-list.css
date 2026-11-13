@@ -18,14 +18,8 @@
 .tl-status:hover{background:var(--surface2);color:var(--ink)}
 .tl-status:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
-/* ---- the header, one row: title, scope ▾, then whose list, search, filter, layout, finished, Catch up, ⋯ and new task.
-   With no room the search folds to its icon (.s-fold), the finished views move to the chips row, and only then does the
-   row wrap (.wrap); task-list.js tasksHeadFit. */
-.tl-head{position:relative;display:flex;flex-wrap:nowrap;align-items:center;gap:8px;min-height:32px;padding-bottom:6px}
-.tl-head.wrap{flex-wrap:wrap;row-gap:6px}
-.tl-head h1{flex:none;font-size:var(--t-lg);margin:0 4px 0 0;white-space:nowrap}
-.tl-head .spacer{flex:1 1 0;min-width:0}
-.tl-head [hidden]{display:none!important}
+/* ---- the header is the shared page header (ui/app/page-head.ts, hook .tl-head): the title, the scope ▾ after it, the
+   view tools, then "New task". Below: the scope button, the icon buttons and the search it holds. */
 .tl-scope{flex:0 1 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-scope:hover,.tl-scope[aria-expanded=true]{background:var(--surface2)}
 .tl-scope:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
@@ -40,10 +34,9 @@
 .tl-ib:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-ib.active{color:var(--ink)}
 .tl-fbadge{position:absolute;top:1px;right:0;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--ink);color:var(--bg);font:600 10px/15px var(--sans);text-align:center}
-.tl-pair{flex:none;display:inline-flex;align-items:center;gap:2px;height:var(--ctl);padding:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
-.tl-pair button{display:inline-grid;place-items:center;min-width:26px;height:100%;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
-.tl-pair button:hover{color:var(--ink)}
-.tl-pair button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+/* the layout pair and the finished views are single-choice filters: .ph-seg (page-head.css) draws them */
+.tl-pair{flex:none}
+.tl-pair button{display:inline-grid;place-items:center;min-width:26px}
 .tl-pair button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-finished-slot,.tl-finished-bar{display:contents}
 .tl-pair[hidden]{display:none}
@@ -51,18 +44,11 @@
 .tl-search{flex:0 1 200px;min-width:120px;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
 .tl-search:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .tl-search svg{flex:none}
-.tl-search input{flex:1;min-width:0;width:0;height:30px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
+.tl-search input{flex:1;min-width:0;width:0;height:calc(var(--ctl) - 2px);padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
 .tl-search input:focus{outline:0;box-shadow:none}
 .tl-search input:placeholder-shown::-webkit-search-cancel-button{display:none}   /* an empty field keeps its room for the placeholder */
 .tl-search kbd{flex:none;font:var(--t-xs)/16px var(--sans);padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
 .tl-search:focus-within kbd{display:none}
-/* folded, the search is its icon; focused it opens over the header's first row; holding words, its icon is marked */
-.tl-head.s-fold .tl-search:not(:focus-within){flex:none;position:relative;width:var(--ctl);min-width:0;padding:0;justify-content:center;border-color:transparent;background:none;cursor:pointer}
-.tl-head.s-fold .tl-search:not(:focus-within):hover{background:var(--surface2);color:var(--ink)}
-.tl-head.s-fold .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
-.tl-head.s-fold .tl-search:not(:focus-within) kbd{display:none}
-.tl-head.s-fold .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
-.tl-head.s-fold .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
 .tl-who{flex:none;display:inline-flex;align-items:center;gap:3px;height:var(--ctl);padding:0 4px 0 6px;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .tl-who:hover,.tl-who[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .tl-who.asked{border-color:var(--line)}
@@ -302,27 +288,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
-  .tl-head{--add-w:30px;gap:4px;flex-wrap:wrap;row-gap:6px}
-  .tl-head h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}   /* the bottom bar already says Tasks */
-  /* The header's first row is the picker, ⋯, ✎, the run button and +, in that order; a break (::after) then starts the row of
-     view tools: search, filter, list or board, Finished and the archive. */
-  .tl-head::after{content:"";flex:0 0 100%;height:0;order:9}
-  .tl-head #task-scope{order:1}
-  .tl-head #task-more{order:2}
-  .tl-head #task-pipeline-edit{order:3}
-  .tl-head #task-play{order:4}
-  .tl-head #task-new{order:5}
-  .tl-head #task-who-wrap,.tl-head .tl-search,.tl-head #task-filter,.tl-head #task-layout,.tl-head .tl-finished-slot,.tl-head #task-archive,.tl-head .tl-decide{order:10}
-  .tl-head .tl-search{margin-left:auto}
-  .tl-head .spacer{display:none}
-  .tl-scope{margin-right:auto;padding:0 6px 0 8px;gap:4px}
+  .tl-scope{padding:0 6px 0 8px;gap:4px}
   .tl-ib{width:30px}
   .tl-who{padding:0 2px 0 4px}
-  .tl-head .tl-search:not(:focus-within){flex:none;position:relative;width:30px;min-width:0;padding:0;justify-content:center;border-color:transparent;background:none}
-  .tl-head .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
-  .tl-head .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
-  .tl-head .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
-  .tl-pair button{min-width:24px;padding:0 4px}
   .tl-bar.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .tl-filters{flex-wrap:nowrap;flex:none}
   .tl-parent{display:none}
@@ -429,23 +397,13 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 
 /* ---- a phone (S17): every control on the Tasks page has a 44 px hit area; the header wraps rather than clip. */
 @media (max-width:760px){
-  .tl-head{flex-wrap:wrap;row-gap:6px;--ctl:44px}
-  /* the search's line is drawn inside it, so its field is the whole 44 px */
-  .tl-head .tl-search{border-width:0;box-shadow:inset 0 0 0 1px var(--line)}
-  .tl-head .tl-search:focus-within{box-shadow:inset 0 0 0 1px var(--focus)}
-  /* folded to an icon it is drawn like Filter beside it, with its line back only while it holds a search */
-  .tl-head .tl-search:not(:focus-within){box-shadow:none}
-  .tl-head .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){box-shadow:inset 0 0 0 1px var(--line)}
-  .tl-head .tl-search input{height:44px}
-  /* the icon buttons and the folded search are 30 px wide above; a thumb needs 44 both ways */
-  .tl-head{--add-w:44px}
+  /* the tools row keeps a thumb-sized hit area: 44 px icon buttons, search and layout pair */
+  .tasks-pane .ph-tools{--ctl:44px}
   .tl-ib{width:44px}
-  .tl-head .tl-search:not(:focus-within){width:44px}
-  .tl-pair button{min-width:44px}
-  .tl-pair{height:auto;min-height:44px;box-sizing:border-box}
-  .tl-pair button{min-height:44px}
+  .tasks-pane .ph-tools .tl-search{flex:1 1 auto}
+  .tl-pair.ph-seg>button{min-width:44px;min-height:44px}
   /* a phone shows a pipeline one stage at a time whatever the layout: list or columns changes nothing there */
-  .tl-head #task-layout{display:none}
+  #task-layout{display:none!important}
   .tl-bar{--ctl:44px}
   .tl-chip{height:44px}
   .tl-chip-x{width:44px}
