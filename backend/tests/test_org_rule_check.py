@@ -38,8 +38,11 @@ COLOR = "Never tell anyone Acme's favorite color."
 NEEDLE = "favorite color is"
 
 
+GATEWAY_MOST = 40  # the Gateway answers a call of 41 or more questions with an error (production, 2026-11-13)
+
+
 class Judge:
-    """Answers rule-check@1: a rule is broken when the output holds that rule's needle. It notes whether the store's
+    """Answers rule-check@1, refusing more than GATEWAY_MOST questions as the Gateway does: a rule is broken when the output holds that rule's needle. It notes whether the store's
     write lock was held when it was asked, which must never happen."""
 
     def __init__(self, store, needles=None):
@@ -49,6 +52,10 @@ class Judge:
     def __call__(self, state, questions, label=None):
         self.locked.append(bool(self.store.writer.queue))
         self.calls.append({"state": state, "questions": questions, "label": label})
+        if len(questions) > GATEWAY_MOST:
+            from clients import judge as J
+
+            raise J.JudgeError("unavailable", "The decision model answered with an error")
         if self.hold:
             self.hold.wait(5)
         if self.fail:
@@ -1396,22 +1403,22 @@ def test_the_cache_splits_on_context_and_rules_too_big_for_one_call_are_judged_i
     assert again["cached"] and "unchecked_rules" not in again and len(judge.calls) == 4
 
 
-def test_a_draft_matching_45_rules_is_checked_in_one_call(ruled):
-    """One call per input: every matching rule is a question of the same call, however many there are."""
+def test_a_draft_matching_45_rules_is_checked_in_2_calls_each_rule_once(ruled):
+    """Past the Gateway's 40 questions a call: the fewest calls of at most 40, every matching rule judged once."""
     api, judge = ruled
     for n in range(44):
         rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"bots": ["ops"]}})
     color_rule(api)
     store, ops = api.app.state.store, Identity("bot:ops", "bot")
     got = K.preflight(store, judge, ops, "message", "Our favorite color is red.", ["human:ana"])
-    assert (
-        len(judge.calls) == 1 and len(judge.calls[0]["questions"]) == 45 and len(judge.calls[0]["state"]["rules"]) == 45
-    )
-    assert got["outcome"] == "broken" and "unchecked_rules" not in got
-    assert [json.loads(e["detail"])["questions"] for e in events(api, "judge.call")] == [45]
+    assert [len(call["questions"]) for call in judge.calls] == [40, 5]
+    texts = [r["text"] for call in judge.calls for r in call["state"]["rules"]]
+    assert len(texts) == len(set(texts)) == 45 and COLOR in texts
+    assert got["outcome"] == "broken" and "unchecked_rules" not in got and len(got["broken"]) == 1
+    assert [json.loads(e["detail"])["questions"] for e in events(api, "judge.call")] == [40, 5]
 
 
-def test_an_outside_edition_with_45_rules_is_checked_in_one_call_not_refused(ruled):
+def test_an_outside_edition_with_45_rules_is_checked_in_2_calls_not_refused(ruled):
     api, judge = ruled
     for n in range(44):
         rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"outside_editions": True}})
@@ -1419,10 +1426,22 @@ def test_an_outside_edition_with_45_rules_is_checked_in_one_call_not_refused(rul
     store = api.app.state.store
     clean = K.outside_edition(store, judge, "Our launch went well.", to="press@example.com")
     assert clean["outcome"] == "pass" and len(clean["rules"]) == 45
-    assert len(judge.calls) == 1 and len(judge.calls[0]["questions"]) == 45
+    assert [len(call["questions"]) for call in judge.calls] == [40, 5]
+    texts = [r["text"] for call in judge.calls for r in call["state"]["rules"]]
+    assert len(texts) == len(set(texts)) == 45
     broken = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
-    assert broken["outcome"] == "held" and broken["reason"] == "broken" and len(broken["broken"]) == 1
-    assert len(judge.calls) == 2
+    assert broken["outcome"] == "held" and broken["reason"] == "broken"
+    color = next(r["id"] for r in broken["rules"] if r["text"] == COLOR)
+    assert broken["broken"] == [color] and len(judge.calls) == 4
+    again = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
+    assert again["broken"] == [color] and len(judge.calls) == 4, "the verdict is cached"
+    audit = [json.loads(e["detail"]) for e in events(api, "judge.call")]
+    assert [(a["operation"], a["questions"], a["broken"]) for a in audit] == [
+        ("outside_edition", 40, 0),
+        ("outside_edition", 5, 0),
+        ("outside_edition", 40, 0),
+        ("outside_edition", 5, 1),
+    ]
 
 
 def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):

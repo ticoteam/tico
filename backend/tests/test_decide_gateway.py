@@ -173,6 +173,20 @@ def ask(api):
     )
 
 
+def test_the_judge_config_reports_the_gateways_40_questions_and_a_41_question_ask_is_refused_unsent(
+    api, monkeypatch, net
+):
+    """The Gateway answers a call of 41 or more questions with an error (production, 2026-11-13): Tico says so, and
+    refuses such an ask itself instead of sending it."""
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    shown = get(api, "judge")
+    assert shown["max_questions"] == 40 and shown["max_call_chars"] == J.MAX_CALL_CHARS
+    many = {f"q{n}": {"type": "noul", "instructions": f"Is it about item {n}?"} for n in range(41)}
+    r = api.post("/api/v2/decisions", headers=headers(), json={"state": {"subject": "Invoice 4471"}, "questions": many})
+    assert r.status_code == 422, r.text
+    assert net.requests == [], "nothing was sent"
+
+
 # ----------------------------------------------------------------------------- 1. the Gateway answers
 def test_with_a_gateway_key_a_decision_goes_to_the_gateway_as_tico_decide_and_the_audit_names_it(api, monkeypatch, net):
     wire(api, monkeypatch, own_key="ts-synthetic")

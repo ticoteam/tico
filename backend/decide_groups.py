@@ -6,10 +6,11 @@ hands its items here as `(state, questions)` pairs, all under one question set's
 only its own answers, in the shape one call about that item alone returns.
 
 How a group is asked: up to MOST items whose states and questions fit one call (`J.fits`: the state within
-`J.MAX_STATE_CHARS` and the whole call within `J.MAX_CALL_CHARS`) go in one call. The state lists the items by name (`item1`, `item2`, ...)
-under `items`; each item's questions are asked again under `<name>__<id>`, their instructions opened with the item they
-are about, and nothing else about them changes. A group of one is sent exactly as the item alone always was, so a pass
-kept at one item per call (`size=1`) asks as it did before grouping.
+`J.MAX_STATE_CHARS`, the whole call within `J.MAX_CALL_CHARS` and at most `J.MAX_QUESTIONS`, the Gateway's limit) go in
+one call. The state lists the items by name (`item1`, `item2`, ...) under `items`; each item's questions are asked again
+under `<name>__<id>`, their instructions opened with the item they are about, and nothing else about them changes. A
+group of one is sent exactly as the item alone always was, so a pass kept at one item per call (`size=1`) asks as it
+did before grouping.
 
 What comes back:
 - every answer is read back under its own item's names only, so an item never gets another item's answer;
@@ -76,8 +77,8 @@ def _size(state: Any) -> int:
 
 def packs(items: Sequence[Item], size: int = MOST) -> list[list[int]]:
     """The items' places, in order, cut into runs that fit one call each: at most `size` items, their states within
-    J.MAX_STATE_CHARS once grouped and the whole grouped call within J.MAX_CALL_CHARS (`J.fits`). An item too big to
-    share a call goes alone."""
+    J.MAX_STATE_CHARS once grouped and the whole grouped call within J.MAX_CALL_CHARS and J.MAX_QUESTIONS (`J.fits`).
+    An item too big to share a call goes alone."""
     size = max(1, int(size))
     most_chars = int(_J.MAX_STATE_CHARS)
     out: list[list[int]] = []

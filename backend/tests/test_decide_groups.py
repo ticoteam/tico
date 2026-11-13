@@ -122,7 +122,7 @@ def test_items_too_big_to_share_a_call_go_alone():
     assert fake.calls == [[0], [1], [2]]
 
 
-def test_questions_too_big_for_one_call_split_the_group_and_any_count_fits():
+def test_questions_too_big_for_one_call_or_past_the_gateways_40_split_the_group():
     # Small states, big questions: two items' questions fit one call (J.MAX_CALL_CHARS), three do not.
     long = "w" * (J.MAX_INSTRUCTIONS - 100)
     big = {f"q{n}": {"type": "noul", "instructions": long} for n in range(J.MAX_CALL_CHARS * 2 // 5 // len(long))}
@@ -130,9 +130,10 @@ def test_questions_too_big_for_one_call_split_the_group_and_any_count_fits():
     for run in DG.packs(items(5, big)):
         state, questions, _ = DG.grouped(items(len(run), big))
         J.validate(state, questions, "x")
-    # No count of questions splits a group: only the call's size does.
-    many = {f"q{n}": QUESTIONS["fit"] for n in range(30)}
-    assert DG.packs(items(5, many)) == [[0, 1, 2, 3, 4]]
+    # Past the Gateway's 40 questions a call (it answers 41 or more with an error), the group splits too.
+    many = {f"q{n}": QUESTIONS["fit"] for n in range(20)}
+    assert DG.packs(items(5, many)) == [[0, 1], [2, 3], [4]]
+    assert DG.packs(items(5, {f"q{n}": QUESTIONS["fit"] for n in range(8)})) == [[0, 1, 2, 3, 4]]
 
 
 def test_the_grouped_call_names_each_item_in_its_questions_and_keeps_their_wording():

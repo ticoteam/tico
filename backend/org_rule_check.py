@@ -1058,49 +1058,62 @@ def outside_edition(store, primary, output, to=""):
             if hit:
                 broken, _ = _cached(hit[0])
                 return result("held", "broken", broken) if broken else result("pass")
-            questions = _questions(qset, rules)
-            state = {
-                "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules, 1)],
-                "operation": "an edition sent outside the company",
-                "output": output,
-                "from": "the company",
-                "to": [to] if to else [],
-                "context": {},
-            }
-            if not J.fits(state, questions):  # every rule in one call, however many there are
+            # Every rule is judged, in one call unless the rules do not fit beside the text in one (`J.pack`: its size
+            # and the Gateway's MAX_QUESTIONS), never refused only for how many there are.
+            batches = J.pack(
+                rules,
+                lambda batch: (
+                    _questions(qset, batch),
+                    {
+                        "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(batch, 1)],
+                        "operation": "an edition sent outside the company",
+                        "output": output,
+                        "from": "the company",
+                        "to": [to] if to else [],
+                        "context": {},
+                    },
+                ),
+            )
+            if batches is None:
                 return result("held", "too_large")
             engine = B.server_engine(store, c, primary)
             if engine is None:
                 return result("held", "budget" if B.over_spend_cap(c, store.settings) else "no_engine")
-            if calls_today(c) >= B.daily_cap(store.settings, "bot"):
+            if calls_today(c) + len(batches) > B.daily_cap(store.settings, "bot"):
                 return result("held", "day_cap")
-        answer, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
-        if error:
-            return result("held", error)
-        if not isinstance(answer, dict):
-            return result("held", "shape")
-        answers = J.check_answers(answer.get("answers"), questions)
         cut = float(qset["thresholds"]["broken"])
-        broken = [rules[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
+        broken, calls = [], []
+        for batch, questions, state in batches:
+            answer, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
+            if error:
+                return result("held", error)
+            if not isinstance(answer, dict):
+                return result("held", "shape")
+            answers = J.check_answers(answer.get("answers"), questions)
+            found = [batch[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
+            broken += found
+            with store.transaction() as c:
+                calls.append(
+                    H.event(
+                        c,
+                        H.KEEPER,
+                        "judge.call",
+                        qset["label"],
+                        {
+                            "label": qset["label"],
+                            "questions": len(questions),
+                            "operation": "outside_edition",
+                            "level": level,
+                            "rules": [r["id"] for r in batch],
+                            "broken": len(found),
+                            **B.audit_detail(answer),
+                        },
+                    )
+                )
         with store.transaction() as c:
-            call = H.event(
-                c,
-                H.KEEPER,
-                "judge.call",
-                qset["label"],
-                {
-                    "label": qset["label"],
-                    "questions": len(questions),
-                    "operation": "outside_edition",
-                    "level": level,
-                    "rules": [r["id"] for r in rules],
-                    "broken": len(broken),
-                    **B.audit_detail(answer),
-                },
-            )
             c.execute(
                 "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
-                (key, json.dumps(broken), call["id"], H.now()),
+                (key, json.dumps(broken), calls[0]["id"], H.now()),  # the first call's id, as `preflight` caches
             )
         return result("held", "broken", broken) if broken else result("pass")
     except J.JudgeError:

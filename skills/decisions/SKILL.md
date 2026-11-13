@@ -87,7 +87,7 @@ branches you may not take: category *and* bug severity *and* refund requested *a
 angry, then let code read only the answers the category makes relevant. State a speculative
 premise in the question itself (``"If `ticket` is a bug report, how severe is it?"``) and
 ignore its answer on the other branches. One call per row, every question about it in that
-call (a call has no question limit, only its size), eight rows in flight, is the shape for a listing.
+call (up to forty questions, the Gateway's limit, and within its size), eight rows in flight, is the shape for a listing.
 
 Questions cannot see one another's answers. A second call is right only when the first answer
 is needed to fetch new evidence, build a new state, or decide what the next options are:
