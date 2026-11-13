@@ -75,7 +75,9 @@ const SETTINGS_COMPACT_AT: [number, string][] = [[100000, '100k'], [150000, '150
 const SETTINGS_COMPACT_DEFAULT = 250000;
 function settingsCompactRow(e: BotEditRow) {
   const harness = e.harness || e.runtime || e.resolved_runtime;
-  if (harness && !(settingsHarness(harness)?.capabilities || harnessCaps(harness)).compaction) return '';
+  const caps = harness ? settingsHarness(harness)?.capabilities || harnessCaps(harness) : null;
+  // A harness that compacts on its own default (Claude Code, as for a person) takes no Compact at.
+  if (caps && (!caps.compaction || caps.own_compaction)) return '';
   const current = Number(e.compact_at) || SETTINGS_COMPACT_DEFAULT;
   const options = SETTINGS_COMPACT_AT.some(([value]) => value === current) ? SETTINGS_COMPACT_AT : [...SETTINGS_COMPACT_AT, [current, `${Math.round(current / 1000)}k`]];
   return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.id)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
