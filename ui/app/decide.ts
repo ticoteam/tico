@@ -271,7 +271,8 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   if (!d.open) d.showModal();
   return true;
 }
-const decideGoThrough = () => decideOpen('');
+/** ▶: the walk from its first item, or, after Go to, from the item it left (decide-about.ts). */
+const decideGoThrough = () => { const at = DEC_RESUME; DEC_RESUME = ''; return (!!at && decideOpen(at)) || decideOpen(''); };
 /** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
     id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
     and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks
@@ -337,6 +338,7 @@ function decideStop() {
   const st = DEC;
   if (!st) return;
   DEC = null;
+  DEC_ABOUT.clear(); DEC_SENT = '';
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
@@ -364,7 +366,7 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
 
 // ---- moving through
 function decideGo(st: DecState, id: string | null) {
-  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false; st.files = [];
+  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = '';
   decideRender(st);
 }
 function decideStep(st: DecState, dir: number) {
@@ -452,6 +454,8 @@ function decideRender(st: DecState) {
   // screen) is read again and marked as changed. While it is on screen, a refresh never reads it again (decideShownPage).
   const held = decideKind(it) === 'ok' ? st.ok.get(decideOkKey(it)) : undefined;
   if (decideKind(it) === 'ok' && (!held || decideOkStale(held, it))) void decideOkLoad(st, it, !!held);
+  // Any other item on a task: its text is read once, and the next item's ahead (decide-about.ts).
+  decideAboutAhead(st);
   decidePaintBody(st);
   decidePaintSide(st);
 }
@@ -468,10 +472,9 @@ function decidePaintBody(st: DecState) {
       : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
         + (v.since?.on && !v.since.same ? `<div class="dc-doc dc-diff">${v.since.diff}</div>`
           : `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`);
-  } else if (it.task) {
-    html = `<div class="dc-doc"><h3 class="dc-title">${esc(it.task.title)}${lateTagHTML(it.task)}</h3>`
-      + `<p class="dc-line">${taskMarkHTML(it.task, {space: false})} ${esc(taskLine(it.task))}</p>`
-      + (kind === 'mention' ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '') + '</div>';
+  } else if (decideTaskId(it)) {
+    // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
+    html = decideAboutHTML(it, kind);
   } else if (kind === 'mention') {
     html = `<blockquote class="dc-quote">${esc(it.line)}</blockquote>`;
   }
@@ -536,9 +539,15 @@ function decidePaintSide(st: DecState) {
   // A page with its rounds read: the right side in parts (decideRoundsHTML), and the stage's paragraph is gone.
   const okView = kind === 'ok' && page ? st.ok.get(decideOkKey(it)) : undefined;
   const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices) : null;
+  // A person's own task and a question: a short heading in the task's own words, the full question once under it.
+  const short = parts ? null : decideHeadOf(it, kind), go = short ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
+  const goBtn = go ? `<button type="button" class="ghost dc-go" data-dc="go" data-dc-href="${esc(go[1])}">${esc(go[0])}</button>` : '';
+  const links = goBtn || open ? `<div class="dc-links">${goBtn}${open}</div>` : '';
   const head = parts ? `<h3 class="dc-q">${esc(title)}</h3>${parts.sub}${open}${parts.body}`
+    : short ? `<h3 class="dc-q dc-q-short">${esc(short.head)}</h3><p class="dc-sub">${sub}</p>${links}`
+      + (short.full ? `<p class="dc-full">${esc(short.full)}</p>` : '')
     : `<h3 class="dc-q">${esc(title || typed?.question || it.line)}</h3><p class="dc-sub">${sub}</p>${open}`
-    + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
+      + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
   let body = '';
@@ -557,10 +566,10 @@ function decidePaintSide(st: DecState) {
   } else if (kind === 'question') {
     const choices = it.ask?.choices || [];
     body = `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>
-      <label class="dc-notes"><span>Something else</span><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"></textarea></label>
-      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('other', 'Send', !choices.length, ' data-dc-needs="#dc-other" disabled')}</div>`;
+      <label class="dc-notes"><span>${choices.length ? 'Something else' : 'Your answer'}</span><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"></textarea></label>
+      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('other', 'Send answer', !choices.length, ' data-dc-needs="#dc-other" disabled')}${decideBtn('askback', 'Ask back', false, ' data-dc-needs="#dc-other" disabled title="Ask what they mean; the question stays open"')}</div>`;
   } else if (kind === 'yours') {
-    body = `<div class="dc-acts">${decideBtn('done', 'Done', true, busy)}${decideBtn('snooze', 'Snooze', false, busy)}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
+    body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideBtn('snooze', 'Snooze', false, busy)}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'stuck') {
     body = `<div class="dc-acts">${decideBtn('again', 'Try again', true, busy)}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${decideMoreHTML(st, it)}`;
   } else {
@@ -571,6 +580,7 @@ function decidePaintSide(st: DecState) {
   const same = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id;
   const held = same ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
   const heldNote = same ? host.querySelector<HTMLTextAreaElement>('#dc-notes')?.value : undefined;
+  const heldReply = same ? host.querySelector<HTMLTextAreaElement>('#dc-reply')?.value : undefined;
   // So does the caret: a redraw while someone types (a refusal, the end of a send) leaves them typing in the same box.
   const typing = document.activeElement;
   const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
@@ -579,13 +589,15 @@ function decidePaintSide(st: DecState) {
   // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
   if (!st.sheet && decideLive(st).length > 1) {
     const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
-    const skip = decideBtn('skip', 'Skip', false, busy);
+    const skip = `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
     if (row) row.insertAdjacentHTML('beforeend', skip); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${skip}</div>`);
   }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
+  const reply = host.querySelector<HTMLTextAreaElement>('#dc-reply');
+  if (reply && heldReply) reply.value = heldReply;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
   // "more" only under a part its 2 lines cut.
   host.querySelectorAll<HTMLElement>('.dc-clamp:not(.open)').forEach(p => {
@@ -678,7 +690,7 @@ function decideGrow(box: HTMLTextAreaElement) {
   box.style.height = `${Math.min(Math.max(start, need), most)}px`;
 }
 /** A paste counts for the note only while a note box has the focus. */
-const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes, #dc-other');
+const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes, #dc-other, #dc-reply');
 /** The files row under the note: each file with its state and ✕ (Retry when it failed), then 📎 Attach. */
 function decideFilesHTML(st: DecState): string {
   const rows = st.files.map(f => `<li class="dc-file" data-dc-file="${f.key}" data-state="${f.state}"><span class="dc-file-name">${esc(f.file.name)}</span>`
@@ -1063,6 +1075,9 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
   const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip], [data-dc-walk], [data-dc-jev], [data-dc-more], [data-dc-ver], [data-dc-since]');
+  // A link in the task's text to a place in the app: there, as Go to goes (the item stays in Needs you).
+  const link = el?.closest<HTMLAnchorElement>('.dc-thing a[href]'), there = link ? decideAppHref(link.getAttribute('href') || '') : '';
+  if (there && !ev.defaultPrevented && ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) { ev.preventDefault(); decideGoThere(st, there); return; }
   if (!b || (b as HTMLButtonElement).disabled) return;
   const at = decideCurrent(st);
   if (at && (b.dataset.dcMore != null || b.hasAttribute('data-dc-jev'))) {
@@ -1088,6 +1103,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (what === 'close') { decideStop(); return; }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
   if (what === 'skip') { decideSkip(st); return; }
+  if (what === 'go' && b.dataset.dcHref) { decideGoThere(st, b.dataset.dcHref); return; }
   if (what === 'undo') return;            // the bar's own handler
   if (what === 'file-drop' || what === 'file-retry') {
     const f = st.files.find(x => String(x.key) === b.dataset.dcKey), at = decideCurrent(st);
@@ -1130,6 +1146,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, decideWithFiles(text, files), ver), decideUndoAnswer);
       return;
     }
+    case 'reply': await decideReplySend(st, it, '#dc-reply'); return;
+    case 'askback': await decideReplySend(st, it, '#dc-other'); return;
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;
     case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;

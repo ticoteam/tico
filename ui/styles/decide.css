@@ -55,6 +55,29 @@
 .dc-file-note{margin:4px 0 0;font-size:var(--t-sm)}
 .dc-acts,.dc-choices,.dc-more,.dc-chips{display:flex;flex-wrap:wrap;gap:8px}
 .dc-acts button,.dc-choices button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
+/* what an item is about (decide-about.ts): who asked, the task's text, its links, files and pages; Go to; the reply */
+.dc-who{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.dc-who b{color:var(--ink);font-weight:600}
+.dc-md{font-size:var(--t-base);line-height:var(--lh-body,1.5)}
+.dc-refs{display:flex;flex-wrap:wrap;gap:6px}
+.dc-ref-chip{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-ref-chip:hover{background:var(--surface2)}
+.dc-q.dc-q-short{font-size:var(--t-lg)}
+.dc-full{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.dc-links .dc-open-task{margin:0}
+.dc-go{min-height:36px;padding:0 12px;border-radius:10px;font-weight:600}
+.dc-reply{display:flex;flex-direction:column;gap:6px}
+.dc-reply-row{display:flex;align-items:center;gap:10px}
+.dc-reply-row button{min-height:36px;padding:0 14px;border-radius:10px;font-weight:600}
+.dc-sent{color:var(--muted);font-size:var(--t-sm)}
+/* Skip: a quiet link after the buttons, never a row of its own */
+.dc-acts .dc-skip{min-width:44px;min-height:40px;padding:0 6px;border:0;background:none;color:var(--muted);font-weight:500;text-decoration:underline}
+@media (min-width:761px){
+  /* one line at 1040 px: Done · Snooze · Give to… at 36 px, then Skip */
+  .dc-acts-row{flex-wrap:nowrap;align-items:center}
+  .dc-acts-row button{min-height:36px;padding:0 14px;border-radius:10px;white-space:nowrap}
+}
 .dc-more{padding-top:4px}
 .dc-chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;cursor:pointer}
 .dc-chip[aria-pressed="true"]{border-color:var(--wait-ink,var(--ink));background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink))}
@@ -120,7 +143,7 @@ button.dc-jev{cursor:pointer}
   /* a field scrolled to (focus, the keyboard opening) stops above the sticky buttons, not under them */
   .dc-side{scroll-padding-bottom:72px;max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
   .dc-q{font-size:var(--t-lg)}
-  .dc-file-x,.dc-attach,.dc-open-task{min-height:44px}
+  .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
   .dc-jev,.dc-more-btn{min-height:44px}
   .dc-step .dc-jev{min-height:20px}
   .dc-switch{min-height:44px}
