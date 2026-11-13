@@ -241,6 +241,7 @@
  "tico_strategy_diff": "404 not_found",
  "tico_strategy_publish": "422 lint",
  "tico_strategy_summary": "404 not_found",
+ "tico_strategy_vision": "403 forbidden",
  "tico_support_send": "404 not_found",
  "tico_tag_show": "404 not_found",
  "tico_tag_update": "404 not_found",

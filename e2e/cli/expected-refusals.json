@@ -105,6 +105,7 @@
  "sql": "sql",
  "strategy diff": "not_found",
  "strategy publish": "lint",
+ "strategy vision": "forbidden",
  "support file": "support_unreachable",
  "task answer": "usage",
  "task ask": "usage",
