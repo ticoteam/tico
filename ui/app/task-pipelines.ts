@@ -223,7 +223,8 @@ const pvColsOf = (state: PvState): HTMLElement | null => state.root?.querySelect
 
 /** Takes where the columns are scrolled now, before a draw replaces them (it catches a drag's own scrolling too). */
 function pvScrollRead(state: PvState): void {
-  const cols = pvColsOf(state);
+  // After another page and back the root is a detached element whose columns read 0: keep what was kept instead.
+  const cols = state.root?.isConnected ? pvColsOf(state) : null;
   if (cols) { state.x = cols.scrollLeft; state.y = cols.scrollTop; }
 }
 
@@ -387,7 +388,9 @@ TASK_PAGE_HOOKS.pipeline = {
   bind(root, rec) {
     const state = pvStateFor(rec);
     state.root = root;
-    pvScrollRestore(state);     // the page calls bind after each draw
+    // The page calls bind after each draw. The browser clamps a restore to the columns drawn, so this holds only while
+    // the first board draw has every stage (it does: columns are drawn from the pipeline, not as tasks arrive).
+    pvScrollRestore(state);
     if (PV_BOUND.has(root)) return;
     PV_BOUND.add(root);
     // Bound once per element; each event reads the view drawn there now.

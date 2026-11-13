@@ -27,7 +27,7 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
 // Task #339: columns are at least 300px, so a board whose stages don't fit scrolls sideways. Each redraw replaced the
 // columns and put the board back at its first stage. At 1440×900 with the manager's panel open, scrolled to 300px, the
 // board stays there through a search typed and cleared, a live update, a drop on another stage, the refused-move bar
-// closed and a reload; another pipeline keeps its own position. Runs on the fake server of tasks-page.cts.
+// closed, a reload and Threads and back; another pipeline keeps its own position. Runs on the fake server of tasks-page.cts.
 async function scrollKept(browser: import('playwright').Browser): Promise<void> {
   const {open, PIPELINES, fixtures, task, brief} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
   const product = PIPELINES.find(p => p.id === 'product')!, ops = PIPELINES.find(p => p.id === 'ops')!;
@@ -93,6 +93,12 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
   await cols.waitFor();
   await page.waitForFunction(() => document.querySelector('#task-body .pv-cols')!.scrollLeft > 0);
   await settled(300, 'a reload');
+  // Threads and back in the same tab: the page draws a new #task-body, and the board opens where it was.
+  await page.evaluate(() => { location.hash = '#/threads'; });
+  await cols.waitFor({state: 'detached'});
+  await page.evaluate(() => { location.hash = '#/tasks?pipeline=product&layout=columns'; });
+  await page.locator('#task-body [data-pv-col="spec"]').waitFor();
+  await settled(300, 'Threads and back');
   await page.evaluate(() => { location.hash = '#/tasks?pipeline=ops&layout=columns'; });
   await page.locator('#task-body [data-pv-col="todo"]').waitFor();
   assert.ok(await cols.evaluate(el => el.scrollWidth > el.clientWidth), 'Operations scrolls sideways too');

@@ -97,13 +97,22 @@ const box = (page: Page, sel: string) => page.locator(sel).evaluate(el => {
       // columns scroll sideways, and their scrollbar is on screen: the board fills the room under the header and is the
       // one scroller, so the wheel over a card scrolls the columns, not the page, and the header stays.
       const tasks = fixtures();
-      for (let i = 0; i < 30; i++) tasks.push(task(`b-${i}`, `A long enough title for a two-line card, number ${i}`, 'build'));
-      const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=product&layout=columns'});
+      for (let i = 0; i < 30; i++) tasks.push(task(`b-${i}`, `A long enough title for a two-line card, number ${i}`, 'build',
+        {requester_id: i % 2 ? 'bot:cal' : 'bot:perf', late: {level: 'told', since: new Date(Date.now() - 3 * 3600e3).toISOString()}}));
+      // Asker names as long as the board's longest today, on a full meta line (Late, the owner's face): none may end in
+      // "…" at 300px; at 200px they did.
+      const bots = [['pm', 'PM'], ['cal', 'Calendar Product Owner'], ['perf', 'Performance Owner']].map(([name, display_name]) =>
+        ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
+      const {page, errors} = await open(browser, {tasks, bots, needs: [], hash: '#/tasks?pipeline=product&layout=columns'});
       await page.locator('#task-body .pv-col').first().waitFor();
       await page.locator('#task-manager').click();
       await page.locator('#task-rail .pm-head').waitFor();
       const widths = await page.locator('#task-body .pv-col').evaluateAll(els => els.map(e => e.getBoundingClientRect().width));
       assert.ok(widths.every(w => Math.abs(w - 300) < 1), `every column is 300px with the panel open at 1440: ${widths}`);
+      const names = await page.locator('#task-body .tk-card .tk-asker .tk-name').evaluateAll(els =>
+        els.map(e => ({text: e.textContent, cut: e.scrollWidth > e.clientWidth})));
+      assert.ok(names.some(n => n.text === 'Calendar Product Owner'), `the long names are drawn: ${JSON.stringify(names.slice(0, 3))}`);
+      assert.deepEqual(names.filter(n => n.cut), [], 'no asker name is cut');
       const board = await page.locator('#task-body .pv-cols').evaluate(el => ({bottom: el.getBoundingClientRect().bottom,
         sideways: el.scrollWidth > el.clientWidth, tall: el.scrollHeight > el.clientHeight, window: innerHeight}));
       assert.ok(board.sideways, 'the stages do not fit: the columns scroll sideways');
