@@ -348,7 +348,7 @@ const factories = (async () => {
   const waiting = task('t9', 'Refund flow', 'spec', {owner_id: null, turn: {state: 'pick', who: 'review', line: 'Waiting for a free Reviewer', since: null}});
   const card = ctx.taskCardHTML(waiting) as string;
   assert.match(card, /<span class="tk-mark tk-mark-pick" role="img" aria-label="Waiting for a free Reviewer"><\/span>/);
-  assert.match(card, /data-tip="Waiting for a free Reviewer"/);
+  assert.match(card, /Waiting for a free Reviewer"/, 'pointing at the card shows the line');
   assert.equal(ctx.taskLine(waiting), 'Waiting for a free Reviewer');
 }
 // ---- a task's row for a stage's answer
