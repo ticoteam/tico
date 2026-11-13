@@ -289,3 +289,19 @@ def test_a_saved_rule_that_never_acts_is_listed_as_not_acting_and_can_still_be_r
     assert asked["status"] == "suggested"
     SR.accept(c, ANA, asked["id"])
     assert SR.get(c, "sr_old")["retired_at"]
+
+
+def test_a_suggestion_of_the_refused_shape_saved_before_is_not_accepted(c):
+    ts = H.now()
+    c.execute(
+        "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, reason, "
+        "status, suggests, created_by, created_at, updated_at) VALUES ('sr_sg_old', 'Old', '', '[]', 'enters', '{}', "
+        "'{}', '', 'move_back', '{}', '', 'suggested', '', 'bot:ops', ?, ?)",
+        (ts, ts),
+    )
+    with pytest.raises(Problem) as refused:
+        SR.accept(c, ANA, "sr_sg_old")
+    assert str(refused.value.detail) == SR.NEEDS_TIMER
+    assert SR.get(c, "sr_sg_old")["status"] == "suggested"
+    # It can still be skipped.
+    assert SR.skip(c, ANA, "sr_sg_old")["retired_at"]

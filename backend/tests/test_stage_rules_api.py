@@ -246,3 +246,12 @@ def test_tell_or_move_back_on_an_action_when_is_refused_with_its_reason(api):
     # An edit that turns a timer into an action keeps the reason.
     got = post(api, f"stage-rules/{made['id']}", {"revision": made["revision"], "event": "enters"}, expected=422)
     assert got["error"]["detail"] == NEEDS_TIMER
+
+
+def test_a_retire_flag_in_the_request_does_not_skip_the_refusal(api):
+    # Only a bot's retire suggestion copies a rule of the refused shape; a saved field never turns that on.
+    engineering(api)
+    body = {"name": "Never acts", "pipeline": "eng", "event": "enters", "then": "tell_owner"}
+    for token in ("ana-test", "ops-test"):
+        got = add(api, {**body, "then_params": {"retire": True}}, token=token, expected=422)
+        assert got["error"]["detail"] == NEEDS_TIMER

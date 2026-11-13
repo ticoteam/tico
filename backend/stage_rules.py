@@ -774,8 +774,9 @@ def _fields(rule: Any) -> dict[str, Any]:
     return {k: rule[k] for k in keep if k in rule}
 
 
-def add(conn: Any, by: str, fields: Any, *, suggests: str = "") -> dict[str, Any]:
-    """A new rule; a bot's is Suggested until a person accepts it."""
+def add(conn: Any, by: str, fields: Any, *, suggests: str = "", retiring: bool = False) -> dict[str, Any]:
+    """A new rule; a bot's is Suggested until a person accepts it. Only `retire` passes `retiring`: a bot's suggestion
+    to retire copies the rule as it is, even a shape saved before `NEEDS_TIMER`; no request field turns that on."""
     H = _h()
     base: dict[str, Any] = {
         "pipeline_id": "",
@@ -786,8 +787,7 @@ def add(conn: Any, by: str, fields: Any, *, suggests: str = "") -> dict[str, Any
         "then_params": {},
         "reason": "",
     }
-    params = cast(dict[str, Any], fields.get("then_params") or {})
-    data = _check({**base, **fields}, retiring=params.get("retire") is not None)
+    data = _check({**base, **fields}, retiring=retiring)
     ts, rid = H.now(), "sr_" + uuid.uuid4().hex[:12]
     status = "active" if _core.is_human(by) else "suggested"
     cols = _columns(data)
@@ -826,7 +826,11 @@ def retire(conn: Any, by: str, rule_id: str, why: str = "") -> dict[str, Any]:
     if not _core.is_human(by):
         fields = _fields(rule)
         return add(
-            conn, by, {**fields, "then_params": {**rule["then_params"], "retire": why or True}}, suggests=rule_id
+            conn,
+            by,
+            {**fields, "then_params": {**rule["then_params"], "retire": why or True}},
+            suggests=rule_id,
+            retiring=True,
         )
     conn.execute("UPDATE stage_rules SET retired_at=?, updated_at=? WHERE id=?", (_h().now(), _h().now(), rule_id))
     return get(conn, rule_id) or {}

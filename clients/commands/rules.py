@@ -78,7 +78,7 @@ STAGE_FIELDS = {
     "then": {
         "type": "string",
         "enum": ["block", "tell_manager", "tell_owner", "move_back"],
-        "description": "Stage rule: Then",
+        "description": "Stage rule: Then. Tell and Move back need a timer When; an action When takes block only",
     },
     "reason": _s("Stage rule: what a Block or Tell says"),
 }
