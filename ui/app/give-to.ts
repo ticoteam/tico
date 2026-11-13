@@ -148,32 +148,32 @@ const GIVE_TO_OPEN = new Map<HTMLElement, () => void>();
     picks, Esc closes with nothing changed and focus back on `anchor`. */
 function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   for (const [old, end] of GIVE_TO_OPEN) { end(); GIVE_TO_OPEN.delete(old); if (old.matches(':popover-open')) old.hidePopover(); old.remove(); }
-  for (const old of document.querySelectorAll<HTMLElement>('.gt-pop')) old.remove();
-  const label = opts.label || 'Give to', n = ++GIVE_TO_SEQ, listId = `gt-list-${n}`;
+  for (const old of document.querySelectorAll<HTMLElement>('.gv-pop')) old.remove();
+  const label = opts.label || 'Give to', n = ++GIVE_TO_SEQ, listId = `gv-list-${n}`;
   const skip = new Set(opts.exclude || []);
   const all = giveToEntries(opts.selected || '').filter(e => !skip.has(e.actor));
   const pop = document.createElement('div');
-  pop.className = 'gt-pop'; pop.popover = 'auto';
+  pop.className = 'gv-pop'; pop.popover = 'auto';
   pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-label', label);
-  pop.innerHTML = `<div class="gt-head"><button type="button" class="gt-x" data-gt-close aria-label="Close">✕</button><span class="gt-title">${esc(label)}</span></div>
-    <input type="text" class="gt-q" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="${listId}" aria-label="${esc(label)}: find a person or bot"
+  pop.innerHTML = `<div class="gv-head"><button type="button" class="gv-x" data-gv-close aria-label="Close">✕</button><span class="gv-title">${esc(label)}</span></div>
+    <input type="text" class="gv-q" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="${listId}" aria-label="${esc(label)}: find a person or bot"
       placeholder="Find a person or bot" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done">
-    <div class="gt-list" id="${listId}" role="listbox" aria-label="${esc(label)}"></div>
-    <div class="gt-status" role="status" aria-live="polite"></div>`;
+    <div class="gv-list" id="${listId}" role="listbox" aria-label="${esc(label)}"></div>
+    <div class="gv-status" role="status" aria-live="polite"></div>`;
   (anchor.closest('dialog[open]') || document.body).append(pop);
-  const input = pop.querySelector<HTMLInputElement>('.gt-q')!, list = pop.querySelector<HTMLElement>('.gt-list')!;
-  const status = pop.querySelector<HTMLElement>('.gt-status')!;
+  const input = pop.querySelector<HTMLInputElement>('.gv-q')!, list = pop.querySelector<HTMLElement>('.gv-list')!;
+  const status = pop.querySelector<HTMLElement>('.gv-status')!;
   let rows: GiveToEntry[] = [], at = -1;
   const row = (e: GiveToEntry, why: string, byRole: boolean): string => {
     const i = rows.push(e) - 1, on = giveToIs(e, opts.selected) || giveToIs(e, opts.current);
-    return `<div role="option" id="${listId}-${i}" class="gt-row${byRole ? ' by-role' : ''}" data-i="${i}" data-give-pick="${esc(e.value)}" aria-selected="false"${on ? ' aria-checked="true"' : ''}${e.role ? ` title="${esc(e.role)}"` : ''}>`
-      + `<span class="gt-face" aria-hidden="true">${actorFace(e.actor, 20)}</span><span class="gt-name">${esc(e.name)}</span>`
-      + `${e.role ? `<span class="gt-role">${esc(e.role)}</span>` : ''}${why ? `<span class="gt-why">${esc(why)}</span>` : ''}${on ? '<span class="gt-on" aria-hidden="true">✓</span>' : ''}</div>`;
+    return `<div role="option" id="${listId}-${i}" class="gv-row${byRole ? ' by-role' : ''}" data-i="${i}" data-give-pick="${esc(e.value)}" aria-selected="false"${on ? ' aria-checked="true"' : ''}${e.role ? ` title="${esc(e.role)}"` : ''}>`
+      + `<span class="gv-face" aria-hidden="true">${actorFace(e.actor, 20)}</span><span class="gv-name">${esc(e.name)}</span>`
+      + `${e.role ? `<span class="gv-role">${esc(e.role)}</span>` : ''}${why ? `<span class="gv-why">${esc(why)}</span>` : ''}${on ? '<span class="gv-on" aria-hidden="true">✓</span>' : ''}</div>`;
   };
-  const group = (title: string, inner: string) => !inner ? '' : `<div role="group" aria-labelledby="${listId}-${title}"><div class="gt-h" id="${listId}-${title}" role="presentation">${esc(title === 'suggested' ? 'Suggested' : 'Everyone')}</div>${inner}</div>`;
+  const group = (title: string, inner: string) => !inner ? '' : `<div role="group" aria-labelledby="${listId}-${title}"><div class="gv-h" id="${listId}-${title}" role="presentation">${esc(title === 'suggested' ? 'Suggested' : 'Everyone')}</div>${inner}</div>`;
   const light = (i: number) => {
     at = rows.length ? Math.max(0, Math.min(rows.length - 1, i)) : -1;
-    for (const el of list.querySelectorAll<HTMLElement>('.gt-row')) {
+    for (const el of list.querySelectorAll<HTMLElement>('.gv-row')) {
       const on = Number(el.dataset.i) === at;
       el.classList.toggle('on', on); el.setAttribute('aria-selected', String(on));
       if (on) el.scrollIntoView({block: 'nearest'});
@@ -192,7 +192,7 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
       list.innerHTML = found.name.map(e => row(e, '', false)).join('') + found.role.map(e => row(e, '', true)).join('');
       status.textContent = rows.length ? `${rows.length} found` : `No one matches ‘${q}’`;
     }
-    status.classList.toggle('gt-none', !rows.length);
+    status.classList.toggle('gv-none', !rows.length);
     at = -1; light(q ? 0 : -1);
   };
   const pick = (e: GiveToEntry | undefined) => {
@@ -212,11 +212,11 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   });
   pop.addEventListener('click', ev => {
     const el = ev.target instanceof Element ? ev.target : null;
-    if (el?.closest('[data-gt-close]')) { pop.hidePopover(); return; }
+    if (el?.closest('[data-gv-close]')) { pop.hidePopover(); return; }
     const r = el?.closest<HTMLElement>('[data-give-pick]');
     if (r) pick(rows[Number(r.dataset.i)]);
   });
-  pop.addEventListener('mousedown', ev => { if (ev.target instanceof Element && ev.target.closest('.gt-row')) ev.preventDefault(); });   // the search box keeps focus
+  pop.addEventListener('mousedown', ev => { if (ev.target instanceof Element && ev.target.closest('.gv-row')) ev.preventDefault(); });   // the search box keeps focus
   function place(): void {
     if (!pop.isConnected) { done(); return; }   // removed without being hidden (its dialog drew again): no toggle comes
     pop.style.maxHeight = '';
@@ -258,7 +258,7 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
 const giveToInput = (btn: HTMLButtonElement) => btn.previousElementSibling as HTMLInputElement | null;
 const GIVE_TO_TASKS = new Map<string, GiveToTask | null>();
 function giveToButtonInner(e: GiveToEntry | undefined, placeholder: string): string {
-  return e ? `<span class="gt-face" aria-hidden="true">${actorFace(e.actor, 18)}</span><span class="gt-name">${esc(e.name)}</span>` : `<span class="gt-name">${esc(placeholder)}</span>`;
+  return e ? `<span class="gv-face" aria-hidden="true">${actorFace(e.actor, 18)}</span><span class="gv-name">${esc(e.name)}</span>` : `<span class="gv-name">${esc(placeholder)}</span>`;
 }
 /** The field in place of a native list. Closed with nothing chosen it reads the placeholder in muted text (no ✓);
     after a pick, the name. A pick sets the hidden input and fires its input and change events. */
@@ -267,8 +267,8 @@ function giveToFieldHTML({name = '', id = '', attrs = '', label = 'Give to', pla
   GIVE_TO_TASKS.set(key, task);
   if (GIVE_TO_TASKS.size > 50) GIVE_TO_TASKS.delete(GIVE_TO_TASKS.keys().next().value!);
   const cur = selected ? giveToEntries(selected).find(e => giveToIs(e, selected)) : undefined;
-  return `<span class="gt-field"><input type="hidden"${name ? ` name="${esc(name)}"` : ''}${id ? ` id="${esc(id)}"` : ''}${attrs ? ' ' + attrs : ''} value="${esc(cur?.value || '')}">`
-    + `<button type="button" class="gt-btn${cur ? '' : ' empty'}" data-give-to="${key}" data-give-label="${esc(label)}" data-give-placeholder="${esc(placeholder)}"${current ? ` data-give-current="${esc(current)}"` : ''} aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(label)}: ${esc(cur?.name || 'nobody chosen')}">${giveToButtonInner(cur, placeholder)}</button></span>`;
+  return `<span class="gv-field"><input type="hidden"${name ? ` name="${esc(name)}"` : ''}${id ? ` id="${esc(id)}"` : ''}${attrs ? ' ' + attrs : ''} value="${esc(cur?.value || '')}">`
+    + `<button type="button" class="gv-btn${cur ? '' : ' empty'}" data-give-to="${key}" data-give-label="${esc(label)}" data-give-placeholder="${esc(placeholder)}"${current ? ` data-give-current="${esc(current)}"` : ''} aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(label)}: ${esc(cur?.name || 'nobody chosen')}">${giveToButtonInner(cur, placeholder)}</button></span>`;
 }
 function giveToFieldSet(btn: HTMLButtonElement, e: GiveToEntry): void {
   const input = giveToInput(btn);
