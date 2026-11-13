@@ -406,3 +406,26 @@ def test_no_bar_is_chosen_when_none_gets_unsure_under_ten_percent():
     good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
     rows = _rows("spec", [(between, "moved_on")] * 2 + [(good, "moved_on")] * 8)
     assert R.choose("spec", rows, grid=(0.5, 0.6))["bar"] is None
+
+
+def test_a_rebuilt_page_is_read_as_its_words_not_its_html(tmp_path):
+    """`tico file read` gives a page's stored HTML, whose styles alone can pass TEXT_CHARS: Jev must be shown the page's
+    words, as the server's loader gives them, or every part reads as missing."""
+    import json
+
+    from backend import pipeline_judges as P
+    from evals.pipeline_judge import rebuild as R
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "tasks").mkdir()
+    style = "<style>" + ".x{color:red}" * (P.TEXT_CHARS // 10) + "</style>"
+    html = (
+        f"<!doctype html><html><head>{style}</head><body><h2>Acceptance criteria</h2><p>AC-1 works.</p></body></html>"
+    )
+    (tmp_path / "pages" / "file-a@1.json").write_text(json.dumps({"text": html}))
+    (tmp_path / "tasks" / "t.json").write_text(json.dumps({"title": "T", "body": "", "version": 1, "links": []}))
+    row = {"verdict_id": "v", "check": "Spec", "file_id": "file-a", "page_version": "1", "task_id": "t"}
+    check, state = R.state_of(row, tmp_path, None)
+    assert check == "spec"
+    assert "AC-1 works." in state["attachment"]["text"] and "color:red" not in state["attachment"]["text"]
+    assert not state["attachment"]["truncated"]

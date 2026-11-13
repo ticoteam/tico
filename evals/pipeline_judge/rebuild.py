@@ -40,6 +40,7 @@ RUBRIC_OF = {"spec": S.SPEC_RUBRIC, "review": S.REVIEW_RUBRIC, "qa": S.QA_RUBRIC
 GRID = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))  # 0.5 .. 0.95
 UNSURE_UNDER = 0.10
 LABEL = "pipeline-requirement@eval-rebuild"
+KEY_VERSION = 2  # bumped when what Jev is shown changes, so earlier answers are asked again
 WORKERS = 4
 
 
@@ -140,7 +141,15 @@ def state_of(row, cache, context):
     check = CHECK_OF[row["check"]]
     page = json.loads((cache / "pages" / f"{row['file_id']}@{row['page_version']}.json").read_text())
     task = json.loads((cache / "tasks" / f"{row['task_id']}.json").read_text())
-    text, cut = P.excerpt(page.get("text"))
+    # `tico file read` gives the version's stored text: a page is HTML (its styles alone can pass TEXT_CHARS), so it
+    # goes through the server's loader (text_of_bytes, the words of the page) as page_verdicts._job reads it.
+    raw = page.get("text") or ""
+    html = raw.lstrip()[:15].lower().startswith(("<!doctype", "<html"))
+    data = raw.encode()
+    text, cut = P.text_of_bytes("text/html" if html else "text/markdown", data, len(data))
+    prs = [
+        link for link in task.get("links") or [] if link.get("kind") == "pr" and link.get("repo") and link.get("number")
+    ]
     judged = {"rubric": RUBRIC_OF[check], "context": context or {"task": row["task_id"]}}
     digest = hashlib.sha256((page.get("text") or "").encode()).hexdigest()
     requirement, attachment = V.job_of(
@@ -156,15 +165,26 @@ def state_of(row, cache, context):
         text,
         cut,
         judged,
+        # The task's PR, as the server passes it when the task links exactly one.
+        {"repo": prs[0]["repo"], "number": prs[0]["number"], "detail": None} if len(prs) == 1 else None,
     )
     return check, P._state(requirement, attachment)
 
 
 def _key(row, context):
-    return hashlib.sha256(json.dumps([row["verdict_id"], context or {}], sort_keys=True).encode()).hexdigest()[:16]
+    return hashlib.sha256(
+        json.dumps([KEY_VERSION, row["verdict_id"], context or {}], sort_keys=True).encode()
+    ).hexdigest()[:16]
+
+
+def readable(rows, cache):
+    """The rows whose page version is in the cache: a page deleted since it was judged cannot be asked again, and is
+    left out of every count (`bars` reports how many) rather than scored as unsure."""
+    return [r for r in rows if (cache / "pages" / f"{r['file_id']}@{r['page_version']}.json").exists()]
 
 
 def ask(rows, cache, contexts):
+    rows = readable(rows, cache)
     answers_dir = cache / "answers"
     answers_dir.mkdir(parents=True, exist_ok=True)
 
@@ -203,7 +223,8 @@ def ask(rows, cache, contexts):
 
 def bars(rows, cache, contexts):
     by_check, cost, unanswered = {}, 0.0, 0
-    for row in rows:
+    kept = readable(rows, cache)
+    for row in kept:
         out = cache / "answers" / f"{_key(row, contexts.get(row['verdict_id']))}.json"
         said = json.loads(out.read_text()) if out.exists() else {"parts": {}}
         cost += said.get("cost_usd") or 0.0
@@ -214,6 +235,7 @@ def bars(rows, cache, contexts):
     result = {check: choose(check, rows_) for check, rows_ in by_check.items()}
     return {
         "verdicts": len(rows),
+        "unreadable": len(rows) - len(kept),
         "unanswered": unanswered,
         "with_context": sum(1 for r in rows if contexts.get(r["verdict_id"])),
         "cost_usd": round(cost, 4),
