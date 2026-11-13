@@ -572,6 +572,20 @@ class TaskRelation(Contract):
     remove: bool = False
 
 
+class TaskMerge(Contract):
+    """Merge `{id}` into `into` as its duplicate (docs/tasks.md, "Merge and make a subtask"). `owner`, one of the two
+    owners, keeps the merged task; by default `into`'s owner keeps it."""
+
+    into: ID
+    owner: ID | None = None
+
+
+class TaskParent(Contract):
+    """Put `{id}` under `parent` as its subtask, after it was filed."""
+
+    parent: ID
+
+
 class Preference(Contract):
     value: dict | list | str | int | float | bool | None = None
 

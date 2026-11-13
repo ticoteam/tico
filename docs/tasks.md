@@ -108,6 +108,10 @@ tico task move <id> reopen -m "The export is wrong again" --version N
 
 Done and Closed tasks are behind the archive button on the Tasks page. Nothing closes by itself.
 
+A duplicate is closed by merging it into the task that stays ([Merge and make a subtask](#merge-and-make-a-subtask)):
+its details move there first, and it is closed with "Archiving this one as a duplicate of #N; its details were added
+there." Reopening it brings it back; what moved stays on the other task.
+
 ## When a bot stops early
 
 A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, or closed.
@@ -130,7 +134,8 @@ a task.
 ## Sub-tasks
 
 A task waits on the tasks it files. File one with `tico task file --parent <id> "title"` (yours unless `--owner`), or
-`tico task create --parent <id> ...`. The parent is set when the task is filed and never changes. Sub-tasks nest at
+`tico task create --parent <id> ...`. The parent is set when the task is filed; a person can also put a task under
+another afterwards, from the Tasks board (see [Merge and make a subtask](#merge-and-make-a-subtask)). Sub-tasks nest at
 most 5 deep. When the last one ends, the parent's owner is woken once with how each ended. Closing a parent closes its
 open sub-tasks. A deleted sub-task counts as Closed for whatever waits on it.
 
@@ -154,6 +159,36 @@ tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the m
 Models), from a provider other than the parent's authors when one can run it. The sub-task is the filing bot's own.
 Only the runtime, model, harness and effort change: the bot's repository, tools and credentials stay its own. The API
 takes `check_model` and `check_role` on task create.
+
+## Merge and make a subtask
+
+On the Tasks board, on a desktop, drag a task onto another task's card: that card is outlined, not its column, and
+letting go asks what to do. Letting go over a column's empty space still moves the stage. Only a person who can change
+both tasks can do this; bots cannot.
+
+- **Make it a subtask.** The task goes under the other. Both keep their owners, stages and pipelines, and the other
+  waits on it like any sub-task. History on both says who did it.
+- **Merge the tasks.** The task you dropped on stays. In one change (if any part is refused, nothing changes):
+
+| Part of the dropped task | After the merge |
+|---|---|
+| Description, files and pages | Added to the kept task under "From #N", with its title. Files and pages are linked, not copied |
+| Open sub-tasks | Move under the kept task, before the close, so they stay open |
+| Comments | Stay on the dropped task. The kept task's note says how many |
+| Open asks and OKs | End with it. The kept task's note lists each question, so its owner can ask again |
+| Followers and requesters | Added to the kept task. Teammates who asked for the merged task also follow the kept one, so they hear when it is done |
+| Labels and related links | Added to the kept task. Its own stage, due date and pipeline stay; the other's due date is in the note |
+| The task itself | Closed with "Archiving this one as a duplicate of #N; its details were added there.", related as `duplicate_of` |
+
+A note on the kept task lists what came in. When its owner is a bot, the bot is woken once to fold in what is relevant;
+a person is not woken. When the two owners differ, Merge asks who keeps the task; by default its own owner does, and
+choosing the other is a reassign with the usual checks. The dialog shows what will move before you confirm, and
+disables a choice that would make a loop, nest past 5 levels, join a private task with a company one, or (for Merge)
+lose an open pull request or cross pipelines, saying why.
+
+`GET /api/v2/tasks/{id}/merge?into=<other id>` returns both tasks, why each choice cannot be done (null when it can)
+and what a merge would move. `POST /api/v2/tasks/{id}/merge` takes `{"into": "<other id>", "owner": "<optional>"}`;
+`POST /api/v2/tasks/{id}/parent` takes `{"parent": "<other id>"}`. Both are for people only.
 
 ## Related tasks
 

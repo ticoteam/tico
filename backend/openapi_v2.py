@@ -1060,6 +1060,32 @@ STABLE = [
         "TaskResult",
     ),
     (
+        "/api/v2/tasks/{tid}/merge",
+        "get",
+        "Tasks",
+        "taskMergeChecks",
+        "Before dropping this task on ?into=: both tasks, why each choice (subtask, merge) cannot be done or null, and "
+        "what a merge would move. People only",
+        "TaskMergeChecks",
+    ),
+    (
+        "/api/v2/tasks/{tid}/merge",
+        "post",
+        "Tasks",
+        "mergeTask",
+        "Merge this task into another as its duplicate ({into, owner?}), in one write: the other gains its details and "
+        "open subtasks, and this one is Closed and linked as a duplicate. People only",
+        "TaskMergeResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/parent",
+        "post",
+        "Tasks",
+        "setTaskParent",
+        "Put this task under another as its subtask ({parent}); both keep their owners and stages. People only",
+        "TaskResult",
+    ),
+    (
         "/api/v2/tasks/{tid}/delete",
         "post",
         "Tasks",
@@ -3269,6 +3295,17 @@ SCHEMAS = {
         actors=ACTORS,
     ),
     "TaskResult": obj({"task": ref("Task")}),
+    "TaskMergeResult": obj({"task": ref("Task"), "closed": ref("Task"), "note": "s"}),
+    "TaskMergeChecks": obj(
+        {
+            "task": {"type": "object"},
+            "into": {"type": "object"},
+            "same_owner": "b",
+            "subtask": {"type": ["string", "null"]},
+            "merge": {"type": ["string", "null"]},
+            "moves": {"type": "object"},
+        }
+    ),
     "OkPreview": obj(
         {
             "requirement_id": "s",
