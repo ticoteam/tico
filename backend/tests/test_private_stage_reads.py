@@ -171,6 +171,20 @@ def test_a_task_the_stage_bot_files_from_the_private_task_is_private_with_the_sa
     assert H.task_private(c, child) and H.task_readers(child) == [BEN]
 
 
+def test_the_stage_bot_cannot_give_what_it_files_from_the_private_task_to_a_bot_that_cannot_read_it(c):
+    """Review 1 of #393: a child owned by another bot would let that bot read what the stage bot copies into it. It is
+    refused unless the new owner already reads the parent."""
+    _engineering(c)
+    row = _private(c)
+    _done(c, row, BUILDER)
+    reason = "You can read this while you hold Review 1; only someone it is shared with can share it"
+    with pytest.raises(H.Refused, match=reason):
+        H.task_create(c, R1, "Follow-up", "From review.", R3, lint=False, parent_id=row["id"])
+    H.set_task_readers(c, RULES, row["id"], add=[R3])  # shared with R3 by someone who may: now it may own the child
+    child = H.task_create(c, R1, "Follow-up", "From review.", R3, lint=False, parent_id=row["id"])
+    assert H.task(c, child["id"])["owner_id"] == R3
+
+
 def test_a_bot_cannot_change_who_holds_a_stage_of_a_pipeline_with_a_private_task_and_a_person_can(c):
     """Criterion 8: on a pipeline that holds an open private task only a person changes a stage's owner bot, and
     their change is in the pipeline's history."""

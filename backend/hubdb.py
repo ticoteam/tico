@@ -5583,9 +5583,11 @@ def task_create(
     )
     if parent and stage_read_only(conn, actor, parent):
         # A bot that reads the parent only while it holds its stage shares it with nobody: what it files from it is
-        # private, with the parent's readers.
+        # private, with the parent's readers, and owned by itself or by someone who already reads the parent.
         shared = task_readers(parent)
-        if any((resolve_actor(conn, r) or r) not in shared for r in readers or ()):
+        if any((resolve_actor(conn, r) or r) not in shared for r in readers or ()) or (
+            target and target != actor and not task_private_readable(conn, target, parent)
+        ):
             refuse_stage_reader(conn, actor, parent)
         private, readers = True, shared
     # A private pipeline's task is private whatever was asked, `from_private` too; its readers are written before it
