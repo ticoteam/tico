@@ -777,7 +777,7 @@ a sub-thread shows its root's.
 | `DELETE /api/v2/threads/{id}/pin` | `thread_rail.unpin(...)` → thread view: a row with `pinned` 0 when the root is pinned for everyone, else the row goes |
 | `PATCH /api/v2/threads/{id} {"pinned_for_everyone": bool}` | `thread_rail.set_pinned_for_everyone(c, principal, thread_id, value)`: managers only (`can_manage`, 403); 422 `pin_everyone` on a 1:1 DM, a Home, a task's or a meeting's thread. Taking it off drops the rows with `pinned` 0 |
 | `POST /api/v2/threads {..., "pin_for_members": true}` | `threads.create(..., pin_for_members=True)`: a pin row for the starter and every `human:` member |
-| `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "dms": {actor: unread}, "next_cursor"}` |
+| `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "unread": [item], "dms": {actor: unread}, "next_cursor"}` |
 | `GET /api/v2/threads/browse?q=&cursor=&limit=50` | `thread_rail.browse(c, viewer, q=None, cursor=None, limit=50)` → `{"threads": [view + "member_count"], "next_cursor"}` |
 | `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
 
@@ -792,7 +792,10 @@ Rows are list rows: `me.unread` and `me.activity` sum the open subtree, as in th
 `catch_up` (Catch up's `count`), `catch_up_ids` (the roots it counts, at most 99) and `dms` (`threads.one_dm_unread`:
 `{actor: unread}` for each open, followed, unmuted DM with exactly one other person or bot) are on the first page only:
 later pages have `null`, `[]` and `{}`. The sidebar's first page has the same DM counts apart: `bot_dms` and
-`person_dms`.
+`person_dms`. `unread` (first page only, `[]` after) is each Catch up item the rail does not hold (a 1:1 DM, a Home, a
+task's thread, a thread the viewer is in only by a mention), in Catch up's order, from the same walk as `catch_up` and
+`catch_up_ids`, so the rows and the badge agree: `{id, title, name, audience, dm_with, dm_with_count, home_actor,
+new_count, mention, task_id, last_message_at}`. A client lists them under Threads while they are in its Catch up set.
 
 Live updates. A client reads the rail whole on first load, on `reset`, on `needs` and on a safety poll every few
 minutes, and patches it from the `threads` topic in between. One `activity` event stands for every activity row of
@@ -815,7 +818,10 @@ in SQL, the newest 500; its rule is under muted roots below) or a write held for
 their own holds, their bots' and the ones they review, through `org_rule_holds_author` and `org_rule_holds_reviewer`,
 the oldest 500 native posts and edits). Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
-another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
+another's Home only through a mention, an ask or a hold, and a bot's Home also while it holds a reply to the viewer's own
+message (delivery reason `reply`) or a mention past their read point (`_home_replies`): that Home's `new_count` is those
+messages alone, since the bot's unprompted posts are Updates, and a bot's reply there is never an open item, so reading
+it clears it. A root the viewer follows with notify `muted` is left out in SQL unless it
 holds an open attention item for them (`_flags` in `thread_rail`, which runs its own query: a delivery with reason mention, ask, assign, addressed or reply whose message is a person's, a bot's ask, or a bot's mention or reply (a DM with one teammate gives the reader reason `dm` at its top level, so only a mention counts there; in a sub-thread, a reply whose `in_reply_to` is the reader's message gives the reader reason `reply` and counts); no reply from the reader after it in the same conversation; an ask not yet answered; `_flags` reads at most ATTENTION_SCAN (500) of these, newest first, so a match past that cap does not bring a muted root back; unlike `thread_attention._addressed`, it admits a bot's ask whatever its reason, where `_addressed` admits one only with reason mention or reply, and it skips an ask already answered) or a mention, ask or assignment past the reader's read point (`_mentioned`: anyone but the reader, with no check whether it was answered, so it counts until the read point passes it; at most ATTENTION_SCAN rows, with no order, so a match past that cap may stay out); a migrated Home they read only for its history counts only by its attention items. Order: items that
 mention the viewer (an open mention, or a new message delivered to them as a mention or assignment; an old `ask` row counts too) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
