@@ -139,7 +139,7 @@ const PAGES: PageSpec[] = [
     ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
-      'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
+      'ui/app/drag-pan.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
       'ui/styles/org-factories.css']},
   // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
   {name: 'bot-chat', route: '#/bot/support-owner', ready: 'No messages yet', ui: BOT_CHAT_UI},
@@ -210,7 +210,7 @@ const PAGES: PageSpec[] = [
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
-  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
+  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/drag-pan.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
     // The stage rules panel opens from Rules › Pipelines and stages and from each stage header on the board.
     'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css']},
   {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
