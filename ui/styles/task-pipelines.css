@@ -38,6 +38,8 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-sleep:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .pv-is-phone .pv-sleep::after{content:"";position:absolute;left:50%;top:50%;width:40px;height:40px;transform:translate(-50%,-50%)}
 .tk-card .pv-wake{min-width:0}
+.pv-blocked-by{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.pv-stop{display:inline-flex;color:var(--fail)}
 
 /* The list: a group per stage. */
 .pv-group{margin:0 0 10px}

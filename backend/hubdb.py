@@ -7897,7 +7897,11 @@ def tasks(
         where.append("id IN (SELECT value FROM json_each(?))")
         args.append(json.dumps(list(ids)))
     if snoozed in ("hide", "only"):
-        where.append(("NOT " if snoozed == "hide" else "") + SNOOZED % "tasks")
+        # A blocked task is listed as blocked, never as snoozed, even under a snooze a bot left open (task_depends).
+        from . import task_depends
+
+        aside = f"({SNOOZED % 'tasks'} AND NOT {task_depends.BLOCKED % 'tasks'})"
+        where.append(("NOT " if snoozed == "hide" else "") + aside)
     if label:
         where.append(
             "EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "

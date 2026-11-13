@@ -205,6 +205,8 @@ def grouped(conn, task_ids, visible_sql="1"):
                 # An order reads "After #40 · Merge", a dependency "Blocked by #304 · Build": the other task's number
                 # and the stage it is in.
                 entry.update(_place(conn, row["id"]))
+            if row["kind"] == "depends_on":
+                entry["since"] = row["at"]  # "Blocked since Nov 13"
             out[row["here"]].setdefault(row["kind"], []).append(entry)
         if visible_sql == "1":
             continue
