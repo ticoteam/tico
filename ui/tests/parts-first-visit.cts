@@ -18,6 +18,7 @@ const {must} = require('./support/e2e.cts') as {must: (hub: RealHubSupport.Hub, 
 declare const S: {v2: {status: Record<string, unknown>}};
 declare function refresh(quiet: boolean): void;
 declare function liveEmit(topic: string, data: unknown): void;
+declare function decideTabPages(): {page: string}[];
 
 interface PartsTable { build: string; parts: Record<string, {url: string; load: string[]}> }
 const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
@@ -110,6 +111,9 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await open.page.addInitScript(() => { Object.defineProperty(Notification, 'permission', {get: () => 'granted'}); });
       await open.page.goto(hub.url + '/#/home');
       await drawn(open.page, '#/home');
+      // A "Page → Tab" phrase in Needs you links Rules' and Settings' tabs before either page has been opened.
+      assert.deepEqual(await open.page.evaluate(() => decideTabPages().map(p => p.page).filter(p => p !== 'Finance')), ['Rules', 'Settings'],
+        "a cold Home knows Rules' and Settings' tabs");
       await open.page.evaluate(() => {
         refresh(false);
         const bot = Object.keys(S.v2.status)[0] || 'ops';
