@@ -120,7 +120,8 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
    its last row for it. Every tap target is 44px. */
 .pa-host[hidden]{display:none}
 .pa-host{position:fixed;z-index:17;right:calc(12px + env(safe-area-inset-right));bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
-body.mobile-composer-focus .pa-host,body:has(.tl-search:focus-within) .pa-host{display:none}   /* a keyboard is up */
+/* a keyboard is up: a chat box, the search, or a field on the board (the Why of a refused move) */
+body.mobile-composer-focus .pa-host,body:has(.tl-search:focus-within) .pa-host,body:has(#main input:focus, #main textarea:focus) .pa-host{display:none}
 .tasks-page.has-ask .tasks-pane{padding-bottom:64px}
 .pa-fab{position:relative;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.28);cursor:pointer;touch-action:manipulation}
 .pa-fab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}

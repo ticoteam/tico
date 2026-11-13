@@ -91,6 +91,12 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       // The last row clears the face: the list keeps 64 px under it.
       assert.equal(await page.locator('#tasks-pane').evaluate(el => getComputedStyle(el).paddingBottom), '64px');
 
+      // A field on the board raises a keyboard (the Why of a refused move): the face hides while it has the focus.
+      await page.evaluate(() => { const i = document.createElement('input'); i.name = 'why'; i.id = 'why-probe'; document.querySelector('#task-body')!.prepend(i); i.focus(); });
+      assert.equal(await face(page).isVisible(), false, 'no face while a board field has the keyboard');
+      await page.evaluate(() => document.querySelector('#why-probe')!.remove());
+      assert.equal(await face(page).isVisible(), true, 'the face is back once it goes');
+
       // Tap: the menu lists the manager, then the open stage's holder.
       await face(page).click();
       await page.locator('#task-ask .pa-pop:not([hidden])').waitFor();

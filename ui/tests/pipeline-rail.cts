@@ -280,15 +280,19 @@ function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
       await page.close();
     }
     {
-      // A phone: no rail; the Ask bar opens the manager's chat alone, its box in view.
+      // A phone: no rail; the floating face opens the manager's chat alone, its box in view.
       const c = chat(200);
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, needs: [], hash: '#/tasks?pipeline=product', beforeGoto: c.route});
       assert.equal(await page.locator('#task-manager').isVisible(), false, 'a phone has no chat icon');
       assert.equal((await box(page, '#task-rail')).hidden, true, 'nor a rail');
       await page.locator('#task-body .pv-tab[data-pv-tab="spec"]').click();
-      await page.locator('#task-ask .pa-text').fill('Anything stuck?');
-      await page.locator('#task-ask .pa-send').click();
+      await page.locator('#task-ask .pa-fab').click();
+      // With more than one bot on the board the face opens a menu: the manager is first.
+      const pick = page.locator('#task-ask .pa-pop:not([hidden]) .pa-pick').first();
+      if (await pick.isVisible()) await pick.click();
       const sheet = page.locator('dialog.pa-sheet[open]');
+      await sheet.locator('.thv-composer .p-text').fill('Anything stuck?');
+      await sheet.locator('.thv-composer .p-send').click();
       await sheet.locator('.th-msg[data-mid]', {hasText: 'Anything stuck?'}).waitFor();
       await page.waitForFunction(() => (document.querySelector('dialog.pa-sheet')?.getAnimations({subtree: true}) ?? []).every(x => x.playState !== 'running'));
       assert.equal(await sheet.locator('.pm-tabs, .pm-body, .pm-tab, [role="tab"]').count(), 0, 'the chat alone');
