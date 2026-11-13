@@ -94,7 +94,10 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
         assert not TM._asks(c, dup["id"]), "the asks ended with it"
         assert sum(1 for m in H.task_comments(c, dup["id"]) if m["kind"] == "say") >= 7, "the comments stay"
         notes = [m["body"] for m in H.task_comments(c, kept["id"]) if m["kind"] == "say"]
-        assert any("7 comments on " + n in body and "Which plan did it fail on?" in body for body in notes)
+        assert any(
+            f"7 comments on [{n}](#/task/{dup['id']})" in body and "Which plan did it fail on?" in body
+            for body in notes
+        )
         closed = [m["body"] for m in H.task_comments(c, dup["id"])]
         assert TM.duplicate_note(b) in closed
         assert (

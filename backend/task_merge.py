@@ -460,7 +460,7 @@ def merge(
     if came:
         lines.append("Added: " + "; ".join(came) + ".")
     if comments:
-        lines.append(f"{_plural(comments, 'comment')} on {_num(a)} stay there.")
+        lines.append(f"{_plural(comments, 'comment')} on [{_num(a)}](#/task/{a['id']}) stay there.")
     if asks:
         lines.append(f"Open questions on {_num(a)} ended with it; ask again if one still matters:")
         lines += [
