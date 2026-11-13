@@ -749,9 +749,7 @@ def _schedule(c, actor, sid, had=None, who=None):
 def source_create(c, actor, body, catalog=None, who=None):
     H._writer(c, actor)
     # A file or bot cost comes from a person; Finance ad spend through its own import and stored keys.
-    reach = body.reach_kind or {"file": "person", "bot_cost": "person", GF.KIND: "credential"}.get(
-        body.sync_kind or ""
-    )
+    reach = body.reach_kind or {"file": "person", "bot_cost": "person", GF.KIND: "credential"}.get(body.sync_kind or "")
     if not reach:
         raise Problem("validation", "reach_kind is mcp, credential, url or person", 422)
     sid = H.new_id()
