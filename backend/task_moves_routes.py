@@ -270,6 +270,9 @@ def register(
         if body.let_see:
             if str(body.to).strip().lower() != "next":
                 raise Problem("bad_request", "Letting someone see a task moves it to the next stage: to is next", 422)
+            if who.via == "botops" and not who.confirmed:
+                # As the readers route: BotOps acting for a person changes who sees a task only on their own tap.
+                raise Problem("confirm_required", "Letting someone see a private task needs the person's own tap", 403)
 
             def check(added: list[str]) -> None:
                 privacy.require_readers(c, who, task_id, added, task_id)

@@ -83,7 +83,7 @@ class Wait:
     about: str | None = None
     fix: str | None = None
     href: str | None = None
-    share: str | None = None
+    share: tuple[str, ...] | None = None
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -126,6 +126,8 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
         del out["href"]
     if out["share"] is None:
         del out["share"]
+    else:
+        out["share"] = list(out["share"])
     return out
 
 
@@ -341,13 +343,19 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
     return None
 
 
-def _share_line(conn: "sqlite3.Connection", who: str) -> str:
-    """Why a private task waits on its person, in their words (task #392): `who` (asked, or the next step's) can't see
-    it. Their card's button lets `who` see it (`Wait.share`)."""
+def names_of(conn: "sqlite3.Connection", whom: Sequence[str]) -> str:
+    """'Reviewer 1', 'Reviewer 1 and Other', 'A, B and C'."""
     from . import hubdb
 
     H: Any = hubdb
-    return f"{H.actor_name(conn, who)} can't see this task"
+    names = [str(H.actor_name(conn, who)) for who in whom]
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _share_line(conn: "sqlite3.Connection", whom: Sequence[str]) -> str:
+    """Why a private task waits on its person, in their words (task #392): `whom` (asked, or the next step's) can't
+    see it. Their card's button lets exactly them see it (`Wait.share`)."""
+    return f"{names_of(conn, whom)} can't see this task"
 
 
 _FILED_OPEN_SQL = (
@@ -435,7 +443,8 @@ def of(
 
     # While it waits on a task it merges after, GitHub's "Not queued until #40 merges" is that same wait (merge_order).
     ordered = any(merge_order.is_order(s.requirement) for s in unmet)
-    shut = unreadable(conn, row, unmet)  # asked, and may not open it
+    asked_out = unreadable(conn, row, unmet)  # asked, and may not open it
+    shut: tuple[str, ...] | None = (asked_out,) if asked_out else None
     for standing in unmet:
         requirement = standing.requirement
         # An ask's wait counts from when it was asked (a page's version, once Jev looked), else when the stage began.
@@ -475,8 +484,8 @@ def of(
                 continue
             if shut and named and E.not_shared(conn, row, named):
                 # Someone who may not open it: the task's person shares it first. Work of theirs, not an ask.
-                line = _share_line(conn, named)
-                out.append(Wait(PERSON, person_for(conn, row), line, requirement["id"], since, share=named))
+                line = _share_line(conn, (named,))
+                out.append(Wait(PERSON, person_for(conn, row), line, requirement["id"], since, share=(named,)))
                 continue
             out.append(_turn(conn, row, named, line, requirement["id"], since, True, seen))
         elif by_hand or asked:
@@ -518,8 +527,9 @@ def of(
             sharer = person_for(conn, row)
             by = str(H.actor_name(conn, sharer)) if sharer else "someone who can see it"
             line = f"Waits on {by}: {held['cause']}"
-            shut = shut or str(held["who"])
-        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=held["who"] if held else None))
+            shut = shut or tuple(held["whom"])
+        share = tuple(held["whom"]) if held else None
+        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=share))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
         # first thing it says is why.

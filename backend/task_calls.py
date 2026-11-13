@@ -277,18 +277,19 @@ def task_let_see(
     conn: "sqlite3.Connection",
     actor: str,
     task_id: str,
-    who: str,
+    whom: list[str],
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
     check: Callable[[list[str]], None] | None = None,
 ) -> Row:
-    """A person lets `who` see private task `task_id` and moves it on, in one write: the stuck card's one fix (task
-    #392). `who` must be exactly the one the task waits on to be let in now (`waiting_on.Wait.share`, as the card
-    showed it): when that changed, nobody is added and the refusal names who it is now. Only `who` is added (one reader
-    event, "<person> let <who> see this task"); then, with nothing else missing, the task moves to the next stage. A
-    bot never lets anyone in: it asks a person (task_engine.fix_for). `check(added)` may refuse the reader
-    (task_privacy.require_readers). A refused move adds nobody: the whole write is undone."""
+    """A person lets `whom` see private task `task_id` and moves it on, in one write: the stuck card's one fix (task
+    #392). `whom` must be exactly who the task waits on to be let in now (`waiting_on.Wait.share`, as the card showed
+    it: everyone the next stage shuts out, so one press always gets it past them): when that changed, nobody is added
+    and the refusal names who it is now. Only they are added (one reader event each, "<person> let <them> see this
+    task"); then, with nothing else missing, the task moves to the next stage. A bot never lets anyone in: it asks a
+    person (task_engine.fix_for). `check(added)` may refuse a reader (task_privacy.require_readers). A refused move
+    adds nobody: the whole write is undone."""
     from . import task_engine as E
     from . import task_requirements as R
     from . import waiting_on as W
@@ -301,16 +302,18 @@ def task_let_see(
     if not full:
         _refuse(conn, actor, "not-found", "No such task")
     E.check_version(conn, actor, full, seen_version)
-    now = next((str(wait.share) for wait in W.of(conn, full) if wait.share), None)
-    named = H.resolve_actor(conn, who) or who
-    if now != named:
+    waits: list[Any] = W.of(conn, full)
+    nobody: list[str] = []
+    now: list[str] = next((list(wait.share) for wait in waits if wait.share), nobody)
+    named: list[str] = [str(H.resolve_actor(conn, who) or who) for who in whom]
+    if not named or sorted(set(named)) != sorted(now):
         said = (
-            f"{H.actor_name(conn, now)} is the one who can't see it now. Nobody was added."
+            f"{W.names_of(conn, now)} can't see it now. Nobody was added."
             if now
             else "Nobody is waiting to see this task now. Nobody was added."
         )
         _refuse(conn, actor, "task_changed", said, task_id)
-    H.set_task_readers(conn, actor, task_id, add=[named], mover=mover, check=check)
+    H.set_task_readers(conn, actor, task_id, add=now, mover=mover, check=check)
     after = E.task(conn, task_id)
     if not after or R.unmet(conn, after):
         return after or row  # an ask in this stage waited on them: it is theirs now, and the task stays

@@ -302,10 +302,10 @@ const taskDone = (id: string, version: number | null, note?: string): Promise<Ta
 /** `to`: next, done, closed, reopen, or a stage's id or name. `why` pushes past what is missing. */
 const taskMove = (id: string, to: string, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/move`, withVersion(version, why ? {to, why} : {to}), newRequestId());
-/** A person lets `who` see a private task and moves it on (the stuck card's one fix, task #392). Refused, adding
+/** A person lets `whom` see a private task and moves it on (the stuck card's one fix, task #392). Refused, adding
     nobody, when the task now waits on someone else. */
-const taskLetSee = (id: string, who: string, version: number | null): Promise<TaskMoved> =>
-  post(`${taskPath(id)}/move`, withVersion(version, {to: 'next', let_see: who}), newRequestId());
+const taskLetSee = (id: string, whom: string[], version: number | null): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/move`, withVersion(version, {to: 'next', let_see: whom}), newRequestId());
 /** `setAnyway`: a person gives it past a stage rule that refused this owner (409 task_stage_rule). */
 const taskReassign = (id: string, owner: string, version: number | null, why?: string, setAnyway?: boolean): Promise<TaskMoved> =>
   post(`${taskPath(id)}/owner`, withVersion(version, {owner, ...(why ? {why} : {}), ...(setAnyway ? {set_anyway: true} : {})}), newRequestId());

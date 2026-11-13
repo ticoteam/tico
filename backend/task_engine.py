@@ -395,6 +395,9 @@ def shut_out(
         return None
     who, how = blocked[0]
     name = H.actor_name(conn, who)
+    # Everyone the stage shuts out, once each: a person lets them all in with one press (task #392), never one at a
+    # time, which the move would refuse again for the next one.
+    whom = list(dict.fromkeys(actor for actor, _ in blocked))
     if goes_private:
         cause = (
             f"{name} {how} {target['name']} and could not read this task there: "
@@ -403,15 +406,19 @@ def shut_out(
         fix = f"Make it private and add {name} under Who can see"
     else:
         # Plain words (task #392): who does the next step and that they can't see it, never the stage's internals.
+        # A move to another stage (back, or a restore) names that stage: it is not the next step.
+        ahead = next_stage(conn, row) if not new and how == "owns" and row.get("stage") else None
         cause = (
             f"{name} {how} {target['name']} and cannot read this private task"
             if new
             else f"{name} does the next step but can't see this private task"
+            if how == "owns" and ahead and ahead["id"] == target["id"]
+            else f"{name} owns {target['name']} but can't see this private task"
             if how == "owns"
             else f"{name} is asked in {target['name']} but can't see this private task"
         )
         fix = f"Add {name} under Who can see" if new else f"Add {name} under Who can see, then move it again"
-    return {"who": who, "cause": cause, "fix": fix}
+    return {"who": who, "whom": whom, "cause": cause, "fix": fix}
 
 
 # ----------------------------------------------------------------------------- the writer

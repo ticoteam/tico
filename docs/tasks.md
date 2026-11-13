@@ -353,11 +353,11 @@ names everyone in it, read at each check.
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with
   `{"readers": [...]}`. A task lists at most 50 readers.
 - A reader reads that task only: not the task above it or its other sub-tasks.
-- A private task stuck because the next step's person (or someone its stage asks) can't see it says so on its person's
-  Needs you card ("Stuck in Build: Reviewer 1 can't see this task"), with **Let Reviewer 1 see it**: one press adds
-  exactly that one as a reader and moves the task on (`POST /api/v2/tasks/{id}/move` with `{"to": "next",
-  "let_see": "<actor>"}`; refused, adding nobody, when the task now waits on someone else). A bot is never told how to
-  share it: its refusal names the person to ask.
+- A private task stuck because the next stage's owner or someone it asks can't see it says so on its person's Needs
+  you card, naming everyone shut out ("Stuck in Build: Reviewer 1 can't see this task"), with **Let Reviewer 1 see
+  it**: one press adds exactly them as readers and moves the task on (`POST /api/v2/tasks/{id}/move` with
+  `{"to": "next", "let_see": ["<actor>", ...]}`, the list the task's `turn.share` gives; refused, adding nobody, when
+  it now waits on someone else). A bot is never told how to share it: its refusal names the person to ask.
 
 ### A private task with no person on it
 

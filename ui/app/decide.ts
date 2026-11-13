@@ -136,7 +136,7 @@ function decideKind(it: NeedsEntry): AskKind {
   // Stuck: the ladder brought it to the person (stuck or late with them), a bot is Paused on it, or it waits on someone
   // being let in (turn.share). Its buttons are the stuck card's, never Done, Snooze or Give to (task #392).
   const t = it.task;
-  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share ? 'stuck' : 'yours';
+  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share?.length ? 'stuck' : 'yours';
 }
 const decideRid = (it: NeedsEntry) => it.requirement_id || it.id;
 const decideTaskId = (it: NeedsEntry) => it.task_id || it.task?.id || '';
@@ -567,9 +567,10 @@ function decidePaintSide(st: DecState) {
   } else if (kind === 'stuck') {
     // Stuck because someone can't see the private task: one button lets exactly them see it and moves it on, and says
     // what they get before the press (task #392). Else Try again.
-    const share = it.task?.turn?.share, name = share ? actorLabel(share) : '';
-    const fix = share ? decideBtn('let-see', `Let ${name} see it`, true, busy) : decideBtn('again', 'Try again', true, busy);
-    const gives = share ? `<p class="muted dc-gives">${esc(name)} will see this task, its conversation and its files, until someone removes them.</p>` : '';
+    // Everyone the next stage shuts out, named: one press lets exactly them in.
+    const share = it.task?.turn?.share || [], name = decideNames(share);
+    const fix = share.length ? decideBtn('let-see', `Let ${name} see it`, true, busy) : decideBtn('again', 'Try again', true, busy);
+    const gives = share.length ? `<p class="muted dc-gives">${esc(name)} will see this task, its conversation and its files, until someone removes them.</p>` : '';
     body = `<div class="dc-acts">${fix}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${gives}${decideMoreHTML(st, it)}`;
   } else {
     // A cause a person fixes in the app (Connect GitHub) goes straight there; Open shows the first task it holds up.
@@ -1024,11 +1025,16 @@ async function decideDo(st: DecState, it: NeedsEntry, label: string, run: () => 
     decidePaintSide(st);
   }
 }
+/** 'Reviewer 1', 'Reviewer 1 and Other', 'A, B and C'. */
+function decideNames(whom: string[]): string {
+  const names = whom.map(actorLabel);
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] || '';
+}
 /** The stuck card's fix (task #392): let exactly the person the card names see the private task, and move it on, in
     one write (a move with `let_see`). When the task now waits on someone else nobody is added: the refusal stays on
     screen and the list is read again, so the card names who it is now. */
-async function decideLetSee(st: DecState, it: NeedsEntry, who: string) {
-  await decideDo(st, it, `${actorLabel(who)} can see it now`, () => taskLetSee(decideTaskId(it), who, it.task?.version ?? null));
+async function decideLetSee(st: DecState, it: NeedsEntry, whom: string[]) {
+  await decideDo(st, it, `${decideNames(whom)} can see it now`, () => taskLetSee(decideTaskId(it), whom, it.task?.version ?? null));
   if (DEC !== st || st.at !== it.id || !st.error) return;
   const said = st.error;
   await v2Refresh();
@@ -1154,7 +1160,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;
     case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
-    case 'let-see': { const who = it.task?.turn?.share; if (who) await decideLetSee(st, it, who); return; }
+    case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'close-task': await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver), decideUndoReopen(taskId)); return;
     case 'snooze': case 'give': case 'back':
       st.more = st.more === what ? '' : what; decidePaintSide(st); return;

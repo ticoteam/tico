@@ -18,7 +18,7 @@ const side = (page: Page) => page.locator('#need-card[open] .dc-side');
 const buttons = (page: Page) => side(page).locator('.dc-acts button').evaluateAll(els => els.map(e => e.textContent?.trim()));
 
 /** Ana's private task in Build, stuck with her: `share` is who it waits on to be let in (null: stuck for another reason). */
-function stuck(share: string | null, line = STUCK): {tasks: Task[]; needs: Need[]} {
+function stuck(share: string[] | null, line = STUCK): {tasks: Task[]; needs: Need[]} {
   const t = task('t-9', 'Fix the card', 'build', {private: true, owner_id: 'bot:pm', version: 4,
     turn: {state: 'person', who: 'human:ana', line, since: new Date().toISOString(), until: null, ask: false, requirement_id: null, ...(share ? {share} : {})}});
   const tasks = [...fixtures(), t];
@@ -26,7 +26,8 @@ function stuck(share: string | null, line = STUCK): {tasks: Task[]; needs: Need[
 }
 
 async function letSee(browser: Browser) {
-  const {tasks, needs} = stuck('bot:eng');
+  // Build's next stage shuts out two (its owner and a teammate it asks): the card names both.
+  const {tasks, needs} = stuck(['bot:eng', 'bot:ops'], 'Stuck in Build: Engineer and Ops can\'t see this task');
   const moves: unknown[] = [];
   const {page, errors} = await open(browser, {tasks, needs, hash: '#/decide?stage=build', beforeGoto: async (p: Page) => {
     await p.route('**/api/v2/tasks/t-9/move', async (route: Route) => {
@@ -37,28 +38,28 @@ async function letSee(browser: Browser) {
   }});
   try {
     await side(page).locator('.dc-q').waitFor({timeout: 5000});
-    assert.equal(await side(page).locator('.dc-q').innerText(), STUCK);
-    assert.deepEqual(await buttons(page), ['Let Engineer see it', 'Reassign', 'Move back', 'Close']);
+    assert.equal(await side(page).locator('.dc-q').innerText(), 'Stuck in Build: Engineer and Ops can\'t see this task');
+    assert.deepEqual(await buttons(page), ['Let Engineer and Ops see it', 'Reassign', 'Move back', 'Close']);
     assert.equal(await side(page).locator('.dc-gives').innerText(),
-      'Engineer will see this task, its conversation and its files, until someone removes them.');
+      'Engineer and Ops will see this task, its conversation and its files, until someone removes them.');
     await side(page).locator('[data-dc="let-see"]').click();
     await page.waitForFunction(() => !document.querySelector('#need-card[open] [data-dc="let-see"]'));
-    assert.deepEqual(moves, [{to: 'next', let_see: 'bot:eng', version: 4}], 'one move, letting exactly Engineer in');
+    assert.deepEqual(moves, [{to: 'next', let_see: ['bot:eng', 'bot:ops'], version: 4}], 'one move, letting exactly both in');
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
-  console.log('stuck card: plain line, Let Engineer see it, what they get, one move with let_see: ok');
+  console.log('stuck card: plain line naming both, Let Engineer and Ops see it, what they get, one move with let_see: ok');
 }
 
 async function changed(browser: Browser) {
-  const {tasks, needs} = stuck('bot:eng');
+  const {tasks, needs} = stuck(['bot:eng']);
   const {page, errors} = await open(browser, {tasks, needs, hash: '#/decide?stage=build', beforeGoto: async (p: Page) => {
     await p.route('**/api/v2/tasks/t-9/move', async (route: Route) => {
       // Review 1 is Writer's now: nobody is added, and the list says so.
       const now = 'Stuck in Build: Writer can\'t see this task', t = tasks.at(-1)!;
-      t.turn = {...t.turn!, line: now, share: 'bot:writer'};
+      t.turn = {...t.turn!, line: now, share: ['bot:writer']};
       needs.splice(0, 1, {...needs[0]!, line: now, task: Object.assign(brief(t), {stuck: true})});
       await route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {code: 'task_changed',
-        detail: 'Writer is the one who can\'t see it now. Nobody was added.'}})});
+        detail: 'Writer can\'t see it now. Nobody was added.'}})});
     });
   }});
   try {

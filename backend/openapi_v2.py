@@ -2775,9 +2775,10 @@ SCHEMAS = {
             "again",
         },
         share={
-            "type": "string",
-            "description": "A private task waits on this actor being let in (the next step's owner, or someone asked, "
-            "can't see it): move with to next and let_see set to it",
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "A private task waits on these actors being let in (the next stage's owner and those it "
+            "asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list",
         },
     ),
     "TaskRequirement": obj(
