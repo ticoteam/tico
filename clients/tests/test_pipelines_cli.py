@@ -699,3 +699,171 @@ def test_save_takes_a_whole_record_from_a_file_as_show_record_prints_it(cli, cap
 def test_show_record_is_the_settings_record_a_save_takes():
     shown = P.pipeline_show(Api(), {"pipeline": "product", "record": True})["pipeline"]
     assert shown == PIPELINES["pipelines"][1]
+
+
+# ----------------------------------------------------------------------------- One of several
+REVIEWERS = ("bot:01a-r1", "bot:01a-r2")
+PICKING = {
+    "id": "engineering-review-1",
+    "name": "Review 1",
+    "owner": "pick",
+    "pick": {
+        "bots": list(REVIEWERS),
+        "how": "turns",
+        "limit_each": 2,
+        "prefer": "new",
+        "owns_task": False,
+        "families": {"bot:01a-r1": "GPT", "bot:01a-r2": "GPT"},
+    },
+    "pick_next": "The next task goes to Reviewer 2, after Reviewer 1 had the last one.",
+    "requirements": [],
+}
+
+
+class Picking(Api):
+    """The fixtures with Engineering's first stage, Build, picking from Builder and Builder 2 (who becomes the owner),
+    and a Review 1 that picks from both Reviewers, as the API gives them (part 1, backend/stage_pick.py)."""
+
+    def get(self, path, **query):
+        found = super().get(path, **query)
+        if path == "pipelines":
+            engineering = found["pipelines"][2]
+            build = engineering["stages"][0]
+            build.update(owner="pick", pick={"bots": [BUILDER, "bot:01a-b2"], "how": "turns", "owns_task": True})
+            engineering["stages"].insert(1, json.loads(json.dumps(PICKING)))
+            found["actors"].update({"bot:01a-b2": "Builder 2", "bot:01a-r1": "Reviewer 1", "bot:01a-r2": "Reviewer 2"})
+        if path == "bots":
+            found = [*found, {"id": "01a-r1", "slug": "reviewer-1", "display_name": "Reviewer 1", "state": "active"}]
+        return found
+
+
+def test_a_stage_that_picks_from_several_reads_as_one_of_its_bots_with_who_gets_the_next_task():
+    shown = P.stage_show(Picking(), {"stage": "engineering-review-1"})["stage"]
+    assert shown["held_by"] == "pick" and shown["held_by_name"] == "One of several: Reviewer 1, Reviewer 2"
+    assert shown["pick"]["bots"] == list(REVIEWERS) and shown["pick"]["bot_names"] == ["Reviewer 1", "Reviewer 2"]
+    assert shown["pick"]["prefer"] == "new" and shown["pick"]["families"]["bot:01a-r1"] == "GPT"
+    assert shown["pick_next"] == PICKING["pick_next"]
+    listed = P.pipeline_list(Picking(), {})["pipelines"][2]["stages"]
+    assert listed[0]["held_by_name"] == "One of several: Builder, Builder 2"
+    # a stage with one owner has neither key, as the API gives it
+    assert "pick" not in P.stage_show(Picking(), {"stage": "product-spec"})["stage"]
+    # each bot it picks from holds the stage
+    reviewer = next(b for b in P.company_show(Picking(), {})["bots"] if b["slug"] == "reviewer-1")
+    assert reviewer["holds"] == ["engineering-review-1"]
+
+
+def test_one_of_several_is_set_with_the_api_fields_and_a_holder_takes_the_stage_back_to_one_owner():
+    api = Api()
+    P.stage_update(
+        api,
+        {"stage": "engineering-build", "pick_from": ["builder", "bot:01a-b2"], "owns_task": True, "limit_each": 3},
+    )
+    build = saved(api)[1]["stages"][0]
+    assert build["owner"] == "pick" and build["pick"] == {
+        "bots": ["bot:builder", "bot:01a-b2"],
+        "how": "turns",
+        "limit_each": 3,
+        "prefer": "anyone",
+        "owns_task": True,
+    }
+    # On a stage that picks already, a setting alone keeps the rest; the read's own additions are never sent back.
+    api = Picking()
+    P.stage_update(api, {"stage": "engineering-review-1", "pick": "random", "no_limit_each": True})
+    review = stage(saved(api)[1], "engineering-review-1")
+    assert review["pick"] == {
+        "bots": list(REVIEWERS),
+        "how": "random",
+        "limit_each": None,
+        "prefer": "new",
+        "owns_task": False,
+    }
+    assert "pick_next" not in review
+    api = Picking()
+    P.stage_update(api, {"stage": "engineering-review-1", "holder": "reviewer-1"})
+    review = stage(saved(api)[1], "engineering-review-1")
+    assert review["owner"] == "bot:reviewer-1" and "pick" not in review and "pick_next" not in review
+    api = Api()
+    P.stage_add(api, {"pipeline": "engineering", "name": "Review 2", "pick_from": ["reviewer-1"], "prefer": "family"})
+    added = saved(api)[1]["stages"][-1]
+    assert (
+        added["owner"] == "pick" and added["pick"]["prefer"] == "family" and added["pick"]["bots"] == ["bot:reviewer-1"]
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"stage": "engineering-build", "prefer": "new"},  # a stage with one owner has nothing to prefer among
+        {"stage": "engineering-build", "owns_task": False},
+        {"stage": "engineering-build", "holder": "builder", "pick_from": ["builder-2"]},
+    ],
+)
+def test_pick_settings_need_a_stage_that_picks_and_never_come_with_a_holder(fields):
+    api = Api()
+    with pytest.raises(APIError) as refused:
+        P.stage_update(api, fields)
+    assert refused.value.code == "usage" and api.writes() == []
+
+
+def test_the_command_line_sets_one_of_several_as_the_tool_does(cli, capsys):
+    argv = ["stage", "update", "engineering-build", "--pick-from", "builder", "--pick-from", "builder-2"]
+    argv += ["--pick", "random", "--limit-each", "2", "--prefer", "new", "--no-owns-task"]
+    code, api = cli(argv)
+    printed = json.loads(capsys.readouterr().out)
+    fields = {
+        "stage": "engineering-build",
+        "pick_from": ["builder", "builder-2"],
+        "pick": "random",
+        "limit_each": 2,
+        "prefer": "new",
+        "owns_task": False,
+    }
+    mcp = Api()
+    assert hubtools.argument_error(fields, hubtools.BY_NAME["tico_stage_update"]["inputSchema"]) is None
+    assert code == 0 and hubtools.BY_NAME["tico_stage_update"]["fn"](mcp, fields) == printed
+    assert api.calls == mcp.calls
+    assert saved(api)[1]["stages"][0]["pick"]["how"] == "random"
+
+
+def test_a_request_into_a_first_stage_that_picks_names_no_owner_and_a_named_one_wins():
+    api = Picking()
+    P.task_request(api, {"pipeline": "engineering", "title": "Add negate"})
+    [(_, path, body)] = api.writes()
+    assert path == "tasks" and "owner" not in body and body["pipeline"] == "engineering"
+    api = Picking()
+    P.task_request(api, {"pipeline": "engineering", "title": "Add negate", "owner": "builder-2"})
+    assert api.writes()[0][2]["owner"] == "builder-2"
+
+
+def test_task_create_files_without_an_owner_and_the_command_line_needs_none(cli, capsys):
+    assert "owner" not in hubtools.BY_NAME["tico_task_create"]["inputSchema"].get("required", [])
+    code, api = cli(["task", "create", "--pipeline", "engineering", "--title", "Add negate"])
+    assert code == 0, capsys.readouterr()
+    [(_, path, body)] = api.writes()
+    assert path == "tasks" and "owner" not in body and body["pipeline"] == "engineering"
+
+
+def test_wait_takes_a_turn_that_waits_for_a_pick():
+    assert "pick" in P.TURN_STATES
+
+
+def test_task_file_into_a_pipeline_whose_first_stage_picks_leaves_the_owner_to_the_stage():
+    api = Picking()
+    hubtools.BY_NAME["tico_task_file"]["fn"](api, {"parent": "T1", "title": "Follow up", "pipeline": "engineering"})
+    [(_, path, body)] = api.writes()
+    assert path == "tasks" and "owner" not in body and body["pipeline"] == "engineering" and body["parent"] == "T1"
+    for fields, owner in (
+        ({"pipeline": "product"}, "human:ana"),  # a first stage with one holder: yours, as before
+        ({}, "human:ana"),  # General
+        ({"pipeline": "engineering", "owner": "builder-2"}, "builder-2"),  # naming one always wins
+    ):
+        api = Picking()
+        hubtools.BY_NAME["tico_task_file"]["fn"](api, {"parent": "T1", "title": "Follow up", **fields})
+        assert api.writes()[0][2]["owner"] == owner, fields
+
+
+def test_stage_add_with_a_pick_setting_and_no_bots_asks_for_the_bots():
+    api = Api()
+    with pytest.raises(APIError, match="--pick-from") as refused:
+        P.stage_add(api, {"pipeline": "engineering", "name": "Review 2", "prefer": "new"})
+    assert "not both" not in refused.value.detail and api.writes() == []

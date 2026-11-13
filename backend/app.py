@@ -3286,6 +3286,16 @@ def create_app(settings=None):
         others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations]
         from .shared_bots import route
 
+        # No owner: a first stage that picks from several picks one as the task arrives (backend/stage_pick.py). The
+        # filer stands in as its requester and reach, as for a task a stage files, and it enters with no assignee.
+        unassigned = not body.owner
+        if unassigned:
+            from . import stage_pick
+
+            refused = stage_pick.no_owner_refusal(c, body.pipeline)
+            if refused:
+                raise Problem("owner", refused, 422)
+            body = body.model_copy(update={"owner": who.actor})
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
         from . import meeting_audience
@@ -3437,7 +3447,7 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id and private:
+        if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
                 "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                 "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot_id=?",
@@ -3495,6 +3505,7 @@ def create_app(settings=None):
             # everyone who will.
             readers=body.readers or (),
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
+            unassigned=unassigned,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if run_model:

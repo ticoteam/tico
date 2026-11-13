@@ -184,6 +184,12 @@ def cmd_task_dry_run(args, who):
         return 1
     for w in warnings:
         print(f"- {w} (warning: the create is accepted)")
+    if not args.owner:
+        print(
+            "ok: no owner named; the server decides at the create (a first stage that picks from several picks one, "
+            "any other pipeline needs --owner)"
+        )
+        return 0
     if not owner:
         print(
             f"ok: {args.owner} is not in registry/employees.yaml or registry/people.yaml; the server decides at the create "
@@ -904,7 +910,11 @@ def parser():
         help="from a run on your private task: a company-visible task for a bot, in your own words (no "
         "12 words copied from the private work, no secret-shaped value, no file or link of it)",
     )
-    s.add_argument("--owner", required=True)
+    s.add_argument(
+        "--owner",
+        help="who does it: a bot slug, a person id or me; leave out to file into a pipeline whose first stage picks "
+        "from several (the stage picks one)",
+    )
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
@@ -1006,11 +1016,16 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
-    s = task.add_parser("file", help="file a task this one waits on; yours unless --owner")
+    s = task.add_parser(
+        "file",
+        help="file a task this one waits on; yours unless --owner, or picked by a pipeline whose first stage picks",
+    )
     s.add_argument("title")
     s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
     s.add_argument("--pipeline", help="the pipeline's id; default general")
-    s.add_argument("--owner", help="who does it; default you")
+    s.add_argument(
+        "--owner", help="who does it; default you, or the stage's pick in a pipeline whose first stage picks"
+    )
     s.add_argument("--body", help="the details; default the title")
     s.add_argument("--due")
     s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")

@@ -395,3 +395,26 @@ def next_line(conn: "sqlite3.Connection", stage: Row) -> str:
     elif pick.prefer == FAMILY:
         said += ", or to one of a different model family from everyone who worked on it"
     return said + "."
+
+
+def first_picks(conn: "sqlite3.Connection", pipeline_id: str | None) -> bool:
+    """Whether a pipeline's first stage picks its owner from several: a task filed into it may name no owner, and the
+    stage picks one as it arrives (a bot filing into Build). Naming an owner always wins."""
+    from . import task_engine
+
+    first = next((s for s in task_engine.stages(conn, str(pipeline_id or "general")) if s["kind"] == "work"), None)
+    return config(first) is not None
+
+
+def no_owner_refusal(conn: "sqlite3.Connection", pipeline_id: str | None) -> str:
+    """Why a task with no owner is refused in a pipeline, or "" when its first stage picks one."""
+    from . import task_engine
+
+    if not task_engine.pipeline(conn, str(pipeline_id or "general")):
+        return f"No pipeline {pipeline_id}"
+    if first_picks(conn, pipeline_id):
+        return ""
+    return (
+        "Say who does it (owner): only a pipeline whose first stage picks from several bots takes a task with no "
+        "owner, and the first stage of " + str(pipeline_id or "general") + " does not"
+    )

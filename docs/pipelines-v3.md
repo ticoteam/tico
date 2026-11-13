@@ -202,6 +202,7 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
   woken; the never-stuck pass gives the oldest to the first with room. Nobody can take it (all paused, or none can read
   a private task): the manager is woken, told why. Each pick is a line on the task's history ("Build given to Builder 2
   · took turns"). Only a person changes who a stage picks from; the record shows `pick_next`, who gets the next task.
+  A task filed into a pipeline whose first stage picks may name no owner (the stage picks one); naming one always wins.
 - **To leave:** a list of requirements. All must be met.
 - **Tasks leave by hand:** a switch. Tasks stay until someone moves them. Nothing there is late and nobody is chased.
 - **A person's request moves on:** a switch on a by-hand stage only (`requests_move_on`), off by default. When on, a

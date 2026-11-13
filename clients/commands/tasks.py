@@ -43,7 +43,10 @@ def task_context(api, args):
     "the write as ask_refused, with the reason and fix; no task is created. To ask a person something on your own "
     "task, use tico_task_ask.",
     {
-        "owner": _s("Who does it: a bot slug, a person id, or `me`"),
+        "owner": _s(
+            "Who does it: a bot slug, a person id, or `me`. Leave it out to file into a pipeline whose first stage "
+            "picks from several: the stage picks one; naming one always wins"
+        ),
         "title": _s("Task title: plain words, no reference numbers or all-caps"),
         "body": _s("The details", default=""),
         "pipeline": _s("The pipeline's id; default general"),
@@ -122,12 +125,12 @@ def task_context(api, args):
         "harness": _s("A harness from that model's harnesses list (with model)"),
         "dry_run": {"type": "boolean", "default": False},
     },
-    required=("owner", "title"),
+    required=("title",),
     writes=True,
 )
 def task_create(api, args):
     body = {
-        "owner": _target(api, args["owner"]),
+        **({"owner": _target(api, args["owner"])} if args.get("owner") else {}),
         "title": args["title"],
         "body": args.get("body") or "",
         "due": args.get("due"),
@@ -229,6 +232,8 @@ def turn_line(turn, actors=None):
     if not turn:
         return ""
     who, line = turn.get("who"), str(turn.get("line") or "")
+    if turn.get("state") == "pick":  # a stage that picks from several has nobody free: "Waiting for a free Reviewer"
+        return line or "Waiting for a free bot"
     if str(turn.get("requirement_id") or "").startswith("merge_order:"):  # it merges after a task: the line names it
         return f"{line} ({who})" if who else line
     if isinstance(who, str) and who and ":" not in who:  # a task's id: the line is its title
@@ -238,10 +243,11 @@ def turn_line(turn, actors=None):
     return text + (f", until {turn['until']}" if turn.get("until") else "")
 
 
-def task_text(task, actors=None):
+def task_text(task, actors=None, events=()):
     """`tico task show` as a bot reads it: the version; pipeline, stage and owner; whose turn it is; what it takes to
-    leave the stage, each requirement met or not with its id; the next stage; the task that filed it. People are
-    named by `actors` (the answer's {id: name}, backend/names.py) where it names them."""
+    leave the stage, each requirement met or not with its id; the next stage; the task that filed it; who each stage
+    that picks from several gave it to (`events` of field `pick`). People are named by `actors` (the answer's
+    {id: name}, backend/names.py) where it names them."""
     stage = task.get("stage") or {}
     lines = [f"{_ref(task)} {task.get('title') or ''}   version {task.get('version')}"]
     owner = task.get("owner_name") or _who(task.get("owner_id") or task.get("owner"), actors)
@@ -291,6 +297,12 @@ def task_text(task, actors=None):
         title = filed.get("title") or "(not yours to read)"
         lines.append(f"Filed: {filed.get('id')} {title} ({filed.get('status')})")
     lines += order_lines(task)
+    # Every pick is written on the task's history: "Build given to Builder 2 · took turns".
+    lines += [
+        f"Picked: {e['note']}"
+        for e in events or ()
+        if isinstance(e, dict) and e.get("field") == "pick" and e.get("note")
+    ]
     return "\n".join(lines)
 
 
@@ -321,7 +333,7 @@ def task_show(api, args):
     if not isinstance(shown, dict):
         return shown
     task = shown.get("task") if isinstance(shown.get("task"), dict) else shown
-    return {**shown, "text": task_text(task, shown.get("actors"))}
+    return {**shown, "text": task_text(task, shown.get("actors"), shown.get("events") or ())}
 
 
 @tool(
@@ -611,12 +623,16 @@ def task_give(api, args):
 @tool(
     "tico_task_file",
     "File a task from the task you work on: that task waits until this one ends, and its owner is woken once then. "
-    "Yours by default, in General unless you name a pipeline. Sub-tasks nest at most 5 deep.",
+    "Yours by default, in General unless you name a pipeline; in a pipeline whose first stage picks from several, the "
+    "stage picks its owner unless you name one. Sub-tasks nest at most 5 deep.",
     {
         "parent": TASK_ID,
         "title": _s("What the new task is for, in plain words"),
         "body": _s("The details; default the title"),
-        "owner": _s("Who does it: a bot slug, a person id, or `me` (the default)"),
+        "owner": _s(
+            "Who does it: a bot slug, a person id, or `me` (the default; in a pipeline whose first stage picks, the "
+            "stage picks)"
+        ),
         "pipeline": _s("The pipeline's id; default general"),
         "due": _s("ISO-8601 date-time with timezone"),
         "labels": {"type": "array", "items": {"type": "string"}, "description": "Lower-case labels"},
@@ -635,9 +651,20 @@ def task_file(api, args):
     fields = ("parent", "title", "pipeline", "due", "labels", "private", "after", "operation_id")
     # A task has a body: with none given, its title is its body, as for a sub-task made with tico_task_child_create.
     body = args.get("body") or args["title"]
-    return task_create(
-        api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": args.get("owner") or "me"}
-    )
+    owner = args.get("owner") or (None if _first_stage_picks(api, args.get("pipeline")) else "me")
+    return task_create(api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": owner})
+
+
+def _first_stage_picks(api, pipeline):
+    """Whether a named pipeline's first stage picks its owner from several (owner `pick`, backend/stage_pick.py): a task
+    filed into it with no owner named is left for the stage to pick, not given to the filer. General never picks."""
+    if not pipeline or str(pipeline).strip().lower() == "general":
+        return False
+    for row in (api.get("pipelines") or {}).get("pipelines") or []:
+        if str(pipeline).strip().lower() in (str(row.get("id") or "").lower(), str(row.get("name") or "").lower()):
+            stages = row.get("stages") or []
+            return bool(stages) and stages[0].get("owner") == "pick"
+    return False
 
 
 @tool(
