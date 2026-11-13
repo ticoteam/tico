@@ -547,7 +547,6 @@ COHORT_FIELDS = (
 )
 
 
-# Cuts and grains computed from customer facts (backend/growth_computed.py). Any of these reads the computed cohorts.
 # Cuts and grains computed from customer facts (backend/growth_computed.py). The Assistant's tool listing is at its
 # size cliff, so these carry no descriptions; docs/growth.md and the CLI help say what each does.
 COMPUTED_PROPS = {
@@ -556,7 +555,7 @@ COMPUTED_PROPS = {
     "week": {"type": "string"},
     "segment": {"type": "string"},
     "plan": {"type": "string"},
-    "customers": {"type": "boolean"},
+    "customers": {"type": "boolean", "description": "Keys behind each figure; needs month or week"},
 }
 
 

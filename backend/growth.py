@@ -113,7 +113,7 @@ def economics_row(cohort, settings):
 
 # What `beside` adds to a channel's month and its economics carry: each figure's origin, and with customer facts how many
 # customers it was computed from, the windows not yet due or too few, their dates, counts and a differing typed actual.
-BESIDE = ("origin", "computed_from", "status", "fills_on", "counts", "typed")
+BESIDE = ("computed_or_typed", "computed_from", "status", "fills_on", "counts", "typed")
 
 
 def economics_total(cohorts, settings):
@@ -121,7 +121,7 @@ def economics_total(cohorts, settings):
     total = aggregate(cohorts, settings)
     return {
         **economics_row({**total, "channel": "all"}, settings),
-        "origin": None,
+        "computed_or_typed": None,
         "channel": None,
         "name": "All channels",
         "track": None,
@@ -303,7 +303,7 @@ TYPED_FIELDS = (
 def beside(row, computed, slug, month):
     """A channel's month with its computed figures laid over the typed ones (#287's rule: computed wins over a typed
     estimate; a typed actual that differs is kept in `typed`, beside it, for the channel's owner to choose). Every
-    figure's `origin` says computed or typed; a computed window that has not come due, or a cohort under the minimum,
+    figure's `computed_or_typed` says which (beside #304's `origins`: typed or which source); a computed window that has not come due, or a cohort under the minimum,
     is null with its `status` (not_yet, too_few) and `fills_on` date. No customer facts: the typed row as it was."""
     view = (
         dict(row)
@@ -320,7 +320,7 @@ def beside(row, computed, slug, month):
             "updated_at": None,
         }
     )
-    view["origin"] = {k: "typed" for k in TYPED_FIELDS if view.get(k) is not None}
+    view["computed_or_typed"] = {k: "typed" for k in TYPED_FIELDS if view.get(k) is not None}
     if not computed:
         return view
     actual = bool(row) and (row.get("quality") or "actual") == "actual"
@@ -330,7 +330,7 @@ def beside(row, computed, slug, month):
         if actual and old is not None and (figure["status"] != "ok" or old != figure["value"]):
             typed[field] = old
         view[field] = figure["value"]
-        view["origin"][field] = "computed"
+        view["computed_or_typed"][field] = "computed"
         if figure["status"] != "ok":
             status[field] = figure["status"]
         if figure.get("fills_on"):

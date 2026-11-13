@@ -158,9 +158,13 @@ def test_day_30_shows_75_percent_computed_from_40_customers_everywhere(api):  # 
         "fills_on": "2026-10-30",
     }
     row = get(api, "growth/cohorts?channel=search-ads&month=2026-09")["cohorts"][0]
-    assert row["kept_d30"] == 75.0 and row["origin"]["kept_d30"] == "computed" and row["computed_from"] == 40
+    assert row["kept_d30"] == 75.0 and row["computed_or_typed"]["kept_d30"] == "computed" and row["computed_from"] == 40
     eco = get(api, "growth/economics?month=2026-09")["rows"][0]
-    assert eco["kept_d30"] == 75.0 and eco["computed_from"] == 40 and eco["origin"]["new_customers"] == "computed"
+    assert (
+        eco["kept_d30"] == 75.0
+        and eco["computed_from"] == 40
+        and eco["computed_or_typed"]["new_customers"] == "computed"
+    )
 
 
 def test_day_90_is_not_yet_with_the_date_it_fills_never_zero(api):  # AC-5
@@ -184,7 +188,7 @@ def test_day_90_fills_by_itself_when_it_comes_due_and_ltv_uses_it(api, monkeypat
     assert before["kept_d90"] is None and before["ltv"] is not None
     monkeypatch.setattr(GX, "today", lambda conf: date(2026, 12, 29))
     after = get(api, "growth/economics?month=2026-09")["rows"][0]
-    assert after["kept_d90"] == 50.0 and after["origin"]["kept_d90"] == "computed"
+    assert after["kept_d90"] == 50.0 and after["computed_or_typed"]["kept_d90"] == "computed"
     assert after["ltv"] != before["ltv"]  # the tail now decays at the day-30-to-90 rate, not the first month's
 
 
@@ -279,7 +283,7 @@ def test_computed_replaces_a_typed_estimate(api):  # AC-13
     put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "kept_d30": 60, "quality": "estimate"})
     load(api, september())
     row = get(api, "growth/cohorts?month=2026-09")["cohorts"][0]
-    assert row["kept_d30"] == 75.0 and row["origin"]["kept_d30"] == "computed" and row["typed"] == {}
+    assert row["kept_d30"] == 75.0 and row["computed_or_typed"]["kept_d30"] == "computed" and row["typed"] == {}
 
 
 def test_a_typed_actual_that_differs_is_kept_beside_the_computed_figure(api):  # AC-14 (the owner's ask is part 3)
@@ -287,7 +291,7 @@ def test_a_typed_actual_that_differs_is_kept_beside_the_computed_figure(api):  #
     put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "kept_d30": 70, "spend": 900})
     load(api, september())
     row = get(api, "growth/cohorts?month=2026-09")["cohorts"][0]
-    assert row["kept_d30"] == 75.0 and row["typed"]["kept_d30"] == 70 and row["origin"]["spend"] == "typed"
+    assert row["kept_d30"] == 75.0 and row["typed"]["kept_d30"] == 70 and row["computed_or_typed"]["spend"] == "typed"
 
 
 def test_a_channel_with_no_customer_facts_reads_as_before(api):  # AC-15
@@ -300,7 +304,7 @@ def test_a_channel_with_no_customer_facts_reads_as_before(api):  # AC-15
     after = get(api, "growth/economics?month=2026-09")["rows"]
     referrals = next(r for r in after if r["channel"] == "referrals")
     assert referrals == next(r for r in before if r["channel"] == "referrals")
-    assert "computed_from" not in referrals and referrals["origin"]["kept_d30"] == "typed"
+    assert "computed_from" not in referrals and referrals["computed_or_typed"]["kept_d30"] == "typed"
 
 
 # ----------------------------------------------------------------------------- loads replace, delete, spells
@@ -333,7 +337,16 @@ def test_deleting_all_customer_facts_falls_back_to_typed_values(api):  # AC-16b
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM growth_customers").fetchone()[0] == 0
     row = get(api, "growth/cohorts?month=2026-09")["cohorts"][0]
-    assert row["kept_d30"] == 70 and row["origin"]["kept_d30"] == "typed" and "computed_from" not in row
+    assert row["kept_d30"] == 70 and row["computed_or_typed"]["kept_d30"] == "typed" and "computed_from" not in row
+
+
+def test_a_computed_month_with_no_typed_row_has_every_key_a_typed_row_has(api):
+    channel(api)
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-08", "new_customers": 3})
+    load(api, september())
+    rows = {r["month"]: r for r in get(api, "growth/cohorts")["cohorts"]}
+    assert rows["2026-09"]["id"] is None and set(rows["2026-08"]) <= set(rows["2026-09"])
+    assert rows["2026-09"]["origins"] == {}
 
 
 def test_a_customer_who_came_back_starts_a_new_spell_and_the_first_keeps_its_churn(api):  # AC-17
