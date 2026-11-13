@@ -556,7 +556,7 @@ item_metadata      id, source, item_type, item_key (nocase), title, fields (json
 releases           id, repo, tag, commit_sha, prerelease, published_at, metadata_version, read_at, created_at
                    unique (repo, tag)
 release_reads      repo (pk), read_at, metadata_version     a read happened, even with no releases (C31)
-release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha)
+release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha); index (commit_sha)
 github_deliveries  id (X-GitHub-Delivery), event, received_at               kept 7 days
 requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json), attached_by_id, created_at,
                    replaced_at            one not replaced per (visit_id, requirement_id)

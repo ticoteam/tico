@@ -941,19 +941,20 @@ def _refresh_releases(store: Any, github: GitHub, now: str, *, task: str | None 
                 changed += save_release(conn, name, release, version)
             saw_releases(conn, name, version)
     asked = 0
+    listed: dict[tuple[str, bool], list[Row]] = {}  # each repo's releases, read once in this pass
     for wait in waits:
         with store.read() as conn:
             merged = H.parse_ts(wait["at"])
+            key = (wait["repo"].lower(), bool(wait["prereleases"]))
+            if key not in listed:
+                listed[key] = releases(conn, wait["repo"], prereleases=wait["prereleases"])
+            held = holds(conn, wait["sha"])
             unread = [
                 r
-                for r in reversed(releases(conn, wait["repo"], prereleases=wait["prereleases"]))
-                if included(conn, r["id"], wait["sha"]) is None
-                and not (merged and (H.parse_ts(r["published_at"]) or merged) < merged)
+                for r in reversed(listed[key])
+                if str(r["id"]) not in held and not (merged and (H.parse_ts(r["published_at"]) or merged) < merged)
             ]
-            known = any(
-                included(conn, r["id"], wait["sha"])
-                for r in releases(conn, wait["repo"], prereleases=wait["prereleases"])
-            )
+            known = holding(listed[key], held) is not None
         for release in [] if known else unread:  # oldest first; the first that holds it is the one that counts
             if asked >= REREAD_BATCH:
                 return changed
@@ -1046,6 +1047,28 @@ def included(conn: "sqlite3.Connection", release_id: str, commit_sha: str) -> bo
         "SELECT included FROM github_release_commits WHERE release_id=? AND commit_sha=?", (release_id, commit_sha)
     ).fetchone()
     return None if found is None else bool(found[0])
+
+
+def holds(conn: "sqlite3.Connection", commit_sha: str) -> dict[str, bool]:
+    """Every saved release read for a commit, in one read: release id -> whether its history holds the commit. A release
+    missing here is not read yet (`included` None)."""
+    return {
+        str(release_id): bool(inside)
+        for release_id, inside in conn.execute(
+            "SELECT release_id, included FROM github_release_commits WHERE commit_sha=?", (commit_sha,)
+        )
+    }
+
+
+def holding(listed: list[Row], held: dict[str, bool]) -> Row | None:
+    """The release that counts for a commit: the oldest of `listed` (newest first, as `releases` gives them) that
+    holds it by `held` (`holds`), or None."""
+    return next((release for release in reversed(listed) if held.get(str(release["id"]))), None)
+
+
+def release_of(conn: "sqlite3.Connection", repo: str, commit_sha: str, *, prereleases: bool) -> Row | None:
+    """The saved release of `repo` that counts as holding a commit (`holding`), in two reads however many releases."""
+    return holding(releases(conn, repo, prereleases=prereleases), holds(conn, commit_sha))
 
 
 def save_included(conn: "sqlite3.Connection", release_id: str, commit_sha: str, value: bool) -> None:
@@ -2159,9 +2182,11 @@ def _release_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: 
         return Standing(requirement, WAITING, SOURCE, "Reading releases")
     if not publishes:
         return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
-    for release in reversed(releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)):
-        if included(conn, release["id"], str(metadata["merged_sha"])):
-            return Standing(requirement, MET, line=f"In {release['tag']}")
+    release = release_of(
+        conn, repo, str(metadata["merged_sha"]), prereleases=settings.get("prereleases", True) is not False
+    )
+    if release:
+        return Standing(requirement, MET, line=f"In {release['tag']}")
     return GR.standing(conn, task, requirement, repo, metadata)  # who cuts it, and what became of the ask
 
 
