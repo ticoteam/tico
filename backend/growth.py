@@ -315,6 +315,7 @@ def beside(row, computed, slug, month):
             **{k: None for k in TYPED_FIELDS},
             "quality": "actual",
             "sources": {},
+            "origins": {},
             "updated_by": None,
             "updated_at": None,
         }
