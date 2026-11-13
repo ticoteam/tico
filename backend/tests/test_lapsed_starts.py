@@ -193,3 +193,20 @@ def test_a_run_cut_by_tico_itself_is_not_called_the_computers_silence(api):
     # Nor does it wait: Tico cut it, not the computer, so the job goes out again at once.
     again = claim(api, machine)
     assert again and again["job_id"] == attempt["job_id"]
+
+
+def test_a_pause_that_cuts_a_claimed_run_is_not_called_the_computers_silence(api):
+    machine, _, attempt = start(api, botops=False)
+
+    def control(action):
+        post(api, "bots/ops/control", {"action": action, "expected_revision": get(api, "bots/ops")["revision"]})
+
+    # Pausing the bot ends its leases itself: the computer said nothing because Tico took the run away.
+    control("pause")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] is None
+    control("resume")
+    ready(api, machine, ["ops"])
+    # So the job goes out again at once on resume, with no wait.
+    again = claim(api, machine)
+    assert again and again["job_id"] == attempt["job_id"]

@@ -4234,7 +4234,9 @@ class Execution:
                 gateway_connection.forget(c, row["id"])
                 botops = False
                 lapsed = row["state"] == "leased" and state == "queued" and not benched
-                silent = lapsed and computer_missed(c, row["id"])
+                # Pausing the bot ends its leases itself (bot_settings_routes): Tico took the run, not the computer.
+                paused = c.execute("SELECT 1 FROM bots WHERE id=? AND state='paused'", (row["bot_id"],)).fetchone()
+                silent = lapsed and not paused and computer_missed(c, row["id"])
                 if silent:
                     # Never started and never handed back, and not cut by Tico itself: say so on the run (Runs,
                     # run_diagnostics.reason) and in the log.
