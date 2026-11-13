@@ -2458,6 +2458,30 @@ class PageOwnerSet(Contract):
     bot: str | None = None
 
 
+class KeyGrantRow(Contract):
+    """One row of the Tools owner's proposal (backend/key_grants.py): a key saved in the Tools chat, by name; a tool,
+    by id or name; read or read_write; the bots, by slug or id."""
+
+    key: str = Field(min_length=1, max_length=150)
+    tool: str = Field(min_length=1, max_length=200)
+    level: Literal["read", "read_write"] = "read"
+    bots: list[str] = Field(min_length=1, max_length=10)
+
+
+class KeyGrantProposal(Contract):
+    """The Tools owner's proposal in its chat with a person (`thread_id`); the server builds the card from it."""
+
+    thread_id: str = Field(min_length=1, max_length=200)
+    rows: list[KeyGrantRow] = Field(min_length=1, max_length=20)
+    note: str = Field(default="", max_length=500)
+
+
+class KeyGrantGrant(Contract):
+    """Grant on the card: the positions of the rows kept (null: all)."""
+
+    keep: list[int] | None = Field(default=None, max_length=20)
+
+
 class AccessRules(Contract):
     """Team rules the owner tightens (backend/team_rules.py); only what is sent changes."""
 

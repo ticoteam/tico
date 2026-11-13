@@ -315,6 +315,7 @@
  "tico_tool_remove": "404 not_found",
  "tico_tool_show": "404 not_found",
  "tico_tool_update": "usage",
+ "tico_tools_propose_grant": "403 forbidden",
  "tico_trigger_delivery": "404 not_found",
  "tico_trigger_relay_create": "409 gateway",
  "tico_trigger_relay_delete": "404 not_found",
