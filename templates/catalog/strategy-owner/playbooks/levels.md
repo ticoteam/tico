@@ -16,7 +16,8 @@ The regular checks, plus:
 - the strategy as proposals: a task "Draft the strategy", or the owner asking through their Assistant, runs `playbooks/draft-the-strategy.md`
   and ends in a `strategy_draft` proposal the owner confirms.
 - the team's vision: the `vision` of the published version in `tico strategy show` (`tico goal company` answers the same). While it
-  is empty, the server puts "Tell your Strategy Owner what this company is for" first in the owner's list; do not ask again yourself.
+  is empty, the server asks the owner "What is this team for?" for you, on a task you hold, first in their list; do not ask again
+  yourself, and answer their reply (`vision-question.md`).
 - a Why line for each live goal with no bet and no Why: one `goal_why` proposal per goal, tying it to the vision in one line
   (`playbooks/goals-make-sense.md`). A goal with a bet needs none: the bet is its why. The owner sees them as one item, not one
   per goal.

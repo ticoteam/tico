@@ -161,10 +161,12 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
     raise_level(api, 2)
     sync(api)
     vision = [a for a in asks(api, OWNER) if a["kind"] == "vision"]
-    assert [(a["title"], a["status"]) for a in vision] == [("Tell your Strategy Owner what this team is for", "open")]
-    with api.app.state.store.read() as c:
-        mine = H.tasks(c, owner=OWNER, status=H.ACTIVE_STATUSES)
-    assert mine[0]["id"] == vision[0]["id"]  # first in the owner's queue
+    # Asked as the Strategy Owner's question (AC-10 of "Bots ask people a question with choices"), not a to-do of theirs.
+    assert [(a["title"], a["status"], a["owner_id"]) for a in vision] == [
+        ("What is this team for?", "open", "bot:strategy-owner")
+    ]
+    mine = get(api, "needs-you")["items"]
+    assert (mine[0]["kind"], mine[0]["task_id"]) == ("ask", vision[0]["id"])  # first in the owner's list
     assert [i["kind"] for i in get(api, "goals/needs-you")["items"]][0] == "vision"
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
     with api.app.state.store.read() as c:

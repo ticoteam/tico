@@ -16,6 +16,8 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 - Level 2 and up: `tico goal strategy-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`: one item for
   the same question several bots ask one person (`playbooks/recoveries.md`).
 - `tico goal company`: the vision and description (read only).
+- `tico strategy vision --task <id> "<vision>"`: only on the server's vision question, the vision the owner sent there, in
+  their words (`playbooks/vision-question.md`).
 
 ## Goals
 - `tico goal list`: your goals and the chain above them. `tico goal list --all`: every live goal (`--status red,yellow` narrows it).

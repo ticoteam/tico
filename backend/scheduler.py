@@ -607,6 +607,14 @@ class Scheduler:
             market_watch.tick(self.store, at)
         except Exception as exc:
             failures.append({"market_watch": type(exc).__name__})
+        # The release sweep of decisions filed as to-dos (backend/decision_todos.py): once per team, on its own thread.
+        try:
+            from . import decision_todos
+
+            app = getattr(ctx, "app", None)
+            decision_todos.tick(self.store, getattr(getattr(app, "state", None), "judge", None))
+        except Exception as exc:
+            failures.append({"decision_todos": type(exc).__name__})
         try:
             from . import automations
 

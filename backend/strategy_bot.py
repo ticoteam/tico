@@ -502,8 +502,9 @@ def day_start(at=None):
 
 
 def asked_today(c, person, at=None):
-    """How many tasks the Strategy Owner filed for this person today (UTC), closed ones included, and merged items. A
-    merged item is a task filed for them since step 6b; one filed before was the Strategy Owner's own."""
+    """How many tasks the Strategy Owner filed for this person today (UTC), closed ones included, merged items, and the
+    vision question (asked of them on a task it holds, backend/goal_asks.py). A merged item is a task filed for them
+    since step 6b; one filed before was the Strategy Owner's own."""
     since = day_start(at)
     return (
         c.execute(
@@ -515,17 +516,27 @@ def asked_today(c, person, at=None):
             "WHERE m.person=? AND m.created_at>=? AND t.owner_id<>m.person",
             (person, since),
         ).fetchone()[0]
+        + c.execute(VISION_ASKED + " AND g.owner=?", (since, person)).fetchone()[0]
     )
 
 
+# The vision question asked of a person today, on a task the Strategy Owner holds (not one of theirs, counted above).
+VISION_ASKED = (
+    "SELECT COUNT(*) FROM goal_asks g JOIN tasks t ON t.id=g.task_id WHERE g.kind='vision' AND t.owner_id<>g.owner "
+    "AND t.created_at>=?"
+)
+
+
 def asked_today_all(c, at=None):
-    """{person actor: tasks the Strategy Owner filed for them today}, for the people it filed any for."""
+    """{person actor: tasks the Strategy Owner filed for them today, as asked_today counts them}, for the people it
+    filed any for."""
     since, out = day_start(at), {}
     for who, n in c.execute(
         "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
         "UNION ALL SELECT m.person, COUNT(DISTINCT m.merged_into) FROM strategy_merges m JOIN tasks t "
-        "ON t.id=m.merged_into WHERE m.created_at>=? AND t.owner_id<>m.person GROUP BY m.person",
-        ("bot:" + SLUG, since, since),
+        "ON t.id=m.merged_into WHERE m.created_at>=? AND t.owner_id<>m.person GROUP BY m.person "
+        "UNION ALL " + VISION_ASKED.replace("SELECT COUNT(*)", "SELECT g.owner, COUNT(*)") + " GROUP BY g.owner",
+        ("bot:" + SLUG, since, since, since),
     ):
         out[who] = out.get(who, 0) + n
     return out
