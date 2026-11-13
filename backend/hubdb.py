@@ -3488,6 +3488,40 @@ def task_private_readable(conn, actor, row):
     return task_reader(conn, actor, row)
 
 
+def stage_read_only(conn, actor, row):
+    """Whether `actor` reads private task `row` only because it holds the task's stage as the bot the pipeline names
+    for it (task_engine.names): it is the owner there and would not read the task otherwise. Such a bot reads the
+    task, and cannot share it: it adds no reader, gives the task to nobody, and what it files from the task stays
+    private with the task's readers (spec: a private task's stage bot can read it while it holds the stage)."""
+    if not row or not is_bot(actor):
+        return False
+    row = dict(row)
+    if "owner_id" not in row or "requester_id" not in row or "stage_id" not in row:
+        row = task(conn, row["id"]) or {}
+    if not row or actor != row.get("owner_id") or not task_private(conn, row):
+        return False
+    stage = _one(conn, "SELECT * FROM stages WHERE id=?", (row.get("stage_id"),)) if row.get("stage_id") else None
+    from . import task_engine
+
+    if not stage or not task_engine.names(stage, actor):
+        return False
+    return not task_private_readable(conn, actor, {**row, "owner_id": None})
+
+
+def refuse_stage_reader(conn, actor, row):
+    """Refuse a share (a reader, a give, a new owner) by a bot that reads the task only while it holds its stage."""
+    if stage_read_only(conn, actor, row):
+        held = task(conn, row["id"]) or {}
+        stage = _one(conn, "SELECT name FROM stages WHERE id=?", (held.get("stage_id"),)) or {"name": "its stage"}
+        refuse(
+            conn,
+            actor,
+            "identity",
+            f"You can read this while you hold {stage['name']}; only someone it is shared with can share it",
+            task=row["id"],
+        )
+
+
 def assistant_turn_person(who):
     """Whether `who` is a person's own Assistant turn: the person acts, and the Assistant's bot is its task actor."""
     return getattr(who, "via", "") == "assistant" and who.role in ("owner", "human")
@@ -3586,6 +3620,7 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     _task_private_writer(conn, actor, row)
     if not task_private(conn, row):
         refuse(conn, actor, "private", "A company task is seen by everyone: make it private to choose who sees it")
+    refuse_stage_reader(conn, actor, row)
     if not may_change_readers(conn, actor, row, mover):
         refuse(
             conn,
@@ -5546,6 +5581,13 @@ def task_create(
         or parent
         and task_private(conn, parent)
     )
+    if parent and stage_read_only(conn, actor, parent):
+        # A bot that reads the parent only while it holds its stage shares it with nobody: what it files from it is
+        # private, with the parent's readers.
+        shared = task_readers(parent)
+        if any((resolve_actor(conn, r) or r) not in shared for r in readers or ()):
+            refuse_stage_reader(conn, actor, parent)
+        private, readers = True, shared
     # A private pipeline's task is private whatever was asked, `from_private` too; its readers are written before it
     # enters (backend/private_pipelines.py).
     pipeline_id = str(pipeline or GENERAL_PIPELINE)

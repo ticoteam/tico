@@ -874,6 +874,14 @@ def _check_pick(conn: "sqlite3.Connection", stage: Row, label: str, problems: li
     stage["pick"] = found
 
 
+def _holds_private(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    """Whether an open task in the pipeline is private."""
+    found = conn.execute(
+        "SELECT 1 FROM tasks WHERE pipeline_id=? AND status='open' AND private=1 LIMIT 1", (pipeline_id,)
+    ).fetchone()
+    return found is not None
+
+
 def _picks(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Row | None]:
     """Each work stage's pick as stored, by stage id: what a bot may read and not change."""
     return {
@@ -1317,6 +1325,20 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
         for stage in parsed["stages"]:
             if stage.get("pick") != had.get(str(stage.get("id") or "")):
                 _refuse(conn, by, "task_settings", f"Only a person changes who {stage['name']} picks from.")
+        # The bot that holds a stage reads the pipeline's private tasks while it holds it (task_engine.names): on a
+        # pipeline that holds one, who holds a stage is a person's to change, and their change is in its history.
+        owners = (
+            {str(s["id"]): s.get("owner") for s in task_engine.stages(conn, str(existing["id"]))} if existing else {}
+        )
+        for stage in parsed["stages"]:
+            sid = str(stage.get("id") or "")
+            if sid in owners and stage.get("owner") != owners[sid] and _holds_private(conn, str(existing["id"])):
+                _refuse(
+                    conn,
+                    by,
+                    "task_settings",
+                    f"Only a person changes who holds {stage['name']} while {existing['name']} holds a private task.",
+                )
     before = read(conn, existing["id"]) if existing else None
     ts = _h().now()
     pid = _write_pipeline(conn, parsed, existing, ts)

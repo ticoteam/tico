@@ -197,8 +197,8 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
   task, or A different model family from everyone who worked on it) and whether the pick becomes the task's owner (its
   assignee, for life: Build) or holds only this stage (`visits.holder_id`: Review). Tico picks the moment a task enters,
   with no model call: a task it had someone here before goes back to them (a task with an owner keeps it); Prefer
-  narrows the list unless that leaves nobody free; then turns or random among bots that can run, can read the task and
-  are under their limit. Everyone full: the task waits ("Waiting for a free Reviewer", state `pick`) and nobody is
+  narrows the list unless that leaves nobody free; then turns or random among bots that can run and are under their
+  limit (each bot on the list reads a private task while it holds the stage: "Private tasks" below). Everyone full: the task waits ("Waiting for a free Reviewer", state `pick`) and nobody is
   woken; the never-stuck pass gives the oldest to the first with room. Nobody can take it (all paused, or none can read
   a private task): the manager is woken, told why. Each pick is a line on the task's history ("Build given to Builder 2
   · took turns"). Only a person changes who a stage picks from; the record shows `pick_next`, who gets the next task.
@@ -1825,7 +1825,14 @@ How each one works on the engine.
 - **Moving a task to another pipeline.** It lands in that pipeline's first stage.
 - **Goals.** Not tasks. A goal links to the tasks that serve it.
 - **Private tasks.** Same engine. Who can see them doesn't change, except that entering a private pipeline adds its
-  manager and the company's owner.
+  manager and the company's owner. The bot a pipeline names for a stage (its fixed owner bot, or a bot on its "One of
+  several" list; never a person, a group, an "assignee" stage's assignee or the General Manager) reads a private task
+  while it holds that stage, as its owner, and its managers with it. That read is not on Who can see, ends when the
+  task moves on, and is a line on the task's history ("Reviewer 1 can read this while it holds Review 1"). A bot that
+  reads only that way shares nothing: it adds no reader, gives the task to nobody, and what it files from the task is
+  private with the task's readers. On a pipeline holding an open private task only a person changes who holds a stage.
+  Anyone else a stage needs (a person asked for an OK or an answer, an assignee, the General Manager) must already
+  read the task: until someone shares it, the task waits and the line names who can.
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
 - **An idea you don't want yet.** Snooze it with no end date. It leaves the stage's count.
 
