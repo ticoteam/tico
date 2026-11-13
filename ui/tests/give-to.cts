@@ -4,7 +4,8 @@
 // New task use it (AC-7); a full-height sheet at 390 px (AC-8); who is listed, ✓ and "No one matches" (AC-9); a
 // combobox with options and no network call while it is open (AC-10).
 import type {Browser, Page} from 'playwright';
-declare const S: {emps: Record<string, unknown>[]; people: Record<string, unknown>[]};
+declare const S: {emps: Record<string, unknown>[]; people: Record<string, unknown>[]; v2: {needs?: {id: string}[] | null}};
+declare function v2NeedsRead(): Promise<unknown>;
 declare function giveToEntries(selected?: string): {value: string; actor: string; name: string; role: string}[];
 declare function giveToMatch(q: string, entries: unknown[]): {name: {name: string}[]; role: {name: string}[]};
 declare function giveToSuggest(entries: unknown[], task: unknown, recent: string[]): {entry: {name: string}; why: string}[];
@@ -179,6 +180,10 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [item]}}));
   const sent: unknown[] = [];
   await page.route('**/api/v2/tasks/t-ny/owner', route => { sent.push(route.request().postDataJSON()); return route.fulfill({json: {task: {...brief, owner_id: 'bot:b-botops', version: 3}}}); });
+  // The app's own Needs you list must hold the item first: a refresh that lands after the screen opens otherwise
+  // reads it as answered elsewhere and moves on.
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 't-ny'));
   assert.equal(await page.evaluate(i => decideOpen('t-ny', [i]), item), true);
   await page.locator('.decide [data-dc="give"]').click();
   const field = page.locator('.decide button[data-give-to]'), give = page.locator('.decide [data-dc="give-to"]');
