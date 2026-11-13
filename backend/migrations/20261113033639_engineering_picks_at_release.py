@@ -18,6 +18,7 @@ In the Engineering pipeline (id or preset `engineering`), once:
 Running it again changes nothing: every stage it sets is then "One of several".
 """
 
+import importlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -69,6 +70,10 @@ def _pick(bots, prefer, owns_task):
 
 
 def up(conn):
+    # The columns this sets come from 20261113002554_stage_pick, which may run after this one (pending migrations run in
+    # any order): make them here the same way (its `up` adds only what is missing), so the result is the same either way.
+    if _columns(conn, "stages") and _columns(conn, "visits"):
+        importlib.import_module("backend.migrations.20261113002554_stage_pick").up(conn)
     if "pick" not in _columns(conn, "stages") or "pick_state" not in _columns(conn, "visits"):
         return
     if "state" not in _columns(conn, "bots"):

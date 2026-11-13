@@ -156,7 +156,7 @@ def intended(before):
     for task in after["tasks"].values():
         if task["title"] == VIEW_TITLE and task["status"] == "open":
             task.update(status="closed", stage=task["stage"].rsplit("-", 1)[0] + "-closed", asks=[])
-    return ideas_move_on(after)
+    return migrated(after)
 
 
 def ideas_move_on(reading):
@@ -168,6 +168,26 @@ def ideas_move_on(reading):
             (name, kind, owner, 0 if name == "Ideas" else by_hand) for name, kind, owner, by_hand in product["stages"]
         ]
     return after
+
+
+def picks_at_release(reading):
+    """The reading as migration engineering_picks_at_release leaves it (a copy): with two Reviewers, Review 1 and
+    Review 2 become "One of several" (owner `pick`). Builders' stages change only with two Builders, which this
+    company's fixture lacks (On deck and Build stay the assignee's)."""
+    after = copy.deepcopy(reading)
+    engineering = after.get("pipelines", {}).get("engineering")
+    reviewers = [slug for slug in after.get("bots", {}) if slug.startswith("reviewer")]
+    if engineering and len(reviewers) >= 2:
+        engineering["stages"] = [
+            (name, kind, "pick" if name in ("Review 1", "Review 2") and owner in reviewers else owner, by_hand)
+            for name, kind, owner, by_hand in engineering["stages"]
+        ]
+    return after
+
+
+def migrated(reading):
+    """The reading with every pending migration's one intended change (a copy)."""
+    return picks_at_release(ideas_move_on(reading))
 
 
 def changes(before, after, path=""):
@@ -378,7 +398,7 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
         results.append((schema(path), seen(path)))
     assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
     assert not changes(results[0][1], results[1][1])
-    assert not changes(ideas_move_on(company.before), results[0][1]), "The pending migrations changed the company"
+    assert not changes(migrated(company.before), results[0][1]), "The pending migrations changed the company"
 
 
 REMOVED = ("growth-manager", "legal-owner", "segment-product-owner")  # live seat bots' templates in the fixture
