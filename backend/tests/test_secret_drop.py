@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from backend import secret_drop
-from backend.tests.helpers.api import claim, get, post, put
+from backend.tests.helpers.api import claim, get, headers, post, put
 from backend.tests.helpers.cards import patch
 from backend.tests.helpers.chat_goals import setup
 
@@ -64,6 +64,26 @@ def test_a_key_in_a_message_to_the_tools_owner_is_refused_before_it_is_kept_or_w
     with api.app.state.store.read() as c:
         assert not c.execute('SELECT 1 FROM messages WHERE body LIKE ?', ('%' + KEY + '%',)).fetchone()
         assert not c.execute('SELECT 1 FROM events WHERE detail LIKE ?', ('%' + KEY + '%',)).fetchone()
+
+
+def test_a_hex_or_uuid_value_after_a_key_word_is_refused(api):
+    # AC-15 for the values Validate saw stored (task #438): hex and UUIDs are ordinary only with no key word before them.
+    machine, dm = _tools_dm(api)
+    hexed = ''.join(['9c1e4', 'b7a20', 'd5f83', '6e0c2', 'a9b14', '7d3f8', 'e2c60', 'a5b1'])
+    keyed = ''.join(['3f6c2', 'a1e-4', 'b7d-4', 'e9a-8', 'c25-0', 'd4e6f', '7a8b9', 'c'])
+    for text, value in (
+        ('token: ' + hexed, hexed),
+        ('Authorization: Bearer ' + hexed, hexed),
+        ('HEROKU_API_KEY=' + keyed, keyed),
+        ('Heroku API key: ' + keyed, keyed),
+    ):
+        r = api.post(f"/api/v2/threads/{dm['id']}/messages", json={'text': text}, headers=headers('ana-test'))
+        assert r.status_code == 422 and r.json()['error']['code'] == 'looks_like_key', text
+        assert value not in r.text
+    assert _bodies(api, dm['id']) == []
+    assert claim(api, machine) is None
+    # Without a key word the same hex is a commit or a hash, and goes through.
+    post(api, f"threads/{dm['id']}/messages", {'text': 'deployed ' + hexed})
 
 
 def test_names_only_go_through_and_reach_the_bots_turn(api):

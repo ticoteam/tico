@@ -64,14 +64,15 @@ def _placeholder(value: str) -> bool:
     return bool(_re(str(rules()["placeholder"]), "i").match(value))
 
 
-def _negative_full(value: str) -> bool:
-    return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()["negative"]))
+def _negative_full(value: str, shapes: str = "negative") -> bool:
+    """Whether `value` is wholly one of the ordinary shapes in the rule list `shapes`."""
+    return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()[shapes]))
 
 
-def secretish(value: str) -> bool:
+def secretish(value: str, shapes: str = "negative") -> bool:
     """A value that reads as a key, not a word: 6+ characters with a digit or a symbol, or mixed case past the first
-    letter, and no placeholder or ordinary shape (an address, an email, an id, a path)."""
-    if len(value) < 6 or _placeholder(value) or _negative_full(value):
+    letter, and no placeholder or ordinary shape (an address, an email, an id, a path; `shapes`: see _shapes)."""
+    if len(value) < 6 or _placeholder(value) or _negative_full(value, shapes):
         return False
     digit, symbol = _has(value, "[0-9]"), _has(value, "[^A-Za-z0-9]")
     mixed = _has(value[1:], "[A-Z]") and _has(value, "[a-z]")
@@ -81,6 +82,18 @@ def secretish(value: str) -> bool:
 def _has(text: str, cls: str) -> bool:
     """Character classes are ASCII on both sides: a letter outside ASCII counts as a symbol in Python and JavaScript."""
     return bool(_re(cls).search(text))
+
+
+def _shapes(rule: dict[str, Any], name: str) -> str:
+    """Which ordinary shapes still cancel a value after the context word `name`: every one with no strong word; after a
+    strong one only a web address, an email or a path from /, ~/, ./ or ../ (a hex string, a UUID or a relative path
+    there is a key); after a password word only a web address, since a password can be shaped like a path or an email
+    but a reset or callback link sits under a password name (RESET_PASSWORD_URL). pass and pw are plain English
+    too, so after a space they are not strong (spec Scope 4b: hex is negative only with no context word)."""
+    word = _word(name) if name else None
+    if not word or not word["strong"] or (rule.get("spaced") and word.get("spaced") is False):
+        return "negative"
+    return "negative_password" if word["type"] == "password" else "negative_keyed"
 
 
 def _word(name: str) -> dict[str, Any] | None:
@@ -137,16 +150,16 @@ def _certain(text: str, rule: dict[str, Any]) -> list[Item]:
             rule["type"],
         )
         named = m.group(int(rule["name_group"])) if rule.get("name_group") else ""
+        shapes = _shapes(rule, m.group(int(rule["word_group"])) if rule.get("word_group") else named)
         if check == "not_placeholder" and _placeholder(value):
             continue
-        if check == "secretish" and not secretish(value):
+        if check == "secretish" and not secretish(value, shapes):
             continue
         if check in ("env", "context"):
             word = _word(named)
-            if _placeholder(value) or _negative_full(value):
+            if shapes != "negative" and (_placeholder(value) or _negative_full(value, shapes)):
                 continue
-            strong = bool(word and word["strong"])
-            if not strong and not secretish(value):
+            if shapes == "negative" and not secretish(value):
                 continue
             if word:
                 kind, kind_of, base = str(word["kind"]), word["type"], str(word["base"]) or base
