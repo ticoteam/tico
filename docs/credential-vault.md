@@ -57,7 +57,10 @@ Older name-only model credentials also offer this choice; granting them fills th
 A **website tool** (Tools → Add → Website) is a site the company signs in to: its sites (a host such as
 `app.example.com`; its subdomains count; plain `http://` only when written so) and its accounts. Each account is a
 login Credential: a username, a password and, optionally, a **2FA key** (the setup key or `otpauth://` link the site
-shows when 2FA is turned on). The password and the 2FA key are sealed like every other value.
+shows when 2FA is turned on). The password and the 2FA key are sealed like every other value. The username and the
+password may be left blank for a site a person signs in to by hand (Google or SSO sign-in, an emailed code, a
+passkey): a bot's fill or copy of the missing value is refused with `no_password` (or `no_username`), and the bot asks a
+person to sign in through the live view; **Replace login** adds a password later.
 
 - **Shared** account: used by the people and bots it is shared with (**Who can use it**, the same grants as any
   Credential). Credential administrators add one.

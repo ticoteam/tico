@@ -4,7 +4,7 @@ import type * as Routes from './support/routes.cts';
 // Website (POST /api/v2/website-tools, then the account, then its grants; a refused account keeps the made tool, so
 // Add again does not make a second); the page (#/tools/website/<id>): Accounts with Shared/Own, the 2FA mark and who
 // can use it, each row's ⋯ (Show code read again when it runs out, Replace login with a blank password, Who can use
-// it, Reveal password · logged, Remove), the Browser card (the host read only, Central only), Recent activity, the
+// it, Reveal password · logged, Remove), an account with no username or password (a person signs in by hand), the Browser card (the host read only, Central only), Recent activity, the
 // tool's ⋯ (Rename) and the Activity tab's pages; a computer's Browser host switch in Settings. 1440 and 390 px, no
 // sideways scroll, light and dark; no stored password or 2FA key is ever on the page before Reveal.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each view in each theme and width.
@@ -17,7 +17,7 @@ const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 interface Who {subject: string; kind: string; id: string; name: string; initials: string}
 interface Account {
-  id: string; kind: string; username: string; has_totp: boolean; holder: Who | null; access: Who[];
+  id: string; kind: string; username: string; has_password?: boolean; has_totp: boolean; holder: Who | null; access: Who[];
   session: {state: string; where: string | null; computer: string | null; by: Who | null}; can_use: boolean; can_manage: boolean;
 }
 interface Tool {
@@ -97,7 +97,7 @@ function fake() {
     if (part === 'accounts' && !aid && method === 'POST') {
       if (refuseAccount > 0) { refuseAccount--; return [422, {error: {code: 'invalid_request', detail: 'That 2FA key is not valid'}}]; }
       const id = 'a' + (10 + t.accounts.length), holder = typeof body.holder === 'string' ? body.holder : '';
-      t.accounts.push({id, kind: holder ? 'own' : 'shared', username: String(body.username), has_totp: !!body.totp, holder: holder ? ANA : null, access: [],
+      t.accounts.push({id, kind: holder ? 'own' : 'shared', username: String(body.username ?? ''), has_password: !!body.password, has_totp: !!body.totp, holder: holder ? ANA : null, access: [],
         session: session('unknown'), can_use: true, can_manage: true});
       return [200, {id}];
     }
@@ -310,6 +310,23 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         await page.locator('dialog.settings-confirm [data-confirm-ok]').click();
         await root.locator('[data-tw-account="a3"]').waitFor({state: 'detached'});
         assert.deepEqual(last(f, 'DELETE', '/api/v2/website-tools/w1/accounts/'), {method: 'DELETE', path: '/api/v2/website-tools/w1/accounts/a3', body: {}});
+        // An account a person signs in to by hand: no username, no password. Named by the tool, nothing to reveal, and
+        // Replace login adds a password later.
+        await root.locator('[data-tw-acct-add]').click();
+        const bare = dialogNamed(page, 'Add account');
+        await bare.locator('button[type=submit]').click();
+        await root.locator('[data-tw-account="a12"]').waitFor();
+        assert.deepEqual(last(f, 'POST', '/api/v2/website-tools/w1/accounts')?.body, {}, `${tag}: no username, no password`);
+        assert.equal(await root.locator('[data-tw-account="a12"] .tw-acct-text').innerText(), 'TIDY admin', `${tag}: named by the tool`);
+        await root.locator('[data-tw-acct-menu="a12"]').click();
+        assert.deepEqual(await menuItems(page), ['Open browser', 'Replace login', 'Who can use it', 'Remove'], `${tag}: no Reveal without a password`);
+        await page.keyboard.press('Escape');
+        await menu(page, 'a12', 'Replace login');
+        assert.equal(await replace.locator('[name=password]').getAttribute('placeholder'), null, `${tag}: no "Unchanged" for a password never stored`);
+        await replace.locator('[name=password]').fill('later-' + SECRET);
+        await replace.locator('button[type=submit]').click();
+        await replace.waitFor({state: 'detached'});
+        assert.deepEqual(last(f, 'PATCH', '/api/v2/website-tools/w1/accounts/a12')?.body, {password: 'later-' + SECRET}, `${tag}: a password added later`);
         // Central only.
         await root.locator('[data-tw-central]').check();
         await page.waitForFunction(() => !document.querySelector<HTMLInputElement>('[data-tw-central]')?.disabled);

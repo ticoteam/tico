@@ -374,6 +374,43 @@ def test_the_code_route_gives_a_person_who_uses_it_the_code_logs_it_without_the_
     get(api, f"website-tools/{tid}/accounts/{plain}/code", r["token"], expected=403)
 
 
+def test_an_account_with_no_password_is_signed_in_by_a_person_and_can_get_a_password_later(api):
+    """A site a person signs in to by hand (Google or SSO, an emailed code, a passkey): no username, no password. It is
+    a normal account with grants; fill, copy and reveal of what it lacks are refused, and Replace login adds it."""
+    start(api)
+    tid = website(api)
+    bare = post(api, f"website-tools/{tid}/accounts", {})["id"]
+    blank = account(api, tid, "cara-test", holder="human:cara", username="", password="")
+    share(api, tid, bare, "human:cara")
+    by_aid = {a["id"]: a for a in get(api, f"website-tools/{tid}")["accounts"]}
+    assert (by_aid[bare]["has_password"], by_aid[bare]["username"], by_aid[blank]["has_password"]) == (False, "", False)
+    assert by_aid[bare]["access"][0]["subject"] == "human:cara"
+    assert post(api, f"credentials/{bare}/reveal", {}, "cara-test", expected=409)["error"]["code"] == "no_password"
+    vault = api.app.state.vault
+    with api.app.state.store.transaction() as c:
+        for field in ("password", "username"):
+            with pytest.raises(Problem) as refused:
+                W.secret(c, vault, bare, field)
+            assert refused.value.code == "no_" + field and refused.value.status == 409
+            assert f'tico browser needs-you {SITE} "Sign in to {SITE}"' in refused.value.detail
+        assert vault.open_login(c, c.execute("SELECT * FROM credentials WHERE id=?", (bare,)).fetchone()) == {
+            "password": "",
+            "totp": "",
+        }
+    # Refusals spend nothing of the hourly limit.
+    assert bare not in W._spent
+    # A 2FA key alone keeps it password-less; then a password is added.
+    call(api, "PATCH", f"website-tools/{tid}/accounts/{bare}", {"totp": KEY})
+    assert {a["id"]: a for a in get(api, f"website-tools/{tid}")["accounts"]}[bare]["has_password"] is False
+    call(api, "PATCH", f"website-tools/{tid}/accounts/{bare}", {"password": PASSWORD, "username": "ops@acme.example"})
+    after = {a["id"]: a for a in get(api, f"website-tools/{tid}")["accounts"]}[bare]
+    assert (after["has_password"], after["has_totp"], after["username"]) == (True, True, "ops@acme.example")
+    assert post(api, f"credentials/{bare}/reveal", {}, "cara-test")["value"] == PASSWORD
+    with api.app.state.store.transaction() as c:
+        assert W.secret(c, vault, bare, "password") == PASSWORD
+    call(api, "DELETE", f"website-tools/{tid}/accounts/{blank}", token="cara-test")
+
+
 def test_activity_pages_newest_first_and_a_member_sees_only_their_own_rows(api):
     start(api)
     tid = website(api)
