@@ -346,9 +346,18 @@ def _channel_body(api, args, keys):
     return body
 
 
+# Every Growth read's answer carries these two (backend/growth_setup.py).
+SETUP_NOTE = (
+    " you_may: what you may do, per action (change settings, add or change any channel, add or change sources, record "
+    "months; a bot that owns a channel still changes its own why, stage and budget). setup: while Growth is not set up, "
+    "each step and the next one with its command, its tool and who may do it; then only done."
+)
+
+
 @tool(
     "tico_growth_channel_list",
-    "The growth channels by sort then name: stage, owner, monthly budget, why, guardrail.",
+    "The growth channels by sort then name: stage, owner, monthly budget, why, guardrail. may_edit: you may add "
+    "and change channels." + SETUP_NOTE,
     {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
 )
 def growth_channel_list(api, args):
@@ -357,7 +366,7 @@ def growth_channel_list(api, args):
 
 @tool(
     "tico_growth_channel_show",
-    "One channel by slug, with its open marketing tasks (labelled channel:<slug>).",
+    "One channel by slug, with its open marketing tasks (labelled channel:<slug>)." + SETUP_NOTE,
     {"slug": _s("Channel slug")},
     required=("slug",),
 )
@@ -426,7 +435,8 @@ def _source_body(api, args):
 @tool(
     "tico_growth_source_list",
     "Which system holds the truth for each number (bookings, spend, sign-ups), how a bot "
-    "reaches it and what it may do there, and any number two sources both claim.",
+    "reaches it and what it may do there, and any number two sources both claim. may_edit: you may change sources."
+    + SETUP_NOTE,
     {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
 )
 def growth_source_list(api, args):
@@ -481,7 +491,8 @@ COHORT_FIELDS = (
 
 @tool(
     "tico_growth_cohort_list",
-    "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 days, revenue and margin.",
+    "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 days, revenue and margin."
+    + SETUP_NOTE,
     {
         "channel": _s("A channel slug, or unknown"),
         "month": _s("YYYY-MM"),
@@ -539,7 +550,7 @@ def growth_cohort_set(api, args):
 @tool(
     "tico_growth_economics",
     "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
-    "expected months kept, LTV and LTV:CAC, with the total and the Unknown row.",
+    "expected months kept, LTV and LTV:CAC, with the total and the Unknown row." + SETUP_NOTE,
     {"month": _s("YYYY-MM; default the latest with numbers")},
 )
 def growth_economics(api, args):
@@ -549,7 +560,7 @@ def growth_economics(api, args):
 @tool(
     "tico_growth_numbers",
     "The growth numbers over the last months: each month's total, each channel's economics, "
-    "the KPI tree with its series, and the markers.",
+    "the KPI tree with its series, and the markers. may_edit: you may record months." + SETUP_NOTE,
     {
         "months": {
             "type": "integer",
@@ -564,7 +575,9 @@ def growth_numbers(api, args):
 
 
 @tool(
-    "tico_growth_kpis", "The KPI tree: the North Star, its inputs and guardrails, each KPI's funnel stage and loop.", {}
+    "tico_growth_kpis",
+    "The KPI tree: the North Star, its inputs and guardrails, each KPI's funnel stage and loop." + SETUP_NOTE,
+    {},
 )
 def growth_kpis(api, args):
     return api.get("growth/kpis")
@@ -573,7 +586,7 @@ def growth_kpis(api, args):
 @tool(
     "tico_growth_settings",
     "The growth settings (unit, revenue per customer per month, margin %). With values or set, "
-    "owner or admin only: change them.",
+    "owner or admin only: change them. may_edit: you may change them." + SETUP_NOTE,
     {
         "values": {"type": "object", "description": "{unit, revenue_month, margin_pct}"},
         "set": {"type": "array", "items": {"type": "string"}, "description": "KEY=VALUE, instead of values"},
@@ -595,6 +608,17 @@ def growth_settings(api, args):
     if not values:
         return api.get("growth/settings")
     return _as_person(api).call("PUT", "growth/settings", values, _key(args))
+
+
+@tool(
+    "tico_growth_setup",
+    "Growth's first run: the four steps from an empty Growth to its first numbers (settings, a channel, its source, "
+    "its first month), each done or not with when it was first done, the next step with its CLI command and MCP tool, "
+    "whether you may do it and if not who may, and when the team first opened Growth and first saw its numbers.",
+    {},
+)
+def growth_setup(api, args):
+    return api.get("growth/setup")
 
 
 def _growth_text(args, result):
@@ -716,6 +740,12 @@ CLI = (
     ),
     Command(
         "growth kpis", "the KPI tree: North Star, inputs, guardrails", render=_growth_text, example="tico growth kpis"
+    ),
+    Command(
+        "growth setup",
+        "the four setup steps, each done or not, and the next one",
+        render=_growth_text,
+        example="tico growth setup",
     ),
     Command(
         "growth settings",
