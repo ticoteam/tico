@@ -87,7 +87,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
         }
         const rows = empty ? [] : ROWS.filter(r => !q.department || r.department === q.department);
         return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', group: 'bot', department: q.department || null, totals: total(rows), rows, departments: ['Ops', 'Revenue'],
-                     dimensions: {harness: ['claude', 'codex'], model: ['claude-opus-5-5'], effort: [], subscription: []}});
+                     dimensions: {harness: ['claude', 'codex'], model: ['claude-opus-5-5', 'claude-sonnet-5'], effort: [], subscription: []}});
       }
       if (p === '/api/employees') return json([{name: 'support', display_name: 'Support', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
@@ -209,7 +209,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await filter.click();
     assert.equal(await filter.getAttribute('aria-expanded'), 'true');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'use-dept', 'the first select has the focus');
-    assert.deepEqual(await panel.locator('.use-frow:not([hidden]) > span').allInnerTexts(), ['Group', 'Harness', 'Group by', 'Sort by']);
+    assert.deepEqual(await panel.locator('.use-frow:not([hidden]) > span').allInnerTexts(), ['Group', 'Harness', 'Model', 'Group by', 'Sort by']);
     await panel.locator('[data-use-filter=harness]').selectOption('codex');
     await page.waitForFunction(() => document.querySelector('.use-filter')?.textContent?.includes('Filter · 1'));
     assert.equal(asked.at(-1)!.harness, 'codex');
@@ -317,7 +317,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
 
     // A bot opens to what explains its spend: a summary with its cache rate, where the tokens go, its top tasks and its
     // models, a labelled daily chart, its routines and a CSV; clicking again closes it.
-    await page.locator('[data-use-filter=model]').selectOption('claude-opus-5-5');
+    await page.locator('button.use-filter').click();
+    await page.locator('#use-filter-panel [data-use-filter=model]').selectOption('claude-opus-5-5');
+    await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
     await support.locator('.use-line').click();
     const detail = support.locator('.use-detail');
