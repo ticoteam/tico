@@ -212,7 +212,9 @@ def test_todays_runner_no_longer_advertises_or_gates_the_retired_packet_capabili
     assert advertised and '"task_lanes_v2"' in advertised.group(1)
     assert '"memory_tidy_packets_v1"' not in lanes
     assert not [k for k in WIRE["gated"] if "memory_tidy_packets_v1" in k]
-    assert "packet_only" not in (W.ROOT / "runner-rs" / "harnesses" / "claude-code.toml").read_text()
+    manifests = sorted((W.ROOT / "runner-rs" / "harnesses").glob("*.toml"))
+    assert manifests
+    assert not [m.name for m in manifests if "packet_only" in m.read_text()]
 
 
 def turn(api, bot="ops"):
