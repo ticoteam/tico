@@ -126,14 +126,17 @@ class _Connection(http.client.HTTPConnection):
     def __init__(self, host, port, ips, tls, left, opener):
         super().__init__(host, port, timeout=min(left(), TIMEOUT_S))
         self._ips, self._tls, self._opener, self._left = ips, tls, opener, left
+        self.connected_to = None  # the address the last connect or TLS handshake used
         self.failures = []  # (address, exception) for each address that could not be reached
 
     def connect(self):
         for ip in self._ips:
             try:
                 self.sock = self._opener(ip, self.port, self._tls, self.host, min(self._left(), TIMEOUT_S))
+                self.connected_to = ip
                 return
-            except ssl.SSLError:
+            except ssl.SSLError as exc:
+                self.connected_to = ip
                 raise
             except OSError as exc:
                 self.failures.append((ip, exc))
@@ -224,7 +227,10 @@ class Fetcher:
                     conn.request("GET", target, headers=headers)
                     response = conn.getresponse()
                 except (OSError, http.client.HTTPException) as exc:
-                    tried = conn.failures or [(None, exc)]
+                    tried = list(conn.failures)
+                    if not any(e is exc for _, e in tried):
+                        # The failure that ended the fetch comes last, after any address that was skipped.
+                        tried.append((conn.connected_to, exc))
                     why = "; ".join(f"{ip}: {failure_words(e)}" if ip else failure_words(e) for ip, e in tried)
                     raise FetchError("network", f"Could not read {host}: {why}") from None
                 if response.status in (301, 302, 303, 307, 308):

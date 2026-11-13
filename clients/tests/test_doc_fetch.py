@@ -101,6 +101,31 @@ def test_an_address_that_cannot_be_reached_falls_back_to_the_next_checked_one():
     assert [ip for ip, _ in net.sent] == [GOOGLE_V4]
 
 
+def test_a_failure_after_a_fallback_is_reported_beside_the_skipped_address():
+    net = Net({"syften.com": [GOOGLE_V6, GOOGLE_V4]}, reply(), down={GOOGLE_V6: UNREACHABLE})
+    real = net.opener
+
+    def opener(*a):
+        sock = real(*a)
+        sock.sendall = lambda data: (_ for _ in ()).throw(ConnectionResetError(104, "Connection reset by peer"))
+        return sock
+
+    with pytest.raises(F.FetchError) as failed:
+        F.fetch("https://syften.com/", resolver=net.resolver, opener=opener)
+    msg = failed.value.message
+    assert "[Errno 101] Network is unreachable" in msg
+    assert f"{GOOGLE_V4}: " in msg and "[Errno 104] Connection reset by peer" in msg
+
+
+def test_a_tls_failure_on_a_later_address_is_reported():
+    import ssl
+
+    net = Net({"syften.com": [GOOGLE_V6, GOOGLE_V4]}, down={GOOGLE_V6: UNREACHABLE, GOOGLE_V4: ssl.SSLError(1, "bad cert")})
+    with pytest.raises(F.FetchError) as failed:
+        net.fetch("https://syften.com/")
+    assert "Network is unreachable" in failed.value.message and "bad cert" in failed.value.message
+
+
 def test_the_name_is_tried_in_the_order_the_system_resolves_it(monkeypatch):
     infos = [(None, None, 6, "", (GOOGLE_V4, 443)), (None, None, 6, "", (GOOGLE_V6, 443, 0, 0))] * 2
     monkeypatch.setattr(F.socket, "getaddrinfo", lambda *a, **k: infos)
