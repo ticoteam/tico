@@ -526,8 +526,9 @@ def _sync_fields(c, fields, sid, kind, catalog=None, before=None):
             raise Problem("validation", f"No bot {out['bot']} to run the query", 422)
         out["bot"] = found["id"]
         _check_query(catalog, out["database"], out["query"])
-        if (before or {}).get("automation"):
-            out["automation"] = before["automation"]
+        had = (before or {}).get("automation")
+        if had:
+            out["automation"] = had
     return json.dumps(out, sort_keys=True)
 
 
@@ -600,6 +601,8 @@ def _schedule(c, actor, sid, had=None):
     from . import automations as AU
 
     row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
+    if not row:
+        return
     mapping = json.loads(row.get("sync_map") or "{}")
     aid = mapping.get("automation") or had
     existing = AU._row(c, aid) if aid else None
