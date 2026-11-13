@@ -18,6 +18,8 @@ use crate::harness_memory::{bot_read, bot_remove, bot_write};
 
 pub const FILE: &str = "AGENTS.md";
 pub const OLD: &str = "AGENT.md";
+/// Claude Code's own instruction file name, which the employee template once linked to AGENT.md.
+pub const CLAUDE: &str = "CLAUDE.md";
 pub const STATE: &str = "state.md";
 pub const STATE_ARCHIVE: &str = "memory/archive/state.md";
 pub const START: &str = "<!-- tico:standing (Tico keeps this section the same for every bot and rewrites it; put your own instructions above it) -->";
@@ -125,6 +127,28 @@ pub async fn ensure(
     let new = checkout.join(FILE);
     let old = checkout.join(OLD);
     let mut paths: Vec<&str> = vec![];
+    // Repositories made from the employee template link AGENTS.md and CLAUDE.md to AGENT.md. Those links go: AGENTS.md
+    // becomes the file itself, and Claude Code, which loads AGENTS.md and CLAUDE.md both, would read a CLAUDE.md link to
+    // it twice. A link only if AGENT.md is a file to move.
+    if std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_file()) {
+        for name in [FILE, CLAUDE] {
+            let link = checkout.join(name);
+            if std::fs::read_link(&link).is_ok_and(|to| to == Path::new(OLD)) {
+                let was_tracked = tracked(
+                    &g(checkout, env, &["ls-files", "--", name])
+                        .await
+                        .map_err(git)?,
+                );
+                bot_remove(&link).map_err(io)?;
+                if was_tracked {
+                    g(checkout, env, &["rm", "-q", "--cached", "--", name])
+                        .await
+                        .map_err(git)?;
+                    paths.push(name);
+                }
+            }
+        }
+    }
     let mut text = bot_read(&new).map_err(io)?;
     if text.is_none() && std::fs::symlink_metadata(&new).is_ok() {
         // AGENTS.md is a link (or not a file): the bot's own arrangement, left as it is.

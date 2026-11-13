@@ -2814,3 +2814,44 @@ async fn an_old_bot_repository_is_brought_to_agents_md_in_one_pushed_commit() {
     assert!(seed.join("AGENTS.md").is_file() && !seed.join("AGENT.md").exists());
     assert!(crate::instructions::present(&seed));
 }
+
+/// A repository from the employee template links AGENTS.md and CLAUDE.md to AGENT.md: AGENTS.md becomes the file
+/// itself and the CLAUDE.md link goes, so Claude Code reads the instructions once.
+#[tokio::test]
+async fn a_template_repository_with_links_to_agent_md_gets_one_agents_md_file() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-ops");
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        std::os::unix::fs::symlink("AGENT.md", seed.join(name)).unwrap();
+    }
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["commit", "-qm", "links"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let main = tmp.0.join("bot-ops");
+    sh(
+        &tmp.0,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let home = tmp.0.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let env = turn_env(&home, &[]);
+    assert!(crate::instructions::ensure(&main, &env, "Tico", false)
+        .await
+        .unwrap());
+    let meta = std::fs::symlink_metadata(main.join("AGENTS.md")).unwrap();
+    assert!(meta.is_file(), "AGENTS.md is the file, not a link");
+    assert!(std::fs::read_to_string(main.join("AGENTS.md"))
+        .unwrap()
+        .starts_with("# Ops\n"));
+    assert!(
+        std::fs::symlink_metadata(main.join("CLAUDE.md")).is_err()
+            && !main.join("AGENT.md").exists()
+    );
+    assert_eq!(sh(&main, &["status", "--porcelain"]), "");
+    assert_eq!(sh(&main, &["ls-tree", "--name-only", "HEAD"]), "AGENTS.md");
+}

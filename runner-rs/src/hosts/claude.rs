@@ -2467,9 +2467,7 @@ mod tests {
             json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})
         );
         assert!(!argv.contains(&"--autocompact".to_string()), "{argv:?}");
-        assert!(turn_env(&settings)
-            .get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
-            .is_none());
+        assert!(!turn_env(&settings).contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
     }
 
     #[test]
