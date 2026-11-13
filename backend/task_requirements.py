@@ -365,8 +365,7 @@ UNSURE_BEFORE_SQL = (
 # Jev sent back an earlier page of this requirement on this visit (one since replaced): on a page a person OKs anyway,
 # the owner had its one round, so the next send back is that person's to decide (`_page`).
 NOT_MET_BEFORE_SQL = UNSURE_BEFORE_SQL.replace("v.verdict = 'unsure'", "v.verdict = 'not_met'")
-# What Jev's unsure says to the bot that holds the stage, and then to the pipeline's manager bot (`_unsure_to_bots`).
-FIX_OR_EXPLAIN = "Not yet met: fix it or explain it on the page."
+# What Jev's unsure says to the pipeline's manager bot (`_unsure_to_bots`).
 DECIDE = "Decide if it meets the check: OK it or send it back, and say why."
 
 
@@ -459,8 +458,13 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if said is None:
         return Standing(requirement, WAITING, JEV, "Jev is checking")
     oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
-    if said == "not_met" and not (
-        oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone()
+    # Jev's verdict on a spec predicts nothing a person decides (task #351: specs it passed were sent back 49% of the
+    # time, those it was unsure of 36%), so on a Spec page it never gates: a missing part goes to the person as its line.
+    gates = not (oks_anyway and _check_of(requirement) == "spec")
+    if (
+        said == "not_met"
+        and gates
+        and not (oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone())
     ):
         return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
     # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
@@ -483,7 +487,11 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if said == "not_met":
         # A page a person OKs anyway that Jev sent back before on this visit: the owner had its round, so the person
         # decides with Jev's reason, as on an unsure (Initech, Nov 11: a page Jev could never pass left only a push-past).
-        line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
+        # A Spec page Jev never gates: the person sees the part that is missing.
+        if not gates:
+            line = f"Jev: {reasons}" if reasons else "Jev: a part is missing"
+        else:
+            line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
         return Standing(requirement, WAITING, person, after + line, since=asked, notices=notices)
     if said in ("unsure", "failed"):
         # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
@@ -494,10 +502,14 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
             else (f"Jev is unsure: {reasons}" if reasons else "Jev is unsure")
         )
         if oks_anyway:
-            # A person OKs this page whatever Jev says: they are asked at once, every version, with Jev's reason. A bot
-            # round trip adds nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks).
-            return Standing(requirement, WAITING, person, after + line, since=asked, notices=notices)
-        routed = _unsure_to_bots(conn, task, requirement, line, failed=said == "failed")
+            # A person OKs this page whatever Jev says: they are asked at once, every version. A bot round trip adds
+            # nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks). Jev's can't
+            # tell names nothing to fix and predicts nothing they decide (task #351: people OK'd 41 of 45 QA pages it
+            # was unsure of), so they see nothing from Jev, as when every part is there.
+            return Standing(
+                requirement, WAITING, person, f"{after}{_ok_line(conn, person, page)}", since=asked, notices=notices
+            )
+        routed = _unsure_to_bots(conn, task, requirement, line)
         if routed:
             routed.since = asked if routed.state == WAITING else None
             return routed
@@ -506,12 +518,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         return Standing(requirement, WAITING, person, line, since=asked)
     if oks_anyway:
         # A people-only page that names nobody (or whose person left) is any person's: Jev passing it is never enough.
-        from . import hubdb
-
-        H: Any = hubdb
-        name = H.actor_name(conn, person) if person else "someone"
         return Standing(
-            requirement, WAITING, person, f"{after}OK {name} (version {page['version']})", since=asked, notices=notices
+            requirement, WAITING, person, f"{after}{_ok_line(conn, person, page)}", since=asked, notices=notices
         )
     return Standing(requirement, MET, line="Jev passed it")
 
@@ -530,6 +538,22 @@ def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answe
         (answer["visit_id"], requirement["id"], answer["created_at"]),
     ).fetchone()
     return bool(shown) and shown[0] == page["file_id"] and shown[1] == answer.get("page_version")
+
+def _ok_line(conn: "sqlite3.Connection", person: str | None, page: Row) -> str:
+    """What a page a person OKs says while it waits on them and nothing is missing: who OKs which version."""
+    from . import hubdb
+
+    H: Any = hubdb
+    name = H.actor_name(conn, person) if person else "someone"
+    return f"OK {name} (version {page['version']})"
+
+
+def _check_of(requirement: Row) -> str | None:
+    """Which of Jev's shipped checks a page requirement's rubric is (pipeline_judges.check_of), or None."""
+    from . import pipeline_judges as PJ
+
+    settings: Row = requirement.get("settings") or {}
+    return PJ.check_of(settings.get("rubric") or "")
 
 
 def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
@@ -840,27 +864,21 @@ def review_commands(task_id: str, requirement_id: str) -> str:
     )
 
 
-def _unsure_to_bots(
-    conn: "sqlite3.Connection", task: Row, requirement: Row, line: str, *, failed: bool = False
-) -> Standing | None:
+def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, line: str) -> Standing | None:
     """Jev unsure of a page on a stage a bot holds (docs/pipelines-v3.md "Jev is checking"; the two sign-offs rule of
-    Nov 11 put this before a person). The first time this visit, it is that bot's turn with Jev's reason and the check
-    line, to fix the page or explain on it. The next time, the pipeline's manager bot decides: it OKs the page or sends it
-    back, with why, as an answer on the task. None, so a person decides as before, when a person holds the stage, or no
-    manager bot is set, or the manager is the bot that holds it. `failed` (Jev could not check, after its retries) skips
-    the bot's round: the manager decides at once, since the page may be fine and only Jev was down (Nov 11: a Jev outage
-    never makes a third kind of person sign-off). A page a person OKs anyway (people only, or naming someone) never
-    comes here."""
+    Nov 11 put this before a person). The pipeline's manager bot looks once per version: it gets Jev's line naming the
+    part it can't tell, and OKs the page or sends it back, with why, as an answer on the task. The page's own bot is not
+    sent back to rewrite on an unsure (task #351: after unsure, 76 reviews and 25 Validate pages were rewritten and
+    judged again); a part that is no still goes back to it (`_page`). None, so a person decides as before, when a person
+    holds the stage, or no manager bot is set, or the manager is the bot that holds it. `failed` (Jev could not check,
+    after its retries) goes the same way: the page may be fine and only Jev was down. A page a person OKs anyway (people
+    only, or naming someone) never comes here. The line never carries the check's full wording."""
     from . import waiting_on as W
 
     held = W.holder(conn, task)
     if not W.is_bot(held):
         return None
-    settings: Row = requirement.get("settings") or {}
-    check = " ".join(str(settings.get("rubric") or "").split()) or name_of(requirement)
-    said = line if check in line else f"{sentence(line)} The check: {check}"
-    if not failed and not conn.execute(UNSURE_BEFORE_SQL, (task["visit"]["id"], requirement["id"])).fetchone():
-        return Standing(requirement, NOT_MET, task.get("owner_id"), f"{FIX_OR_EXPLAIN} {said}")
+    said = sentence(line)
     pipeline: Row = task.get("pipeline") or {}
     manager: object = pipeline.get("manager_id")
     if W.is_bot(manager) and manager != held:

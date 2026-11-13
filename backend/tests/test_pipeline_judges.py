@@ -412,3 +412,110 @@ def test_the_judge_is_shown_what_a_page_is_judged_against():
     context = {"heads": {"acme/app#12": "aaa"}, "release": ["v1.2.0"]}
     assert P._state(REQ, _work_fields(context=context))["work"]["context"] == context
     assert "context" not in P._state(REQ, _work_fields())["work"]
+
+
+# ----------------------------------------------------------------------------- checks asked in parts (task #351)
+def _parts_engine(ps, asked=None):
+    """Jev answering each part question (`part_<key>`) with ps[key] (0.95 when not named), as live_engine reads it."""
+
+    def ask(model, state, questions, label):
+        if asked is not None:
+            asked.append(questions)
+        answers = {qid: {"noul": ps.get(qid.removeprefix("part_"), 0.95)} for qid in questions}
+        return P._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
+
+    return ask
+
+
+def _spec_req():
+    from backend import pipeline_settings as PS
+
+    return {"id": "req-spec", "name": "Spec page", "rubric": PS.SPEC_RUBRIC, "pipeline_id": None}
+
+
+def test_a_spec_with_no_out_of_scope_list_is_not_met_and_says_so_in_one_line():
+    asked = []
+    result = P.judge_once(None, _spec_req(), ATTACHMENT, engine=_parts_engine({"out_of_scope": 0.05}, asked))
+    assert (result["verdict"], result["reason"]) == ("not_met", "No out-of-scope list found.")
+    (questions,) = asked
+    assert sorted(questions) == ["part_criteria", "part_goal", "part_in_scope", "part_out_of_scope"], "one call"
+    assert "what the work leaves out" in questions["part_out_of_scope"]["instructions"]
+    assert all(q["type"] == "noul" for q in questions.values())
+
+
+def test_the_verdict_comes_from_the_parts_and_names_at_most_three():
+    req = _spec_req()
+    every = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({}))
+    assert every["verdict"] == "met"
+    unsure = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"criteria": 0.6}))
+    assert (unsure["verdict"], unsure["reason"]) == ("unsure", "Can't tell if the acceptance criteria can be checked.")
+    # A no outweighs a can't tell, and each missing part is named, three at most.
+    mixed = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"criteria": 0.6, "goal": 0.1}))
+    assert (mixed["verdict"], mixed["reason"]) == ("not_met", "No goal found.")
+    nothing = P.judge_once(
+        None,
+        req,
+        ATTACHMENT,
+        engine=_parts_engine(dict.fromkeys(("goal", "in_scope", "out_of_scope", "criteria"), 0.0)),
+    )
+    assert nothing["reason"] == "No goal found. No in-scope list found. No out-of-scope list found."
+
+
+def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
+    from backend import pipeline_settings as PS
+
+    assert P.check_of(PS.SPEC_RUBRIC) == "spec" and P.check_of(PS.REVIEW_RUBRIC) == "review"
+    assert P.check_of(PS.QA_RUBRIC) == "qa" and P.check_of(PS.VALIDATE_RUBRIC) == "validate"
+    assert P.check_of(PS.EARLIER["product-spec/page/rubric"][0]) == "spec", "an unedited older line is the same check"
+    assert P.check_of("  " + PS.SPEC_RUBRIC.replace(" ", "\n", 3)) == "spec", "spacing does not matter"
+    assert P.check_of(REQ["rubric"]) is None, "a company's own rubric is asked whole"
+    assert [len(P.CHECKS[c]) for c in ("spec", "review", "qa", "validate")] == [4, 3, 5, 3]
+    assert set(P.BARS) == set(P.CHECKS), "every check has its bar, in one place"
+    req = {"id": "r", "name": "Checked in production", "rubric": PS.VALIDATE_RUBRIC}
+    result = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"version": 0.5}))
+    assert (result["verdict"], result["reason"]) == ("unsure", "Can't tell if the version production runs is named.")
+
+
+def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
+    """Task #351: "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): <the whole rubric>"
+    named nothing to fix. Whole or in parts, met, not met or unsure, the reason carries none of it."""
+    from backend import pipeline_settings as PS
+
+    reasons = []
+    for p in (0.95, 0.5, 0.05):
+        reasons.append(P.judge_once(None, REQ, ATTACHMENT, engine=_engine(p, reason=""))["reason"])
+        for rubric in (PS.SPEC_RUBRIC, PS.REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
+            req = {"id": "r", "name": "Page", "rubric": rubric}
+            for key in [part.key for part in P.CHECKS[P.check_of(rubric)]]:
+                reasons.append(P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({key: p}))["reason"])
+    assert reasons and all(reasons)
+    for reason in reasons:
+        assert "p 0." not in reason and "between 0.2" not in reason and "(p " not in reason, reason
+        for rubric in (REQ["rubric"], PS.SPEC_RUBRIC, PS.REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
+            assert rubric not in reason, reason
+    assert P.judge_once(None, REQ, ATTACHMENT, engine=_engine(0.5, reason=""))["reason"] == (
+        'Can\'t tell if it meets "Shows the page live".'
+    ), "a check asked whole names the requirement, never its rubric"
+
+
+def test_the_grouped_jev_step_asks_the_parts_in_one_call_and_reads_each(monkeypatch):
+    """judge_many (the Jev step's path): a Spec page is one call with a question per part, read back by part."""
+    calls = []
+
+    def raw(state, questions, label):
+        calls.append(sorted(questions))
+        answers = {q: {"type": "noul", "noul": 0.1 if q == "part_out_of_scope" else 0.9} for q in questions}
+        return {"answers": answers, "model": "tico-decide-low", "provider": "gateway", "cost_usd": 0.001, "ms": 3}
+
+    class Store:
+        settings = None
+
+        @contextmanager
+        def read(self):
+            yield None
+
+    monkeypatch.setattr(P, "ASK", raw)
+    monkeypatch.setattr(P.judge, "over_spend_cap", lambda c, s: None)
+    (result,) = P.judge_many(Store(), [(_spec_req(), ATTACHMENT)])
+    assert calls == [["part_criteria", "part_goal", "part_in_scope", "part_out_of_scope"]]
+    assert (result["verdict"], result["reason"]) == ("not_met", "No out-of-scope list found.")

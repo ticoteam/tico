@@ -1626,3 +1626,171 @@ def test_needs_you_names_a_page_ok_by_its_task_and_decision_not_the_requirement(
     assert views.page_ask_line("Review page", "X", conflict) == (
         "Review for X, ready for your OK. The PR has a merge conflict: builder fixes it after your OK."
     )
+
+
+# ----------------------------------------------------------------------------- Jev says what is missing (task #351)
+def _shipped(name):
+    from backend import pipeline_settings as PS
+
+    return getattr(PS, name)
+
+
+def _parts(ps):
+    """Jev (pipeline_judges.ENGINE) answering each part it is asked with ps[key], 0.95 when not named."""
+
+    def ask(model, state, questions, label):
+        answers = {qid: {"noul": ps.get(qid.removeprefix("part_"), 0.95)} for qid in questions}
+        return PJ._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
+
+    return ask
+
+
+def _jev_lines(r, row):
+    notes = [
+        n[0]
+        for n in r.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='jev_verdict'",
+            (row["id"],),
+        )
+    ]
+    return [n for n in notes if n]
+
+
+@pytest.mark.parametrize("rubric", ["SPEC_RUBRIC", "QA_RUBRIC"])
+@pytest.mark.parametrize("ps", [{}, {"goal": 0.6, "built": 0.6}], ids=["every part yes", "a part unsure"])
+def test_a_page_a_person_oks_shows_nothing_from_jev_unless_a_part_is_missing(store, seeded, monkeypatch, rubric, ps):
+    def build(c):
+        _pipeline(c, page_settings={"rubric": _shipped(rubric)}, who_oks="people_only")
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        return row
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", _parts(ps))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert standing.state == R.WAITING and standing.line == "OK someone (version 1)", standing.line
+        assert "Jev" not in standing.line
+        assert _jev_lines(r, row) == [], "the task page shows no Jev line either"
+        view = H.task_view(r, row["id"], ANA)
+        assert "Jev" not in json.dumps(view.get("to_leave")), view.get("to_leave")
+
+
+def test_a_spec_page_missing_a_part_goes_to_the_person_with_that_line_not_back_to_the_bot(store, seeded, monkeypatch):
+    """Jev's verdict on a spec predicts nothing a person decides, so it never gates a Spec page: the person sees the one
+    line, and the bot that wrote it is not sent back."""
+
+    def build(c):
+        _pipeline(c, page_settings={"rubric": _shipped("SPEC_RUBRIC")}, who_oks="people_only")
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        X.settled(c)
+        return row
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"out_of_scope": 0.05}))
+    V.run(store, H.shift(H.now(), seconds=1))
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert (standing.state, standing.line) == (R.WAITING, "Jev: No out-of-scope list found.")
+        assert standing.on != WRITER
+        assert _jev_lines(r, row) == ["No out-of-scope list found."]
+        sent = r.execute(
+            "SELECT 1 FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (WRITER, row["id"] + ":%:jev:%")
+        ).fetchall()
+        assert not sent, "the spec's bot is not woken to rewrite it"
+
+
+def test_a_qa_page_missing_a_part_still_goes_back_to_its_bot_first(c, store):
+    rid = _pipeline(c, page_settings={"rubric": _shipped("QA_RUBRIC")}, who_oks="people_only")
+    assert rid
+    row = _task(c)
+    _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "not_met", "Reviewer 2's findings are missing.")
+    standing = _standing(c, row)
+    assert (standing.state, standing.on, standing.line) == (
+        R.NOT_MET,
+        WRITER,
+        "Jev sent it back: Reviewer 2's findings are missing.",
+    )
+
+
+def _validate(c, store):
+    _pipeline(c, page_settings={"rubric": _shipped("VALIDATE_RUBRIC")})
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _attach(c, row, "page:" + fid)
+    X.settled(c)
+    return row, fid
+
+
+def _jev_wakes(r, row, who):
+    return [
+        m[0]
+        for m in r.execute(
+            "SELECT body FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (who, row["id"] + ":%:jev:%")
+        )
+    ]
+
+
+def test_unsure_on_a_bots_stage_wakes_the_manager_once_per_version_and_not_the_pages_bot(store, seeded, monkeypatch):
+    row, fid = seeded(lambda c: _validate(c, store))
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"version": 0.5}))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
+        assert standing.line == f"{R.DECIDE} Jev is unsure: Can't tell if the version production runs is named."
+        (asked,) = _jev_wakes(r, row, "bot:manager")
+        assert "Can't tell if the version production runs is named." in asked
+        assert _shipped("VALIDATE_RUBRIC") not in asked, "the line, never the whole check"
+        assert _jev_wakes(r, row, WRITER) == [], "the page's own bot is not woken to rewrite it"
+    # Judged again at the same version (as at release: an open unsure is judged once more): no new wake.
+    with store.transaction() as c:
+        c.execute("UPDATE page_verdicts SET verdict=NULL, next_try_at=NULL WHERE file_id=?", (fid,))
+    assert V.run(store, H.shift(H.now(), seconds=2)) == 1
+    with store.read() as r:
+        assert len(_jev_wakes(r, row, "bot:manager")) == 1, "a second unsure of the same version wakes nobody new"
+        assert _jev_wakes(r, row, WRITER) == []
+
+
+def test_a_part_that_is_no_on_a_bots_stage_still_goes_back_to_the_pages_bot(store, seeded, monkeypatch):
+    row, _fid = seeded(lambda c: _validate(c, store))
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"shown": 0.05}))
+    V.run(store, H.shift(H.now(), seconds=1))
+    with store.read() as r:
+        standing = _standing(r, row)
+        assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
+        assert (
+            standing.line == "Jev sent it back: Doesn't say what was run or looked at in production and what it gave."
+        )
+        (told,) = _jev_wakes(r, row, WRITER)
+        assert "Doesn't say what was run or looked at in production" in told
+        assert _jev_wakes(r, row, "bot:manager") == []
+
+
+def test_at_release_an_open_unsure_is_judged_again_and_old_lines_lose_their_probability(c, store):
+    """The migration that ships this: the open task's unsure page is owed again; a closed one's verdict stays, and
+    every line in the old template is said the new way."""
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261113060000_jev_reasons_by_part")
+    _pipeline(c)
+    open_row, closed_row = _task(c), _task(c)
+    old = "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): Spec page"
+    waiting = _say(c, _attach(c, open_row, "page:" + _page(c, store)[0]), "unsure", old)
+    shut = _say(c, _attach(c, closed_row, "page:" + _page(c, store)[0]), "unsure", old)
+    E.move(c, closed_row["id"], E.CLOSED, ANA, "not needed")
+    migration.up(c)
+    again = V.get(c, waiting["file_id"], waiting["version"], waiting["rubric_hash"])
+    assert (again["verdict"], again["reasons"], again["tries"]) == (None, None, 0)
+    assert V.owed(c, H.shift(H.now(), seconds=1)) and again["id"] in [
+        o["id"] for o in V.owed(c, H.shift(H.now(), seconds=1))
+    ]
+    kept = V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])
+    assert (kept["verdict"], kept["reasons"]) == ("unsure", "Can't tell if it meets the check.")
+    migration.up(c)  # a second run changes nothing it already changed
+    assert (
+        V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])["reasons"]
+        == "Can't tell if it meets the check."
+    )
