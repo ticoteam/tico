@@ -213,6 +213,16 @@ async function phone(browser: Browser): Promise<void> {
   console.log('give-to: phone ok');
 }
 
+// A Give answers, then Needs you reads itself again in the background (decideDo's v2Refresh). A case that then swaps the
+// list waits for that read and its redraw first: one landing late redraws the screen under the next case's picker.
+async function giveAndSettle(page: Page, click: () => Promise<void>): Promise<void> {
+  const needs = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/needs-you');
+  const status = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/status');
+  await click();
+  await Promise.all([needs, status]);
+  await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+}
+
 // Needs you (decide.ts): Give to… on a task of yours. Suggested is who asked and the bots the title names; the current
 // owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give sends the pick.
 async function needsYou(browser: Browser): Promise<void> {
@@ -253,8 +263,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});
   assert.equal(await give.isDisabled(), false);
-  await give.click();
-  for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(100);
+  await giveAndSettle(page, () => give.click());
   assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['botops'], 'Give sends the value the old list sent');
 
   // Suggested reads the whole task the screen loads, not only the item's brief (title and requester): a bot named only
@@ -306,8 +315,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.keyboard.type('sam');
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});
-  await whyGive.click();
-  for (let i = 0; i < 50 && !given.length; i++) await page.waitForTimeout(100);
+  await giveAndSettle(page, () => whyGive.click());
   assert.deepEqual(given.map(b => (b as {to: string}).to), ['human:sam']);
 
   // 👎 on a bot's OK ask: an OK shows its own content, so the task is read only when 👎 opens; Suggested then has the
@@ -345,8 +353,7 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 1, 'opened again: a bot only the body names is suggested');
   await page.keyboard.press('Escape');
   await pop.waitFor({state: 'detached'});
-  await whyGive.click();
-  for (let i = 0; i < 50 && !okGiven.length; i++) await page.waitForTimeout(100);
+  await giveAndSettle(page, () => whyGive.click());
   assert.deepEqual(okGiven.map(b => (b as {to: string}).to), ['human:sam'], 'the pick made while the read was on its way is given');
   assert.equal(okReads, 1, 'one read for the task');
 
