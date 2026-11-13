@@ -14,7 +14,7 @@ const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.A
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 // `iconRow`: on a phone the header is one dense row of icons with the title kept for screen readers only (Tasks).
-type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean};
+type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean; opens?: [string, string]};
 // The week-one table. `button: false` = no filled button allowed; undefined = at most one.
 const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
@@ -25,11 +25,11 @@ const SCREENS: Screen[] = [
   {name: 'Listening', hash: '#/listening', button: true},
   {name: 'Rules', hash: '#/rules', tabs: true},
   {name: 'Docs', hash: '#/docs', button: true, more: ['Import a file…', 'Add source…']},
-  {name: 'Tools', hash: '#/tools', more: ['Keys', 'Settings']},
+  {name: 'Tools', hash: '#/tools', more: ['Keys', 'Settings'], opens: ['Keys', '^#/tools/keys']},
   // Sources joins Meetings' ⋯ once a source is connected (the source tiles stand in for it before); the seeded hub has none.
   {name: 'Meetings', hash: '#/meetings', tabs: true, more: ['Settings']},
   {name: 'Usage', hash: '#/usage', tabs: true, button: false},
-  {name: 'Updates', hash: '#/updates', tabs: true, button: false, more: ['Archive']},
+  {name: 'Updates', hash: '#/updates', tabs: true, button: false, more: ['Archive'], opens: ['Archive', 'view=archive']},
   {name: 'Archive', hash: '#/updates?view=archive', button: false},
   {name: 'Learnings', hash: '#/learnings', button: false},
 ];
@@ -146,31 +146,64 @@ const titleLeft = (page: Page) => page.evaluate(() =>
             for (const want of s.more) if (!items.includes(want)) say(s, '1440', [`⋯ lacks "${want}" (has ${items.join(', ')})`]);
             await page.keyboard.press('Escape');
             if (await menu.count()) say(s, '1440', ['Escape left ⋯ open']);
+            // A click outside closes it too.
+            await more.click();
+            await menu.waitFor({timeout: t(3000)}).catch(() => say(s, '1440', ['⋯ did not open again']));
+            await page.locator('#main header.ph > h1.ph-t').click();
+            if (await menu.count()) say(s, '1440', ['a click outside left ⋯ open']);
+            // The item that moved there opens what it opened before.
+            if (s.opens) {
+              await more.click();
+              await menu.locator(':is(button,a)', {hasText: s.opens[0]}).click();
+              await page.waitForFunction(re => new RegExp(re).test(location.hash), s.opens[1], {timeout: t(5000)})
+                .catch(async () => say(s, '1440', [`⋯ ${s.opens![0]} went to ${await page.evaluate(() => location.hash)}`]));
+            }
           }
         }
       } finally { await page.context().close(); }
     }
 
-    // 1100x800: AC-5.
+    // Narrower than 1440, above a phone: 1280, 1100, 900 and 800. Every tab sits inside its row and every header control
+    // is what a click at its centre hits, inside the window (Review 1: tabs slid out of their row, Ask and Live now went
+    // under Add notes). Where it all fits, the header is one row (AC-5): at 1100 on every screen whose title, tabs, ⋯ and
+    // button fit with their tools (all but Rules' eight tabs and Meetings).
     {
       const page = await pageAs(browser, hub, 'dana');
       try {
-        await page.setViewportSize({width: 1100, height: 800});
         await ready(page);
-        for (const s of SCREENS) {
-          try { await open(page, s); } catch { say(s, '1100', ['no header']); continue; }
-          say(s, '1100', await page.evaluate(() => {
-            const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
-            // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
-            const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
-            if (tall > 41.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
-            const b = head.querySelector<HTMLElement>('.ph-act .primary');
-            if (b) {
-              const br = b.getBoundingClientRect();
-              if (br.left < r.left - 0.5 || br.right > Math.min(r.right, document.documentElement.clientWidth) + 0.5) bad.push('the filled button is cut off');
-            }
-            return bad;
-          }));
+        for (const width of [1280, 1100, 900, 800]) {
+          await page.setViewportSize({width, height: 800});
+          for (const s of SCREENS) {
+            try { await open(page, s); } catch { say(s, String(width), ['no header']); continue; }
+            await page.waitForTimeout(t(100));   // the fit runs on the next frame
+            say(s, String(width), await page.evaluate(([oneRow]) => {
+              const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
+              const vw = document.documentElement.clientWidth;
+              const name = (el: Element) => el.id ? '#' + el.id : (el.textContent || '').trim().slice(0, 24) || el.className;
+              const nav = head.querySelector<HTMLElement>(':scope > .ph-tabs');
+              if (nav) {
+                const nr = nav.getBoundingClientRect();
+                for (const x of nav.children) {
+                  const xr = x.getBoundingClientRect();
+                  if (xr.left < nr.left - 0.5 || xr.right > nr.right + 0.5) bad.push(`tab "${name(x)}" is outside its row`);
+                }
+              }
+              const controls = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tabs > *, :scope > .ph-tools :is(button, a, input, summary, select), :scope > .ph-more, :scope > .ph-act :is(button, a)')]
+                .filter(el => el.getClientRects().length && !el.closest('details:not([open]) > :not(summary), [popover]:not(:popover-open)') && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).opacity !== '0');
+              for (const el of controls) {
+                const cr = el.getBoundingClientRect();
+                if (cr.right > vw + 0.5 || cr.left < -0.5) { bad.push(`${name(el)} is past the window`); continue; }
+                const hit = document.elementFromPoint(cr.left + cr.width / 2, cr.top + cr.height / 2);
+                if (!hit || !(el.contains(hit) || hit.contains(el))) bad.push(`${name(el)} is covered by ${hit ? name(hit) : 'nothing'}`);
+              }
+              if (oneRow) {
+                // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
+                const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
+                if (tall > 41.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
+              }
+              return bad;
+            }, [width === 1100 && !['Rules', 'Meetings'].includes(s.name)] as const));
+          }
         }
       } finally { await page.context().close(); }
     }
