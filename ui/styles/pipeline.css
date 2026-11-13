@@ -163,6 +163,8 @@
   /* The page scrolls as a whole here: the rail stays put between the window's top and the bottom bar, so its box is
      always in view while the board scrolls under the header. */
   .tasks-page.has-rail > .pm-rail { position: fixed; z-index: 2; top: 0; right: 0; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); width: var(--rail-w); }
+  /* The board's Ask bar stays over the board's column, clear of the rail and its box (it still asks the stage's holder). */
+  .tasks-page.has-rail .pa-host { right: var(--rail-w); }
 }
 @media (max-width: 600px) {
   .tasks-page.has-rail { display: block; }

@@ -70,16 +70,22 @@ const placed = (page: Page) => page.evaluate(() => {
   const msgs = rail.querySelectorAll('.th-msg[data-mid]'), last = msgs[msgs.length - 1]!;
   const nav = document.querySelector('#mobile-nav'), navTop = nav && getComputedStyle(nav).display !== 'none' ? nav.getBoundingClientRect().top : innerHeight;
   const r = (el: Element) => { const b = el.getBoundingClientRect(); return {top: Math.round(b.top), bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right)}; };
-  return {win: {w: innerWidth, h: innerHeight, floor: Math.round(Math.min(innerHeight, navTop))}, composer: r(composer), scroll: r(scroll), last: r(last),
-    scrollY: scrollY};
+  // Reachable, not just inside the window: what a click at the box's field and at the newest message's last line hits.
+  const field = composer.querySelector('textarea')!.getBoundingClientRect(), lb = last.getBoundingClientRect();
+  const hit = (x: number, y: number) => { const el = document.elementFromPoint(x, y); return !!el && rail.contains(el); };
+  return {win: {w: innerWidth, h: innerHeight, floor: Math.round(Math.min(innerHeight, navTop))}, rail: r(rail), composer: r(composer), scroll: r(scroll),
+    last: r(last), scrollY: scrollY,
+    reach: {box: hit(field.left + field.width / 2, field.top + field.height / 2), last: hit(lb.left + lb.width / 2, lb.bottom - 6)}};
 });
 
 function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
-  const {win, composer, scroll, last} = p;
+  const {win, rail, composer, scroll, last, reach} = p;
   assert.ok(composer.top >= 0 && composer.bottom <= win.floor + 1 && composer.left >= 0 && composer.right <= win.w + 1,
     `${where}: the box is inside the window: ${JSON.stringify(p)}`);
   assert.ok(last.bottom <= composer.top + 1 && last.bottom > scroll.top && last.bottom <= scroll.bottom + 1,
     `${where}: the newest message is in view just above the box: ${JSON.stringify(p)}`);
+  assert.ok(rail.bottom - composer.bottom <= 16, `${where}: the chat fills the rail, its box at the bottom: ${JSON.stringify(p)}`);
+  assert.deepEqual(reach, {box: true, last: true}, `${where}: a click on the box and on the newest message reaches the rail: ${JSON.stringify(p)}`);
 }
 
 (async () => {
