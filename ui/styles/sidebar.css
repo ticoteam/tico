@@ -207,8 +207,9 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 /* The seat's state word and its applicants count are a line under the name, not a pill or words after it: the name keeps
    the row's whole width, so a long title three levels down at the 200px minimum takes three lines, not four. */
 .tree .node.seat .seat-text{display:flex;flex-direction:column;flex:1 1 auto;min-width:0}
-.tree .node.seat .seat-line{display:flex;align-items:center;gap:6px;min-width:0}
-.tree .node.seat .seat-word{min-width:0;color:var(--muted);font-size:var(--t-xs);font-weight:400;line-height:1.25;overflow-wrap:break-word}
+/* The state word is never split: where it and the count do not fit on one line, the count drops to the next. */
+.tree .node.seat .seat-line{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-width:0}
+.tree .node.seat .seat-word{color:var(--muted);font-size:var(--t-xs);font-weight:400;line-height:1.25;white-space:nowrap}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
 .tree .nm{display:block;min-width:0;white-space:normal;overflow-wrap:break-word;line-height:1.25}
