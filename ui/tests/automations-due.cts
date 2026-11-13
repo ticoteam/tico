@@ -30,6 +30,12 @@ declare function taskDueInfo(task: unknown): {words: string} | undefined;
 
 const HUB_NOW = new Date('2026-10-20T09:00:00Z');   // evals/factory/world.py START, where the hub's clock stays
 const BOT = 'builder-claude';
+// Due sits in the task window's Details, one line until opened (task #419). Wait for this task's own, not the last one's.
+async function openDetails(page: Page, id: string): Promise<void> {
+  const details = page.locator(`#task-modal[open] details.task-details[data-task-details="${id}"]`);
+  await details.waitFor({state: 'attached', timeout: t(10000)});
+  if (!await details.evaluate(d => (d as HTMLDetailsElement).open)) await details.locator('> summary').click();
+}
 
 // Screenshots in both themes, with animations stopped (a loading dot never finishes).
 async function themed(page: Page, name: string) {
@@ -167,6 +173,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   // The occurrence tasks read as deadlines on their pages (red once past); the bot's other task still wakes.
   const due = async (id: string, words: RegExp) => {
     await go(page, '#/task/' + encodeURIComponent(id));
+    await openDetails(page, id);
     const cell = page.locator('[data-prop-row="due"] .prop-txt:visible', {hasText: words}).first();
     await cell.waitFor({timeout: t(10000)});
     return {text: await cell.innerText(), cls: (await cell.getAttribute('class'))!};
@@ -194,6 +201,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.equal(ny.due_at, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
   const utc = await open(browser, hub, 'dana', {phone, hash: '#/task/' + encodeURIComponent(ny.id), time: HUB_NOW,
     timezone: 'UTC'});
+  await openDetails(utc, ny.id);
   const utcDue = utc.locator('[data-prop-row="due"] .prop-txt:visible').first();
   await utcDue.waitFor({timeout: t(10000)});
   assert.match((await utcDue.innerText()).trim(), /Mar 1$/, `${tag}: a UTC viewer reads the occurrence's day`);
