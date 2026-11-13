@@ -90,14 +90,14 @@ async function desktop(browser: Browser): Promise<void> {
   // The reads a picker could make (the roster, tasks, tags); the app's own timers (live stream, sign-in, support) are not its.
   page.on('request', r => { if (/^\/api\/(employees|humans|v2\/(tasks|bots|people|tags))\b/.test(new URL(r.url()).pathname)) asked.push(r.url()); });
   await owner.click();
-  const pop = page.locator('.gt-pop:popover-open');
+  const pop = page.locator('.gv-pop:popover-open');
   await pop.waitFor();
   const box = pop.locator('input[role=combobox]');
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('role')), 'combobox', 'focus starts in the search box');
   assert.equal(await box.getAttribute('aria-controls'), await pop.locator('[role=listbox]').getAttribute('id'));
-  assert.deepEqual(await pop.locator('.gt-h').allTextContents(), ['Suggested', 'Everyone']);
-  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gt-name').allTextContents(), ['Ana'], 'only the requester before any pick');
-  assert.equal(await pop.locator('[aria-checked=true] .gt-name').first().textContent(), 'Engineer', 'the current owner shows ✓');
+  assert.deepEqual(await pop.locator('.gv-h').allTextContents(), ['Suggested', 'Everyone']);
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-name').allTextContents(), ['Ana'], 'only the requester before any pick');
+  assert.equal(await pop.locator('[aria-checked=true] .gv-name').first().textContent(), 'Engineer', 'the current owner shows ✓');
   assert.doesNotMatch(await pop.innerText(), /opus|anthropic/i, 'no model text');
   assert.equal(await pop.locator('[role=option]').first().getAttribute('title'), 'Founder', 'the role on hover');
   assert.equal(await pop.locator('[role=option][data-give-pick="botops"]').getAttribute('title'), 'Keeps every bot running: stuck runs, failed jobs, computers.');
@@ -114,11 +114,11 @@ async function desktop(browser: Browser): Promise<void> {
   await pop.waitFor();
   await page.setViewportSize({width: 1000, height: 700});
   await page.waitForFunction(() => {
-    const p = document.querySelector('.gt-pop:popover-open')?.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')?.getBoundingClientRect();
+    const p = document.querySelector('.gv-pop:popover-open')?.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')?.getBoundingClientRect();
     return !!p && !!b && p.right <= innerWidth - 8 && Math.abs(p.top - (b.bottom + 4)) <= 20;
   });
   const fit = await page.evaluate(() => {
-    const p = document.querySelector('.gt-pop:popover-open')!.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')!.getBoundingClientRect();
+    const p = document.querySelector('.gv-pop:popover-open')!.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')!.getBoundingClientRect();
     return {clear: p.top >= b.bottom || p.bottom <= b.top, inside: p.top >= 8 && p.bottom <= innerHeight - 8};
   });
   assert.deepEqual(fit, {clear: true, inside: true}, 'the picker leaves its button in view and stays on screen');
@@ -129,7 +129,7 @@ async function desktop(browser: Browser): Promise<void> {
   // Removed without being hidden (its dialog drew again): the next resize cleans up and the button is no longer expanded.
   await owner.click();
   await pop.waitFor();
-  await page.evaluate(() => document.querySelector('.gt-pop')!.remove());
+  await page.evaluate(() => document.querySelector('.gv-pop')!.remove());
   await page.setViewportSize({width: 1400, height: 900});
   await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="owner"]')?.getAttribute('aria-expanded') === 'false');
   await page.setViewportSize({width: 1440, height: 900});
@@ -139,7 +139,7 @@ async function desktop(browser: Browser): Promise<void> {
     {label: 'Add as reviewer', exclude: giveToEntries().map(e => e.actor), none: 'Everyone is on it', onPick: () => {}}));
   await pop.waitFor();
   assert.equal(await pop.locator('[role=option]').count(), 0);
-  assert.equal((await pop.locator('.gt-status').textContent())!.trim(), 'Everyone is on it');
+  assert.equal((await pop.locator('.gv-status').textContent())!.trim(), 'Everyone is on it');
   await page.keyboard.press('Escape');
   await pop.waitFor({state: 'detached'});
 
@@ -147,11 +147,11 @@ async function desktop(browser: Browser): Promise<void> {
   await owner.click();
   await pop.waitFor();
   await page.keyboard.type('nobody here');
-  assert.equal((await pop.locator('.gt-status').textContent())!.trim(), 'No one matches ‘nobody here’');
+  assert.equal((await pop.locator('.gv-status').textContent())!.trim(), 'No one matches ‘nobody here’');
   await box.fill('review');
-  assert.deepEqual(await pop.locator('[role=option] .gt-name').allTextContents(), ['Reviewer 1', 'Reviewer 2', 'Release Owner']);
-  assert.equal(await pop.locator('.gt-row.by-role .gt-role').textContent(), 'Reviews the merge queue and ships each release.', 'a role match shows its role');
-  const lit = () => pop.locator('[role=option][aria-selected=true] .gt-name').textContent();
+  assert.deepEqual(await pop.locator('[role=option] .gv-name').allTextContents(), ['Reviewer 1', 'Reviewer 2', 'Release Owner']);
+  assert.equal(await pop.locator('.gv-row.by-role .gv-role').textContent(), 'Reviews the merge queue and ships each release.', 'a role match shows its role');
+  const lit = () => pop.locator('[role=option][aria-selected=true] .gv-name').textContent();
   assert.equal(await lit(), 'Reviewer 1');
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
   assert.equal(await lit(), 'Release Owner');
@@ -176,11 +176,11 @@ async function desktop(browser: Browser): Promise<void> {
   assert.equal(await form.locator('select').count(), 1, 'only the pipeline is a native list');
   await field.click();
   await pop.waitFor();
-  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gt-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gt-name')?.textContent}: ${r.querySelector('.gt-why')?.textContent}`)), ['BotOps: Recent']);
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gv-name')?.textContent}: ${r.querySelector('.gv-why')?.textContent}`)), ['BotOps: Recent']);
   await pop.locator('[data-give-pick="human:sam"]').last().click();
   await pop.waitFor({state: 'detached'});
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'human:sam');
-  assert.equal(await field.locator('.gt-name').textContent(), 'Sam');
+  assert.equal(await field.locator('.gv-name').textContent(), 'Sam');
   assert.ok(!(await field.evaluate(b => b.classList.contains('empty'))));
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.giveTo.recent:human:ana') || '[]').join(' ')), 'human:sam bot:botops');
   assert.deepEqual(errors, []);
@@ -194,18 +194,18 @@ async function phone(browser: Browser): Promise<void> {
   await roster(page);
   await page.evaluate(() => openTaskCreate());
   await page.locator('#task-create-form button[data-give-to]').click();
-  const pop = page.locator('.gt-pop:popover-open');
+  const pop = page.locator('.gv-pop:popover-open');
   await pop.waitFor();
   const r = (await pop.boundingBox())!;
   assert.deepEqual([r.x, r.y, r.width, r.height], [0, 0, 390, 844], 'full height');
-  const x = (await pop.locator('.gt-x').boundingBox())!, q = (await pop.locator('.gt-q').boundingBox())!;
+  const x = (await pop.locator('.gv-x').boundingBox())!, q = (await pop.locator('.gv-q').boundingBox())!;
   assert.ok(x.x < 20 && x.y < 20 && x.width >= 44 && x.height >= 44, '✕ top left');
   assert.ok(q.y < 80 && q.height >= 44, 'search at the top');
-  const heights = await pop.locator('.gt-row').evaluateAll(rs => rs.map(r => r.getBoundingClientRect().height));
+  const heights = await pop.locator('.gv-row').evaluateAll(rs => rs.map(r => r.getBoundingClientRect().height));
   assert.ok(heights.length > 5 && heights.every(h => h >= 44), `44px rows: ${heights}`);
-  assert.equal(await pop.locator('.gt-row[data-give-pick="botops"] .gt-role').isVisible(), true, 'the role shows after the name on a phone');
+  assert.equal(await pop.locator('.gv-row[data-give-pick="botops"] .gv-role').isVisible(), true, 'the role shows after the name on a phone');
   assert.ok(await pop.evaluate(p => p.scrollWidth <= p.clientWidth + 1), 'no sideways scroll');
-  await pop.locator('.gt-x').click();
+  await pop.locator('.gv-x').click();
   await pop.waitFor({state: 'detached'});
   assert.deepEqual(errors, []);
   await page.close();
@@ -233,14 +233,14 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await page.evaluate(i => decideOpen('t-ny', [i]), item), true);
   await page.locator('.decide [data-dc="give"]').click();
   const field = page.locator('.decide button[data-give-to]'), give = page.locator('.decide [data-dc="give-to"]');
-  assert.equal(await field.locator('.gt-name').textContent(), 'Give to…');
+  assert.equal(await field.locator('.gv-name').textContent(), 'Give to…');
   assert.equal(await give.isDisabled(), true, 'nothing chosen yet');
   await field.click();
-  const pop = page.locator('.gt-pop:popover-open');
+  const pop = page.locator('.gv-pop:popover-open');
   await pop.waitFor();
-  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gt-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gt-name')?.textContent}: ${r.querySelector('.gt-why')?.textContent}`)),
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gv-name')?.textContent}: ${r.querySelector('.gv-why')?.textContent}`)),
     ['Sam: Asked for it', 'BotOps: Named in the task']);
-  assert.deepEqual(await pop.locator('[aria-checked=true] .gt-name').allTextContents(), ['Engineer'], 'the current owner shows ✓');
+  assert.deepEqual(await pop.locator('[aria-checked=true] .gv-name').allTextContents(), ['Engineer'], 'the current owner shows ✓');
   await page.keyboard.press('Escape');
   await pop.waitFor({state: 'detached'});
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-give-to')), true, 'focus back on the field');
@@ -274,7 +274,7 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await whyGive.isDisabled(), true, 'nothing chosen yet');
   await why.click();
   await pop.waitFor();
-  assert.deepEqual(await pop.locator('[aria-checked=true] .gt-name').allTextContents(), ['Jev'], "the task's owner shows ✓");
+  assert.deepEqual(await pop.locator('[aria-checked=true] .gv-name').allTextContents(), ['Jev'], "the task's owner shows ✓");
   assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="finance"]').count(), 1, 'a bot the title names is suggested');
   await page.keyboard.type('sam');
   await page.keyboard.press('Enter');
