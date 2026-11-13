@@ -23,9 +23,9 @@ owner's reviewed instructions and the setup answers.
     tico task show <id>
 
 A task titled `Build a bot: <name>` carries a name and a plain-language job
-instead of a template. Pick the closest template in the templates, and write `AGENT.md` for that job.
+instead of a template. Pick the closest template in the templates, and write `AGENTS.md` for that job.
 
-If any of those is missing, choose it and go on (AGENT.md, Defaults, not questions):
+If any of those is missing, choose it and go on (AGENTS.md, Defaults, not questions):
 
 - **Slug:** never ask anyone for one, and leave it out of `tico bot create`: Tico picks it from the name (else the
   template's name), lowercase with hyphens ("Projects Manager" is `projects-manager`), adds -2, -3
@@ -54,12 +54,12 @@ From here on a routine is changed in Tico with `tico automation update <id>` (it
 
 ## 3. Put the real instructions in
 
-If the task carries the owner's reviewed instructions, replace `AGENT.md` with them. Keep the
+If the task carries the owner's reviewed instructions, replace `AGENTS.md` with them. Keep the
 section order the template uses, so `## Role`, `## Owns` and `## Boundaries` are still
 where a reader and the readiness check expect them, and keep at least one real bullet under
 `## Owns`.
 
-If the task carries no reviewed instructions, tailor the template's `AGENT.md` to the setup
+If the task carries no reviewed instructions, tailor the template's `AGENTS.md` to the setup
 answers instead. Three things have to be true and specific in it:
 
 - what the team does, in the words the answers used;
@@ -98,7 +98,7 @@ elsewhere names the folders, `files: {publish: [reports/, deliverables/]}`.
 
     tico bot check <slug>
 
-Fix everything it reports as a failure: a missing `state.md`, an `AGENT.md` still identical to the
+Fix everything it reports as a failure: a missing `state.md`, an `AGENTS.md` still identical to the
 template, an empty `## Owns`, a `name:` that is not the slug, a schedule that would be refused. A
 warning can stand if you say in the note what it is and why it is acceptable now. A credential the bot
 needs and does not have is yours to ask for: open the card (`playbooks/connect-a-tool.md`), never
@@ -124,7 +124,7 @@ first placement is your computer, where its history is: the runner there sets `o
 publishes the history with the bot's own token, and never forces: if the repository already holds different
 history it stops and Health says so. Once GitHub has it, the bot can move to any computer. You do not push other bots'
 repositories. If `tico bot create` failed with `github_permission_missing`, a person must act: the app
-was not given permission to create repositories. Do not work around it or retry (AGENT.md rule 6). Finish
+was not given permission to create repositories. Do not work around it or retry (AGENTS.md rule 6). Finish
 steps 3 to 5 in the local repository anyway, then say plainly in the task note that the bot waits for its
 GitHub repository and that the owner has a Needs-you task with the fix it names; tell the person who asked
 once, and do not file another ask. Tico finishes the repository on its own once the owner acts, and the bot

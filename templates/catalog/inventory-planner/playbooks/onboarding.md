@@ -32,7 +32,7 @@ Numbered, each with its one-line why and a default.
 ## 4. Record
 
 Answers to `state.md` under `## Answers`, dated. Compute `knowledge/items.md` from the exports as in
-`AGENT.md`, "How you compute". An item with under 30 days of sales history is marked "too new to
+`AGENTS.md`, "How you compute". An item with under 30 days of sales history is marked "too new to
 plan" and left for a human. An item with under 60 clean days, or fewer than three recorded deliveries, uses the fallback
 safety stock rule, and its line says so.
 

@@ -64,7 +64,7 @@ tasks they own. The owned tasks are one kind of many.
    otherwise close, but whose closing would leave a task you keep stuck, stays open, named in the same line.
 5. No command here clears these: a held message, a paused thread, a thread mention or DM, a memory tidy card, a setup
    or reconnect item. Name the ones left, and say they clear them in Tico. Never guess a command.
-6. Recount once, at the end: `tico needs-you show`. Reply in plain lines, no headings or bold (AGENT.md,
+6. Recount once, at the end: `tico needs-you show`. Reply in plain lines, no headings or bold (AGENTS.md,
    Replies): the Needs you count before and after, with its split by kind; what was closed, answered and sent back, with counts and links; the
    kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
    Answers and send-backs cannot be undone: say so, and give no undo line for them. Shape, with placeholders:

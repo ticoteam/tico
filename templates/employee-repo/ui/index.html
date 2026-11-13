@@ -17,7 +17,7 @@ pre{background:#f4f6f8;padding:12px;border-radius:4px;overflow-x:auto;white-spac
   <nav id="nav"></nav>
 </header>
 <h2>State</h2><pre id="state">…</pre>
-<h2>Instructions (AGENT.md)</h2><pre id="agent">…</pre>
+<h2>Instructions (AGENTS.md)</h2><pre id="agent">…</pre>
 <h2>Learnings</h2><pre id="learnings">…</pre>
 <script src="vendor/js-yaml.min.js"></script>
 <script>
@@ -33,6 +33,6 @@ pre{background:#f4f6f8;padding:12px;border-radius:4px;overflow-x:auto;white-spac
     const repo = String(m.repo || '').startsWith('http') ? `<a href="${m.repo}">Repo</a>` : '';
     document.getElementById('nav').innerHTML = `${repo} <a href="../reports/">Reports</a>`;
   } catch {}
-  put('state', 'state.md'); put('agent', 'AGENT.md'); put('learnings', 'memory/learnings.md');
+  put('state', 'state.md'); put('agent', 'AGENTS.md'); put('learnings', 'memory/learnings.md');
 })();
 </script>

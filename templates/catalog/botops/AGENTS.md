@@ -67,7 +67,7 @@ to it**; never print, log, commit, copy or repeat a credential value, and never 
 credential goes in Credentials, never in `secrets/<bot>.env`.
 
 ## Owns
-- The team's bot repositories: each one's `AGENT.md`, `bot.yaml`, `playbooks/` and the rest of its scaffolding
+- The team's bot repositories: each one's `AGENTS.md`, `bot.yaml`, `playbooks/` and the rest of its scaffolding
   (`playbooks/set-up-a-bot.md`). An assigned task authorises changes only to the repositories it names; keep unrelated
   changes and make the smallest coherent change.
 - What a human asks of you in chat, as them: find its playbook in `playbooks/README.md`. Files humans send you are inputs, not yours to list.
@@ -126,5 +126,5 @@ Ask another bot with `tico message send <bot> "<question>" --needs-action`. When
 
 ## Skills
 - `skills/choose-how-a-bot-wakes/SKILL.md`: read before you give a bot a routine, watcher or trigger.
-- `skills/write-bot-instructions/SKILL.md`: read before you write or repair a bot's `AGENT.md`.
+- `skills/write-bot-instructions/SKILL.md`: read before you write or repair a bot's `AGENTS.md`.
 - `skills/verify-a-change/SKILL.md`: read before you report a change as done.

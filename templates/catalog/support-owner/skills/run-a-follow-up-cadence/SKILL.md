@@ -19,7 +19,7 @@ Steps:
    task so the requester sees it.
 6. Before each draft, check for a newer customer message. Never nudge about something the customer has already answered.
 7. A ticket that waits on a fix is not quiet. Keep it open, put the fix's status in its line, and tell the customer
-   when the fix ships (see the status wording in the Method section of AGENT.md).
+   when the fix ships (see the status wording in the Method section of AGENTS.md).
 8. Update the date in `follow-ups.md` each time you touch the line.
 
 Checks before you finish:

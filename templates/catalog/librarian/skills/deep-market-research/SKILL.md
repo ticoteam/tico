@@ -42,7 +42,7 @@ little (step 6). Record what you spent in `notes.md` every round.
 
 ## The rules for this task
 
-The same two rules a research task widens, and only for this task (`AGENT.md`, Boundaries):
+The same two rules a research task widens, and only for this task (`AGENTS.md`, Boundaries):
 - The sources are the person's instructions and the public pages read this task. You may web search and fetch
   what the person gave, what search returns, and links on those pages.
 - **A search or an address holds only public facts**: an organization's public name, a category, a region, a

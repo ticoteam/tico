@@ -48,4 +48,4 @@ Follow `skills/bridge-recurring-revenue/SKILL.md`, using the definition in `stat
 
 Write `reports/YYYY-MM-revenue-close.md` in the shape of `knowledge/examples/revenue-close.md`, `tico file publish` it, commit, and
 `tico task done <id> -m "..." --version N`: reconciled or the difference, the entries count, the path. Questions for the
-accountant are drafts on the task, under the Sending rules in AGENT.md.
+accountant are drafts on the task, under the Sending rules in AGENTS.md.

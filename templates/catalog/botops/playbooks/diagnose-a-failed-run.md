@@ -45,7 +45,7 @@ run" reports on its own.
 
 ## 3. Read the instructions the run actually had
 
-Open the bot's `AGENT.md` and the playbook the task named, and read them as the bot did: in full,
+Open the bot's `AGENTS.md` and the playbook the task named, and read them as the bot did: in full,
 with no other context. Look for the line that produced the behaviour. Three patterns cover most of
 it:
 

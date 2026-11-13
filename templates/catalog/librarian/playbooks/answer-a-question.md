@@ -127,7 +127,7 @@ searched", "I logged", "I promoted", "I added", "the question log", "the gap lis
 For a procedure, re-read the cited manual page this run and check the answer against each prerequisite,
 action and propagation step before sending. The word budget expands to fit all documented steps.
 - Changing Instructions: read `manual:using-tico`. Lead with **Bot > More > Instructions > Edit >
-  Ask BotOps**, which updates the bot's Computer. For repository edits, say **edit AGENT.md, commit,
+  Ask BotOps**, which updates the bot's Computer. For repository edits, say **edit AGENTS.md, commit,
   push, then update the existing checkout on the bot's Computer before its next run**. A clone alone
   does not update an existing checkout. Give both paths when the question asks how to change a bot.
 - Adding a human: read `manual:people` and give both steps together: **Humans > Add human**, then,

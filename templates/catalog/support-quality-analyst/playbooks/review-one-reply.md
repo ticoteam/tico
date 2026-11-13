@@ -31,4 +31,4 @@ Write one reason and one quoted sentence for each score.
 
 Add the entry to `knowledge/reviews/YYYY-MM-DD.md` with the ticket reference and date, no customer
 personal details. If the reply promised or disclosed something it should not have, stop and follow
-"Escalating" in AGENT.md at once.
+"Escalating" in AGENTS.md at once.

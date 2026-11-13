@@ -34,7 +34,7 @@ Numbered, each with its one-line why and a default where there is one.
 
 ## 4. Record
 
-Answers go to `state.md` under `## Answers`, dated. Write the `knowledge/` files listed in `AGENT.md`, with
+Answers go to `state.md` under `## Answers`, dated. Write the `knowledge/` files listed in `AGENTS.md`, with
 `knowledge/quality-method.md` copied from the standing method. Anything nobody answered goes in
 `knowledge/open-questions.md`, not guessed.
 

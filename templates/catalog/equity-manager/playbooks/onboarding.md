@@ -29,7 +29,7 @@ Numbered, each with its one-line why.
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Write the `knowledge/` files listed in `AGENT.md`. Anything
+Answers to `state.md` under `## Answers`, dated. Write the `knowledge/` files listed in `AGENTS.md`. Anything
 nobody answered goes in `knowledge/open-questions.md`, not guessed.
 
 ## 5. Produce the first result now
