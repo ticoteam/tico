@@ -125,7 +125,7 @@ WHERE_THREAD_CHARS = 100
 
 def _where_terms(c, value):
     """A rule's `where` as stored: `thread:<id>` (a conversation's id), `team:<group>` (by its id or name, resolved to
-    the group's id), `kind:dm` and `has_outside_members`. Any other term is refused, never kept: a rule that silently
+    the group's id), `kind:dm`, `kind:ask` (a bot's question to a person on a task) and `has_outside_members`. Any other term is refused, never kept: a rule that silently
     matched nothing would look like a rule that never fires."""
     if not value:
         return []
@@ -136,7 +136,7 @@ def _where_terms(c, value):
         text = str(raw or "").strip()
         head, sep, rest = text.partition(":")
         rest = rest.strip()
-        if text in ("has_outside_members", "kind:dm"):
+        if text in ("has_outside_members", "kind:dm", ASK):
             term = text
         elif head == "thread" and sep and rest and len(rest) <= WHERE_THREAD_CHARS:
             term = "thread:" + rest
@@ -146,12 +146,23 @@ def _where_terms(c, value):
         else:
             raise Problem(
                 "validation",
-                f"Where takes thread:<id>, team:<group>, kind:dm or has_outside_members, not {text or raw}",
+                f"Where takes thread:<id>, team:<group>, kind:dm, kind:ask or has_outside_members, not {text or raw}",
                 422,
             )
         if term not in out:
             out.append(term)
     return out
+
+
+# A `where` term: a bot's question to a person on a task (task_rule_gate.TaskRules.check marks its place `ask`). Only
+# that write meets it: no chat reply, comment or note does.
+ASK = "kind:ask"
+ASKS_ONLY = json.dumps([ASK], sort_keys=True, separators=(",", ":"))  # such a rule's where_terms, as `_json` stores it
+
+
+def asks_only(terms):
+    """Whether a rule's `where` is met only by a bot's question to a person: no live reply is ever checked by it."""
+    return bool(terms) and all(term == ASK for term in terms)
 
 
 def _where_hits(terms, place):
@@ -166,6 +177,8 @@ def _where_hits(terms, place):
             hit = bool(place.get("outside"))
         elif term == "kind:dm":
             hit = place.get("kind") == "dm"
+        elif term == ASK:
+            hit = bool(place.get("ask"))
         elif term.startswith("thread:"):
             # A sub-thread's write is in its root's thread too: a rule on the root names its sub-threads.
             wanted = term[len("thread:") :]
@@ -489,10 +502,16 @@ def _active(c):
     return [_row(r) for r in c.execute("SELECT * FROM org_rules WHERE status='active' ORDER BY created_at, id")]
 
 
-def any_active(c):
+def any_active(c, ask=False):
     """Whether any rule is in force: one indexed row, read before anything else on every bot write (most writes meet no
-    rule, and an install with none never builds the roster for them)."""
-    return c.execute("SELECT 1 FROM org_rules WHERE status='active' LIMIT 1").fetchone() is not None
+    rule, and an install with none never builds the roster for them). A rule met only by a bot's question to a person
+    (`asks_only`) counts only for one (`ask`): every other write reads as if it were not there."""
+    return (
+        c.execute(
+            "SELECT 1 FROM org_rules WHERE status='active' AND (? OR where_terms != ?) LIMIT 1", (int(ask), ASKS_ONLY)
+        ).fetchone()
+        is not None
+    )
 
 
 def any_where(c):
@@ -506,7 +525,7 @@ def matching(c, author, recipients=(), place=None):
     """The active rules that apply to one write: the author is in Who, With is empty or names a recipient, and Where is
     empty or meets the write's place (`place`, from org_rule_check.place_for). With no rule in force it reads nothing
     more; the recipients are looked up only once a rule's Who names the author."""
-    if not any_active(c):
+    if not any_active(c, ask=bool((place or {}).get("ask"))):
         return []
     ctx = _ctx(c)
     author_key = who_key(c, author, ctx)
@@ -1226,6 +1245,54 @@ def seed_external(c, who, text, source_name, source_kind):
     )
     _audit(c, who.actor, row["id"], None, _core(_get(c, row["id"])), who)
     _event(c, who.actor, "added", row["id"], {"kind": "external", "status": "active"})
+    return row["id"]
+
+
+# The built-in rule "Asks to a person" (Tasks spec "Bots ask people a question with choices", AC-7 and AC-8): added
+# once to every team, on, followed by all bots and met only by a bot's question to a person (`kind:ask`). The team edits
+# it or turns it off on the Rules page like any rule; the marker stays, so it is never added again.
+ASKS_TO_A_PERSON = (
+    "A bot's ask or task for a person says in plain words why it matters, gives 2 to 4 choices with the bot's "
+    "recommendation, says what happens on each, and uses no Markdown or file paths. Otherwise it is refused, and the "
+    "bot rewrites it."
+)
+ASKS_TO_A_PERSON_ADDED = "rules.asks_to_a_person"  # registry_metadata: added once; never again
+
+
+def ensure_builtin(c):
+    """Add "Asks to a person" once per team, active: its marker is written with it, so a rule the team edited, turned
+    off or deleted is left as they left it. Returns the rule's id when it was added now, else None."""
+    if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (ASKS_TO_A_PERSON_ADDED,)).fetchone():
+        return None
+    now = H.now()
+    row = {
+        "id": H.new_id(),
+        "kind": "internal",
+        "text": ASKS_TO_A_PERSON,
+        "description": "Built in. A question a bot asks a person on a task is checked against it before it is asked.",
+        "who": _json({"everyone": False, "all_bots": True, "groups": [], "bots": [], "people": []}),
+        "with_scope": _json({"groups": [], "bots": [], "people": []}),
+        "where_terms": ASKS_ONLY,
+        "if_broken": "block",
+        "status": "active",
+        "suggested_by": H.KEEPER,
+        "decided_by": H.KEEPER,
+        "decided_at": now,
+        "version": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    c.execute(
+        "INSERT INTO org_rules (id, kind, text, description, who, with_scope, where_terms, if_broken, status, "
+        "suggested_by, decided_by, decided_at, version, created_at, updated_at) VALUES (:id, :kind, :text, "
+        ":description, :who, :with_scope, :where_terms, :if_broken, :status, :suggested_by, :decided_by, :decided_at, "
+        ":version, :created_at, :updated_at)",
+        row,
+    )
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?)", (ASKS_TO_A_PERSON_ADDED, _json({"rule": row["id"], "at": now}))
+    )
+    _event(c, H.KEEPER, "added", row["id"], {"kind": "internal", "status": "active", "built_in": True})
     return row["id"]
 
 

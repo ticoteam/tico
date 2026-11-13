@@ -367,6 +367,11 @@ class TaskAsk(Contract):
         default=None, min_length=2, max_length=6
     )
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
+    # A bot's question to a person (backend/ask_shape.py): why it matters, a line per choice on what happens on it (in
+    # the choices' order) and the choice it recommends. Required there; anyone else may send them too.
+    why: Annotated[str, Field(max_length=200)] | None = None
+    details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
+    recommend: Annotated[str, Field(max_length=60)] | None = None
     version: Version | None = None
 
 

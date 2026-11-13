@@ -335,6 +335,48 @@ def test_an_ask_names_who_and_the_line_before_anything_is_sent():
     assert api.calls == []
 
 
+def test_a_bots_question_to_a_person_sends_its_why_each_choice_with_what_happens_and_the_recommendation():
+    """`tico task ask --why ... --choice "Label|what happens" --recommend Label` (asks-not-todos, For the engineer)."""
+    argv = [
+        "task",
+        "ask",
+        "T1",
+        "Which tone?",
+        "--to",
+        "chris",
+        "--why",
+        "It goes out Friday.",
+        "--choice",
+        "Plain|Safe for customers",
+        "--choice",
+        "Playful | Stands out",
+        "--recommend",
+        "Plain",
+        "--version",
+        "3",
+    ]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, args)
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/asks",
+            {
+                "to": "chris",
+                "line": "Which tone?",
+                "version": 3,
+                "why": "It goes out Friday.",
+                "recommend": "Plain",
+                "choices": ["Plain", "Playful"],
+                "details": ["Safe for customers", "Stands out"],
+            },
+        )
+    ]
+    with pytest.raises(ValueError, match="not both"):
+        hubtools.task_ask(Recorder(), {**args, "choices": ["A", "B"]})
+
+
 TASK = {
     "id": "t_9f3a",
     "number": 214,

@@ -504,7 +504,9 @@ def _own_ask(api, task_id, requirement=None):
     "Ask a person on this task, in one sentence: a question (with choices, or a typed answer) or an OK. The task "
     "stays in its stage until they answer, it is one line in their Needs you, and their answer wakes you once. "
     "Asking again in this stage replaces your earlier ask. A rule they set may refuse it with the rule's words: act on "
-    "the rule instead. `withdraw` takes your open ask back.",
+    "the rule instead. A bot asking a person a question says why it matters (`why`) and, with choices, gives 2 to 4 "
+    "each with what happens (`choice`) and names one (`recommend`); what it shows is a page, file, task or link. "
+    "`withdraw` takes your open ask back.",
     {
         "id": TASK_ID,
         "to": _s("The person you ask: their id"),
@@ -521,6 +523,14 @@ def _own_ask(api, task_id, requirement=None):
             "maxItems": 6,
             "description": "The answers to pick from; they may also type their own",
         },
+        "choice": {
+            "type": "array",
+            "items": _s("One answer and what happens on it: Label|what happens", maxLength=221),
+            "minItems": 2,
+            "maxItems": 4,
+            "description": "A bot asking a person: 2 to 4 answers, each with what happens on it (instead of choices)",
+        },
+        "recommend": _s("The choice you recommend: a bot asking a person with choices names one", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
@@ -534,7 +544,10 @@ def _own_ask(api, task_id, requirement=None):
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
         "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
-        "why": _s("With withdraw: why, in a sentence"),
+        "why": _s(
+            "Why it matters to them, in one line: a bot asking a person a question needs it. With withdraw: why you "
+            "take it back"
+        ),
         "version": VERSION,
     },
     required=("id",),
@@ -556,9 +569,15 @@ def task_ask(api, args):
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show"):
+    for field in ("kind", "choices", "show", "why", "recommend"):
         if args.get(field):
             body[field] = args[field]
+    if args.get("choice"):
+        if args.get("choices"):
+            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
+        pairs = [str(one).partition("|") for one in args["choice"]]
+        body["choices"] = [label.strip() for label, _, _ in pairs]
+        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request
 
 from . import ask_ingest as _ask_ingest
+from . import ask_shape
 from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
@@ -416,11 +417,54 @@ def register(
 
     # ------------------------------------------------------------------ asks
     def ask_said(body: Any) -> list[tuple[str, Any]]:
+        """What the rule check reads of an ask: its line, why it matters, each choice with its line (the one
+        recommended marked) and what it shows. One call reads all of it."""
+        details: list[str] = list(body.details or [])
+        best = ask_shape.recommended(body.choices, body.recommend)
+        choices = [
+            f"{label}{' (recommended)' if label.strip() == best else ''}"
+            + (f": {details[i]}" if i < len(details) and details[i] else "")
+            for i, label in enumerate(body.choices or [])
+        ]
         return [
             ("Ask", body.line),
-            ("Choices", " / ".join(body.choices or [])),
+            ("Why", body.why),
+            ("Choices", "\n".join(choices)),
             ("Shows", "\n".join(body.show or [])),
         ]
+
+    def ask_brief(body: Any) -> dict[str, Any] | None:
+        """What a question keeps besides its line and choices (task_calls._brief_of reads it back)."""
+        if not (body.why or "").strip():
+            return None
+        return {
+            "why": body.why.strip(),
+            "details": [d.strip() for d in body.details] if body.details else None,
+            "recommend": ask_shape.recommended(body.choices, body.recommend),
+        }
+
+    def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk) -> None:
+        """A bot's question to a person that is not shaped as one (backend/ask_shape.py) is refused before the rule
+        check's call, and nothing is written but the refusal (rule `task_ask_shape`: fixed by rewriting, never counted
+        toward quarantine)."""
+        caller: Any = request.state.identity
+        if caller.role != "bot" or body.kind != "answer":
+            return
+        with store.read() as c:
+            target = H.resolve_actor(c, body.to) or ""
+            if not H.is_human(target):
+                return
+            name = H.actor_name(c, target) or "They"
+        detail = ask_shape.refusal(
+            name, why=body.why, choices=body.choices, details=body.details, recommend=body.recommend, shows=body.show
+        )
+        if detail:
+            work(
+                request,
+                tid,
+                body,
+                lambda c, who, task_id: H.refuse(c, who.actor, "task_ask_shape", detail, task=task_id),
+            )
 
     def ask_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         from . import lifecycle as _lifecycle
@@ -441,6 +485,7 @@ def register(
             shows=body.show or None,
             seen_version=version,
             mover=mover(c, who) or None,
+            brief=ask_brief(body),
         )
         return {"requirement_id": made.get("requirement_id")}
 
@@ -450,7 +495,9 @@ def register(
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
         """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19). A
         bot's ask a company rule covers is refused with the rule's words (docs/pipelines-v3.md, "How a rule stops the
-        next one")."""
+        next one"). A bot's question to a person says why it matters, and its choices (2 to 4) each say what happens
+        and which one it recommends (backend/ask_shape.py): refused before any check otherwise."""
+        ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 
     def withdraw_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
