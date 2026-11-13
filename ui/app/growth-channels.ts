@@ -80,6 +80,9 @@ async function gcSettings(state: GrowthState) {
       ${grField('Margin %', `<input name="margin_pct" inputmode="decimal" value="${esc(st.margin_pct ?? '')}">`)}</div></div></fieldset>
     <section class="gr-sec gs-sec" aria-label="Channels"><h3 class="gr-k">Channels</h3>${list.map(c => row(c, true)).join('')}${row(GC_UNKNOWN, false)}
       <button class="ghost small gs-add" type="button" data-ch-add>+ Channel</button></section>
+    <section class="gr-sec gs-sec" aria-label="Customers"><h3 class="gr-k">Customers</h3>
+      <p class="muted gr-note">Load one row per customer and Growth computes retention, LTV and CAC from them.</p>
+      <button class="ghost small" type="button" data-grx-upload-settings>Upload customers</button></section>
     <a class="gs-src" href="${GR_SOURCES}" data-gr-sources>Where numbers come from</a>`, 'Save', async form => {
     const v = (n: SettingsField) => (form.elements as GrowthFormFields<SettingsField>)[n].value;
     const body: GrowthSettings = {revenue_month: grNum(v('revenue_month')), margin_pct: grNum(v('margin_pct'))};
@@ -89,6 +92,8 @@ async function gcSettings(state: GrowthState) {
   });
   const sources = dlg.querySelector<HTMLElement>('[data-gr-sources]');
   if (sources) sources.onclick = () => dlg.close();
+  const upload = dlg.querySelector<HTMLElement>('[data-grx-upload-settings]');
+  if (upload) upload.onclick = () => grxUpload();
   const add = dlg.querySelector<HTMLElement>('[data-ch-add]');
   if (add) add.onclick = () => void gcChannelDialog(state);
   dlg.querySelectorAll<HTMLButtonElement>('[data-gs-edit]').forEach(b => { b.onclick = () => void gcChannelDialog(state, list.find(c => c.slug === b.dataset.gsEdit)); });
