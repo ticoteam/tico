@@ -5,6 +5,8 @@
 // "Read-only view" line. Tasks reads the bot's name and its open tasks by stage, with a line that Needs you is a
 // person's list; Company › Mine is one card of the bot's tasks. A Company place that fails to load says "This page
 // couldn't load." with Try again, never the server's text. A person sees New task and the message box as before.
+// The bot's list keeps up through the refresh (an edit, a new task, one closed or given away) and pages with More, and C
+// opens no New task dialog in a view.
 import type {Page} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -13,6 +15,7 @@ const crypto = require('node:crypto');
 const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 declare const S: {me?: {name?: string}};
+declare function refresh(force?: boolean): Promise<void>;
 
 const BOT = 'builder-claude';
 const OWN = 'The bot works on this';
@@ -32,7 +35,7 @@ const READS = [
   '#side a', '#side button', '#account', '#side-search', '#nav-toggle',
   '#task-scope', '#task-q', '#task-filter', '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x',
   '#task-archives button',
-  '.tl-mi', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
+  '.tl-mi', '#task-more button', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
   '.dash-tabs a', '.dash-tabs button', '[role="tab"]', '.tmodal [aria-label="Close"]', '.tmodal .x',
   '[data-show-more]', '.linkish[data-open]', 'a[href]',
 ];
@@ -51,6 +54,7 @@ const writesShown = (page: Page) => page.evaluate((reads: string[]) => {
   return out;
 }, READS);
 
+const taskId = (r: {task?: {id?: string}; id?: string}) => String(r.task?.id ?? r.id ?? '');
 const go = async (page: Page, hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); };
 const ready = (page: Page) => page.waitForFunction(() => {
   const who = document.querySelector('#account .account-email')?.textContent || '';
@@ -63,7 +67,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
   try {
     const dana = hub.tokens.dana!;
     // The bot owns one open task, and an owner turns its view on.
-    await call(hub, dana, 'POST', '/v2/tasks', {title: OWN, body: 'Its own work.', owner: BOT});
+    const own = taskId(await call(hub, dana, 'POST', '/v2/tasks', {title: OWN, body: 'Its own work.', owner: BOT}));
     await call(hub, dana, 'POST', `/v2/bots/${BOT}/app-view`, {on: true});
     // Its run, claimed and started as its computer would, opens the view.
     const {attempt} = await call<{attempt?: {id: string; token: string}}>(hub, hub.runner, 'POST', '/v2/jobs/claim', {bot: BOT, start_places: true});
@@ -88,12 +92,48 @@ const ready = (page: Page) => page.waitForFunction(() => {
     assert.match(await page.locator('#task-body').innerText(), /Needs you is a person's list/);
     assert.ok(await page.locator('#task-body .tk-group').count() >= 1, 'its tasks are grouped by stage');
     assert.deepEqual(await writesShown(page), [], 'Tasks offers nothing that writes');
-    // Its ⋯ menu keeps Archived and drops New task.
+    // Its ⋯ menu keeps Archived and drops New task, and C opens no New task dialog.
     await page.locator('#task-menu').click();
     await page.locator('#task-mi-archive').waitFor({state: 'visible', timeout: t(15000)});
     assert.equal(await page.locator('#task-mi-new').isVisible(), false, 'no New task in ⋯');
     assert.deepEqual(await writesShown(page), [], 'the Tasks ⋯ menu offers nothing that writes');
     await page.keyboard.press('Escape');
+    await page.locator('#task-body').click({position: {x: 5, y: 5}});
+    await page.keyboard.press('c');
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator('dialog[open]').count(), 0, 'C opens no New task dialog in a view');
+
+    // The bot's list keeps up: an edit shows, a new task for it comes in, one closed or given away goes out. A view has no
+    // live stream (the server refuses it one), so the app's periodic refresh catches up from the list's cursor.
+    const row = (title: string) => page.locator('#task-body .tk-row', {hasText: title});
+    const poll = () => page.evaluate(() => refresh(false));
+    await call(hub, dana, 'POST', `/v2/tasks/${own}`, {title: OWN + ' today'});
+    await poll();
+    await row(OWN + ' today').waitFor({timeout: t(15000)});
+    const second = taskId(await call(hub, dana, 'POST', '/v2/tasks', {title: 'Second for the bot', body: 'More work.', owner: BOT}));
+    await poll();
+    await row('Second for the bot').waitFor({timeout: t(15000)});
+    const third = taskId(await call(hub, dana, 'POST', '/v2/tasks', {title: 'Third for the bot', body: 'More work.', owner: BOT}));
+    await poll();
+    await row('Third for the bot').waitFor({timeout: t(15000)});
+    await call(hub, dana, 'POST', `/v2/tasks/${third}/owner`, {owner: 'dana', why: 'Dana takes it'});
+    await poll();
+    await row('Third for the bot').waitFor({state: 'detached', timeout: t(15000)});
+    // A later page: read one row at a time, More brings the next and keeps it.
+    await page.route(/\/api\/v2\/tasks\?.*owner=/, r => r.continue({url: r.request().url().replace(/([?&])limit=\d+/, '$1limit=1')}));
+    await go(page, '#/home');
+    await page.locator('#dash-grid').waitFor({timeout: t(15000)});
+    await go(page, '#/tasks');
+    await page.locator('#task-more button').waitFor({state: 'visible', timeout: t(15000)});
+    assert.equal(await page.locator('#task-body .tk-row').count(), 1, 'one row a page');
+    assert.deepEqual(await writesShown(page), [], 'More is a read');
+    await page.locator('#task-more button').click();
+    await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-row').length === 2, null, {timeout: t(15000)});
+    await page.unroute(/\/api\/v2\/tasks\?.*owner=/);
+    await call(hub, dana, 'POST', `/v2/tasks/${second}/move`, {to: 'closed', why: 'Not needed'});
+    await poll();
+    await row('Second for the bot').waitFor({state: 'detached', timeout: t(15000)});
+    assert.ok(await row(OWN).count() === 1, 'its own open task stays');
 
     // A task window: no Follow, no page +, no answer buttons, no box; the box is a grey "Read-only view" line.
     await page.locator('#task-body .tk-row', {hasText: OWN}).click();

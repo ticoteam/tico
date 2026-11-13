@@ -190,7 +190,7 @@ function pageTasks(openId = '') {
     if (TASKS_ST !== state || ev.metaKey || ev.ctrlKey || ev.altKey || document.querySelector('dialog[open]')) return;
     if (eventElement(ev)?.closest('input, textarea, select, [contenteditable]')) return;
     if (ev.key === '/') { ev.preventDefault(); search.focus(); }
-    else if (ev.key === 'c') { ev.preventDefault(); openTaskCreate('', {pipeline: state.pipeline || null}); }
+    else if (ev.key === 'c' && !tasksViewOnly()) { ev.preventDefault(); openTaskCreate('', {pipeline: state.pipeline || null}); }
   }, {signal});
   pullToRefresh($('#tasks-pane'), () => tasksLoad(state), {signal});
   tasksRender(state);
@@ -252,6 +252,8 @@ function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
 }
 /** A bot's read-only view of the app (backend/app_view.py). */
 const tasksViewOnly = (): boolean => !!S.me?.read_only_view;
+/** A view's You: the bot's own open tasks (tasksQuery), kept live and paged like a pipeline's rows. */
+const tasksOwnView = (state: TasksPageState): boolean => tasksViewOnly() && !state.pipeline && !state.archive;
 /** The search and the filters as the server takes them (backend/task_match.py): the same meaning as taskFilterMatch, so
  * the server answers only the matches, a page at a time. */
 function tasksNarrow(state: Pick<TasksPageState, 'q' | 'filters'>): TaskBriefQuery {
@@ -285,6 +287,7 @@ function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
   if (state.readKey && !taskFilterMatch(t, state.q, state.filters)) return false;
   if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
   if (state.archive) return t.status === state.archive;
+  if (tasksOwnView(state)) return t.status === 'open' && t.owner_id === 'bot:' + (S.me?.id || '');
   return !!state.pipeline && t.status === 'open';
 }
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
@@ -375,7 +378,7 @@ function tasksTaskPut(state: TasksPageState, given: TaskAny | null, id: string |
   // You: Needs you says what is on it; a task's change only redraws the item that shows it.
   for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
   // A full task carries every list field.
-  if (state.pipeline || state.archive) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
+  if (state.pipeline || state.archive || tasksOwnView(state)) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
   if (moved && draw) tasksRender(state);
   return moved;
 }
@@ -654,7 +657,7 @@ function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
 const tasksFilterOn = (f: TaskFilters, k: keyof TaskFilters) => { const v = f[k]; return Array.isArray(v) ? v.length > 0 : !!v; };
 /** The rows a filter's values come from: what the view lists, and what it listed with no search or filter. */
 const tasksFilterRows = (state: TasksPageState): TaskBriefV3[] =>
-  state.archive || state.pipeline ? [...state.base, ...state.tasks] : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
+  state.archive || state.pipeline || tasksOwnView(state) ? [...state.base, ...state.tasks] : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
 type TaskFilterValue = {value: string; label: string; face?: string};
 function tasksFilterValues(state: TasksPageState, k: keyof TaskFilters): TaskFilterValue[] {
   if (k === 'due') return [{value: 'overdue', label: 'Overdue'}, {value: 'week', label: 'This week'}, {value: 'any', label: 'Has a date'}];

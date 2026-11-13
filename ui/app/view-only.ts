@@ -18,7 +18,7 @@ const VIEW_HIDDEN = [
 const VIEW_READS = [
   '#side a', '#side button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
   '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x', '#task-archives button', '.tl-mi',
-  '.tl-chip button', '.tk-row', '[data-task]',
+  '.tl-chip button', '#task-more button', '.tk-row', '[data-task]',
   '[data-need]', '[data-reload]', '[data-dash-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
   '[aria-label="Close"]', '[data-close]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
 ];
