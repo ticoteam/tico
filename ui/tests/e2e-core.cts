@@ -82,8 +82,12 @@ const tasks = (() => {
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-manager'}).getAttribute('value');
-    await form.locator('select[name=owner]').selectOption(owner!);
+    // For whom: Give to…, searched by the bot's slug.
+    await form.locator('button[data-give-to]').click();
+    await page.locator('.gt-pop input[role=combobox]').fill('engineering-manager');
+    await page.keyboard.press('Enter');
+    await page.locator('.gt-pop').waitFor({state: 'detached'});
+    assert.ok(await form.locator('input[name=owner]').inputValue(), `${where}: an owner is picked`);
     await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
     assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
     await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
@@ -249,9 +253,11 @@ const newBot = (() => {
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const option = form.locator('select[name=owner] option', {hasText: 'Sales Helper'}).first();
-    assert.equal(await option.getAttribute('value'), bot, `${where}: the owner choice is the bot's id`);
-    await form.locator('select[name=owner]').selectOption(bot);
+    await form.locator('button[data-give-to]').click();
+    await page.locator('.gt-pop input[role=combobox]').fill('Sales Helper');
+    await page.keyboard.press('Enter');
+    await page.locator('.gt-pop').waitFor({state: 'detached'});
+    assert.equal(await form.locator('input[name=owner]').inputValue(), bot, `${where}: the owner choice is the bot's id`);
     await form.locator('textarea[name=body]').fill('The sheet is in Files; send it with a short note.');
     await form.locator('button[type=submit]').click();
     // The new task opens once made.

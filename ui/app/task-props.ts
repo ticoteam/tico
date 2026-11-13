@@ -392,12 +392,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     } else if (key === 'people') {
       // First the role (one already on the task, or a new name), then the person or bot.
       const pick = (role: string): void => {
-        const have = new Set((task.roles || {})[role] || []);
-        const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll<HTMLOptionElement>('option[value]:not([value=""])');
-        const items = [...opts].map(o => ({value: o.value, text: o.textContent ?? '', actor: o.value.includes(':') ? o.value : 'bot:' + o.value,
-          html: `<span class="tl-opt-face">${actorFace(o.value.includes(':') ? o.value : 'bot:' + o.value, 16)}</span><span>${esc(o.textContent ?? '')}</span>`}))
-          .filter(it => !have.has(it.actor));
-        propMenu(d, b, {label: 'Add as ' + roleWord(role), find: 'Find a person or bot', items, none: 'Everyone is on it',
+        giveToOpen(b, {label: 'Add as ' + roleWord(role), task, exclude: (task.roles || {})[role] || [],
           onPick: it => void save('people', cur => ({roles: {[role]: [...((cur.roles || {})[role] || []), it.actor]}}))});
       };
       propMenu(d, b, {label: 'Role', entry: 'Role, like reviewer', none: 'Type a role, then Enter',
@@ -428,11 +423,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       propMenu(d, b, {label: 'Add a follower', find: 'Find a person or bot', items, none: 'Nobody to add',
         onPick: it => void taskFollow(d, task, {actor: it.value, following: true})});
     } else if (key === 'owner') {
-      const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll<HTMLOptionElement>('option[value]:not([value=""])');
-      propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
-        const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-        return {value: o.value, text: o.textContent ?? '', html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent ?? '')}</span>`, checked: task.owner_id === actor, actor};
-      }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
+      // Give to… (give-to.ts): searchable, with suggestions for this task; the owner shows ✓.
+      if (!giveToJustClosed(b)) giveToOpen(b, {label: 'Owner', task, selected: task.owner_id || '',
+        onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
     } else if (key === 'due') {
       const input: HTMLInputElement | null = $('[data-prop-date]', d);
       d.focusProp = 'due';
