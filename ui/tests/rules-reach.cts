@@ -298,13 +298,13 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await panel(page).locator('.rr-book .rr-from').count(), 0, 'its own setting has no source');
 
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
-      await page.locator('.ru-acts .rr-q').fill('sales');
-      assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:growth-manager']);
+      await page.locator('.ru-ph .rr-q').fill('sales');
+      assert.deepEqual(await page.locator('.ru-ph .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:growth-manager']);
       assert.equal(await page.locator('.rr-map .hit').count(), 2);
       await shot(page, 'desktop-search');
-      await page.locator('.ru-acts .rr-q').press('Enter');
+      await page.locator('.ru-ph .rr-q').press('Enter');
       await until(async () => (await panel(page).locator('h2').innerText()) === 'Sales', 'Sales selected');
-      assert.equal(await page.locator('.ru-acts .rr-results').isHidden(), true);
+      assert.equal(await page.locator('.ru-ph .rr-results').isHidden(), true);
       assert.equal(await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="closed"]').getAttribute('aria-pressed'), 'true');
       assert.equal(await panel(page).locator('.rr-reach .rr-from').count(), 0);
       assert.equal(await panel(page).locator('[data-rr-cap="chats_per_day"]').inputValue(), '40');
@@ -371,10 +371,10 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await page.locator('.rr-map').isVisible(), true);
       await panel(page).locator('.rr-back').tap();
       await until(async () => !(await page.locator('.rr-side').isVisible()), 'map alone again');
-      await page.locator('.ru-acts .rr-q').fill('build');
+      await page.locator('.ru-ph .rr-q').fill('build');
       assert.equal(await page.locator('.rr-map').isVisible(), false);
       assert.deepEqual(await page.locator('.rr-pick [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['bot:builder']);
-      assert.equal(await page.locator('.ru-acts .rr-results').isVisible(), false);
+      assert.equal(await page.locator('.ru-ph .rr-results').isVisible(), false);
       await page.locator('.rr-pick [data-rr-party="bot:builder"]').tap();
       await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown');
       assert.equal(await page.locator('.rr-pick').isVisible(), false);
