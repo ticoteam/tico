@@ -149,7 +149,7 @@ let browser: import('playwright').Browser | null = null;
     return {ms: performance.now() - t, rows: window.__rows.get(k) || 0};
   }, [A, Array.from({length: 20}, (_, i) => edit(N - 3, i + 1, `Before ${i + 1}`))] as [number, Live[]]);
   await reset(page);
-  // One draw of a changed list, the median of three so one slow draw does not set the bar.
+  // One draw of a changed list, the median of three, printed in the bench for comparison.
   const one = await page.evaluate(([k, evs]) => {
     const view = [...THV_VIEWS].find(v => v.key === k)!, ms = evs.map(ev => { const t = performance.now(); threadViewsLive(ev[0], ev[1]); thvDraw(view); return performance.now() - t; });
     return ms.sort((a, b) => a - b)[1]!;
@@ -182,7 +182,8 @@ let browser: import('playwright').Browser | null = null;
   const statusMs = await burst(page, Array.from({length: 20}, (_, i) => status(i + 1)));
   await frame(page);
   const after2 = {...await counts(page, A), ms: statusMs + await page.evaluate(() => window.__drawMs)};
-  assert.deepEqual({rows: after2.rows, tails: after2.tails, draws: after2.draws}, {rows: 0, tails: 1, draws: 1}, 'only the status rows are drawn, once');
+  assert.equal(after2.draws, 1, 'the 20 status changes are drawn once, by the frame');
+  assert.deepEqual({rows: after2.rows, tails: after2.tails}, {rows: 0, tails: 1}, 'only the status rows are drawn, once');
   assert.match(await page.locator('.th-status .th-status-detail').innerText(), /step 20/);
   assert.equal(await page.locator('.thv-list > :last-child').getAttribute('data-th-status'), 'bot:ops', 'the status rows stay at the end of the timeline');
   assert.equal(await page.locator('.thv-list > :last-child').getAttribute('role'), 'status');
