@@ -139,6 +139,43 @@ def test_a_new_install_lets_the_finance_owner_see_the_books_but_not_private_payr
         assert view.everything and payroll not in view.full_detail and view.full_detail == frozenset()
         assert len(_view_grants(c, "active")) == 1 and _granted_events(c) == 1
         assert not c.execute("SELECT 1 FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchone()
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        (by,) = c.execute("SELECT granted_by FROM fin_view_grants WHERE subject=?", (BK.ACTOR,)).fetchone()
+        assert by == owner  # the owner's grant, checked like any owner's grant
+        notices = c.execute(
+            "SELECT body FROM messages WHERE kind='notice' AND recipient_id=? AND body=?", (owner, BK.VIEW_NOTICE)
+        ).fetchall()
+        assert len(notices) == 1  # told once, after two starts
+
+
+def test_the_default_view_stops_standing_when_the_company_changes_owner(environment):
+    from dataclasses import replace
+
+    from backend.finance.context import load
+    from backend.finance.core import view as VW
+    from backend.finance.store import access as SA
+
+    api = built(environment)
+    ensure(api)
+    with api.app.state.store.read() as c:
+        ctx = load(c)
+        (grant,) = [g for g in SA.grants(c) if g.subject == BK.ACTOR and g.what == "everything"]
+        assert VW.standing(ctx.org, grant, SA.defaults(c), ctx.accounts)
+        new_owner = replace(ctx.org, owner="human:someone-new")
+        assert not VW.standing(new_owner, grant, SA.defaults(c), ctx.accounts)
+
+
+def test_with_no_owner_yet_nothing_is_granted_and_the_next_start_grants_it(environment):
+    api = built(environment)
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        BK.grant_defaults(c)
+        assert BK.grant_view(c, "") is None
+        assert _view_grants(c) == [] and _granted_events(c) == 0
+    ensure(api)
+    with store.read() as c:
+        assert len(_view_grants(c, "active")) == 1 and _granted_events(c) == 1
 
 
 def test_an_older_install_gets_the_view_once_and_its_open_ask_is_closed_for_the_owner(environment):

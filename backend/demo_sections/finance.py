@@ -457,7 +457,7 @@ def _setup(c, cal):
     bookkeeper.grant_defaults(c)
     # The Finance Owner sees the books by default, before its first entry: a journal line on an account the poster
     # cannot see is refused (handlers.may_write).
-    if bookkeeper.grant_view(c, cal.at(opened, hour=8)) is None:
+    if bookkeeper.grant_view(c, OWNER, cal.at(opened, hour=8)) is None:
         raise AssertionError("finance demo: the Finance Owner was not given its default view")
     _act(c, cal, OWNER, "right_grant", {"teammate": ACCOUNTS_PAYABLE, "right": "finance.ap"}, "right-ap", opened)
     for who in (ACCOUNTS_PAYABLE,):

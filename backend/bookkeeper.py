@@ -6,9 +6,9 @@ before it gets it at the next start (`ensure`, after Finance's own setup). It is
 Its Finance rights come with the hire, once (`finance.actions.grant_defaults`: finance.book, ap, ar, pay, cards and
 rules), recorded by one `bookkeeper.rights_granted` event so a later revoke sticks. An install built before rules was
 a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). It sees the books
-by default: one Finance view grant of Everything, made once per install (`grant_view`, one `bookkeeper.view_granted`
-event), so revoking it in Finance → Access sticks. Payroll's private lines stay private: an Everything grant gives no
-full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
+by default: one Finance view grant of Everything in the owner's name, made once per install (`grant_view`, one
+`bookkeeper.view_granted` event, one notice to the owner), so revoking it in Finance → Access sticks and a change of
+owner pauses it. Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
 the Finance Owner was ever revoked, and its open "Let the Finance Owner see the books" task is closed for the owner.
 
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
@@ -142,20 +142,32 @@ def grant_defaults(c):
     return []
 
 
-def grant_view(c, at: str | None = None):
-    """The Finance Owner's Finance view, once per install: one grant of Everything (company-wide), recorded by one
-    `bookkeeper.view_granted` event so a later revoke in Finance → Access sticks. An install from before (no event)
-    is granted the same way unless an Everything grant to the Finance Owner was ever revoked (the owner's no stands);
-    one it already holds is recorded, not doubled. Either way the owner's old open ask (VIEW_TITLE) is closed for them.
-    Payroll's private lines stay private: full detail comes only from a private line's own list, never from a grant.
-    A paused or archived Finance Owner gets nothing. The grant id made now, or None."""
+VIEW_NOTICE = (
+    "The Finance Owner now sees the books, so its Books check and Watch can work the whole queue. Payroll's private "
+    "lines stay private. To take it back, open Finance → Access."
+)
+
+
+def grant_view(c, owner: str, at: str | None = None):
+    """The Finance Owner's Finance view, once per install: one grant of Everything (company-wide) made in the owner's
+    name, recorded by one `bookkeeper.view_granted` event so a later revoke in Finance → Access sticks. The owner is
+    the grantor so the grant is checked like any owner's grant: when the company changes owner it stops standing
+    (view.standing) and the new owner decides. With no owner yet nothing is written and the next start tries again.
+    The owner gets one notice when the grant is made.
+
+    An install from before (no event) is granted the same way unless an Everything grant to the Finance Owner was ever
+    revoked (the owner's no stands); one it already holds is recorded, not doubled. Either way the owner's old open
+    ask (VIEW_TITLE) is closed for them. Payroll's private lines stay private: full detail comes only from a private
+    line's own list, never from a grant. A paused or archived Finance Owner gets nothing now; `check` runs this too,
+    so one unpaused later gets the view at its next hourly check. The grant id made now, or None."""
     from .finance import reads as FR
+    from .finance.context import load
     from .finance.core import view as VW
-    from .finance.core.org import SYSTEM
+    from .finance.core.errors import FinanceError
     from .finance.store import access as SA
     from .finance.store.ledger import new_id
 
-    if not FR.is_set_up(c) or not active(c) or _has_event(c, "bookkeeper.view_granted"):
+    if not owner or not FR.is_set_up(c) or not active(c) or _has_event(c, "bookkeeper.view_granted"):
         return None
     mine = c.execute(
         "SELECT id, status FROM fin_view_grants WHERE subject_kind='teammate' AND subject=? AND what='everything'",
@@ -166,11 +178,19 @@ def grant_view(c, at: str | None = None):
     when = at or H.now()
     made = None
     if not any(r["status"] == "active" for r in mine):
-        made = new_id()
-        grant = VW.Grant(id=made, subject_kind="teammate", subject=ACTOR, what="everything", granted_by=SYSTEM)
-        SA.insert_grant(c, grant, SYSTEM, when)
+        ctx = load(c, when)
+        grant = VW.Grant(id=new_id(), subject_kind="teammate", subject=ACTOR, what="everything", granted_by=owner)
+        try:
+            if VW.check_grant(ctx.org, owner, grant, SA.defaults(c), ctx.accounts) != "ok":
+                return None
+        except FinanceError:
+            return None  # not the company's owner (yet): the next start tries again
+        made = grant.id
+        SA.insert_grant(c, grant, owner, when)
         SA.bump_view(c, f"grant {made}", when)
-    H.event(c, H.KEEPER, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything"})
+    H.event(c, H.KEEPER, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything", "by": owner})
+    if made:
+        H.notice(c, H.KEEPER, owner, VIEW_NOTICE, refs={"finance_view_grant": made})
     for row in c.execute(
         f"SELECT id FROM {H.TASKS} tasks WHERE title=? AND requester_id=? AND status='open'", (VIEW_TITLE, H.KEEPER)
     ).fetchall():
@@ -188,7 +208,7 @@ def ensure(c, onboarding, auth):
         return None
     made = onboarding.ensure_bookkeeper(c)
     grant_defaults(c)
-    grant_view(c)
+    grant_view(c, _owner(c, auth))
     from .finance import tax as FT
 
     FT.seed_dues(c, H.now())
@@ -612,7 +632,7 @@ def check(c, auth, at):
     from . import bills_address
 
     grant_defaults(c)
-    grant_view(c)
+    grant_view(c, _owner(c, auth))
     bills_address.reconcile(c)
     items, counts = collect(c)
     fresh = _fresh(c, items, at)
