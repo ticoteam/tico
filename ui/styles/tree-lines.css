@@ -2,6 +2,7 @@
    (updates.css), the Org chart's stacks (redesign-strategy.css) and the Goals tree (goals.css).
    One pattern: a rail hangs from the parent's avatar, and an elbow turns off it, round, into each child's avatar,
    stopping just short of it so the line is seen to meet it. The rail ends in the last child's elbow, never past it.
+   Into a boxed child (an Updates card), the elbow ends at the box's edge, never inside the box.
    Three pieces, all pseudo-elements on the trees' own elements:
    - the stub (::after on the parent's row): from the bottom of its avatar to the bottom of the row;
    - the elbow (::before on each child's row): from the row above, or the stub, down to the child's avatar centre and

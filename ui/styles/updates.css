@@ -106,25 +106,23 @@
   .upd-head{gap:6px}.upd-seg button{padding:6px 10px}.upd-chip{padding:6px 8px}}
 /* Updates nested by the org chart: each report's card hangs under its manager's, opened by the "8 v" toggle at the
    right of the manager's card. The lines (tree-lines.css): a rail under the middle of the manager's avatar, from the
-   bottom of its card (the update runs under the avatar, so the line does not cross it), and an elbow into each report's
-   avatar, across the report's card edge (drawn over the card, under its unread mark). Every offset follows from the
-   card's padding and the avatar's size; a "No update yet" row has the same avatar at the same inset, so a thread's
-   avatars line up whatever their cards are. The reports' cards start just past the round of the elbow. */
+   bottom of its card (the update runs under the avatar, so the line does not cross it), and an elbow to each report's
+   card, level with its avatar's middle, that ends on the card's outer left edge (a T with its border, or with an unread
+   card's mark): nothing is drawn inside a card. Every offset follows from the card's padding and the avatar's size; a
+   "No update yet" row has the same avatar at the same inset, so a thread's avatars line up whatever their cards are.
+   The reports' cards start just past the round of the elbow. */
 .upd-node{display:flex;flex-direction:column;gap:10px;--tree-up:10px}
 .upd-kids{margin-left:auto;padding:0 6px 0 10px;gap:0}
 .upd-kids[aria-expanded=true] .nav-icon{transform:var(--chev-open)}
 .upd-kids .upd-dot{position:absolute;top:5px;right:3px;margin:0}
 .upd-sub{display:flex;flex-direction:column;gap:10px;margin-left:calc(var(--upd-cx) + var(--upd-in))}
 .upd-sub>.upd-node{position:relative;--tree-x:calc(-1 * var(--upd-in))}
-/* a report's card: the elbow, from the node, over the card into its avatar */
-.upd-sub>.upd-node:has(>.upd-card){--tree-y:calc(1px + var(--upd-pad-y) + var(--upd-av) / 2);
-  --tree-elbow:calc(var(--upd-in) + 1px + var(--upd-pad) - var(--tree-gap))}
-.upd-sub>.upd-node:has(>.upd-card)::before{z-index:1}
-/* "No update yet": the elbow from the row itself (measured inside its border), into the middle of its height (set
-   here, not inherited from a card further up the thread) */
-.upd-sub>.upd-node>.upd-none{--tree-x:calc(-1px - var(--upd-in));--tree-up:11px;--tree-y:50%;
-  --tree-elbow:calc(var(--upd-in) + 1px + var(--upd-pad) - var(--tree-gap))}
-/* The editor has no avatar: its elbow ends at its edge, and its rail leaves from its bottom. */
+/* a report's card: the elbow, from the node, to the card's edge on its avatar's row */
+.upd-sub>.upd-node:has(>.upd-card){--tree-y:calc(1px + var(--upd-pad-y) + var(--upd-av) / 2);--tree-elbow:var(--upd-in)}
+/* "No update yet": the elbow from the row itself (measured inside its border, so it ends on the dashed border's outer
+   edge), level with the middle of its height (set here, not inherited from a card further up the thread) */
+.upd-sub>.upd-node>.upd-none{--tree-x:calc(-1px - var(--upd-in));--tree-up:11px;--tree-y:50%;--tree-elbow:var(--upd-in)}
+/* The editor: its elbow ends at its edge like every report's, and its rail leaves from its bottom. */
 .upd-sub>.upd-node:has(>.upd-edit){--tree-elbow:var(--upd-in)}
 /* the manager's stub, under its avatar's middle: from a card's bottom (its update fills the card under the avatar), or
    from the avatar's foot in a "No update yet" row, through the gap below it */
