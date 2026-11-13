@@ -3492,9 +3492,9 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py): file import, database query and Finance ad spend
-# (backend/growth_finance.py); bot cost follows in a later part.
-GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
+# A synced source's kind (backend/growth_sync.py): file import, database query, Finance ad spend
+# (backend/growth_finance.py) and bot cost.
+GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend", "bot_cost"]
 
 
 class GrowthSyncMap(Contract):

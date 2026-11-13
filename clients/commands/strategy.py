@@ -424,7 +424,7 @@ SOURCE_PROPS = {
     "owner": _s("Who answers for it: me, a bot slug or a person id"),
     "sync_kind": {
         "type": "string",
-        "enum": ["file", "db_query", "finance_ad_spend", "none"],
+        "enum": ["file", "db_query", "finance_ad_spend", "bot_cost", "none"],
         "description": "Make it fill numbers itself: file (a CSV sent with tico growth source push), db_query (a named "
         "query a bot runs daily; give database, query and bot), finance_ad_spend (spend from Finance's Google Ads and "
         "Meta import; map campaigns with campaign); none stops it",

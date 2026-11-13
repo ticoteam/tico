@@ -35,6 +35,8 @@ Rules, from the spec:
 """
 
 import csv
+import hashlib
+import hmac
 import io
 import json
 import math
@@ -69,6 +71,7 @@ NOT_WRITTEN_MAX = 50  # rows listed per run; `not_written_count` has them all
 ERROR_CHARS = 300
 UNKNOWN = "unknown"
 DB_KEYS = ("database", "query", "bot")  # what a db_query source's map names besides its columns
+IN_PATH = "/api/v2/growth/in/"  # a file source's signed address: IN_PATH + the source's id
 DB_CRON = "0 6 * * *"  # the daily run, in UTC
 
 
@@ -93,6 +96,16 @@ def window(first: bool, at: datetime | None = None) -> tuple[str, str]:
 
 
 # ----------------------------------------------------------------------------- the source
+def sealed_as(sid: str) -> str:
+    return "growth_sources:" + sid
+
+
+def signed(secret: str, body: bytes, header: str) -> bool:
+    """Whether `header` is `sha256=` and the HMAC-SHA256 of `body` under `secret`."""
+    want = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(header.strip().encode(), want.encode())
+
+
 def sync_map(row: dict[str, Any]) -> dict[str, Any]:
     raw: Any = json.loads(row.get("sync_map") or "{}")
     return cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
@@ -151,6 +164,7 @@ def view(row: dict[str, Any]) -> dict[str, Any]:
         "last_run_at": row.get("last_run_at"),
         "last_good_run": row.get("last_good_run_at"),
         "last_error": row.get("last_error"),
+        "has_address": bool(row.get("signing_secret")),
         "has_file": bool(row.get("has_payload") or row.get("last_payload")),
     }
 
@@ -179,6 +193,8 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
     given: dict[str, Any] = dict(mapping or {})
     if kind == GF.KIND:
         given = GF.check_map(given)
+    elif kind == "bot_cost":
+        given["fields"] = {"bot_cost": "bot_cost"}  # the only number it fills, from the bots' own run cost
     if given.get("shape") == "customers":
         if given.get("fields") or given.get("month") or given.get("channel"):
             raise Problem("validation", "A customers source maps no numbers: its rows are customers", 422)
@@ -499,6 +515,7 @@ def run(
     csv_text: str | None = None,
     error: str | None = None,
     at: datetime | None = None,
+    notes: list[str] | None = None,
 ) -> dict[str, Any]:
     """One run of `source`: rows (or a CSV) to write, or the `error` its fetch ended with. Never raises for a bad
     payload: a failed run is recorded, the source shows Failing with the reason and nothing it wrote changes."""
@@ -515,6 +532,8 @@ def run(
         "not_written": [],
         "not_written_count": 0,
     }
+    if notes:
+        result["notes"] = notes
     try:
         if error:
             raise RunFailed(" ".join(error.split())[:ERROR_CHARS])
@@ -577,6 +596,41 @@ def run(
         {k: result[k] for k in ("run", "ok", "error", "written", "held", "not_written_count")},
     )
     return result
+
+
+# ----------------------------------------------------------------------------- bot cost
+def bot_cost_rows(c: Any, at: datetime | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+    """The rows a bot cost run posts: each month's run cost (USD, two places) of the bot that owns a channel, on that
+    channel. A bot owning several channels cannot be split between them, so its cost goes to Unknown, and a note says
+    so. A bot that owns no channel is not a Growth cost."""
+    from .usage_records import RUNS
+
+    oldest, newest = window(False, at)
+    first = f"{oldest}-01"
+    last = f"{_month(_index(newest) + 1)}-01"
+    owned: dict[str, list[str]] = {}
+    for r in c.execute(
+        "SELECT slug, owner_ref FROM growth_channels WHERE retired_at IS NULL AND owner_ref LIKE 'bot:%'"
+    ):
+        owned.setdefault(str(r[1]).removeprefix("bot:"), []).append(str(r[0]))
+    cost: dict[tuple[str, str], float] = {}
+    notes: list[str] = []
+    for bot, month, total in c.execute(
+        f"SELECT bot, substr(started_at,1,7), coalesce(sum(est_cost_usd),0) FROM {RUNS} "
+        "WHERE started_at >= ? AND started_at < ? GROUP BY bot, substr(started_at,1,7)",
+        (first, last),
+    ).fetchall():
+        slugs = owned.get(str(bot))
+        if not slugs or not total:
+            continue
+        channel = slugs[0] if len(slugs) == 1 else "unknown"
+        if len(slugs) > 1:
+            note = f"{bot} owns {len(slugs)} channels ({', '.join(sorted(slugs))}): its cost is counted on Unknown"
+            if note not in notes:
+                notes.append(note)
+        cost[(channel, str(month))] = cost.get((channel, str(month)), 0.0) + float(total)
+    rows = [{"month": m, "channel": ch, "bot_cost": round(v, 2)} for (ch, m), v in sorted(cost.items())]
+    return rows, sorted(notes)
 
 
 # ----------------------------------------------------------------------------- typing and conflicts

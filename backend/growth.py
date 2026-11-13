@@ -16,8 +16,10 @@ Who may: everyone signed in reads. The owner and admins (people) write channels,
 owns a channel may change its why, stage and budget; any bot or admin records cohorts.
 """
 
+import asyncio
 import json
 import math
+import secrets
 
 from fastapi import Request
 
@@ -746,8 +748,10 @@ def _schedule(c, actor, sid, had=None, who=None):
 
 def source_create(c, actor, body, catalog=None, who=None):
     H._writer(c, actor)
-    # A file comes from a person; Finance ad spend through Finance's own import and its stored keys.
-    reach = body.reach_kind or {"file": "person", GF.KIND: "credential"}.get(body.sync_kind or "")
+    # A file or bot cost comes from a person; Finance ad spend through its own import and stored keys.
+    reach = body.reach_kind or {"file": "person", "bot_cost": "person", GF.KIND: "credential"}.get(
+        body.sync_kind or ""
+    )
     if not reach:
         raise Problem("validation", "reach_kind is mcp, credential, url or person", 422)
     sid = H.new_id()
@@ -1086,6 +1090,58 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
+    @app.post("/api/v2/growth/sources/{sid}/address")
+    def growth_source_address(request: Request, sid: str, body: M.Empty):
+        """Owner, admin or the source's own owner: a signed address for a file source, so a script can post its CSV.
+        The old one stops working; the address and its signing secret are shown this once."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            row = GS.may_run(c, sid, who.actor, admin(auth, who))
+            if row["sync_kind"] != "file":
+                raise Problem("validation", "Only a file source has an address", 422)
+            secret = secrets.token_urlsafe(32)
+            c.execute(
+                "UPDATE gtm_sources SET signing_secret=? WHERE id=?",
+                (request.app.state.vault.cipher.seal(c, GS.sealed_as(sid), secret), sid),
+            )
+            H.event(c, who.actor, "growth.source.address", sid, {})
+            return {
+                "source": sid,
+                "address": request.app.state.store.settings.public_url.rstrip("/") + GS.IN_PATH + sid,
+                "signing_secret": secret,
+                "signed_with": "HMAC-SHA256 of the body in the X-Signature header, as sha256=<hex>",
+            }
+
+        return mutate(request, body, work)
+
+    @app.post(GS.IN_PATH + "{sid}")
+    async def growth_source_post(request: Request, sid: str):
+        """A signed address: a script posts a CSV (the request body) with `X-Signature: sha256=<hmac of the body>`. A
+        bad or missing signature is refused and writes nothing; a good one runs the source as an upload does."""
+        raw = await request.body()
+        if len(raw) > GS.PAYLOAD_MAX:
+            raise Problem("too_large", f"The file is over {GS.PAYLOAD_MAX // 1000} KB", 413)
+        signature = request.headers.get("x-signature", "")
+        vault = request.app.state.vault
+
+        def take():
+            with store.transaction() as c:
+                row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
+                secret = vault.cipher.unseal(c, GS.sealed_as(sid), row.get("signing_secret")) if row else None
+                if not row or not secret or row.get("sync_kind") != "file" or row.get("retired_at"):
+                    raise Problem("not_found", "No such address", 404)
+                if not GS.signed(secret, raw, signature):
+                    raise Problem("unauthorized", "The signature does not match the body", 401)
+                try:
+                    text = raw.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    raise Problem("validation", "The file is not UTF-8 text", 422) from None
+                return GS.run(c, row.get("owner_ref") or H.KEEPER, row, csv_text=text)
+
+        return await asyncio.to_thread(take)
+
     @app.post("/api/v2/growth/sources/{sid}/sync")
     def growth_source_sync(request: Request, sid: str, body: M.Empty):
         """Owner, admin or the source's own owner: run a synced source now. A file source runs its last file again
@@ -1105,6 +1161,9 @@ def install(app, store, auth, mutate):
                 return _start_db_run(c, who, row)
             if row["sync_kind"] == GF.KIND:
                 return GF.sync(c, who.actor, row)
+            elif row["sync_kind"] == "bot_cost":
+                rows, notes = GS.bot_cost_rows(c)
+                return GS.run(c, who.actor, row, rows=rows, notes=notes)
             raise Problem("conflict", f"{row['system']} cannot be run from here yet", 409)
 
         return mutate(request, body, work)

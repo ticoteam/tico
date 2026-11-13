@@ -240,6 +240,15 @@ estimate; CAC, LTV and payback name the sources of the numbers they are worked o
 with shows both values, and the source's owner or an admin picks **Keep** or **Use**, on the card or in a month's
 numbers under Settings, where a synced number is locked.
 
+**A signed address for a file source.** `POST /api/v2/growth/sources/<id>/address` (the owner, an admin or the source's
+owner) gives a file source an address and a signing secret, shown once; a new one stops the old. A script posts the CSV
+as the request body to `/api/v2/growth/in/<id>` with `X-Signature: sha256=<HMAC-SHA256 of the body under the secret>`, and
+the result is the same as an upload. A missing or wrong signature is refused with 401 and writes nothing.
+
+**Bot cost.** A `bot_cost` source (`tico growth source add --sync bot_cost`) fills only bot cost: each month, the run cost
+of the bot that owns a channel goes on that channel. A bot that owns several channels cannot be split, so its cost goes on
+Unknown and the run result carries a note. `sync` runs it.
+
 ## Marketing tasks
 
 A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
