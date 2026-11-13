@@ -1016,7 +1016,10 @@ def _counted(checks, suite_runs=None):
     group cancels the older duplicate workflow run when the newer one starts (Nov 12 stress run, I38). The same
     workflow is a newer suite (ids only grow) of the same App with a check run of the same name (`SUITE_RUNS`). A
     suite with no id, or whose runs were never seen, is never superseded: a cancelled workflow is never hidden behind
-    another workflow of the same App."""
+    another workflow of the same App. Tico's own `tico/merge-ok` is left out too, with the suite it ran in: it is the
+    Merge stage's gate, red on every commit the stage did not queue, never a CI result (#395)."""
+    from .item_sources.github import MERGE_OK
+
     suite_runs = suite_runs or {}
 
     def split(key):
@@ -1034,7 +1037,14 @@ def _counted(checks, suite_runs=None):
             for other in checks
         )
 
-    return {k: v for k, v in checks.items() if not (v == "cancelled" and k.startswith("suite:") and superseded(k))}
+    def gate(key):
+        return key == MERGE_OK or set(suite_runs.get(key) or ()) == {MERGE_OK}
+
+    return {
+        k: v
+        for k, v in checks.items()
+        if not gate(k) and not (v == "cancelled" and k.startswith("suite:") and superseded(k))
+    }
 
 
 def _overall(checks, suite_runs=None):
@@ -1351,6 +1361,13 @@ def apply_checks(c, link_id, head, checks, since=None):
     return state
 
 
+def _own_app(c, suite):
+    """Whether a check suite is the company GitHub App's own, the one that posts `tico/merge-ok`."""
+    slug = str((suite.get("app") or {}).get("slug") or "").lower()
+    app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
+    return bool(slug and app and str(app["slug"]).lower() == slug)
+
+
 def pr_signal(c, event, payload):
     """Checks, commit statuses, reviews and review comments update every attached PR."""
     repo = str((payload.get("repository") or {}).get("full_name") or "")
@@ -1422,6 +1439,11 @@ def pr_signal(c, event, payload):
             suite_runs = detail.get(SUITE_RUNS) or {}
             if own.get("id"):
                 _add_suite_run(suite_runs, _suite_key(own, signal), name)
+            if event == "check_suite" and _own_app(c, signal):
+                # The company App posts only `tico/merge-ok`: its suite is the gate's even before its run is seen.
+                from .item_sources.github import MERGE_OK
+
+                _add_suite_run(suite_runs, name, MERGE_OK)
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
             pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
