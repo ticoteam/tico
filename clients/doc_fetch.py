@@ -136,6 +136,8 @@ class _Connection(http.client.HTTPConnection):
             share = self._left() / (len(self._ips) - n)
             try:
                 self.sock = self._opener(ip, self.port, self._tls, self.host, min(share, TIMEOUT_S))
+                # The share was for connecting; the answer gets the rest of the fetch's time.
+                self.sock.settimeout(min(self._left(), TIMEOUT_S))
                 self.connected_to = ip
                 return
             except ssl.SSLError:

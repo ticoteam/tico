@@ -23,6 +23,7 @@ class Net:
     def __init__(self, names, *replies, down=None):
         self.names, self.replies, self.sent, self.connected = names, list(replies), [], []
         self.down = down or {}  # address -> the OSError connecting to it raises
+        self.reply_after = 0.0  # seconds each reply takes to start; a socket with a shorter timeout times out
 
     def resolver(self, host, port):
         return self.names[host]
@@ -34,16 +35,23 @@ class Net:
         outer, raw = self, self.replies.pop(0)
 
         class Sock:
+            def settimeout(self, value):
+                self.timeout = value
+
             def sendall(self, data):
                 outer.sent.append((ip, data.decode()))
 
             def makefile(self, *a, **k):
+                if outer.reply_after > self.timeout:
+                    raise TimeoutError("timed out")
                 return io.BytesIO(raw)
 
             def close(self):
                 pass
 
-        return Sock()
+        sock = Sock()
+        sock.timeout = timeout
+        return sock
 
     def fetch(self, url, **kw):
         return F.fetch(url, resolver=self.resolver, opener=self.opener, **kw)
@@ -151,6 +159,13 @@ def test_an_address_that_hangs_leaves_time_for_the_next_one():
 
     result = F.fetch("https://syften.com/", resolver=net.resolver, opener=opener, clock=lambda: now[0])
     assert result["text"] == "Hello" and [ip for ip, _ in net.sent] == [GOOGLE_V4]
+
+
+def test_a_reply_slower_than_one_address_share_is_still_read():
+    eight = [f"216.239.3{i}.21" for i in range(8)]  # syften.com has eight addresses
+    net = Net({"syften.com": eight}, reply(body=b"<p>Hello</p>"))
+    net.reply_after = 4.0  # longer than 20 s / 8, well inside the fetch's 20 s
+    assert net.fetch("https://syften.com/")["text"] == "Hello"
 
 
 def test_the_name_is_tried_in_the_order_the_system_resolves_it(monkeypatch):
