@@ -96,7 +96,7 @@
         "browser_exit_bots": {"type": "array", "items": {"type": "string"}, "x-note": "The bots on this computer with a browser exit set (backend/browser_exit.py bots_on): the runner stops every other bot's proxy. Absent from older servers: the runner then keeps its proxies."},
         "turns_at_once": {"type": ["integer", "null"], "minimum": 1},
         "restart": {"const": true},
-        "assignments": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+        "assignments": {"type": "array", "items": {"type": "object", "additionalProperties": true}, "x-note": "Always empty: a runner reads its bots from GET runners/assignments when a runner change of kind assignments tells it to; no runner since 0.4.0 reads this. Kept because the 0.5.0 and 0.6.0 contracts require it."}
       }
     },
     "ClaimAnswer": {
