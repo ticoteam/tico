@@ -116,7 +116,7 @@ const STATE_STEPS: &[(&str, &str)] = &[
         r"(Record the bet's id and statement)\s+in\s+`state\.md`\s+under\s+Answers",
         "${1} in `knowledge/`",
     ),
-    (r"(?m)^[ \t]*\d+\.\s+Read\s+`state\.md`\.[ \t]*\n", ""),
+    (r"(?m)^[ \t]*\d+\.\s+Read\s+`state\.md`\.[ \t]*\r?\n", ""),
     (
         r"\b([Rr])ead\s+`state\.md`(?:,\s+then|,|\s+and)\s+",
         "${1}ead ",
@@ -397,6 +397,10 @@ mod tests {
             (
                 "1. Start.\n2. Read `state.md`.\n3. Read the task.\n",
                 "1. Start.\n3. Read the task.\n",
+            ),
+            (
+                "1. Start.\r\n2. Read `state.md`.\r\n3. Read the task.\r\n",
+                "1. Start.\r\n3. Read the task.\r\n",
             ),
             (
                 "3. Update `state.md`: current focus, open threads, next step.\n",
