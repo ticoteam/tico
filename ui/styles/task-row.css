@@ -62,3 +62,5 @@
 .tc-form textarea{min-height:120px}
 .tc-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tc-pick{display:inline-flex;align-items:center;gap:4px}
+/* A task others depend on: "Blocks #307" beside Late (task_depends). */
+.tk-blocks{flex:none;padding:0 6px;border-radius:999px;background:var(--fail-bg);color:var(--fail);font-size:var(--t-2xs);line-height:16px;white-space:nowrap}

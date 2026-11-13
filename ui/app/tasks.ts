@@ -20,7 +20,7 @@ interface TaskRow extends PropTask {
 }
 // One relation of a task (the server's `relations`, by kind): `direction` is the task's own side, `out` or `in`.
 // An `after` row also has the other task's number and stage (the order to merge in: backend/merge_order.py).
-type TaskRelRow = {direction: string; id: string; owner_id: string; status: string; title: string; number?: number | null; stage?: string | null};
+type TaskRelRow = {direction: string; id: string; owner_id: string; status: string; title: string; number?: number | null; stage?: string | null; since?: string};
 // A goal as the Serves picker needs it (goalOptions).
 type GoalOption = Pick<import('../types/api').Goal, 'id' | 'title' | 'owner_id' | 'parent_id' | 'rank' | 'status'>;
 const teamOf = (id: string) => botRow(id)?.team || '';

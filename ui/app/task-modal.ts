@@ -398,18 +398,22 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
     } catch (e) { toast(errorMessage(e, ''), true); }
   });
   // Related tasks, by kind: + asks which kind, then finds the task; each one opens, × takes it off (from both tasks).
+  // The same finder picks the task a blocked task depends on: "Add another" under Blocked by opens it at once.
+  const findTask = async (anchor: HTMLElement, kind: string, text: string) => {
+    const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
+    const pick = (rows: PropCandidate[]) => rows.filter(x => !have.has(String(x.id))).map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+      html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`}));
+    const first = await taskPropCandidates(task);
+    if (!anchor.isConnected) return;
+    propMenu(d, anchor, {label: text, find: 'Find a task', none: 'No open tasks', items: pick(first.rows),
+      ...(first.more ? {search: async (q: string) => pick((await taskPropCandidates(task, q)).rows)} : {}),
+      onPick: it => taskRelate(d, task, {task: it.value, kind})});
+  };
   const addRelated = $('[data-related-add]', d);
   if (addRelated) addRelated.onclick = () => propMenu(d, addRelated, {label: 'Relation', items: TASK_REL_ADD.map(([kind, text]) => ({value: kind, text, html: `<span>${esc(text)}</span>`})),
-    onPick: kind => setTimeout(async () => {
-      const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
-      const pick = (rows: PropCandidate[]) => rows.filter(x => !have.has(String(x.id))).map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`}));
-      const first = await taskPropCandidates(task);
-      if (!addRelated.isConnected) return;
-      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: pick(first.rows),
-        ...(first.more ? {search: async (q: string) => pick((await taskPropCandidates(task, q)).rows)} : {}),
-        onPick: it => taskRelate(d, task, {task: it.value, kind: kind.value})});
-    }, 0)});
+    onPick: kind => setTimeout(() => void findTask(addRelated, kind.value, kind.text), 0)});
+  const addBlocker = $('[data-depends-add]', d);
+  if (addBlocker) addBlocker.onclick = () => void findTask(addBlocker, 'depends_on', 'Blocked by');
   d.querySelectorAll<HTMLElement>('[data-drop-rel]').forEach(b => b.onclick = () => {
     const [kind, direction, other] = b.dataset.dropRel!.split(' ');
     // A row this task is the far end of is taken off from the other task's side.
@@ -540,7 +544,8 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
   };
 }
 // The relations backend/task_relations.py relate writes (a parent is fixed when the task is filed).
-const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
+const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of'],
+  ['depends_on', 'Blocked by']];
 const TASK_REL_GROUPS: [string, string, string][] = [['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
   ['duplicate_of', 'in', 'Duplicated by'], ['follow_up', 'out', 'Follow-up of'], ['follow_up', 'in', 'Follow-ups']];
 // One relation added or taken off (POST /v2/tasks/{id}/relations), then the task redrawn. `on` is the task whose
@@ -581,9 +586,26 @@ function taskOrderHTML(t: ModalTask) {
     }).join('')}</div></div>`;
   }).join('');
 }
+// A dependency (backend/task_depends.py), from both ends. Blocked by: each task it waits for, "#304 Growth synced sources
+// part 1 · Build · since Nov 13", with × to take it off, and Add another (the same task finder as +). Blocks: the tasks
+// waiting for this one, under "Blocks 4 tasks". A dependency comes off when its task ends, so these are open tasks.
+function taskDependsHTML(t: ModalTask) {
+  const row = (k: TaskRelRow, dir: string, label: string) => {
+    const ref = k.number ? `#${k.number}` : '';
+    const where = [k.status === 'open' ? k.stage || '' : k.status, k.since ? `since ${shortDate(k.since)}` : ''].filter(Boolean).join(' · ');
+    return `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${esc(ref)} ${esc(clipLine(k.title, 60))}</button>`
+      + `${where ? ` · <span class="tchip-note">${esc(where)}</span>` : ''}`
+      + `<button type="button" class="x" data-drop-rel="depends_on ${dir} ${esc(k.id)}" aria-label="Remove ${esc(label)}: ${esc(k.title)}">×</button></span>`;
+  };
+  const on = taskRels(t, 'depends_on', 'out'), of = taskRels(t, 'depends_on', 'in');
+  const blocked = on.length ? `<div class="trel task-depends"><span class="trel-k">Blocked by</span><div class="tlinks">${on.map(k => row(k, 'out', 'blocked by')).join('')}`
+    + `<button type="button" class="linkish task-depends-add" data-depends-add aria-haspopup="menu">Add another</button></div></div>` : '';
+  const blocks = of.length ? `<div class="trel task-blocks"><span class="trel-k">${esc(`Blocks ${of.length} task${of.length === 1 ? '' : 's'}`)}</span><div class="tlinks">${of.map(k => row(k, 'in', 'blocks')).join('')}</div></div>` : '';
+  return blocked + blocks;
+}
 function taskRelHTML(t: ModalTask) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]): [string, string, string, TaskRelRow[]] => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
-  const milestones = taskMilestoneHTML(t) + taskOrderHTML(t);
+  const milestones = taskDependsHTML(t) + taskMilestoneHTML(t) + taskOrderHTML(t);
   return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
     ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }
@@ -710,7 +732,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   subtask: v => v ? 'added a subtask' : 'moved a subtask out', blocks: v => v ? 'made it block another task' : 'stopped it blocking a task',
   related: v => v ? 'attached a related task' : 'removed a related task', duplicate_of: v => v ? 'marked it a duplicate' : 'unmarked it as a duplicate',
   duplicated_by: v => v ? 'marked a duplicate of it' : 'unmarked a duplicate of it', follow_up_of: v => v ? 'marked it a follow-up' : 'unmarked it as a follow-up',
-  follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up',
+  follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up', depends_on: v => v ? 'made it wait for another task' : 'took off a task it waited for',
   reader: (v, x) => v ? `let ${actorLabel(v)} see this task` : `stopped ${actorLabel(x.old)} seeing this task`,
   link: v => v ? `linked ${v}` : 'removed a link', file: (v, x) => v ? `added ${v}` : `removed ${x.old || 'a file'}`, due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment',

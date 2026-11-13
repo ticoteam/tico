@@ -2662,6 +2662,13 @@ SCHEMAS = {
             "description": "On the task's own read: the stage it is in",
         },
         pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
+        blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}}))
+        | {
+            "description": "On a list row: the open tasks it depends on (\"Blocked by #304\"), oldest first; one the "
+            "reader may not open has a null id and number"
+        },
+        blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}}))
+        | {"description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\")"},
         stage_since={
             "type": ["string", "null"],
             "description": "On a list row: when it entered its stage, else when it was filed",
@@ -2728,6 +2735,7 @@ SCHEMAS = {
                     ["id", "title", "status", "owner_id", "direction"],
                     number={"type": ["integer", "null"]},
                     stage={"type": ["string", "null"]},
+                    since={"type": "string", "description": "depends_on only: when the dependency was written"},
                 )
             ),
         },
@@ -3696,6 +3704,8 @@ SCHEMAS = {
             "pushed_past": "b",
             "stage_since": "n",
             "on_person": "b",
+            "blocked_by": items(obj({"id": "n", "number": {"type": ["integer", "null"]}})),
+            "blocks": items(obj({"id": "s", "number": {"type": ["integer", "null"]}})),
         }
     ),
     "GranolaStatus": obj(

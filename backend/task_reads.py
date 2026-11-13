@@ -209,6 +209,7 @@ def _could_read(c, visible_sql, tid, ref):
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`,
+    `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`),
     `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
     person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
     entered its stage: its open visit, else when it was filed; a board card's age) and `on_person` (it waits only on a
@@ -246,6 +247,7 @@ def brief(c, rows, visible_sql="1"):
             (marks,),
         )
     }
+    blocked_by, blocks = _dependencies(c, ids, visible_sql)
     heads = {tid: found[0] if found else None for tid, found in waits.items()}
     named = sorted({head.about for head in heads.values() if head and head.about})
     shown = (
@@ -274,10 +276,41 @@ def brief(c, rows, visible_sql="1"):
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         row["snoozed"] = row["id"] in snoozed
+        row["blocked_by"] = blocked_by.get(row["id"], [])
+        row["blocks"] = blocks.get(row["id"], [])
         row["pushed_past"] = row["id"] in pushed
         row["stage_since"] = entered.get(row["id"]) or row.get("created_at")
         row["on_person"] = row["id"] in person
     return rows
+
+
+def _dependencies(c, ids, visible_sql):
+    """({task id: [{id, number}]} of the open tasks each one depends on, {task id: [{id, number}]} of the open tasks
+    each one blocks), for a board card's stop mark and "#304", and "Blocks #307" (backend/task_depends.py). Two reads
+    for every row. A task it depends on that the reader may not open is there with neither id nor number, so the card
+    still shows it is blocked; a task it blocks that the reader may not open is left out."""
+    from . import task_depends as D
+
+    D.prime(c, ids)
+    on = {tid: [other for other, _since in D.blockers(c, tid)] for tid in ids}
+    of = D.blocking(c, ids)
+    others = sorted({other for found in on.values() for other in found} | {d for f in of.values() for d, _n, _s in f})
+    if not others:
+        return {}, {}
+    seen = {
+        r[0]: r[1]
+        for r in c.execute(
+            f"SELECT id, number FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(others),),
+        )
+    }
+    blocked_by = {
+        tid: [{"id": o, "number": seen[o]} if o in seen else {"id": None, "number": None} for o in found]
+        for tid, found in on.items()
+        if found
+    }
+    blocks = {tid: [{"id": d, "number": n} for d, n, _s in found if d in seen] for tid, found in of.items() if found}
+    return blocked_by, blocks
 
 
 def _running(c, bots):

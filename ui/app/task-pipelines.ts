@@ -2,7 +2,9 @@
    columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
    row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed. A snoozed
    task stays in its stage, after every task that is not, dimmed, with the day it wakes (or Snoozed) and a moon that is
-   its one button: Unsnooze. It holds no slot, so a stage's number leaves it out.
+   its one button: Unsnooze. It holds no slot, so a stage's number leaves it out. A blocked task (it depends on a task
+   still open) keeps full colour, with a stop mark and "#304" where a snoozed one shows its day, after the awake tasks and
+   before the snoozed ones; it holds no slot either. A task others depend on says "Blocks #307".
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
    for whoever may change the pipeline. Beside it, Rules and its count opens the stage's rules (stage-rules.ts); then ▶ and how many items in the stage wait on the person opens the
    stage's review (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone it sits beside the stage tabs. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
@@ -71,6 +73,11 @@ function pvStateFor(rec: PipelineRec): PvState {
 /** A task set aside in its stage (`snoozed`): drawn last there, and holding no slot. */
 const pvSnoozed = (t: TaskAny): boolean => !!(t as {snoozed?: boolean}).snoozed;
 
+/** A task that depends on another one still open (`blocked_by`): drawn in full colour after the awake ones and before
+ * the snoozed ones, with a stop mark and "#304" where a snoozed one shows its day. It holds no slot. Blocked wins over
+ * a snooze: no list says Snoozed for a blocked task. */
+const pvBlocked = (t: TaskAny): boolean => taskBlockedBy(t).length > 0;
+
 /** The open tasks the manager's rail reads, when the view shows that pipeline: the snoozed ones are no one's turn. */
 const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks.filter(t => !pvSnoozed(t)) : [];
 
@@ -89,7 +96,7 @@ const pvOnPerson = (t: TaskAny): boolean => !!(t as {on_person?: boolean}).on_pe
  * counts the same. */
 function pvPersonCount(state: PvState, stage: PipelineStageRec): number {
   if (!stage.task_limit) return 0;
-  return state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && pvOnPerson(t) && !pvSnoozed(t)).length;
+  return state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && pvOnPerson(t) && !pvSnoozed(t) && !pvBlocked(t)).length;
 }
 
 /** A person, as the mark beside a limited stage's number. */
@@ -109,8 +116,11 @@ function pvPersonHTML(n: number): string {
  * has one. Against a limit it counts the tasks that hold a slot: one waiting only on a person's OK or answer does not
  * (`pvPersonCount`), nor does a snoozed one (task_engine.has_room). */
 function pvStageCount(state: PvState, stage: PipelineStageRec): string {
-  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && !pvSnoozed(t)).length;
-  return stage.task_limit ? `${n - pvPersonCount(state, stage)}/${stage.task_limit}` : String(n);
+  const here = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && !pvSnoozed(t));
+  if (!stage.task_limit) return String(here.length);
+  // A blocked task holds no slot either (task_depends): the limit counts the others.
+  const held = here.filter(t => !pvBlocked(t)).length;
+  return `${held - pvPersonCount(state, stage)}/${stage.task_limit}`;
 }
 
 /** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise.
@@ -131,12 +141,27 @@ function pvPlayHTML(stage: PipelineStageRec): string {
     + `<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tnum">${n}</span></button>`;
 }
 
-/** The tasks of one stage that the search and the filters let through, in the order the page gave them, the snoozed
- * ones after all the others. */
+/** The tasks of one stage that the search and the filters let through, in the order the page gave them: the awake
+ * ones, then the blocked ones, then the snoozed ones. */
 function pvInStage(state: PvState, stageId: string): TaskAny[] {
   const shown = state.tasks.map(t => pvShown(state, t))
     .filter(t => t.stage_id === stageId && taskFilterMatch(t, state.opts.q, state.opts.filters));
-  return [...shown.filter(t => !pvSnoozed(t)), ...shown.filter(pvSnoozed)];
+  const blocked = shown.filter(pvBlocked), rest = shown.filter(t => !pvBlocked(t));
+  return [...rest.filter(t => !pvSnoozed(t)), ...blocked, ...rest.filter(pvSnoozed)];
+}
+
+/** A stop sign: the mark on a blocked task. */
+const PV_STOP_ICON = '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" focusable="false">'
+  + '<path d="M4.7 1.5h4.6l3.2 3.2v4.6l-3.2 3.2H4.7L1.5 9.3V4.7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>'
+  + '<path d="M4.6 7h4.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+/** Where a blocked task's age goes: the stop mark and the tasks it waits for, "#304" or "#304, #321" ("Blocked" when the
+ * reader may open none of them). Its tip is the task's line, "Blocked by #304 Growth synced sources part 1, in Build". */
+function pvBlockedTailHTML(t: TaskAny): string {
+  const refs = taskBlockedBy(t).map(taskDepRef).filter(Boolean);
+  const label = refs.length ? `Blocked by ${refs.join(', ')}` : 'Blocked';
+  return `<span class="tk-age pv-blocked-by" role="img" aria-label="${esc(label)}" title="${esc(label)}">`
+    + `<span class="pv-stop">${PV_STOP_ICON}</span>${esc(refs.join(', ') || 'Blocked')}</span>`;
 }
 
 /** A crescent moon: the sleep mark on a snoozed task. */
@@ -158,8 +183,10 @@ function pvSnoozedHTML(t: TaskAny, card: boolean): string {
     ? `<div class="tk-card pv-snoozed" ${attrs}>${title}${mark}${when}</div>`
     : `<div class="tk-row tk-row-dim pv-snoozed" ${attrs}>${mark}${title}${when}</div>`;
 }
-const pvCardHTML = (t: TaskAny): string => pvSnoozed(t) ? pvSnoozedHTML(t, true) : taskCardHTML(t);
-const pvRowHTML = (t: TaskAny): string => pvSnoozed(t) ? pvSnoozedHTML(t, false) : taskRowHTML(t, {look: 'list'});
+const pvCardHTML = (t: TaskAny): string => pvBlocked(t) ? taskCardHTML(t, pvBlockedTailHTML(t))
+  : pvSnoozed(t) ? pvSnoozedHTML(t, true) : taskCardHTML(t);
+const pvRowHTML = (t: TaskAny): string => pvBlocked(t) ? taskRowHTML({...t, snoozed: false}, {look: 'list', tail: pvBlockedTailHTML(t)})
+  : pvSnoozed(t) ? pvSnoozedHTML(t, false) : taskRowHTML(t, {look: 'list'});
 
 const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || taskFiltersOn(opts.filters);
 
