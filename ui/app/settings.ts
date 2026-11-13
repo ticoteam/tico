@@ -8,7 +8,7 @@ type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?:
 type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: CloudMachineRow | null; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness & DeviceReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
-  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null};
+  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null; compact_default?: number};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
 type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
@@ -16,7 +16,7 @@ type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransiti
 type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; own_compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
 // GET /v2/operations `agents`: an external agent (a Hermes or OpenClaw profile) and what it last reported (settings-devices.ts).
 type SettingsAgentRow = {bot: string; display_name?: string; harness?: string; profile?: string; version?: string; platform?: string; model?: string; provider?: string; online?: boolean; revoked_at?: string | null; last_seen_at?: string | null};
-type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; capabilities?: HarnessCaps};
+type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; offered?: boolean; capabilities?: HarnessCaps};
 // What a bot's computer cannot run, per bot and harness (backend/readiness.py `can_run`, /v2/operations `runnable`).
 type SettingsRunAnswer = {can_run?: boolean; problem?: string; short?: string; computer?: {id?: string} | null;
   sign_in?: {runner_id?: string; computer?: string} | null; move?: {id: string; label: string} | null};

@@ -118,8 +118,8 @@ p:empty{display:none}
 .settings-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .settings-toolbar p{margin:0;color:var(--muted);font-size:var(--t-base)}
 .settings-bots-table{table-layout:fixed;min-width:0}
-/* Room for a computer's name ("Ana's Mac mini"): the model and fallback give some of theirs. */
-.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:22%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:19%}.settings-bots-table th:nth-child(5){width:14%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
+/* Room for a computer's name ("Ana's Mac mini") and a model's whole name, effort and window ("Opus 5.5 MED 400K") beside Tasks. */
+.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:19%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:24%}.settings-bots-table th:nth-child(5){width:12%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
 .settings-bots-table td{vertical-align:middle;min-width:0;padding-top:7px;padding-bottom:7px;padding-right:var(--s2)}
 /* Model, fallback and computer read as text until hovered; the model pickers open in a popover (.sb-choice-pop). */
 .sb-pick{display:flex;align-items:center;gap:4px;width:100%;max-width:100%;min-width:0;margin-left:-7px;padding:5px 7px;border:1px solid transparent;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
@@ -131,18 +131,49 @@ p:empty{display:none}
 .settings-bots-table .settings-inline-select:not(:hover):not(:focus):not(:disabled){border-color:transparent;background-color:transparent}
 .settings-bots-table .settings-inline-select{margin-left:-7px;width:calc(100% + 7px)}
 .settings-bots-table .settings-inline-select:disabled{background:none;border-color:transparent;opacity:1;color:var(--ink);cursor:default}
-.tl-pop.sb-choice-pop{width:300px;padding:12px 14px 14px}
-@media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
+.tl-pop.sb-choice-pop{width:min(360px,calc(100vw - 16px));max-height:min(80vh,620px);padding:12px 14px 14px;overflow-x:hidden}
+@media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;max-height:86vh;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
 .sb-choice-head{margin:0 0 10px;font-size:var(--t-sm);font-weight:600;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sb-choice-pop .settings-choice{display:flex;flex-wrap:wrap;gap:8px}
-.sb-choice-pop .settings-model-choice{flex:1 0 100%;gap:8px}
-.sb-choice-pop .settings-choice>small{flex:1 0 100%}
-.sb-choice-pop .settings-choice>[data-choice-apply]{margin-top:4px;padding:6px 14px}
-.sb-choice-pop .settings-choice>[data-choice-cancel]{margin-top:4px}
+/* The model picker's panel: Harness, Model, Effort and Compact read top to bottom, each with a short visible label. */
+.mp-panel{display:grid;gap:10px;min-width:0}
+.mp-row{display:grid;gap:4px;min-width:0;margin:0;padding:0;border:0}
+.mp-row[hidden]{display:none}
+.mp-row>legend,.mp-row>span{padding:0;margin-bottom:4px;font-size:var(--t-xs);font-weight:600;color:var(--muted)}
+.mp-seg{display:flex;flex-wrap:wrap;gap:0;min-width:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.mp-seg .mp-opt{flex:1 1 auto;justify-content:center;padding:6px 8px;border-right:1px solid var(--line);text-align:center}
+.mp-seg .mp-opt:last-child{border-right:0}
+/* Harnesses run three to a row, so six make two even rows rather than a lone one under five. */
+[data-choice-harness] .mp-seg .mp-opt{flex:1 1 30%;border-bottom:1px solid var(--line);margin-bottom:-1px}
+.mp-list{display:grid;min-width:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.mp-list .mp-opt{padding:7px 10px;border-bottom:1px solid var(--line)}
+.mp-list .mp-opt:last-child{border-bottom:0}
+.mp-opt{position:relative;display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--t-sm);color:var(--ink);cursor:pointer}
+.mp-opt input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.mp-opt:hover{background:var(--surface2)}
+.mp-opt:has(input:checked){background:color-mix(in srgb,var(--accent,var(--ink)) 12%,transparent);font-weight:600}
+.mp-list .mp-opt:has(input:checked)::before{content:"✓";flex:none}
+.mp-opt:has(input:focus-visible){outline:2px solid var(--accent,var(--ink));outline-offset:-2px}
+.mp-opt.off,.mp-opt:has(input:disabled:not(:checked)){color:var(--muted);cursor:default}
+.mp-opt.off:hover{background:none}
+.mp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-mark{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:400}
+.mp-compact select{width:100%;min-width:0;padding:6px 8px;font-size:var(--t-sm);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.mp-note{margin:0;font-size:var(--t-sm);color:var(--muted)}
+.mp-note:empty{display:none}
+.mp-foot{display:flex;gap:8px;margin-top:2px}
+.mp-foot .primary{padding:6px 14px}
+.settings-bulk-pick{display:flex;min-width:0}
+/* In a form (the bot editor, Add bot, bulk change, Hire) the picker's button is a dropdown like the selects beside it:
+   the same box, height and type; only the bots table keeps it as text. */
+#bot-editor .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
+#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
+#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret{opacity:1}
 /* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
    marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
 .sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
 .sb-model-wrap>.sb-pick{flex:1 1 auto;width:auto}
+/* The cell keeps the button's -7px pull on its box, not the button: a shrink-to-fit box loses a negative margin from its width. */
+.sb-model-wrap>.settings-choice{flex:0 1 auto;margin-left:-7px}.sb-model-wrap>.settings-choice>.sb-pick{width:auto;margin-left:0}
 .sb-model-match{display:block;white-space:normal;overflow-wrap:anywhere;color:var(--muted);font-size:var(--t-xs);margin-top:4px}
 .sb-task-mark{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid transparent;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;opacity:.45}
 tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=true]{opacity:1}
@@ -153,19 +184,15 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
 .sb-task-under{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .sb-task-head{flex:1 0 100%;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
-.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;flex:1 1 420px;min-width:0}
-.sb-task-under .settings-model-choice{flex:1 1 320px;grid-template-columns:repeat(2,minmax(0,1fr))}
-/* Task effort and Task context length: labelled and drawn like the task model's own pickers beside them. */
+.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex:1 1 240px;min-width:0}
+/* Task effort: labelled and drawn beside the Task model picker. */
 .sb-task-part{display:flex;flex-direction:column;gap:3px;flex:0 1 150px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
 .sb-task-part select{width:100%;min-width:0;max-width:100%;padding:7px 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
-.sb-task-under .settings-choice-blocks{grid-column:1/-1}
-.sb-task-under .settings-choice>[data-choice-apply]{margin-top:0}
 .sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
 @media (max-width:760px){
   .settings-bots-table tr.sb-task-row{display:block;padding:0 0 10px}
   .settings-bots-table tr.sb-task-row td{display:block}
-  .sb-task-under .settings-choice,.sb-task-under .settings-model-choice{flex:1 0 100%}
-  .sb-task-under .settings-model-choice{grid-template-columns:minmax(0,1fr)}
+  .sb-task-under .settings-choice{flex:1 0 100%}
   .sb-task-part{flex:1 1 calc(50% - 6px)}
   .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:32px}
 }
@@ -294,10 +321,6 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo-n{flex:none;max-width:70%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .settings-combo-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
 .settings-choice{min-width:0}
-.settings-model-choice{display:grid;gap:6px;min-width:0}
-.settings-model-choice label{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
-.settings-model-choice select{width:100%;min-width:0;max-width:100%;padding:7px 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
-.settings-choice>[data-choice-apply]{margin-top:6px}
 .settings-choice-blocks:empty{display:none}
 .settings-choice-block{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:0;font-size:var(--t-sm);color:var(--muted)}
 .settings-choice-block .ghost{padding:2px 8px;font-size:var(--t-sm)}

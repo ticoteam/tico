@@ -6,14 +6,16 @@
 
 from clients import harness_manifests as manifests
 
+# `offered: False`: a harness the team does not offer for new picks (Settings' model picker leaves it out); a bot already
+# on one keeps it.
 HARNESS_CATALOG = (
     {"id": "codex", "label": "Codex (OpenAI)", "runtime": "codex"},
     {"id": "claude", "label": "Claude Code (Anthropic)", "runtime": "claude"},
-    {"id": "gemini", "label": "gemini", "runtime": "gemini"},
+    {"id": "gemini", "label": "gemini", "runtime": "gemini", "offered": False},
     {"id": "antigravity", "label": "antigravity", "runtime": "gemini"},
     {"id": "grok", "label": "Grok Build (xAI)", "runtime": "grok"},
     {"id": "pi", "label": "pi (openrouter)", "runtime": "pi"},
-    {"id": "cursor", "label": "Cursor Agent", "runtime": "cursor"},
+    {"id": "cursor", "label": "Cursor Agent", "runtime": "cursor", "offered": False},
     {"id": "musecode", "label": "Muse Code (Meta)", "runtime": "musecode"},
     # An external agent: it runs somewhere Tico does not manage, holds its own model and
     # provider, and reaches the hub with a bot credential over MCP or the `tico` CLI. No

@@ -173,3 +173,51 @@ def test_tico_bot_model_takes_compact_at_default_on_the_command_line():
 
     args = hubcli.parser().parse_args(["bot", "model", "ops", "--compact-at", "default"])
     assert args.compact_at == "default"
+
+
+# Task #236: the shared model picker in Settings > Bots reads each model's default from the model list, a bot's chosen
+# window from its row in the bot list (none there: it follows the model), and saves a new bot's chosen window.
+
+
+def employee(api, bot="ops"):
+    from backend.tests.helpers.api import headers
+
+    return next(row for row in api.get("/api/employees", headers=headers()).json() if row["id"] == bot)
+
+
+def test_the_model_list_marks_each_models_default_window(api):
+    rows = {row["id"]: row for row in get(api, "models")["models"]}
+    assert rows["claude-opus-5-5"]["compact_default"] == 400_000
+    assert rows["claude-haiku-5-5"]["compact_default"] == 150_000
+    assert rows["claude-sonnet-5-5"]["compact_default"] == 250_000
+    assert all(row["compact_default"] in SIZES for row in rows.values())
+
+
+def test_the_model_list_says_which_harnesses_the_picker_offers(api):
+    harnesses = {row["id"]: row for row in get(api, "models")["harnesses"]}
+    assert {h for h, row in harnesses.items() if row.get("offered") is False} == {"gemini", "cursor"}
+    assert all(
+        row.get("offered", True)
+        for h, row in harnesses.items()
+        if h in ("claude", "codex", "pi", "grok", "antigravity", "musecode")
+    )
+
+
+def test_the_bot_list_carries_only_a_chosen_window(api):
+    ops_on_sonnet(api)
+    on_model(api, "claude-opus-5-5")
+    assert "compact_at" not in employee(api)
+    post(api, "bots/ops/compact-at", {"compact_at": 400_000, "expected_revision": revision(api)})
+    assert employee(api)["compact_at"] == 400_000
+
+
+def test_a_new_bot_saves_the_window_chosen_for_it_and_refuses_one_off_the_list(api):
+    new = {"display_name": "Analyst", "status": "planned", "model": "claude-haiku-5-5", "effort": "medium"}
+    made = post(api, "bots", {**new, "compact_at": 700_000})
+    assert employee(api, made["id"])["compact_at"] == 700_000
+    assert get(api, f"bots/{made['id']}")["compact_at"] == 700_000
+    plain = post(api, "bots", {**new, "display_name": "Second analyst"})
+    assert "compact_at" not in employee(api, plain["id"])
+    assert get(api, f"bots/{plain['id']}")["compact_at"] == 150_000
+    refused = post(api, "bots", {**new, "display_name": "Third analyst", "compact_at": 350_000}, expected=422)
+    assert all(str(size) in str(refused) for size in SIZES), refused

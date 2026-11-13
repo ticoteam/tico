@@ -11,6 +11,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const {html, uiFile, harnesses} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {openPicker, choose} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 declare function settingsShow(tab: string): void;
 declare function modelWords(id: string | null | undefined): string;
 declare function renderSettingsProviders(gatewaySaved?: boolean): Promise<void>;
@@ -65,7 +66,7 @@ declare function renderSettingsBots(): void;
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: []});
-      if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico']});
+      if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico', 'openai']});
       if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); return json({enabled: ['tico'], default: catalog.default, revision: 2}); }
       if (p === '/api/v2/providers') return json({enabled: ['tico'], default: catalog.default, revision: 1, auto_fallback: true,
         providers: [{id: 'tico', label: 'Tico AI Gateway', gateway: true}]});
@@ -89,20 +90,23 @@ declare function renderSettingsBots(): void;
       await page.evaluate(n => settingsEditBot(n), name);
       await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
       await page.evaluate(n => settingsEditBot(n, true), name);
-      await model.locator('[data-choice-harness]').waitFor();
+      await model.locator('[data-choice-open]').waitFor();
+      return openPicker(model);
     };
-    const pick = async () => model.evaluate(box => (box as unknown as {picker: {value(): string}}).picker.value());
+    // The open panel: its tier controls, and the pick Apply would make.
+    const panel = page.locator('#sb-choice-pop');
+    const pick = async () => (await panel.locator('form').getAttribute('data-value')) || '';
 
     // 1. The pick: the Gateway under the harness, the level, no Fast, the current version; no department anywhere.
     await edit('seller');
-    assert.equal(await model.locator('[data-choice-harness] option:checked').innerText(), 'Tico AI Gateway');
-    assert.equal(await model.locator('[data-choice-model-label]').isHidden(), true, 'the model list gives way to the pick');
-    assert.deepEqual(await model.locator('[data-tier-level] option').allInnerTexts(), ['X-Low', 'Low', 'Medium', 'High', 'X-High']);
-    assert.equal(await model.locator('[data-tier-level] option:checked').innerText(), 'Medium');
-    assert.doesNotMatch(await model.innerText(), /Department/);
-    assert.equal(await model.locator('[data-tier-fast]').isChecked(), false);
-    assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), '1.0');
-    assert.equal(await model.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M', 'the rendered Gateway line names the window');
+    assert.equal(await panel.locator('[data-choice-harness] label:has(input:checked)').innerText(), 'Tico AI Gateway');
+    assert.equal(await panel.locator('[data-choice-model]').isHidden(), true, 'the model list gives way to the pick');
+    assert.deepEqual(await panel.locator('[data-tier-level] option').allInnerTexts(), ['X-Low', 'Low', 'Medium', 'High', 'X-High']);
+    assert.equal(await panel.locator('[data-tier-level] option:checked').innerText(), 'Medium');
+    assert.doesNotMatch(await panel.innerText(), /Department/);
+    assert.equal(await panel.locator('[data-tier-fast]').isChecked(), false);
+    assert.equal(await panel.locator('[data-tier-version] option:checked').innerText(), '1.0');
+    assert.equal(await panel.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M', 'the rendered Gateway line names the window');
     // The model and effort label ends in the context window the catalog gives (format.ts modelContextWords).
     const labels = await page.evaluate(() => ['claude-opus-5-5', 'gpt-6.1-sol', 'gemini-3.8-flash', 'grok-4.6', 'deepseek-v4.1-flash',
       'tico-medium-1.0', 'tico-high-fast-1.0'].map(id => settingsChoiceLabel('', id, 'high')));
@@ -114,73 +118,77 @@ declare function renderSettingsBots(): void;
     assert.match(labels[5], / · 1M$/, 'a Gateway tier shows the window of the model it runs on');
     assert.match(labels[6], / · 1M$/, 'Opus 5.5 in Fast mode takes the 1M window of the model it runs on');
     assert.equal(await pick(), 'pi::tico-medium-1.0::high');
-    assert.deepEqual(await model.locator('[data-tier-version] option').allInnerTexts(), ['1.1 (current)', '1.0', 'Auto (always latest)']);
-    await model.scrollIntoViewIfNeeded();
+    assert.deepEqual(await panel.locator('[data-tier-version] option').allInnerTexts(), ['1.1 (current)', '1.0', 'Auto (always latest)']);
     await shot('desktop-bots-gateway-bot.png');
     // Level, Fast and Version make the id; Low takes the low effort default.
-    await model.locator('[data-tier-level]').selectOption('high');
+    await panel.locator('[data-tier-level]').selectOption('high');
     assert.equal(await pick(), 'pi::tico-high-1.0::high');
-    await model.locator('[data-tier-fast]').check();
+    await panel.locator('[data-tier-fast]').check();
     assert.equal(await pick(), 'pi::tico-high-fast-1.0::high');
-    assert.match(await model.locator('[data-tier-line]').innerText(), /^Claude Opus 5\.5 \(fast mode\) · 1M · \$10\.00 \/ \$50\.00 per 1M$/,
+    assert.match(await panel.locator('[data-tier-line]').innerText(), /^Claude Opus 5\.5 \(fast mode\) · 1M · \$10\.00 \/ \$50\.00 per 1M$/,
       'Opus 5.5 in Fast mode takes the 1M window of the model it runs on');
-    await model.locator('[data-tier-version]').selectOption('auto');
+    await panel.locator('[data-tier-version]').selectOption('auto');
     assert.equal(await pick(), 'pi::tico-high-fast::high', 'Auto is the id without a version');
-    await model.locator('[data-tier-level]').selectOption('low');
+    await panel.locator('[data-tier-level]').selectOption('low');
     assert.equal(await pick(), 'pi::tico-low-fast::high');
-    assert.equal(await model.locator('[data-choice-effort]').inputValue(), 'high');
-    await model.locator('[data-tier-level]').selectOption('xhigh');
+    assert.equal(await panel.locator('[data-choice-effort] input:checked').inputValue(), 'high');
+    await panel.locator('[data-tier-level]').selectOption('xhigh');
     assert.equal(await pick(), 'pi::tico-xhigh-fast::high');
-    assert.match(await model.locator('[data-tier-line]').innerText(), /^Claude Fable 5\.1 · 1M · \$12\.50 \/ \$62\.50 per 1M$/);
+    assert.match(await panel.locator('[data-tier-line]').innerText(), /^Claude Fable 5\.1 · 1M · \$12\.50 \/ \$62\.50 per 1M$/);
     // Another harness brings the model list back; choosing the Gateway again starts at Medium, its current version.
-    await model.locator('[data-choice-harness]').selectOption('');
-    assert.equal(await model.locator('[data-choice-model-label]').isVisible(), true);
-    await model.locator('[data-choice-harness]').selectOption('tico');
+    const other = await panel.locator('[data-choice-harness] input:not([value=tico]):not(:disabled)').first().inputValue();
+    await choose(panel, 'harness', other);
+    assert.equal(await panel.locator('[data-choice-model]').isVisible(), true);
+    await choose(panel, 'harness', 'tico');
     assert.equal(await pick(), 'pi::tico-medium-1.1::high');
 
     // 1b. A pinned version stays only where the destination tier has it; otherwise that tier's current one. Auto stays Auto.
     await edit('banker');
     assert.equal(await pick(), 'pi::tico-medium-1.1::high');
-    await model.locator('[data-tier-level]').selectOption('high');
+    await panel.locator('[data-tier-level]').selectOption('high');
     assert.equal(await pick(), 'pi::tico-high-1.0::high', 'High has no 1.1: it takes its own current version');
-    assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), '1.0 (current)');
-    await model.locator('[data-tier-level]').selectOption('medium');
+    assert.equal(await panel.locator('[data-tier-version] option:checked').innerText(), '1.0 (current)');
+    await panel.locator('[data-tier-level]').selectOption('medium');
     assert.equal(await pick(), 'pi::tico-medium-1.0::high', 'back at Medium the version 1.0 it holds exists there');
-    await model.locator('[data-tier-version]').selectOption('1.1');
-    await model.locator('[data-tier-fast]').check();
+    await panel.locator('[data-tier-version]').selectOption('1.1');
+    await panel.locator('[data-tier-fast]').check();
     assert.equal(await pick(), 'pi::tico-medium-fast-1.0::high', 'Fast has no 1.1 either');
-    await model.locator('[data-tier-version]').selectOption('auto');
-    await model.locator('[data-tier-level]').selectOption('high');
+    await panel.locator('[data-tier-version]').selectOption('auto');
+    await panel.locator('[data-tier-level]').selectOption('high');
     assert.equal(await pick(), 'pi::tico-high-fast::high', 'Auto stays Auto');
 
     // 2. An id the catalog lacks shows as it is until a control changes it.
     await edit('old');
-    assert.equal(await model.locator('[data-choice-harness] option:checked').innerText(), 'Tico AI Gateway');
-    assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), 'tico-retired-1.0');
-    assert.equal(await model.locator('[data-tier-level] option:checked').innerText(), 'Choose');
+    assert.equal(await panel.locator('[data-choice-harness] label:has(input:checked)').innerText(), 'Tico AI Gateway');
+    assert.equal(await panel.locator('[data-tier-version] option:checked').innerText(), 'tico-retired-1.0');
+    assert.equal(await panel.locator('[data-tier-level] option:checked').innerText(), 'Choose');
     assert.equal(await pick(), 'pi::tico-retired-1.0::high', 'untouched, the id stays');
-    await model.locator('[data-tier-level]').selectOption('high');
+    await panel.locator('[data-tier-level]').selectOption('high');
     assert.equal(await pick(), 'pi::tico-high-1.0::high', 'a change moves it to a tier');
     assert.equal(await page.evaluate(() => modelWords('tico-medium-fast-1.0')), 'Medium · Fast 1.0');
     assert.equal(await page.evaluate(() => modelWords('tico-xlow')), 'X-Low (auto)');
     // A tier kept auto: the table and the picker say so.
     await edit('writer');
-    assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), 'Auto (always latest)');
-    assert.equal(await model.locator('[data-tier-fast]').isChecked(), true);
-    assert.equal(await model.locator('[data-tier-line]').innerText(), 'DeepSeek V4.1 Flash · 1.05M · $0.45 / $1.80 per 1M',
+    assert.equal(await panel.locator('[data-tier-version] option:checked').innerText(), 'Auto (always latest)');
+    assert.equal(await panel.locator('[data-tier-fast]').isChecked(), true);
+    assert.equal(await panel.locator('[data-tier-line]').innerText(), 'DeepSeek V4.1 Flash · 1.05M · $0.45 / $1.80 per 1M',
       'the tier line shows the model, its window and its price');
 
     // 3. The same pick under Fallback and Task model; the harness list still offers the others.
+    await page.locator('#sb-choice-pop [data-choice-cancel]').click();
     await page.evaluate(() => { location.hash = '#/settings'; });
     await page.waitForFunction(() => S.route === '#/settings');   // a page change draws a frame later (its fade)
     await page.evaluate(() => { settingsShow('bots'); renderSettingsBots(); });
     await page.locator('[data-task-open=seller]').click();
     const task = page.locator('tr[data-task-row=seller] [data-bot-choice][data-kind=task]');
-    await task.locator('[data-choice-harness]').selectOption('tico');
-    assert.equal(await task.locator('[data-tier-level] option:checked').innerText(), 'Medium');
-    assert.equal(await task.evaluate(box => (box as unknown as {picker: {value(): string}}).picker.value()), 'pi::tico-medium-1.1::high');
-    assert.equal(await task.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M',
+    await openPicker(task);
+    await choose(panel, 'harness', 'tico');
+    assert.equal(await panel.locator('[data-tier-level] option:checked').innerText(), 'Medium');
+    assert.equal(await pick(), 'pi::tico-medium-1.1::high');
+    assert.equal(await panel.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M',
       'the task model picker shows the same Gateway line');
+    await page.waitForFunction(() => document.getElementById('sb-choice-pop')!.getBoundingClientRect().bottom <= innerHeight,
+      undefined, {timeout: 2000}).catch(() => { throw new Error('the panel, grown by the tier controls, runs off the screen'); });
 
     // 4. The Tico Gateway card on Models (the Gateway page's place now): one line with the spend, its bar and the switch;
     // our prices by level and mode; the picks in use; the API keys row; the services folded. No model name anywhere.

@@ -9,10 +9,10 @@ import type * as Routes from './support/routes.cts';
 //  - when the definition is refused after the fallback saved, Save again sends only the definition;
 //  - Model and Fallback both pending: Fallback, definition, then the transition; a refused transition keeps the editor
 //    open with the pick, and Save again sends the definition and the transition, not the Fallback;
-//  - a half-made pick (harness, no model) keeps the editor open and says so;
+//  - a half-made pick (harness, no model) cannot be held: the picker's Apply waits for a model;
 //  - with nothing pending, Save posts the definition only, as before;
-//  - every other row waits for Save bot too: a model, compact-at and turns-at-once change posts nothing
-//    until Save bot, which then saves all of them, each at the revision the write before it made;
+//  - every other row waits for Save bot too: a model with its Compact window (in the Model picker) and a turns-at-once
+//    change post nothing until Save bot, which then saves all of them, each at the revision the write before it made;
 //  - Archive bot asks first, naming who gets its work, and Cancel archives nothing;
 //  - Slug renames a bot whose id is not its slug: the new slug goes with the definition, a taken one shows the
 //    server's refusal, the bot keeps its id; a built-in bot's slug cannot be changed.
@@ -21,13 +21,15 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {openPicker, choose, applyPicker, closedText} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 type Call = {what: string | undefined; body: Record<string, unknown>};
 declare const S: {emps: {id: string; name: string; slug?: string; revision?: number; fallback?: {model: string}}[]};
 declare const SETTINGS_DATA: {models?: unknown[]; harnesses?: {id: string; capabilities: Record<string, unknown>}[]};
-declare function settingsCompactRow(row: never): string;
+declare function settingsCompacts(harness: string): boolean;
 declare const SETTINGS_TRANSITION_TIMER: number;
 declare function settingsEditBot(id: string, edit?: boolean): void;
 declare function loadSettings(): void;
+declare function settingsChoiceFromValue(value: string): {harness: string; model: string; effort: string};
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {
@@ -38,7 +40,7 @@ declare function loadSettings(): void;
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
       models: [model('gpt-6-luna', 'codex', 'openai'), model('gpt-6-1-sol', 'codex', 'openai'), model('opus-5-5', 'claude', 'anthropic')],
-      harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
+      harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex', capabilities: {compaction: true}}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
       default: {runtime: 'claude', model: 'opus-5-5'},
     };
     const helper: {[key: string]: unknown; revision: number} = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
@@ -116,17 +118,23 @@ declare function loadSettings(): void;
       await page.locator('#pane-settings').waitFor();
       await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
       await page.evaluate(() => settingsEditBot('helper', true));
-      await row('fallback').locator('[data-choice-harness]').waitFor();
+      await row('fallback').locator('[data-choice-open]').waitFor();
       calls = [];
     };
-    const pick = async (kind: string, harness: string, id?: string) => {
-      await row(kind).locator('[data-choice-harness]').selectOption(harness);
-      if (id) await row(kind).locator('[data-choice-model]').selectOption(id);
+    // Pick in a row's picker and Apply: the editor holds the pick until Save bot.
+    const pick = async (kind: string, harness: string, id?: string, compact?: string) => {
+      const panel = await openPicker(row(kind));
+      await choose(panel, 'harness', harness);
+      if (id) await choose(panel, 'model', id);
+      if (compact) await panel.locator('[data-choice-compact]').selectOption(compact);
+      await applyPicker(panel);
     };
+    // The model and harness a row holds now (saved or picked).
+    const held = (kind: string) => row(kind).evaluate(box => settingsChoiceFromValue((box as HTMLElement & {picker: {value(): string}}).picker.value()));
     const closed = () => page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved').catch(async error => {
       throw new Error(`the editor stayed open: ${await editor.locator('[data-bot-status]').innerText().catch(() => '')} (${JSON.stringify(calls)})`, {cause: error}); });
     const statusText = () => editor.locator('[data-bot-status]').innerText();
-    const save = () => editor.locator('button[type=submit]').click();
+    const save = () => editor.locator('button[type=submit]:not([data-choice-apply])').click();
     await page.goto('https://tico-ui.test/#/settings');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'helper') && SETTINGS_DATA.models?.length);
 
@@ -140,7 +148,7 @@ declare function loadSettings(): void;
     // 1. A Fallback picked but not Applied: Save sends it (same body as Apply) first, then the definition.
     await open();
     await pick('fallback', 'codex', 'gpt-6-1-sol');
-    assert.equal(await row('fallback').locator('[data-choice-apply]').count(), 0, 'no row saves on its own: there is no Apply');
+    assert.deepEqual(calls as unknown[], [], 'no row saves on its own: the picker\'s Apply only holds the pick');
     await save();
     await closed();
     assert.deepEqual(calls.map(c => c.what), ['fallback', 'definition'], 'Save applies the pending fallback, then the definition');
@@ -148,8 +156,8 @@ declare function loadSettings(): void;
     assert.equal(calls[1]!.body.expected_revision, 6, 'the definition follows the revision the fallback made');
     await page.waitForFunction(() => S.emps.find(e => e.name === 'helper')?.fallback?.model === 'gpt-6-1-sol');
     await open();
-    assert.equal(await row('fallback').locator('[data-choice-model]').inputValue(), 'gpt-6-1-sol', 'reopening shows the new fallback');
-    assert.equal(await row('fallback').locator('[data-choice-harness]').inputValue(), 'codex');
+    assert.equal((await held('fallback')).model, 'gpt-6-1-sol', 'reopening shows the new fallback');
+    assert.equal((await held('fallback')).harness, 'codex');
 
     // 3. A refused /fallback keeps the editor open with the error, and the definition is not sent.
     refuseFallback = true;
@@ -160,7 +168,7 @@ declare function loadSettings(): void;
     assert.equal(await editor.isVisible(), true, 'the editor stays open');
     assert.deepEqual(calls.map(c => c.what), ['fallback'], 'nothing else is saved');
     assert.equal(calls[0]!.body.fallback, null, 'None is sent as no fallback');
-    assert.equal(await editor.locator('button[type=submit]').isEnabled(), true, 'Save can be pressed again');
+    assert.equal(await editor.locator('button[type=submit]:not([data-choice-apply])').isEnabled(), true, 'Save can be pressed again');
     refuseFallback = false;
     await page.evaluate(() => settingsEditBot('helper', true));
 
@@ -178,13 +186,18 @@ declare function loadSettings(): void;
     assert.deepEqual(calls.map(c => c.what), ['definition'], 'the saved fallback is not sent twice');
     assert.equal(calls[0]!.body.expected_revision, 8, 'at the revision the fallback made');
 
-    // A half-made pick (harness, no model) is not dropped either.
+    // A half-made pick (harness, no model) cannot be held: Apply waits for a model, and Cancel keeps the fallback.
     await open();
-    await pick('fallback', 'claude');
-    await save();
-    await editor.locator('[data-bot-status] .err').waitFor();
-    assert.match(await statusText(), /Nothing saved: finish choosing the fallback/);
-    assert.deepEqual(calls as unknown[], [], 'nothing is saved');
+    {
+      const panel = await openPicker(row('fallback'));
+      await choose(panel, 'harness', 'claude');
+      await choose(panel, 'harness', 'codex');
+      assert.equal(await panel.locator('[data-choice-model] input:checked').count(), 0, 'Codex has two models: none is guessed');
+      assert.equal(await panel.locator('[data-choice-apply]').isDisabled(), true, 'no Apply without a model');
+      await panel.locator('[data-choice-cancel]').click();
+      assert.equal((await held('fallback')).model, 'gpt-6-luna', 'the fallback as it was');
+      assert.equal(await editor.locator('[data-bot-pending]').isHidden(), true, 'nothing is held');
+    }
     await page.evaluate(() => settingsEditBot('helper', true));
 
     // 2. A Model picked but not Applied: Save opens its transition dialog. Cancel saves nothing and says why.
@@ -200,7 +213,7 @@ declare function loadSettings(): void;
     assert.match(await statusText(), /Nothing saved: the model change was not confirmed/);
     assert.equal(await editor.isVisible(), true, 'no definition-only close');
     assert.deepEqual(calls as unknown[], [], 'Cancel saves nothing');
-    assert.equal(await row('model').locator('[data-choice-model]').inputValue(), 'gpt-6-1-sol', 'the pick is still there');
+    assert.equal((await held('model')).model, 'gpt-6-1-sol', 'the pick is still there');
     // Prepare change: the definition, then the model transition from the revision the definition made.
     await save();
     await transition.locator('[data-confirm-prepare]').click();
@@ -222,7 +235,7 @@ declare function loadSettings(): void;
     assert.match(await statusText(), /Bot configuration changed/, 'the refused transition is shown in the editor');
     assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]), [['fallback', 10], ['definition', 11], ['transitions', 12]],
       'Fallback, then the definition, then the transition, each at the revision the write before it made');
-    assert.equal(await row('model').locator('[data-choice-model]').inputValue(), 'gpt-6-1-sol', 'the Model pick is kept');
+    assert.equal((await held('model')).model, 'gpt-6-1-sol', 'the Model pick is kept');
     refuseTransition = false; calls = [];
     await save();
     await transition.locator('[data-confirm-prepare]').click();
@@ -235,10 +248,9 @@ declare function loadSettings(): void;
     // Model, compact-at and turns at once changed: nothing is posted until Save bot, then all
     // of them save together.
     await open();
-    await pick('model', 'codex', 'gpt-6-luna');
-    assert.deepEqual(await editor.locator('[data-bot-compact] option').allInnerTexts(), ['100k', '150k', '200k', '250k', '300k', '400k', '500k', '600k', '700k', '800k', '900k', '1M'],
-      'the Compact at choices, 100k first');
-    await editor.locator('[data-bot-compact]').selectOption('100000');
+    assert.equal(await editor.locator('[data-bot-compact]').count(), 0, 'no Compact at row: the window is in the Model picker');
+    await pick('model', 'codex', 'gpt-6-luna', '100000');
+    assert.match(await closedText(row('model')), / 100K$/, 'the picker says the held window');
     await editor.locator('[data-bot-turns-at-once]').fill('5');
     await editor.locator('[data-bot-turns-at-once]').dispatchEvent('change');
     await editor.locator('[data-bot-pending]:not([hidden])').waitFor();
@@ -248,21 +260,21 @@ declare function loadSettings(): void;
     await transition.locator('[data-confirm-prepare]').click();
     await closed();
     assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]),
-      [['definition', 13], ['compact-at', 14], ['turns-at-once', 15], ['transitions', 16]],
+      [['definition', 13], ['turns-at-once', 14], ['compact-at', 15], ['transitions', 16]],
       'Save bot saves every held change, chaining the revision');
-    assert.equal(calls[1]!.body.compact_at, 100000);
-    assert.deepEqual(calls[2]!.body, {turns_at_once: 5, expected_revision: 15});
+    assert.deepEqual(calls[1]!.body, {turns_at_once: 5, expected_revision: 14});
+    assert.equal(calls[2]!.body.compact_at, 100000);
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector<HTMLDialogElement>('#transition-dialog')!.close(); });
 
     // Archive bot asks first and names who gets the work; Cancel archives nothing and leaves the editor open.
     await open();
-    assert.equal(await editor.locator('[data-bot-compact]').inputValue(), '100000', 'reloads with 100k selected');
-    // A harness that compacts on its own default (Claude Code's manifest: own_compaction) has no Compact at.
+    assert.match(await closedText(row('model')), / 100K$/, 'reloads with 100K');
+    // A harness that compacts on its own default (Claude Code's manifest: own_compaction) has no Compact choice.
     assert.equal(await page.evaluate(() => {
       SETTINGS_DATA.harnesses!.push({id: 'own-compactor', capabilities: {compaction: true, own_compaction: true}});
-      return settingsCompactRow({id: 'scout', harness: 'own-compactor', display_name: 'Scout'} as never);
-    }), '', 'no Compact at for a harness that compacts on its own');
+      return settingsCompacts('own-compactor');
+    }), false, 'no Compact for a harness that compacts on its own');
     await editor.locator('[data-bot-remove]').click();
     const ask = page.locator('dialog.settings-confirm');
     await ask.waitFor();
@@ -287,7 +299,7 @@ declare function loadSettings(): void;
     const editScout = async () => {
       await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
       await page.evaluate(id => settingsEditBot(id, true), SCOUT_ID);
-      await row('fallback').locator('[data-choice-harness]').waitFor();
+      await row('fallback').locator('[data-choice-open]').waitFor();
       await slugField.waitFor({state: 'attached'});
       await editor.locator('[data-bot-advanced]').evaluate(el => { (el as HTMLDetailsElement).open = true; });
     };
@@ -315,7 +327,7 @@ declare function loadSettings(): void;
     await page.waitForFunction(() => location.hash === '#/bot/botops/settings');
     await page.waitForFunction(() => !!document.querySelector('#bot-editor [data-bot-status]'));
     await page.evaluate(() => settingsEditBot('botops', true));
-    await row('fallback').locator('[data-choice-harness]').waitFor();
+    await row('fallback').locator('[data-choice-open]').waitFor();
     assert.equal(await slugField.getAttribute('readonly'), '');
     assert.deepEqual(errors, []);
     console.log('ok');

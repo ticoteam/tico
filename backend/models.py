@@ -1906,6 +1906,8 @@ class BotDefinitionCreate(Contract):
     model: str = Field(default="", max_length=200)
     effort: str = Field(default="", max_length=200)
     harness: ID | None = None
+    # Where its conversation compacts; left out, it follows its model's default (backend/providers.py compact_default).
+    compact_at: CompactAt | None = None
     operator: ID | None = None
     # Who the bot works for (shared-room members). Left out, that is its operator; who may use it is
     # its access (docs/permissions.md), which starts Open.
@@ -1968,6 +1970,10 @@ class SeatHire(Contract):
     model: Annotated[str, Field(max_length=200)] = ""
     name: Annotated[str, Field(max_length=100)] = ""
     runner_id: ID | None = None
+    # With `model`: the harness and effort picked with it, and where its conversation compacts (left out, the model's default).
+    harness: ID | None = None
+    effort: Annotated[str, Field(max_length=200)] = ""
+    compact_at: CompactAt | None = None
 
 
 class BotArchive(Contract):
