@@ -222,11 +222,13 @@ const mapText = (page: Page, under = '.rr-map') => page.evaluate((sel: string) =
       await settle(page);
       assert.equal(await page.locator(`.rr-chip[data-rr-line="e-${target}"]`).innerText(), '3 a day', 'in view: the count alone');
       // A chip with keyboard focus keeps it when the map scrolls and its chips are drawn again.
-      await page.locator(`.rr-chip[data-rr-line="e-${target}"]`).focus();
+      const before = await page.locator(`.rr-chip[data-rr-line="e-${target}"]`).elementHandle();
+      await before!.focus();
       const scrolled = await pane.evaluate(el => el.scrollTop);
       await page.keyboard.press('ArrowDown');
       await page.keyboard.press('ArrowDown');
-      await page.waitForTimeout(600);   // the arrow keys' smooth scroll, then the repaint 120ms after it rests
+      // The chip that had focus is replaced once the scroll comes to rest; only then is focus checked.
+      await until(async () => !(await before!.evaluate(el => el.isConnected)), 'the chips were drawn again after the scroll');
       assert.notEqual(await pane.evaluate(el => el.scrollTop), scrolled, 'the arrow keys scrolled the map');
       assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.rrLine), `e-${target}`, 'focus stays on the chip after a repaint');
       // A still click selects.
