@@ -1,6 +1,7 @@
 """Helpers that other tests share, moved out of test_maintenance_learn_step.py so they import no test file."""
 
 from backend import updates
+from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 
 
@@ -23,6 +24,12 @@ def start(api, row, machine=None):
         c.execute(
             "UPDATE jobs SET state='completed' WHERE bot_id=? AND message_id<>? AND state='queued'",
             (row["bot"], row["message_id"]),
+        )
+        # The request waits for a warm session (backend/wake_presets.py); let it go as the release check would.
+        c.execute(
+            "UPDATE jobs SET held=0,released=json_object('warm',1,'waited',0,'at',?) "
+            "WHERE message_id=? AND held=1 AND state='queued' AND hold_reason IS NULL",
+            (H.now(), row["message_id"]),
         )
     attempt = claim(api, machine, row["bot"])
     assert attempt is not None

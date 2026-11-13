@@ -147,10 +147,8 @@ def ensure(c):
     H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
     # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
     H.add_column(c, "jobs", "wake_carrier", "TEXT")
-    # The release policy (`policy`), the job a warm window chained this one after, and how it was let go (`_let_go`).
-    H.add_column(c, "jobs", "release", "TEXT")
-    H.add_column(c, "jobs", "release_after", "TEXT")
-    H.add_column(c, "jobs", "released", "TEXT")
+    # The release policy's own columns (`release`, `release_after`, `released`) come from migration
+    # 20261113061438_job_release_policy, and from store.SCHEMA on a new file.
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot_id,hold_until) WHERE held=1")
     # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
