@@ -28,11 +28,27 @@ async function pageLearnings(): Promise<void> {
   try { data = await get<LearnNights>('/v2/learnings'); } catch (e) { $('#lrn-night').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== LEARN_LOAD) return;
   const nights = data.nights || [];
-  if (!nights.length) { $('#lrn-night').innerHTML = '<div class="empty">Learn is a beta Maintenance step. Turn it on in Maintenance settings to collect learnings.</div>'; return; }
+  if (!nights.length) {
+    const empty = await learnEmptyHTML();
+    if (load === LEARN_LOAD) $('#lrn-night').innerHTML = empty;
+    return;
+  }
   const cur = nights.find(n => n.id === want) || nights[0];
   if (!cur) return; // unreachable: nights is non-empty here
   $('#lrn-nights').innerHTML = nights.map(n => `<a class="lrn-n${n.id === cur.id ? ' on' : ''}" href="${LEARNINGS}?night=${encodeURIComponent(n.id)}"><span>${esc(learnNight(n.night))}</span><span class="c">${n.status === 'done' ? n.updates : '—'}</span></a>`).join('');
   await learnShowNight(cur, load);
+}
+
+// No nights yet: what the page is for and, by Learn's switch in Maintenance (anyone signed in may read it), the way on.
+// Learn on: it says when the first night shows. Off: Turn on Learn for whoever may change it, else Open Maintenance.
+async function learnEmptyHTML(): Promise<string> {
+  let on = false, can = false;
+  try {
+    const m = await get<MaintView>('/v2/maintenance');
+    can = !!m.can_change; on = !!m.steps?.find(s => s.key === 'learn')?.enabled;
+  } catch { /* unread: the same line, and Open Maintenance */ }
+  if (on) return `<div class="empty-state">${EMPTY_ART['learn-on']}<p>Learn is on. The first night shows here tomorrow.</p></div>`;
+  return `<div class="empty-state">${EMPTY_ART.learn}<p>What your bots learned each night, and from where.</p><a class="${can ? 'primary' : 'ghost'}" href="#/automations/maintenance">${can ? 'Turn on Learn' : 'Open Maintenance'}</a></div>`;
 }
 
 async function learnShowNight(n: LearnNightSummary, load: number): Promise<void> {
@@ -52,13 +68,23 @@ async function learnShowNight(n: LearnNightSummary, load: number): Promise<void>
   const parts = groups.map(g => `${g.subs.length} ${g.label.toLowerCase()}`);
   box.innerHTML = head(total ? `${total} update${total === 1 ? '' : 's'} across ${parts.join(', ')}` : 'Nothing changed.')
     + groups.map(g => `<section class="lrn-grp"><h3><span class="nav-icon" aria-hidden="true">${g.icon}</span>${g.label}</h3>${g.subs.map(x => learnSubject(g.k, x)).join('')}</section>`).join('');
+  learnFitNames(box);
+  void document.fonts.ready.then(() => { if (load === LEARN_LOAD) learnFitNames(box); });
+}
+// Each section's name column is as wide as its longest name (its text, not its cell), 80-280px, so its second column
+// starts at one x. Runs again once the fonts are in: measured in the fallback font, a name would come out short.
+function learnFitNames(box: Element): void {
+  for (const g of box.querySelectorAll<HTMLElement>('.lrn-grp')) {
+    const w = Math.max(0, ...[...g.querySelectorAll<HTMLElement>('.lrn-subj .nm')].map(n => { const r = document.createRange(); r.selectNodeContents(n); return Math.ceil(r.getBoundingClientRect().width); }));
+    g.style.setProperty('--lrn-nm', `${Math.min(Math.max(w, 80), 280)}px`);
+  }
 }
 
 function learnSubject(kind: LearnKind, x: LearnSubject): string {
   const more = Math.max(0, x.entries.length - 1);
   const av = kind === 'bots' ? botAvatar(x.id, 22) : `<span class="lrn-sq" aria-hidden="true">${esc((x.name || '?')[0])}</span>`;
   const name = kind === 'bots' ? `<a href="#/bot/${encodeURIComponent(x.id)}">${esc(x.name)}</a>` : esc(x.name);
-  return `<details class="lrn-subj"><summary>${av}<span class="nm">${name}</span><span class="first">${esc(x.entries[0]?.title || x.delivery_status || '')}</span><span class="more">${more ? `+${more} more` : ''}<span class="nav-icon" aria-hidden="true">chevron_right</span></span></summary>
+  return `<details class="lrn-subj"><summary>${av}<span class="nm" title="${esc(x.name)}">${name}</span><span class="first">${esc(x.entries[0]?.title || x.delivery_status || '')}</span><span class="more">${more ? `+${more} more` : ''}<span class="nav-icon" aria-hidden="true">chevron_right</span></span></summary>
     <div class="lrn-body">${x.saw ? `<div class="saw">${esc(x.saw)}</div>` : ''}${x.delivery_status ? `<p>${esc(x.delivery_status)}</p>` : ''}${x.entries.map(learnEntry).join('')}</div></details>`;
 }
 
