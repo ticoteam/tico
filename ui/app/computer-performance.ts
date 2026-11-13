@@ -17,8 +17,10 @@ interface ComputerPerfOverload {
   cpu_max: number | null;
   mem_max: number | null;
   runs_max: number;
-  bots: { bot: string; model?: string; runs: number }[];
-  procs: { name: string; cpu?: number; mem?: number }[];
+  // `limit`: the bot's "Turns at once" when the overload was recorded, if it has one.
+  bots: { bot: string; model?: string; runs: number; limit?: number }[];
+  // The bots' processes first; `service` marks the one row grouping the machine's own services (disk snapshots).
+  procs: { name: string; cpu?: number; mem?: number; service?: boolean }[];
 }
 interface ComputerPerfRun {
   id: string | null;
@@ -263,6 +265,13 @@ function perfTicks(d: ComputerPerformance): { ts: number; label: string }[] {
 }
 
 // ----------------------------------------------------------------- tables
+// "Reviewer 1 ×4 (limit 3, over)": a bot's turns at once beside its own limit, as Health's Load row says it.
+function perfRunning(b: ComputerPerfOverload['bots'][number]): string {
+  const limit = b.limit;
+  const count = b.runs > 1 || limit != null ? ` ×${b.runs}` : '';
+  return perfBot(b.bot) + count + (limit == null ? '' : b.runs > limit ? ` (limit ${limit}, over)` : ` (limit ${limit})`);
+}
+
 function perfOverloadsHTML(d: ComputerPerformance): string {
   if (!d.overloads.length) return '';
   const rows = [...d.overloads].reverse().map(o => {
@@ -270,8 +279,8 @@ function perfOverloadsHTML(d: ComputerPerformance): string {
     const replay = '#/replay?' + new URLSearchParams({from: new Date(o.started_at * 1000).toISOString(), to: new Date(end * 1000).toISOString()});
     return `<tr><td class="tnum">${esc(perfWhen(o.started_at))}</td><td class="tnum">${esc(perfMinutes(o.minutes))}${o.ended_at ? '' : ' <span class="pill fail">now</span>'}</td>
       <td>${esc(o.reasons.map(r => PERF_REASONS[r] || r).join(', '))}<span class="settings-cell-note">peak CPU ${perfPct(o.cpu_max)} · memory ${perfPct(o.mem_max)} · ${o.runs_max} turn${o.runs_max === 1 ? '' : 's'}</span></td>
-      <td>${esc(o.bots.map(b => perfBot(b.bot) + (b.runs > 1 ? ` ×${b.runs}` : '')).join(', ') || '–')}</td>
-      <td>${esc(o.procs.slice(0, 3).map(p => p.name).join(', ') || '–')}</td><td><a href="${esc(replay)}">Replay</a></td></tr>`;
+      <td>${esc(o.bots.map(perfRunning).join(', ') || '–')}</td>
+      <td>${esc([...o.procs.filter(p => !p.service).slice(0, 3), ...o.procs.filter(p => p.service)].map(p => p.name).join(', ') || '–')}</td><td><a href="${esc(replay)}">Replay</a></td></tr>`;
   }).join('');
   return `<section class="card"><header><h2>Overloads</h2><span class="sub">10 minutes or more of CPU or memory over 90%, heavy swapping or a nearly full disk</span></header>
     <div class="scroll"><table><thead><tr><th>Started</th><th>For</th><th>Why</th><th>Running</th><th>Busiest processes</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></section>`;

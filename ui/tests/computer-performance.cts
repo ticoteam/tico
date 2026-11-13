@@ -35,7 +35,9 @@ declare const SETTINGS_DATA: {machines: {performance: string}[]};
       runs: [{attempt: 'a1', bot: 'ops', model: 'claude-opus-5-5', started_at: iso(now - 7300), finished_at: iso(now - 6500), state: 'done'}],
       busiest: {bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], processes: [{name: 'cargo', cpu_minutes: 40.5, cpu_max: 400, mem_max: 2e9}]},
       overloads: [{started_at: now - 7200, ended_at: now - 6600, last_seen_at: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
-        bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], procs: [{name: 'cargo'}]}],
+        // A bot over its limit says so; the machine's own services come after the bots' processes, as one row.
+        bots: [{bot: 'ops', runs: 4, limit: 3}, {bot: 'finance', runs: 2}],
+        procs: [{name: 'cargo'}, {name: 'python'}, {name: 'claude'}, {name: 'node'}, {name: 'machine services (disk snapshots)', service: true}]}],
       summary: 'Overloaded once in the last 1 day (CPU over 90%): CPU over 90% for 10 minutes; running: ops; busiest processes: cargo.'});
     const writes: unknown[] = [];
     let erased = false;
@@ -94,6 +96,9 @@ declare const SETTINGS_DATA: {machines: {performance: string}[]};
     assert.match(tip, /CPU 97%/); assert.match(tip, /3 active turns: ops/);
     // The overloads table links its window in Replay; the busiest processes and the table view are there.
     assert.match(await page.locator('table a[href^="#/replay?from="]').getAttribute('href'), /&to=/);
+    const overload = await page.locator('tr', {has: page.locator('a[href^="#/replay?from="]')}).textContent();
+    assert.match(overload, /ops ×4 \(limit 3, over\), finance ×2/);
+    assert.match(overload, /cargo, python, claude, machine services \(disk snapshots\)/);
     assert.match(await page.locator('.perf-split').textContent(), /cargo/);
     await page.locator('#perf-table summary').click();
     await page.waitForFunction(n => document.querySelectorAll('#perf-table tbody tr').length === n, points.length);

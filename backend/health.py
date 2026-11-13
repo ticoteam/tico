@@ -3452,6 +3452,23 @@ def view(c, who, settings, auth, github, config):
             )
 
     if full:
+        from .start_places import over_limits
+
+        # A bot running more turns than its "Turns at once": the claim and the start place both refuse at the limit, so
+        # this is a lowered limit its running turns still exceed, or a start that got past the check.
+        over = over_limits(c)
+        names = _bot_names(c, [bot for bot, _, _ in over])
+        for bot, count, limit in over:
+            checks.append(
+                _check(
+                    "turn_limit:" + bot,
+                    "Turn limit",
+                    "warn",
+                    f"{names[bot]} has {count} turns at once, over its limit of {limit}. "
+                    "No new turn of it starts until it is back under the limit; if this stays, the limit is not holding.",
+                    [_fix(*BOT_SETTINGS)],
+                )
+            )
         overloads = recent_overloads(c, [computer["id"] for computer in computers])
         from .cloud_machines import disk_words
 

@@ -480,7 +480,7 @@ def _update(c, oid, runner_id, started, last, why):
         "AND span=? AND created_at>=? AND created_at<=?",
         (runner_id, MINUTE, started, last),
     ).fetchone()
-    bots = at_once(c, runner_id, started, last + MINUTE)[:8]
+    bots = with_limits(c, at_once(c, runner_id, started, last + MINUTE)[:8])
     procs = c.execute(
         "SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
         "span=? AND created_at>=? AND created_at<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
@@ -556,6 +556,47 @@ def at_once(c, runner_id, start, end):
     return [{"bot": b, "runs": n} for b, n in sorted(peaks.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
+def with_limits(c, bots):
+    """`bots` rows with each bot's "Turns at once" as `limit`, for those that have one: read when the overload is
+    recorded, so the alert compares the count with the limit that held then."""
+    from . import bot_settings as BS
+    from .start_places import bot_limit
+
+    out = []
+    for b in bots:
+        row = c.execute(BS.ONE_SQL, (b["bot"],)).fetchone()
+        limit = bot_limit(H._json(row[0], {}) if row else {})
+        out.append(b | {"limit": limit} if limit is not None else b)
+    return out
+
+
+# Processes a cloud machine's host runs for itself, never a bot's work: grouped as one "machine services" row after the
+# bots' processes, so the alert leads with what the bots ran. ariana-fswatch watches the disk for the host's snapshots.
+MACHINE_SERVICES = {"ariana-fswatch": "disk snapshots"}
+
+
+def grouped_procs(procs):
+    """An overload's busiest processes, the bots' work first in CPU order, then the machine's own services as one row."""
+    work = [p for p in procs if p["name"] not in MACHINE_SERVICES]
+    services = [p for p in procs if p["name"] in MACHINE_SERVICES]
+    if not services:
+        return work
+    what = ", ".join(sorted({MACHINE_SERVICES[p["name"]] for p in services}))
+    return work + [
+        {
+            "name": f"machine services ({what})",
+            "cpu": round(sum(p.get("cpu") or 0 for p in services), 1),
+            "mem": max(p.get("mem") or 0 for p in services),
+            "service": True,
+        }
+    ]
+
+
+def proc_names(procs, top=3):
+    """The names the alert gives: the busiest `top` of the bots' processes, then the machine services row if any."""
+    return [p["name"] for p in procs if not p.get("service")][:top] + [p["name"] for p in procs if p.get("service")]
+
+
 def overload_view(row):
     return {
         "started_at": row["started_at"],
@@ -567,7 +608,7 @@ def overload_view(row):
         "mem_max": row["mem_max"],
         "runs_max": row["runs_max"],
         "bots": json.loads(row["bots"]),
-        "procs": json.loads(row["procs"]),
+        "procs": grouped_procs(json.loads(row["procs"])),
     }
 
 
@@ -594,11 +635,15 @@ def recent_overloads(c, runner_ids, within=RECENT_S, now=None):
 
 
 def _who_ran(bots, label=lambda b: b):
+    """ "Reviewer 1 x4 (limit 3, over), Builder x2": each bot's turns at once, beside its own limit when it has one."""
     names = []
     for b in bots[:3]:
         what = label(b["bot"])
-        if b.get("runs", 1) > 1:
-            what += f" x{b['runs']}"
+        runs, limit = b.get("runs", 1), b.get("limit")
+        if runs > 1 or limit is not None:
+            what += f" x{runs}"
+        if limit is not None:
+            what += f" (limit {limit}, over)" if runs > limit else f" (limit {limit})"
         names.append(what)
     return ", ".join(names)
 
@@ -611,7 +656,7 @@ def describe(o, label=lambda b: b):
     if ran:
         words += f"; running: {ran}"
     if o["procs"]:
-        words += "; busiest processes: " + ", ".join(p["name"] for p in o["procs"][:3])
+        words += "; busiest processes: " + ", ".join(proc_names(o["procs"]))
     return words
 
 
@@ -643,7 +688,7 @@ def summary(overloads, days, label=lambda b: b):
         common.append(
             ", ".join(label(b) for b in shared[:3]) + " " + ("was" if len(shared[:3]) == 1 else "were") + " running"
         )
-    procs = [{p["name"] for p in o["procs"]} for o in overloads]
+    procs = [set(proc_names(o["procs"], top=len(o["procs"]))) for o in overloads]
     busy = sorted(set.intersection(*procs)) if procs else []
     if busy:
         common.append(

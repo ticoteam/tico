@@ -451,3 +451,60 @@ def test_turns_that_ended_as_the_window_opened_are_not_counted_in_it():
     rows.append(("new", "ops", "r", P._iso(100), P._iso(100), None, "running", None))
     c.executemany("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?)", rows)
     assert P.at_once(c, "r", 100, 200) == [{"bot": "ops", "runs": 1}]
+
+
+def test_the_alert_shows_each_bots_limit_beside_its_count_and_says_when_it_was_over(api):
+    """'Reviewer 1 x4' did not say whether 4 broke the bot's limit of 3: each bot with a "Turns at once" shows it, and
+    'over' when the turns that ran at once passed it. A bot with no limit reads as before."""
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    start = (int(time.time()) // 60 - 12) * 60
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Operations Lead' WHERE id='ops'")
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        for n in ("a", "b"):  # two more turns beside the claimed one, the whole window
+            c.execute(
+                "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                "started_at,lane) SELECT ?,job_id,bot_id,runner_id,generation,?,'running',lease_until,?,?,? "
+                "FROM attempts WHERE id=?",
+                (f"t-{n}", f"tok-{n}", P._iso(start - 60), P._iso(start - 60), f"lane-{n}", attempt["id"]),
+            )
+    revision = get(api, "bots/ops")["revision"]
+    post(api, "bots/ops/turns-at-once", {"turns_at_once": 2, "expected_revision": revision})
+    post(
+        api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"]
+    )
+    (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
+    assert o["bots"] == [{"bot": "ops", "runs": 3, "limit": 2}]
+
+    def load():
+        return next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
+
+    assert "running: Operations Lead x3 (limit 2, over)" in load()
+    revision = get(api, "bots/ops")["revision"]
+    post(api, "bots/ops/turns-at-once", {"turns_at_once": 3, "expected_revision": revision})
+    post(api, "runners/performance", {"samples": [sample(start + 600, cpu=97.0)]}, token=r["token"])
+    assert "running: Operations Lead x3 (limit 3))." in load()
+    with api.app.state.store.transaction() as c:  # an overload recorded before limits were kept reads as it did
+        c.execute("UPDATE perf_overloads SET bots='[{\"bot\": \"ops\", \"runs\": 3}]' WHERE runner_id=?", (rid,))
+    assert "running: Operations Lead x3)." in load()
+
+
+def test_the_busiest_processes_lead_with_the_bots_work_and_group_the_machines_own_services(api):
+    """ariana-fswatch, the cloud host's disk-snapshot watcher, was named among the busiest processes as if a bot ran it:
+    it now comes after the bots' processes, as 'machine services (disk snapshots)'."""
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    start = (int(time.time()) // 60 - 12) * 60
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+    procs = [("ariana-fswatch", 300.0), ("python", 200.0), ("claude", 90.0), ("rustc", 80.0), ("node", 10.0)]
+    busy = [sample(start + 60 * i, cpu=97.0, procs=procs) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])
+    seen = get(api, f"computers/{rid}/performance?hours=1")
+    (o,) = seen["overloads"]
+    assert [p["name"] for p in o["procs"]] == ["python", "claude", "rustc", "node", "machine services (disk snapshots)"]
+    assert o["procs"][-1]["service"] is True and o["procs"][-1]["cpu"] == 300.0
+    load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
+    assert "busiest processes: python, claude, rustc, machine services (disk snapshots))" in load
+    assert "ariana-fswatch" not in load and "ariana-fswatch" not in seen["summary"]

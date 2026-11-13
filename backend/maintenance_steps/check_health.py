@@ -101,6 +101,7 @@ TAGS = {
     "performance": "noisy",
     "disk": "noisy",
     "turns": "noisy",
+    "turn_limit": "noisy",  # most often a limit lowered while the bot's turns ran: it clears as they end
 }
 # Health page checks this step files another way, so the page reader leaves them out: `invariant:<id>` rows are the
 # production checks, which the invariant reader files as `inv:<id>`.
