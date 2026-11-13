@@ -472,6 +472,57 @@
   "argv": [
    "growth",
    "source",
+   "add",
+   "--truth-for",
+   "customers",
+   "--system",
+   "Billing export",
+   "--sync",
+   "file",
+   "--map",
+   "customers"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "map": [
+      "customers"
+     ],
+     "operation_id": null,
+     "sync_kind": "file",
+     "system": "Billing export",
+     "truth_for": "customers"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "customers",
+     "system": "Billing export",
+     "sync_kind": "file",
+     "sync_map": {
+      "shape": "customers"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
    "sync",
    "s1"
   ],

@@ -3498,6 +3498,8 @@ GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
 
 
 class GrowthSyncMap(Contract):
+    # "customers": each run posts customer rows (backend/growth_customers.py) and maps no numbers.
+    shape: Literal["numbers", "customers"] | None = None
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
     fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]] | None = None
