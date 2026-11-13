@@ -21,6 +21,12 @@ needs no round trip to revalidate them. The bundle's first statement marks `tico
 A file the page lists as TypeScript (`/tico/ui/app/a.ts`) is bundled as its compiled JavaScript (backend/ui_build.py):
 when that is missing or older than the source, the bundle is not built (StaleBuild), and nothing older is served.
 
+Each file is bundled as its minified copy (build/ui/min, written by scripts/build-ui.cjs with a map to its source) while
+that copy is current, and as it is otherwise (a file edited since the last build). A part with minified files ends by
+naming its map (app.bundle.2.js.map): an index map whose sections place each file's own map at that file's line, so
+the browser's tools and `python -m backend.ui_bundle --where app.bundle.2.js:1:4567` (a Sentry frame, which keeps only
+the file name, line and column) find the source file and line.
+
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
@@ -69,21 +75,66 @@ def is_part(path):
     return bool(PART.fullmatch(path))
 
 
-def split(chunks, limit=PART_BYTES):
-    """The chunks (each one file's text, in order) packed into parts of at most `limit` bytes; a file larger than that
-    is a part of its own."""
+def pack(chunks, limit=PART_BYTES):
+    """The indexes of the chunks (each one file's text, in order) packed into parts of at most `limit` bytes; a file
+    larger than that is a part of its own."""
     parts, size = [[]], 0
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         if parts[-1] and size + len(chunk) > limit:
             parts.append([])
             size = 0
-        parts[-1].append(chunk)
+        parts[-1].append(i)
         size += len(chunk)
-    return [b"".join(p) for p in parts]
+    return parts
+
+
+def split(chunks, limit=PART_BYTES):
+    """The chunks packed into parts (`pack`), each part's bytes."""
+    return [b"".join(chunks[i] for i in p) for p in pack(chunks, limit)]
+
+
+def map_path(kind, n):
+    """The URL path of the source map of a bundle's nth part."""
+    return part_path(kind, n) + ".map"
+
+
+def _parts(kind, chunks, prefix=lambda n: b""):
+    """The parts of one bundle and, per part, its map's sections [(line, map file)]: `chunks` are (text, the lines
+    before the file's own code, its map file or None). A part with any section ends by naming its map, `?v=` a hash of
+    what the sections are, so the map's URL changes with them."""
+    texts = [c[0] for c in chunks]
+    parts, sections = [], []
+    for n, indexes in enumerate(pack(texts)):
+        head = prefix(n)
+        line, found = head.count(b"\n"), []
+        for i in indexes:
+            text, before, path = chunks[i]
+            if path is not None:
+                found.append((line + before, path))
+            line += text.count(b"\n")
+        body = head + b"".join(texts[i] for i in indexes)
+        if found:
+            key = hashlib.sha256(repr([(at, str(path), path.stat().st_mtime_ns) for at, path in found]).encode())
+            url = map_path(kind, n).rsplit("/", 1)[1] + "?v=" + key.hexdigest()[:16]
+            body += (f"//# sourceMappingURL={url}\n" if kind == "js" else f"/*# sourceMappingURL={url} */\n").encode()
+        parts.append(body)
+        sections.append(found)
+    return parts, sections
+
+
+def index_map(sections):
+    """The index source map of one part: each file's own map placed at the line its code starts on."""
+    return (
+        b'{"version":3,"sections":['
+        + b",".join(
+            b'{"offset":{"line":%d,"column":0},"map":%s}' % (line, path.read_bytes().strip()) for line, path in sections
+        )
+        + b"]}"
+    )
 
 
 class Bundle:
-    def __init__(self, page, js_parts, css_parts, versions=None):
+    def __init__(self, page, js_parts, css_parts, versions=None, sections=None):
         self.page, self.js, self.css = page, b"".join(js_parts), b"".join(css_parts)
         # STANDALONE path -> the `?v=` the page names it with.
         self.versions = dict(versions or {})
@@ -93,6 +144,13 @@ class Bundle:
             **{part_path("css", n): b for n, b in enumerate(css_parts)},
         }
         self.etag = {path: _etag(body) for path, body in self.parts.items()}
+        # A part's map path -> (its `?v=`, its sections); the map itself is read when it is asked for (`source_map`).
+        self.sections = {}
+        for path, found in (sections or {}).items():
+            m = re.search(rb"sourceMappingURL=[^?\s]+\?v=([0-9a-f]{16})", self.parts[path])
+            if found and m:
+                self.sections[path + ".map"] = (m.group(1).decode(), found)
+        self._maps = {}
         # Sent to a browser that accepts it (the server has no other compression); its own strong ETag.
         self.gz = {path: gzip.compress(body, 6, mtime=0) for path, body in self.parts.items()}
         self.gz_etag = {k: v[:-1] + '-gzip"' for k, v in self.etag.items()}
@@ -103,6 +161,15 @@ class Bundle:
         # one in the config is out of date.
         self.version = {kind: tag[1:17] for kind, tag in self.whole_etag.items()}
         self.build = self.version["js"] + "." + self.version["css"]
+
+    def source_map(self, path, v):
+        """The map at `path` (app.bundle.2.js.map) as the part names it (`?v=`), or None."""
+        if path not in self.sections or self.sections[path][0] != v:
+            return None
+        if path not in self._maps:
+            body = index_map(self.sections[path][1])
+            self._maps[path] = (body, gzip.compress(body, 6, mtime=0), _etag(body))
+        return self._maps[path]
 
     def gzip_whole(self, kind):
         if kind not in self.whole_gz:
@@ -135,23 +202,37 @@ def build(ui_dir):
             files[kind].append((name, path))
     if not files["js"] or not files["css"]:
         raise BundleError("index.html has no bundle regions")
+    # Each file as its current minified copy (with its map), or as it is: (name, text, map file or None).
+    minified = ui_build.minified_entries(ui_dir)
+    sources = {}
+    for kind in ("js", "css"):
+        sources[kind] = []
+        for name, path in files[kind]:
+            found = ui_build.minified(ui_dir, name, minified)
+            if found:
+                text, map_file = found[0].read_text(), found[1]
+            elif name.endswith(".ts"):
+                # A compiled file's last line names its source map, which maps the file served alone, not a bundle part.
+                text, map_file = ui_build.without_map_line(path.read_bytes()).decode(), None
+            else:
+                text, map_file = path.read_text(), None
+            sources[kind].append((name, text, map_file))
     # One script is one scope for 'use strict': a directive only counts at the top of a script, so the
     # bundle opens with it once, and every file must already be strict.
     js = []
-    for name, path in files["js"]:
-        # A compiled file's last line names its source map, which maps the file served alone, not a bundle part.
-        text = ui_build.without_map_line(path.read_bytes()).decode() if name.endswith(".ts") else path.read_text()
-        # esbuild writes the directive of a compiled file with double quotes.
+    for name, text, map_file in sources["js"]:
+        # esbuild writes the directive of a compiled or minified file with double quotes.
         if not re.search(r"""^(['"])use strict\1;""", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")
-        js.append(f"// file: {name}\n{text.rstrip()}\n\n".encode())
-    css = [f"/* file: {name} */\n{path.read_text().rstrip()}\n\n".encode() for name, path in files["css"]]
+        js.append((f"// file: {name}\n{text.rstrip()}\n\n".encode(), 1, map_file))
+    css = [(f"/* file: {name} */\n{text.rstrip()}\n\n".encode(), 1, m) for name, text, m in sources["css"]]
     # Each part is a script of its own, so each opens with the directive; the first also marks where the run starts.
-    js_parts = [
-        b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n" + part
-        for n, part in enumerate(split(js))
-    ]
-    css_parts = split(css)
+    js_parts, js_sections = _parts(
+        "js", js, lambda n: b"'use strict';\n" + (BUNDLE_MARK.encode() if n == 0 else b"") + b"\n"
+    )
+    css_parts, css_sections = _parts("css", css)
+    sections = {part_path("js", n): s for n, s in enumerate(js_sections)}
+    sections |= {part_path("css", n): s for n, s in enumerate(css_sections)}
     version = {"js": _etag(b"".join(js_parts))[1:17], "css": _etag(b"".join(css_parts))[1:17]}
     count = {"js": len(js_parts), "css": len(css_parts)}
     page = REGION.sub(
@@ -175,7 +256,10 @@ def build(ui_dir):
     listed = [p for kind in files.values() for _, p in kind] + standalone + [ui_dir / "index.html"]
     if typed:
         listed += typed + [ui_build.manifest_path(ui_dir)]
-    return Bundle(page.encode(), js_parts, css_parts, versions), listed
+    # A new build of the minified copies rewrites the manifest.
+    if minified and ui_build.manifest_path(ui_dir) not in listed:
+        listed.append(ui_build.manifest_path(ui_dir))
+    return Bundle(page.encode(), js_parts, css_parts, versions, sections), listed
 
 
 class UiBundle:
@@ -246,7 +330,67 @@ def versioned(ui_dir, path, v):
     return bool(bundle) and bundle.versions.get(path) == v
 
 
-if __name__ == "__main__":
+_B64 = {c: i for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")}
+
+
+def _segments(mappings):
+    """A source map's mappings, decoded: per generated line, [(column, source, line, column)] (0-based, absolute)."""
+    lines, state = [], [0, 0, 0, 0, 0]
+    for text in mappings.split(";"):
+        row, state[0] = [], 0
+        for seg in text.split(","):
+            if not seg:
+                continue
+            values, value, shift = [], 0, 0
+            for ch in seg:
+                digit = _B64[ch]
+                value += (digit & 31) << shift
+                if digit & 32:
+                    shift += 5
+                else:
+                    values.append(-(value >> 1) if value & 1 else value >> 1)
+                    value, shift = 0, 0
+            for i, v in enumerate(values):
+                state[i] += v
+            if len(values) >= 4:
+                row.append(tuple(state[:4]))
+        lines.append(row)
+    return lines
+
+
+def where(bundle, frame):
+    """A frame of a bundle part (`app.bundle.2.js:1:4567`, 1-based line and column as Sentry and browsers give them) as
+    `source:line:column`, or None when no minified file is there."""
+    import json
+
+    m = re.fullmatch(r"(?:.*/)?(app\.bundle(?:\.\d+)?\.(?:js|css)):(\d+):(\d+)", frame)
+    if not m:
+        raise ValueError(f"{frame}: not app.bundle[.N].js:line:column")
+    path, line, column = PREFIX + m.group(1), int(m.group(2)) - 1, int(m.group(3)) - 1
+    found = [s for s in bundle.sections.get(path + ".map", (None, []))[1] if s[0] <= line]
+    if not found:
+        return None
+    start, map_file = found[-1]
+    source_map = json.loads(map_file.read_bytes())
+    rows = _segments(source_map["mappings"])
+    row = rows[line - start] if line - start < len(rows) else []
+    hits = [s for s in row if s[0] <= column]
+    if not hits:
+        return None
+    _, source, src_line, src_column = hits[-1]
+    return f"{source_map['sources'][source]}:{src_line + 1}:{src_column + 1}"
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--where"]:
+    # A Sentry frame of the bundle this checkout builds now (build it at the release's commit first).
+    root = Path(__file__).resolve().parents[1]
+    try:
+        current, _ = build(root / "ui")
+    except ui_build.StaleBuild as exc:
+        raise SystemExit(f"ui bundle: {exc}") from None
+    for arg in sys.argv[2:]:
+        print(f"{arg} -> {where(current, arg) or 'not in a minified file'}")
+elif __name__ == "__main__":
     ui, out = Path(sys.argv[1]), Path(sys.argv[2])
     try:
         bundle, _ = build(ui)
@@ -256,3 +400,5 @@ if __name__ == "__main__":
     (out / "index.html").write_bytes(bundle.page)
     for path, body in bundle.parts.items():
         (out / path[len(PREFIX) :]).write_bytes(body)
+    for path, (_, found) in bundle.sections.items():
+        (out / path[len(PREFIX) :]).write_bytes(index_map(found))

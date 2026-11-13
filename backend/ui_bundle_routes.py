@@ -61,6 +61,14 @@ def register(app, auth, settings):
         async def ui_bundle_asset(request: Request, part: str):
             bundle = current_bundle()
             path = request.url.path
+            if bundle is not None and path.endswith(".map"):
+                # A part's source map (ui_bundle.index_map), only as the part names it; asked for by the browser's
+                # tools, never by the page, so it is revalidated rather than kept.
+                found = bundle.source_map(path, request.query_params.get("v") or "")
+                if found is None:
+                    raise Problem("not_found", "Not found", 404)
+                body, gz, etag = found
+                return ui_reply(request, body, "application/json", etag, None, gz, etag[:-1] + '-gzip"')
             if bundle is None or path not in bundle.parts:
                 raise Problem("not_found", "Not found", 404)
             kind = "js" if path.endswith(".js") else "css"

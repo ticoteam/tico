@@ -283,6 +283,104 @@ def test_a_typescript_file_runs_only_as_its_current_compiled_output(tmp_path):
         ui_build.check(ui)
 
 
+def test_a_bundled_file_is_its_minified_copy_while_that_is_current(tmp_path):
+    # scripts/build-ui.cjs minifies each bundled file to build/ui/min with a map to its source; the bundle uses that copy
+    # only while the manifest matches the source, and a part with one names its map, which places the file's own map
+    # at the line the file starts on.
+    import hashlib
+    import json
+
+    ui, out = tmp_path / "ui", tmp_path / "build/ui"
+    (ui / "app").mkdir(parents=True)
+    (ui / "styles").mkdir()
+    (out / "min/app").mkdir(parents=True)
+    (ui / "app/a.js").write_text("'use strict';\nconst ALPHA = 1;\n")
+    (ui / "app/b.js").write_text("'use strict';\nconst BETA = ALPHA + 1;\n")
+    (ui / "styles/a.css").write_text("a{color:red}\n")
+    (ui / "index.html").write_text(
+        "<head>\n<!-- bundle:css:start -->\n<link rel=\"stylesheet\" href=\"/tico/ui/styles/a.css\">\n<!-- bundle:css:end -->\n</head>\n"
+        "<!-- bundle:js:start -->\n<script src=\"/tico/ui/app/a.js\"></script>\n<script src=\"/tico/ui/app/b.js\"></script>\n"
+        "<!-- bundle:js:end -->\n"
+    )
+    # b.js minified: column 0 is its line 1, column 13 (`const`) its line 2.
+    (out / "min/app/b.js").write_text('"use strict";const BETA=ALPHA+1;\n')
+    (out / "min/app/b.js.map").write_text(
+        json.dumps({"version": 3, "sources": ["app/b.js"], "names": [], "mappings": "AAAA,aACA"})
+    )
+
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    (out / "manifest.json").write_text(
+        json.dumps(
+            {
+                "files": {},
+                "min": {
+                    "app/b.js": {
+                        "source": sha(ui / "app/b.js"),
+                        "output": sha(out / "min/app/b.js"),
+                        "map": sha(out / "min/app/b.js.map"),
+                    }
+                },
+            }
+        )
+    )
+    bundles = ui_bundle.UiBundle(ui)
+    bundle = bundles.get()
+    js = bundle.parts[ui_bundle.JS_PATH].decode()
+    assert '// file: app/b.js\n"use strict";const BETA=ALPHA+1;' in js and "const BETA = ALPHA" not in js
+    assert "// file: app/a.js\n'use strict';\nconst ALPHA = 1;" in js  # no minified copy: the file as it is
+    url = re.search(r"//# sourceMappingURL=(app\.bundle\.js\.map)\?v=([0-9a-f]{16})\n\Z", js)
+    assert url, js[-200:]
+    body, _, _ = bundle.source_map(ui_bundle.JS_PATH + ".map", url.group(2))
+    lines = js.split("\n")
+    start = lines.index('"use strict";const BETA=ALPHA+1;')
+    index = json.loads(body)
+    assert [s["offset"] for s in index["sections"]] == [{"line": start, "column": 0}]
+    assert index["sections"][0]["map"]["sources"] == ["app/b.js"]
+    assert bundle.source_map(ui_bundle.JS_PATH + ".map", "0" * 16) is None  # another build's map is not this one
+    # A Sentry frame (1-based line and column) back to the source.
+    assert ui_bundle.where(bundle, f"app.bundle.js:{start + 1}:20") == "app/b.js:2:1"
+    assert ui_bundle.where(bundle, f"https://x.example/tico/ui/app.bundle.js:{start + 1}:1") == "app/b.js:1:1"
+    assert ui_bundle.where(bundle, "app.bundle.js:3:1") is None  # a's line: not minified
+    # b.js edited after the build: the copy is old, so the file is bundled as it is now, without a map.
+    edited = ui / "app/b.js"
+    before = edited.stat()
+    edited.write_text("'use strict';\nconst BETA = ALPHA + 2;\n")
+    os.utime(edited, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    stale = bundles.get().parts[ui_bundle.JS_PATH].decode()
+    assert "const BETA = ALPHA + 2;" in stale and "sourceMappingURL" not in stale and not bundles.get().sections
+
+
+@served
+def test_the_served_bundle_is_minified_and_maps_to_its_source(api):
+    page = api.get("/", headers=AUTH).text
+    parts = re.findall(r'(?:src|href)="(/tico/ui/app\.bundle(?:\.\d+)?\.(?:js|css))\?v=[0-9a-f]{16}"', page)
+    served, sources = 0, 0
+    for path in parts:
+        body = api.get(path, headers={**AUTH, "Accept-Encoding": "identity"}).text
+        served += len(body)
+        tail = re.search(r"sourceMappingURL=(app\.bundle(?:\.\d+)?\.(?:js|css)\.map\?v=[0-9a-f]{16})", body)
+        assert tail, path  # every part holds minified files
+        r = api.get("/tico/ui/" + tail.group(1), headers=AUTH)
+        assert r.status_code == 200 and r.json()["sections"], path
+        assert api.get("/tico/ui/" + tail.group(1)).status_code == 401
+    assert api.get("/tico/ui/app.bundle.js.map?v=" + "0" * 16, headers=AUTH).status_code == 404
+    html = (ui_build.ROOT / "ui/index.html").read_text()
+    for ref in re.findall(r'(?:src|href)="/tico/ui/([^"]+)"', html.split("bundle:css:start")[1]):
+        if "bundle:" in ref:
+            continue
+        sources += (ui_build.ROOT / "ui" / ref).stat().st_size
+    assert served < sources * 0.85, (served, sources)  # minified: today's sources shrink by about a quarter
+    # A frame in a minified file names its source file and line.
+    bundle = ui_bundle.shared(ui_build.ROOT / "ui").get()
+    text = bundle.parts[ui_bundle.part_path("js", 1)].decode().split("\n")
+    line = next(i for i, t in enumerate(text) if not t.startswith("//") and re.search(r"function \w{6,}\(", t))
+    m = re.search(r"function (\w{6,})\(", text[line])
+    source, at, _ = ui_bundle.where(bundle, f"app.bundle.2.js:{line + 1}:{m.start(1) + 1}").rsplit(":", 2)
+    assert f"function {m.group(1)}(" in (ui_build.ROOT / "ui" / source).read_text().split("\n")[int(at) - 1]
+
+
 def test_a_typescript_file_is_served_as_its_compiled_javascript(api):
     # With the files served separately (TICO_UI_BUNDLE=off), the page asks for the .ts name it lists.
     name = next(n for n in ui_build.sources(ui_build.ROOT / "ui") if n.startswith("app/"))
