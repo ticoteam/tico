@@ -1308,7 +1308,6 @@ function taskActivityOpen(d: ModalDialog) {
 function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
   const finished = taskFinished(t), me = myActor();
   const turn = !finished ? t.turn : null;
-  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me;
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');
   const mover = canMove();
