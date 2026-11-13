@@ -239,9 +239,10 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     assert.ok(state.asked!.some(a => /[?&]q=budget(&|$)/.test(a)) && !state.asked!.some(a => /q=b(&|$)|q=bu(&|$)/.test(a)), 'find: one request once typing stops');
     assert.equal((await card.locator('.bf-fbtn').innerText()).trim(), '', 'find: the filter icon, no word');
     await card.locator('.bf-q').fill('');
+    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 19);
     await card.locator('.bf-fbtn').click();
     await card.locator('[data-bf-kind="data"]').click();
-    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 1);
+    await page.waitForFunction(() => [...document.querySelectorAll('#bot-files .bf-name')].map(el => el.textContent).join() === '.json');
     assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['.json'], 'find: one kind');
     assert.ok(state.asked!.at(-1)!.includes('kind=data'));
     await card.locator('.bf-q').fill('nothing like it');
