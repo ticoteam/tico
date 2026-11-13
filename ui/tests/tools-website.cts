@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 interface Who {subject: string; kind: string; id: string; name: string; initials: string; members?: number; via?: string[]}
 interface Account {
-  id: string; kind: string; username: string; has_password?: boolean; has_totp: boolean; holder: Who | null; access: Who[];
+  id: string; kind: string; username: string; has_password?: boolean; has_totp: boolean; all_bots?: boolean; holder: Who | null; access: Who[];
   session: {state: string; where: string | null; computer: string | null; by: Who | null}; can_use: boolean; can_manage: boolean;
 }
 interface Tool {
@@ -120,13 +120,14 @@ function fake() {
     if (part === 'accounts' && !aid && method === 'POST') {
       if (refuseAccount > 0) { refuseAccount--; return [422, {error: {code: 'invalid_request', detail: 'That 2FA key is not valid'}}]; }
       const id = 'a' + (10 + t.accounts.length), holder = typeof body.holder === 'string' ? body.holder : '';
-      t.accounts.push({id, kind: holder ? 'own' : 'shared', username: String(body.username ?? ''), has_password: !!body.password, has_totp: !!body.totp, holder: holder ? ANA : null, access: [],
+      t.accounts.push({id, kind: holder ? 'own' : 'shared', username: String(body.username ?? ''), has_password: !!body.password, has_totp: !!body.totp, all_bots: !holder && body.all_bots !== false, holder: holder ? ANA : null, access: [],
         session: session('unknown'), can_use: true, can_manage: true});
       return [200, {id}];
     }
     if (!acct) return [404, {error: {code: 'not_found', detail: 'No such account'}}];
     if (leaf === 'code') { codes++; return [200, codes === 1 ? {code: '482913', expires_in: 1} : {code: '123456', expires_in: 30}]; }
     if (leaf === 'access' && subject && method === 'PUT') {
+      if (subject === 'bots') { acct.all_bots = !!body.on; return [200, {subject, on: acct.all_bots}]; }
       const s = decodeURIComponent(subject), [kind = '', id = ''] = s.split(':');
       const added = kind === 'group' ? group(id) : who(kind === 'bot' ? 'bot' : 'person', id, PEOPLE.find(x => x.id === id)?.name || id);
       acct.access = accessView(body.on ? [...acct.access.filter(w => w.subject !== s), added] : acct.access.filter(w => w.subject !== s));
@@ -246,6 +247,8 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         await page.locator('[data-tl-add-item="website"]').click();
         const add = dialogNamed(page, 'Add website');
         await add.waitFor();
+        assert.equal(await add.locator('[data-tw-all-bots]').isChecked(), true, `${tag}: shared defaults to all bots`);
+        await add.locator('[data-tw-all-bots]').uncheck();
         await add.locator('[name=site]').fill('app.acme.example');
         await add.locator('[name=username]').fill('ops@acme.example');
         await add.locator('[name=password]').fill(SECRET);
@@ -267,7 +270,7 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         await page.waitForFunction(() => location.hash === '#/tools/website/w2');
         assert.deepEqual(f.writes.filter(w => w.path === '/api/v2/website-tools'), [{method: 'POST', path: '/api/v2/website-tools', body: {sites: ['app.acme.example'], central_only: true}}],
           `${tag}: one tool made`);
-        assert.deepEqual(last(f, 'POST', '/api/v2/website-tools/w2/accounts')?.body, {username: 'ops@acme.example', password: SECRET, totp: TOTP}, `${tag}: the account`);
+        assert.deepEqual(last(f, 'POST', '/api/v2/website-tools/w2/accounts')?.body, {username: 'ops@acme.example', password: SECRET, totp: TOTP, all_bots: false}, `${tag}: the account`);
         assert.deepEqual(f.writes.filter(w => w.method === 'PUT' && w.path.startsWith('/api/v2/website-tools/w2/accounts/a10/access/')).map(w => [w.path, w.body]).sort(),
           [['/api/v2/website-tools/w2/accounts/a10/access/bot%3Asupport-bot', {on: true}], ['/api/v2/website-tools/w2/accounts/a10/access/group%3Adesign', {on: true}]],
           `${tag}: its grants, the group's included`);
@@ -348,7 +351,7 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         assert.equal(await access.locator('header button').count(), 0, `${tag}: no button in the header`);
         assert.deepEqual(await access.locator('button:not(.tw-x)').evaluateAll(b => b.map(x => [x.textContent, x.classList.contains('primary'), !!x.closest('footer')])),
           [['Done', true, true]], `${tag}: Done alone`);
-        assert.equal(await access.locator('label').count(), 0, `${tag}: no label`);
+        assert.equal(await access.locator('label:not(.tw-all-bots)').count(), 0, `${tag}: no label but the All bots switch`);
         // AC-5: no list on open; a click opens everyone not yet granted, groups first with counts, then people, then bots.
         assert.equal(await pickList(page).count(), 0, `${tag}: no list on open`);
         await access.locator('.who-pick-q').click();
@@ -399,6 +402,18 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
           const focused = await page.evaluate(() => { const el = document.activeElement; return el && el.matches('.tw-x') ? [getComputedStyle(el).opacity, getComputedStyle(el).outlineStyle] : null; });
           assert.deepEqual(focused, ['1', 'solid'], `${tag}: Tab reaches the hidden × and shows it with the focus ring`);
         }
+        // All bots: saved at once; while on, a bot's own grant has no working × and the picker offers no bot.
+        await access.locator('[data-tw-all-bots]').check();
+        await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('[data-tw-revoke="bot:ops"]')?.disabled);
+        assert.equal(f.tools.w1!.accounts[0]!.all_bots, true, `${tag}: all bots saved`);
+        assert.deepEqual(last(f, 'PUT', '/api/v2/website-tools/w1/accounts/a1/access/'), {method: 'PUT', path: '/api/v2/website-tools/w1/accounts/a1/access/bots', body: {on: true}});
+        await access.locator('.who-pick-q').click();
+        await pickList(page).waitFor();
+        assert.ok((await pickOptions(page)).every(o => !o[1].startsWith('Bot')), `${tag}: no bot offered with All bots on`);
+        await access.locator('.who-pick-q').press('Escape');
+        await access.locator('[data-tw-all-bots]').uncheck();
+        await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-tw-revoke="bot:ops"]')?.disabled);
+        assert.equal(f.tools.w1!.accounts[0]!.all_bots, false, `${tag}: all bots revoked`);
         await shot(page, `access-${tag}`);
         // AC-7: Esc closes the list and keeps the text; a second Esc closes the dialog.
         await access.locator('.who-pick-q').fill('en');
@@ -427,11 +442,15 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         const bare = dialogNamed(page, 'Add account');
         await bare.locator('button[type=submit]').click();
         await root.locator('[data-tw-account="a12"]').waitFor();
-        assert.deepEqual(last(f, 'POST', '/api/v2/website-tools/w1/accounts')?.body, {}, `${tag}: no username, no password`);
+        assert.deepEqual(last(f, 'POST', '/api/v2/website-tools/w1/accounts')?.body, {all_bots: true}, `${tag}: no username, no password`);
+        assert.equal(await root.locator('[data-tw-account="a12"] [data-tw-all-bots-label]').innerText(), 'All bots');
         assert.equal(await root.locator('[data-tw-account="a12"] .tw-acct-text').innerText(), 'TIDY admin', `${tag}: named by the tool`);
         // AC-7b: nobody granted and eleven candidates: seven full options show, the dialog does not scroll, Done is not covered.
         await menu(page, 'a12', 'Who can use it');
         const empty = dialogNamed(page, 'Who can use it');
+        assert.equal(await empty.locator('.tw-nobody').innerText(), 'Nobody else.', `${tag}: All bots on, nobody else`);
+        await empty.locator('[data-tw-all-bots]').uncheck();
+        await page.waitForFunction(() => !document.querySelector<HTMLInputElement>('dialog[open] [data-tw-all-bots]')?.disabled);
         assert.equal(await empty.locator('.tw-nobody').innerText(), 'Nobody yet.');
         await empty.locator('.who-pick-q').press('ArrowDown');
         await pickList(page).waitFor();

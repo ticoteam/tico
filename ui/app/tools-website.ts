@@ -21,7 +21,7 @@ interface TwWho {subject: string; kind: string; id: string; name?: string | null
 interface TwGroup {id: string; name?: string; members?: number; actors?: string[]}
 interface TwSession {state?: string; where?: string | null; computer?: string | null; by?: TwWho | null}
 interface TwAccount {
-  id: string; kind: string; username?: string | null; has_password?: boolean; has_totp?: boolean; holder?: TwWho | null; access?: TwWho[];
+  id: string; kind: string; username?: string | null; has_password?: boolean; has_totp?: boolean; all_bots?: boolean; holder?: TwWho | null; access?: TwWho[];
   session?: TwSession | null; can_use?: boolean; can_manage?: boolean;
 }
 interface TwHost {runner_id: string; label: string; online: boolean}
@@ -114,7 +114,7 @@ function twAccountsCard(d: TwData): string {
     const st = a.session?.state || '', said = TW_SESSION[st];
     const by = st === 'in_use' && a.session?.by ? ` · ${twName(a.session.by)}` : '';
     const right = a.kind === 'own' ? `<span class="muted tw-acct-user">${esc(a.username || '')}</span>`
-      : `<span class="tt-faces">${(a.access || []).slice(0, 4).map(w => `<span class="tt-face" title="${esc(toolsFaceTitle({kind: w.kind, id: w.id, name: twName(w), members: w.members}))}">${twFace(w)}</span>`).join('')}</span>${
+      : `${a.all_bots ? '<span class="pill" data-tw-all-bots-label>All bots</span>' : ''}<span class="tt-faces">${(a.access || []).slice(0, 4).map(w => `<span class="tt-face" title="${esc(toolsFaceTitle({kind: w.kind, id: w.id, name: twName(w), members: w.members}))}">${twFace(w)}</span>`).join('')}</span>${
         (a.access || []).length > 4 ? `<span class="muted tt-more">+${(a.access || []).length - 4}</span>` : ''}`;
     return `<div class="tw-acct" data-tw-account="${esc(a.id)}" data-kind="${esc(a.kind)}">
       <span class="pill tw-kind${a.kind === 'own' ? '' : ' in-progress'}">${a.kind === 'own' ? 'Own' : 'Shared'}</span>
@@ -434,8 +434,8 @@ function twWhoOf(subject: string, groups: Map<string, TwGroup>): TwWho {
   return {subject, kind: kind === 'bot' ? 'bot' : 'person', id, name: kind === 'bot' ? botDisplayName(id) : twPersonName(id)};
 }
 // Everyone not yet granted, for the picker: groups (with their member counts), people, bots. One already covered by a
-// granted group stays, with "In Design", since a direct grant outlives the group's.
-function twCandidates(granted: TwWho[], groups: Map<string, TwGroup>): WhoCandidate[] {
+// granted group stays, with "In Design", since a direct grant outlives the group's. With All bots on, no bot is offered.
+function twCandidates(granted: TwWho[], groups: Map<string, TwGroup>, allBots = false): WhoCandidate[] {
   const taken = new Set(granted.map(w => w.subject));
   const covering = (subject: string) => granted.filter(w => w.kind === 'group' && (groups.get(w.id)?.actors || []).includes(subject)).map(w => twName(w));
   const inGroups = (subject: string) => { const g = covering(subject); return g.length === 1 ? `In ${g[0]}` : g.length > 1 ? `In ${g.length} groups` : ''; };
@@ -452,7 +452,7 @@ function twCandidates(granted: TwWho[], groups: Map<string, TwGroup>): WhoCandid
     const name = p.name || p.email || p.id;
     out.push({subject, kind: 'person', name, email: p.email || undefined, face: toolsFace({kind: 'person', id: p.id, name}, 24), sub: inGroups(subject)});
   }
-  for (const e of S.emps || []) {
+  for (const e of allBots ? [] : S.emps || []) {
     const subject = 'bot:' + e.id;
     if (e.status === 'archived' || taken.has(subject)) continue;
     out.push({subject, kind: 'bot', name: botDisplayName(e.id), face: avatar(e.id, 24), sub: ['Bot', inGroups(subject)].filter(Boolean).join(' · ')});
@@ -469,7 +469,10 @@ function twLoginFields(canShare: boolean): string {
     <label>Username<input name="username" maxlength="250" autocomplete="off" spellcheck="false" autocapitalize="off"></label>
     <label>Password<input name="password" type="password" autocomplete="new-password" spellcheck="false"></label>
     <label>2FA key (optional)<input name="totp" type="password" autocomplete="off" spellcheck="false" placeholder="Setup key or otpauth:// link"></label>
-    ${canShare ? `<div class="tw-who-field" data-tw-shared><span class="tw-who-k">Who can use it</span>${whoPickerHTML({label: 'Who can use it'})}
+    ${canShare ? `<div class="tw-who-field" data-tw-shared><span class="tw-who-k">Who can use it</span>
+      <label class="tw-all-bots"><input type="checkbox" role="switch" class="people-switch" name="all_bots" data-tw-all-bots checked> All bots</label>
+      <p class="muted">Includes bots added later. Turn off to choose individual bots.</p>
+      ${whoPickerHTML({label: 'Who can use it'})}
       <div class="tw-access" data-tw-picked></div></div>` : ''}`;
 }
 // Binds the Shared/Own switch and the who-can-use-it picker; returns the picked subjects.
@@ -477,6 +480,7 @@ function twLoginBind(dialog: HTMLDialogElement): Set<string> {
   const picked = new Set<string>();
   const kind = dialog.querySelector<HTMLInputElement>('[name=kind]'), own = dialog.querySelector<HTMLElement>('[data-tw-own]');
   const shared = dialog.querySelector<HTMLElement>('[data-tw-shared]'), rows = dialog.querySelector<HTMLElement>('[data-tw-picked]');
+  const allBots = dialog.querySelector<HTMLInputElement>('[data-tw-all-bots]');
   dialog.querySelectorAll<HTMLButtonElement>('[data-tw-kind]').forEach(b => {
     b.onclick = () => {
       const k = b.dataset.twKind || 'shared';
@@ -490,7 +494,8 @@ function twLoginBind(dialog: HTMLDialogElement): Set<string> {
   let groups = new Map<string, TwGroup>();
   const chosen = () => [...picked].map(s => twWhoOf(s, groups));
   const paint = () => { rows.innerHTML = picked.size ? twWhoRows(chosen(), 'data-tw-unpick') : ''; };
-  const picker = whoPickerWire(shared, {candidates: () => twCandidates(chosen(), groups), onPick: c => { picked.add(c.subject); paint(); }});
+  const picker = whoPickerWire(shared, {candidates: () => twCandidates(chosen(), groups, !!allBots?.checked), onPick: c => { picked.add(c.subject); paint(); }});
+  if (allBots) allBots.onchange = () => picker?.refresh();
   rows.onclick = ev => {
     const s = eventElement(ev)?.closest<HTMLElement>('[data-tw-unpick]')?.dataset.twUnpick;
     if (s) { picked.delete(s); paint(); picker?.input.focus(); }
@@ -504,7 +509,7 @@ async function twAddAccount(toolId: string, data: FormData, picked: Set<string>)
   const username = String(data.get('username') || '').trim(), password = String(data.get('password') || '');
   // No password: an account a person signs in to by hand (Google or SSO, an emailed code, a passkey).
   const made: {id?: string} = await post(twPath(toolId, '/accounts'), {...(username ? {username} : {}), ...(password ? {password} : {}),
-    ...(totp ? {totp} : {}), ...(own ? {holder: String(data.get('holder') || '')} : {})});
+    ...(totp ? {totp} : {}), ...(own ? {holder: String(data.get('holder') || '')} : {all_bots: data.get('all_bots') === 'on'})});
   if (own || !made?.id || !picked.size) return;
   const aid = made.id;
   const failed = (await Promise.allSettled([...picked].map(s => put(twAcctPath(toolId, aid, '/access/' + encodeURIComponent(s)), {on: true}))))
@@ -565,22 +570,32 @@ function twReplaceDialog(state: TwState, a: TwAccount): void {
 // Who can use it (a shared account): each change is saved at once, and the rows repaint from the account's access the
 // answer carries. The picker at the top; the only button is Done.
 function twAccessDialog(state: TwState, a: TwAccount): void {
-  const dialog = whDialog('Who can use it', `${whoPickerHTML({label: 'Add a person, bot or group'})}<div class="tw-access" data-tw-access></div>`, '', {close: 'Done'});
+  const dialog = whDialog('Who can use it', `<label class="tw-all-bots"><input type="checkbox" role="switch" class="people-switch" data-tw-all-bots${a.all_bots ? ' checked' : ''}${state.data?.can_manage ? '' : ' disabled'}> All bots</label>
+    <p class="muted">Includes bots added later. Turn off to choose individual bots.</p>
+    ${whoPickerHTML({label: 'Add a person, bot or group'})}<div class="tw-access" data-tw-access></div>`, '', {close: 'Done'});
   dialog.classList.add('tw-access-dialog');
-  let access = [...(a.access || [])], groups = new Map<string, TwGroup>();
+  let access = [...(a.access || [])], groups = new Map<string, TwGroup>(), allBots = !!a.all_bots;
+  const all = dialog.querySelector<HTMLInputElement>('[data-tw-all-bots]');
   const list = dialog.querySelector<HTMLElement>('[data-tw-access]');
   const err = dialog.querySelector<HTMLElement>('[data-wh-error]');
-  const paint = () => { if (list) list.innerHTML = twWhoRows(access, 'data-tw-revoke'); };
+  // With All bots on, a bot's own grant cannot be taken away (the server says to turn All bots off first).
+  const paint = () => {
+    if (!list) return;
+    list.innerHTML = access.length ? twWhoRows(access, 'data-tw-revoke') : `<p class="muted tw-nobody">${allBots ? 'Nobody else.' : 'Nobody yet.'}</p>`;
+    if (allBots) list.querySelectorAll<HTMLButtonElement>('[data-tw-access-row^="bot:"] [data-tw-revoke]').forEach(b => { b.disabled = true; });
+  };
   const save = async (subject: string, on: boolean) => {
     if (err) err.textContent = '';
     try {
       const said: {access?: TwWho[]} | null = await put(twAcctPath(state.id, a.id, '/access/' + encodeURIComponent(subject)), {on});
-      access = Array.isArray(said?.access) ? said.access : on ? [...access, twWhoOf(subject, groups)] : access.filter(w => w.subject !== subject);
+      if (subject === 'bots') allBots = on;
+      else access = Array.isArray(said?.access) ? said.access : on ? [...access, twWhoOf(subject, groups)] : access.filter(w => w.subject !== subject);
       paint();
       picker?.refresh();
-    } catch (e) { if (err) err.textContent = errorMessage(e, 'Try again'); }
+    } catch (e) { if (all) all.checked = allBots; if (err) err.textContent = errorMessage(e, 'Try again'); }
   };
-  const picker = whoPickerWire(dialog, {candidates: () => twCandidates(access, groups), onPick: c => save(c.subject, true)});
+  const picker = whoPickerWire(dialog, {candidates: () => twCandidates(access, groups, allBots), onPick: c => save(c.subject, true)});
+  if (all) all.onchange = async () => { all.disabled = true; await save('bots', all.checked); all.disabled = false; };
   if (list) list.onclick = ev => {
     const s = eventElement(ev)?.closest<HTMLElement>('[data-tw-revoke]')?.dataset.twRevoke;
     if (s) void save(s, false);

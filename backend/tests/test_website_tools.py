@@ -57,7 +57,7 @@ def account(api, tid, token="ana-test", expected=200, **body):
     found = post(
         api,
         f"website-tools/{tid}/accounts",
-        {"username": "ops@acme.example", "password": PASSWORD, **body},
+        {"username": "ops@acme.example", "password": PASSWORD, "all_bots": False, **body},
         token,
         expected=expected,
     )
@@ -209,6 +209,58 @@ def test_an_address_a_browser_could_read_differently_matches_no_site():
 
 
 # ---- the pick rule
+
+
+def test_new_shared_accounts_cover_current_and_future_bots_without_giving_people_or_unknown_bots_access(api):
+    start(api)
+    tid = website(api)
+    aid = post(api, f"website-tools/{tid}/accounts", {"password": PASSWORD})["id"]
+    # An account grant also makes an otherwise private tool discoverable to its bots.
+    call(api, "PATCH", f"website-tools/{tid}", {"audience": {"people": ["ana"]}})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,state) VALUES('future-bot','future-bot','active')")
+    with api.app.state.store.read() as c:
+        for actor in (bot(api, "ops"), "bot:future-bot"):
+            assert W.pick(c, Identity(actor, "bot"), tid)["account_id"] == aid
+        for actor in ("human:cara", "bot:unregistered"):
+            with pytest.raises(Problem):
+                W.pick(c, Identity(actor, "human" if actor.startswith("human:") else "bot"), tid)
+        from backend import api_tools
+
+        assert "bot:future-bot" in {r["subject"] for r in api_tools.access_rows_all(c, tid)}
+    row = get(api, f"website-tools/{tid}")["accounts"][0]
+    assert row["all_bots"] is True
+    indexed = next(r for r in get(api, 'tool-index')['rows'] if r['id'] == 'website:' + tid)
+    assert indexed['who_total'] > 0 and all(p['kind'] == 'bot' for p in indexed['who'])
+    assert share(api, tid, aid, "bots", False)["on"] is False
+    with api.app.state.store.read() as c:
+        with pytest.raises(Problem):
+            W.authorize(c, Identity("bot:future-bot", "bot"), tid, aid)
+
+
+def test_all_bots_is_admin_only_revocable_and_does_not_change_own_or_selected_accounts(api):
+    start(api)
+    tid = website(api)
+    aid = account(api, tid)
+    ops = bot(api, "ops")
+    share(api, tid, aid, ops)
+    assert share(api, tid, aid, "bots", token="cara-test", expected=403)["error"]["code"] == "forbidden"
+    share(api, tid, aid, "bots")
+    assert share(api, tid, aid, ops, False, expected=409)["error"]["code"] == "all_bots"
+    share(api, tid, aid, "bots", False)
+    with api.app.state.store.read() as c:
+        assert W.pick(c, Identity(ops, "bot"), tid)["account_id"] == aid
+        with pytest.raises(Problem) as refused:
+            W.pick(c, Identity(bot(api, "finance"), "bot"), tid)
+        assert refused.value.code == "no_account"
+    own = post(api, f"website-tools/{tid}/accounts", {"holder": ops})["id"]
+    assert share(api, tid, own, "bots", expected=409)["error"]["code"] == "own_account"
+    assert not next(a for a in get(api, f"website-tools/{tid}")["accounts"] if a["id"] == own)["all_bots"]
+    # The broad rule is for website sessions, never an API key's runtime secret.
+    from backend.tests.helpers.credentials import create
+
+    key = create(api)["id"]
+    post(api, f"credentials/{key}/grants", {"subject": "bots"}, expected=422)
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,8 @@ aliases: [websites, browser]
 ## What it is
 
 A website tool is a site the company signs in to, added in Tools (Add → Website), with its accounts. An account is
-**shared** (used by the teammates it is shared with) or **own** (one person's or one bot's, used by them alone). Tico
+**shared** (available to all current and future bots by default, plus people it is shared with) or **own** (one person's or one bot's, used by them alone).
+Turn off **All bots** in **Who can use it** to choose individual bots instead. Existing accounts keep their saved access. Tico
 picks the account for you: your own on that site, else the shared one shared with you. The browser runs on the
 company's **browser host** (one computer an admin picks); without one, on your own computer, unless the site is
 **central only** (banks), which runs on the browser host or not at all. Opening chooses the computer and every
