@@ -120,7 +120,7 @@ An empty Growth needs four things, in this order, before it shows a team's first
 1. **Settings**: revenue per customer per month and the margin (the unit has a default).
 2. **A channel**: at least one active channel. Unknown is not a channel.
 3. **Its source**: an active channel names a live source.
-4. **Its first month**: an active channel has a month with spend and new customers.
+4. **Its first month**: an active channel that names a live source has a month with spend and new customers.
 
 Every Growth read (`channel list` and `show`, `source list`, `cohort list`, `economics`, `numbers`, `kpis`, `settings`)
 carries `setup` while any step is not done: each step and whether it is done, and the next one with its CLI command, its
@@ -130,14 +130,19 @@ retired later. `tico growth setup` shows each step with the date it was first do
 
 Growth records once per team when it was first opened (any Growth read, by a person or a bot), when each step was first
 done, and when its numbers were first seen (the Growth page, `economics`, `numbers` or a channel read after all four
-steps are done). The Growth activation rate is read from these dates.
+steps are done). The Growth activation rate is read from these dates. A team whose first read already finds all four
+steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
+support session reading Growth records nothing.
 
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
 
-Every Growth read carries `you_may`: per action (`settings`, `channels`, `sources`, `months`), what this caller may do.
+Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
+any channel (`channels`), add or change sources (`sources`), record months (`months`). `channels` false does not stop a
+bot that owns a channel changing that channel's why, stage and budget. Each setup write (settings, a channel, a source,
+a month) answers with `setup` too, so the next step follows without another read.
 `may_edit` stays as it was: in `channel list`, `source list` and `settings` it is "may change channels, sources and
 settings"; in `numbers` it is "may record months".
 

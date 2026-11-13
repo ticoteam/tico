@@ -6,7 +6,7 @@ The steps, in order, one rule for the web, the CLI and the JSON:
 1. `settings`: revenue per customer per month and margin are set (the unit has a default).
 2. `channel`: at least one active channel (Unknown is not a channel).
 3. `source`: an active channel names a live source.
-4. `month`: an active channel has a month with spend and new customers.
+4. `month`: an active channel that names a live source has a month with spend and new customers.
 Steps 3 and 4 follow the first channel made; any channel that meets them completes them. Once all four have been done,
 setup stays done (`growth_setup.done_at`), even if a channel is retired later.
 
@@ -38,6 +38,8 @@ Store: Any = _store_mod
 STEPS = ("settings", "channel", "source", "month")
 # What doing a step is, as the actions every read names in `you_may`.
 ACTION = {"settings": "settings", "channel": "channels", "source": "sources", "month": "months"}
+# Columns set only together with the date they follow (else `<name minus _by>_at`).
+FOLLOWS = {"set_up_before_first_open": "first_opened_at"}
 DATES = ("first_opened_at", "settings_at", "channel_at", "source_at", "month_at", "done_at", "numbers_seen_at")
 
 
@@ -80,7 +82,8 @@ def state(c: Any) -> dict[str, Any]:
         "settings": conf.get("revenue_month") is not None and conf.get("margin_pct") is not None,
         "channel": bool(live),
         "source": any(ch["sourced"] for ch in live),
-        "month": any(ch["counted"] for ch in live),
+        # Activation is a channel with a source and its numbers: the month counts only on a sourced channel.
+        "month": any(ch["sourced"] and ch["counted"] for ch in live),
     }
     if recorded(c).get("done_at"):
         done = dict.fromkeys(STEPS, True)
@@ -180,7 +183,13 @@ def record(c: Any, actor: str, *, seen: bool = False, at: str | None = None) -> 
     if not _due(recorded(c), st, seen):
         return
     c.execute("INSERT OR IGNORE INTO growth_setup (id) VALUES (1)")
-    fields = {"first_opened_at": at, "first_opened_by": actor}
+    # A team already set up at its first read (set up before this was counted, at release) is marked, so the
+    # activation rate can leave it out: its dates all land on that one read.
+    fields: dict[str, Any] = {
+        "first_opened_at": at,
+        "first_opened_by": actor,
+        "set_up_before_first_open": int(st["done"]),
+    }
     fields.update({s["step"] + "_at": at for s in st["steps"] if s["done"]})
     if st["done"]:
         fields["done_at"] = at
@@ -188,7 +197,9 @@ def record(c: Any, actor: str, *, seen: bool = False, at: str | None = None) -> 
             fields.update(numbers_seen_at=at, numbers_seen_by=actor)
     # SQLite reads the old row for every expression, so each `_by` is set only with its `_at`.
     sets = ", ".join(
-        f"{k}=CASE WHEN {k[:-3]}_at IS NULL THEN ? ELSE {k} END" if k.endswith("_by") else f"{k}=coalesce({k}, ?)"
+        f"{k}=CASE WHEN {FOLLOWS.get(k, k[:-3] + '_at')} IS NULL THEN ? ELSE {k} END"
+        if k in FOLLOWS or k.endswith("_by")
+        else f"{k}=coalesce({k}, ?)"
         for k in fields
     )
     c.execute(f"UPDATE growth_setup SET {sets} WHERE id=1", list(fields.values()))
@@ -200,7 +211,7 @@ def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool =
         st = state(c)
         due = _due(recorded(c), st, seen)
         setup = block(c, auth, who, st)
-    if due:
+    if due and not getattr(who, "support", None):  # Tico support reading the app is not the team opening Growth
 
         def work(w: Any) -> None:
             record(w, who.actor, seen=seen)
@@ -208,7 +219,7 @@ def attach(store: Any, auth: Any, who: Any, out: dict[str, Any], *, seen: bool =
         try:
             store.write(who, work)
         except Store.Problem:
-            pass  # a caller who may write nothing (support reading the app) still reads; the next read records it
+            pass  # a write refused for this caller never fails the read; the next read records it
     return {**out, "you_may": you_may(auth, who), "setup": setup}
 
 
@@ -220,6 +231,13 @@ def show(c: Any, auth: Any, who: Any) -> dict[str, Any]:
     out["steps"] = [{**s, "at": row.get(s["step"] + "_at")} for s in st["steps"]]
     out["channel"] = st["channel"]
     out["you_may"] = you_may(auth, who)
-    for k in ("first_opened_at", "first_opened_by", "done_at", "numbers_seen_at", "numbers_seen_by"):
+    for k in (
+        "first_opened_at",
+        "first_opened_by",
+        "done_at",
+        "numbers_seen_at",
+        "numbers_seen_by",
+        "set_up_before_first_open",
+    ):
         out[k] = row.get(k)
     return out

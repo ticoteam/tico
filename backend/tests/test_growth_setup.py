@@ -213,3 +213,80 @@ def test_a_read_whose_record_is_refused_still_answers(api, monkeypatch):
     monkeypatch.setattr(api.app.state.store, "write", refuse)
     assert get(api, "growth/channels")["setup"]["next"]["step"] == "settings"
     assert not recorded(api).get("first_opened_at")
+
+
+def test_the_first_month_counts_only_on_a_channel_that_names_a_source(api):
+    """A month on one channel and the source on another is not a channel with a source and its numbers."""
+    put(api, "growth/settings", {"revenue_month": 80, "margin_pct": 70})
+    post(api, "growth/channels", {"slug": "seo", "name": "SEO"})
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search ads"})
+    put(api, "growth/cohorts", {"channel": "seo", "month": "2026-10", "spend": 500, "new_customers": 10})
+    src = post(api, "growth/sources", {"truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp"})
+    name_source(api, src)
+    nxt = get(api, "growth/economics")["setup"]["next"]
+    assert nxt["step"] == "month" and "--channel search-ads" in nxt["command"]
+    assert not recorded(api).get("done_at") and not recorded(api).get("numbers_seen_at")
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-10", "spend": 900, "new_customers": 3})
+    assert get(api, "growth/economics")["setup"] == {"done": True}
+
+
+def test_a_support_session_reads_growth_without_recording_the_teams_dates():
+    from types import SimpleNamespace
+
+    from contextlib import contextmanager
+
+    class Store:
+        writes = 0
+
+        @contextmanager
+        def read(self):
+            import sqlite3
+
+            c = sqlite3.connect(":memory:")
+            c.row_factory = sqlite3.Row
+            for ddl in (
+                "CREATE TABLE growth_settings (id INTEGER PRIMARY KEY, revenue_month REAL, margin_pct REAL)",
+                "CREATE TABLE growth_channels (id TEXT, slug TEXT, name TEXT, source_id TEXT, retired_at TEXT, "
+                "created_at TEXT)",
+                "CREATE TABLE gtm_sources (id TEXT, retired_at TEXT, created_at TEXT)",
+                "CREATE TABLE growth_cohorts (channel_id TEXT, spend REAL, new_customers INTEGER)",
+                "CREATE TABLE growth_setup (id INTEGER PRIMARY KEY, first_opened_at TEXT, done_at TEXT)",
+            ):
+                c.execute(ddl)
+            yield c
+
+        def write(self, who, fn):
+            Store.writes += 1
+
+    support = SimpleNamespace(actor="support:tico", role="human", support="app", via=None)
+    auth = SimpleNamespace(company_role=lambda who: "admin")
+    store = Store()
+    out = GS.attach(store, auth, support, {}, seen=True)
+    assert out["setup"]["done"] is False and Store.writes == 0
+
+
+def test_a_team_already_set_up_at_its_first_read_is_marked_so_and_a_new_team_is_not(api):
+    set_up_to(api, "month")
+    with api.app.state.store.transaction() as c:  # as at release: set up, no dates yet
+        c.execute("DELETE FROM growth_setup")
+    get(api, "growth/kpis")
+    row = recorded(api)
+    assert row["set_up_before_first_open"] == 1 and row["first_opened_at"] == row["done_at"]
+
+
+def test_a_new_team_is_not_marked_set_up_before_its_first_open(api):
+    get(api, "growth/kpis")
+    set_up_to(api, "month")
+    assert recorded(api)["set_up_before_first_open"] == 0
+
+
+def test_each_setup_write_answers_with_the_next_step(api):
+    assert put(api, "growth/settings", {"revenue_month": 80, "margin_pct": 70})["setup"]["next"]["step"] == "channel"
+    added = post(api, "growth/channels", {"slug": "search-ads", "name": "Search ads"})
+    assert added["slug"] == "search-ads" and added["setup"]["next"]["step"] == "source"
+    src = post(api, "growth/sources", {"truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp"})
+    assert src["setup"]["next"]["command"] == f"tico growth channel update search-ads --source {src['id']}"
+    r = api.patch("/api/v2/growth/channels/search-ads", json={"source_id": src["id"]}, headers=headers())
+    assert r.json()["setup"]["next"]["step"] == "month"
+    month = {"channel": "search-ads", "month": "2026-10", "spend": 1800, "new_customers": 6}
+    assert put(api, "growth/cohorts", month)["setup"] == {"done": True}

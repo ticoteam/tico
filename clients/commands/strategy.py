@@ -348,7 +348,8 @@ def _channel_body(api, args, keys):
 
 # Every Growth read's answer carries these two (backend/growth_setup.py).
 SETUP_NOTE = (
-    " you_may: what you may do, per action (settings, channels, sources, months). setup: while Growth is not set up, "
+    " you_may: what you may do, per action (change settings, add or change any channel, add or change sources, record "
+    "months; a bot that owns a channel still changes its own why, stage and budget). setup: while Growth is not set up, "
     "each step and the next one with its command, its tool and who may do it; then only done."
 )
 

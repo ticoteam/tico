@@ -630,9 +630,10 @@ def install(app, store, auth, mutate):
         return GS.attach(store, auth, who, out, seen=seen)
 
     def wrote(c, who, result):
-        """After a write: the setup steps it finished get their first done date."""
+        """After a write: the setup steps it finished get their first done date, and the answer says what is next,
+        so the four steps chain without a read between them."""
         GS.record(c, who.actor)
-        return result
+        return {**result, "setup": GS.block(c, auth, who)}
 
     def reader(who):
         auth.domain(who)
