@@ -30,7 +30,7 @@ declare const window: Window & typeof globalThis & {
 
 const T = 't-big', N = 250;
 // The random bursts are the slow part (each one draws a 250-message view after every event). This script runs seeds 1-4;
-// thread-redraw-bursts-a/-b.cts run 5-14 and 15-24 through TICO_REDRAW_SEEDS, so each script stays well under the limit.
+// thread-redraw-bursts-1..4.cts run 5-9, 10-14, 15-19 and 20-24 through TICO_REDRAW_SEEDS, so each script stays well under the limit.
 const SEEDS = (process.env.TICO_REDRAW_SEEDS ?? '1-4').split('-').map(Number) as [number, number];
 const now = Date.now(), at = (sec: number) => new Date(now - sec * 1000).toISOString();
 const me = {member: true, following: true, notify: 'live', last_read_seq: N - 5, unread: 5, activity: false, can_post: true, can_manage: true, pinned: false};
