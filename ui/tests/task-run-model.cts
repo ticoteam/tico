@@ -2,7 +2,7 @@
 // (`can_set_run_model` in GET /v2/tasks/{id}) picks the task's own model, harness and effort and applies it, or clears
 // it back to the bot's task model; anyone else reads what it runs on. Retired and Gateway tier models are not offered.
 // Its Compact list starts on "Same as bot" and offers only the sizes the picked model holds; a window alone keeps the
-// bot's model (task #237). The form fits a phone's width.
+// bot's model (task #237); Claude Code, which compacts on its own default, has none. The form fits a phone's width.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,6 +25,11 @@ const MODELS = [
   {id: 'old-model', label: 'Old Model', harnesses: ['claude'], efforts: [], deprecated: true},
   {id: 'tico-fast', label: 'Gateway fast', harnesses: ['claude'], efforts: []}];
 
+// Claude Code compacts on its own default (own_compaction), so a Claude model offers no Compact; Codex and Cursor do.
+const HARNESSES = [
+  {id: 'claude', capabilities: {compaction: true, own_compaction: true}},
+  {id: 'codex', capabilities: {compaction: true}}, {id: 'cursor', capabilities: {compaction: true}}];
+
 // `canSet` is the server's answer for this reader (`can_set_run_model`), whatever their role in the roster says.
 async function run(viewport: {width: number; height: number}, shot: string, me: unknown, canSet: boolean) {
   const browser = await launch();
@@ -46,7 +51,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/models') return json({models: MODELS});
+      if (p === '/api/v2/models') return json({models: MODELS, harnesses: HARNESSES});
       if (p === '/api/v2/tasks') return json({tasks: [task]});
       if (p === '/api/v2/tasks/t-audit/model' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}');
@@ -84,6 +89,11 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     assert.deepEqual(await model.locator('option').allInnerTexts(), ["The bot's task model", 'Sonnet 5.5', 'GPT Test · 1.05M'],
       'the window is in the option label');
     assert.equal(await sec.locator('[data-run-model-apply]').isDisabled(), true, 'nothing to apply yet');
+
+    // A Claude Code model has no Compact: Claude Code compacts as it does for a person.
+    await model.selectOption('claude-sonnet-5-5');
+    await sec.locator('[data-run-effort]').waitFor();
+    assert.equal(await sec.locator('[data-run-compact]').count(), 0, 'no Compact for Claude Code');
 
     // A model with two harnesses offers both, starting on its first harness and its default effort.
     await model.selectOption('gpt-test');
