@@ -127,7 +127,7 @@ def _jev(verdict: Row | None) -> Row:
     if said_ == "failed":
         reason = f"Jev couldn't check this: {reason}" if reason else "Jev couldn't check this"
     else:
-        reason = _P_VALUE.sub("", reason)
+        reason = _P_VALUE.sub("", reason, count=1)
     return {"verdict": said_, "reason": reason}
 
 

@@ -130,6 +130,8 @@ def test_jev_reason_on_the_chip_drops_the_p_value_jev_writes(verdict, p, shown):
     assert "(p " in stored
     assert PR._jev({"verdict": verdict, "reasons": stored}) == {"verdict": verdict, "reason": shown}
     assert PR._jev({"verdict": verdict, "reasons": "Clear (and complete)"})["reason"] == "Clear (and complete)"
+    own = J.reason_for(verdict, p, "Cites the rate (p 0.05) for each claim")
+    assert PR._jev({"verdict": verdict, "reasons": own})["reason"].endswith(": Cites the rate (p 0.05) for each claim")
 
 
 def test_an_attach_that_quotes_the_send_back_or_breaks_the_forms_is_refused_and_nothing_is_attached(c, store):
