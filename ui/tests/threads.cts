@@ -30,6 +30,7 @@ declare var callJoin: (threadId: string, call: {id: string}, title: string) => P
 declare var threadsSideRender: () => void;
 declare var THREADS: {on: unknown};
 declare var CU: {undo: {timer?: ReturnType<typeof setTimeout>} | null};
+declare var railRender: () => void;
 declare var CALL: {id: string} | null;
 declare var CALL_JOINS: number;
 declare var CALL_JOINING: Map<string, number>;
@@ -149,9 +150,13 @@ const homes: Record<string, string> = {'bot:ops': 'h-ops', 'human:bea': 'h-bea',
 
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
+// What the rail holds for Ana at open: her pins and the chats Catch up holds (a script changes them before open()).
+let pinsAtOpen = ['t-plan'], unreadAtOpen = ['t11', 't4', 't-gdm'];
 let dmRows: Thr[] | null = null, callsOff = false, railOff = false, threadsOff: boolean | 'odd' = false, threadsGate: Gate[] | null = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
 let callMade: {id: string; state: string; connector: string} | null = null, joinRefused = false, startWait = 150;
+// Ana's private chat with Ops, when a block sets it: what GET /v2/threads/dm?create=false answers; PATCH archives it.
+let opsDm: (Thr & {archived_at?: string | null}) | null = null;
 let startGate: Gate[] | null = null, leaveGate: Gate[] | null = null, callLive: {id: string; state: string; connector: string} | null = null;
 async function open(browser: import('playwright').Browser, who: string, {phone = false, sse = null}: {phone?: boolean; sse?: Sse | null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
@@ -189,7 +194,7 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
   });
   const bob = who === 'bob';
   // The rail as the server keeps it for this page: Ana's pins, and threads she joined from Browse.
-  const pins = new Set(['t-plan']), joined: Thr[] = [];
+  const pins = new Set(pinsAtOpen), joined: Thr[] = [];
   const railRows = (): Thr[] => [plan, ...listed, groupDm, ...(dmRows ? [dmRows[1]!] : []), ...joined];
   const known = (id: string): Thr | undefined => [...railRows(), openHouse].find(t => t.id === id);
   await page.route('**/*', async route => {
@@ -235,7 +240,7 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
       if (railOff) return json({error: 'not_found'}, 404);
       const pin = (t: Thr) => ({...t, me: {...t.me, pinned: pins.has(t.id)}});
       return json(bob ? {pinned: [], threads: [], catch_up: 0, next_cursor: null, dms: {}} : {pinned: railRows().filter(t => pins.has(t.id)).map(pin),
-        threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: 3, catch_up_ids: ['t11', 't4', 't-gdm'], next_cursor: null,
+        threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: unreadAtOpen.length, catch_up_ids: unreadAtOpen, next_cursor: null,
         dms: {'bot:ops': 2, 'human:bea': 1}});
     }
     if (p === '/api/v2/threads/catch-up') return json(bob ? {items: [], count: 0, next_cursor: null} : {items: catchUp(), count: 3, next_cursor: null});
@@ -265,7 +270,14 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
       if (bob && actor === 'bot:ops') return json({error: 'not_found'}, 404);
       return homes[actor] ? json(timeline[homes[actor]!]!().thread) : json({error: 'not_found'}, 404);
     }
+    if (p === '/api/v2/threads/dm' && opsDm && method === 'GET' && url.searchParams.get('create') === 'false' && url.searchParams.get('with') === 'bot:ops') return json(opsDm);
     if (p === '/api/v2/threads/dm') return json({error: 'not_found'}, 404);
+    if (opsDm && p === '/api/v2/threads/' + opsDm.id && method === 'PATCH') {
+      const body = JSON.parse(req.postData() || '{}'); seen.patches.push(body);
+      opsDm = {...opsDm, archived_at: body.archived ? at(0) : null};
+      return json(opsDm);
+    }
+    if (opsDm && p === `/api/v2/threads/${opsDm.id}/timeline`) return json({thread: opsDm, breadcrumb: [], next_cursor: null, messages: [{...msg('o1', 1, 'bot:ops', 'Just us here.'), thread_id: opsDm.id}]});
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
     if (tl && timeline[tl[1]!]) return json(timeline[tl[1]!]!());
     if (tl && known(tl[1]!)) return json({thread: known(tl[1]!), breadcrumb: [{id: tl[1], title: known(tl[1]!)!.title}], next_cursor: null,
@@ -1024,7 +1036,10 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     const tabs = page.locator('#btabs [data-bt]');
     await tabs.first().waitFor();
-    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Chat', 'Tasks']);
+    // The tabs are icons people know (#282): a chat bubble, the Tasks check and ⋯, each naming itself on hover and to a screen reader.
+    assert.deepEqual(await tabs.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, b.querySelector('.nav-icon')?.textContent ?? (b.querySelector('svg') ? 'svg' : '')])),
+      [['Chat', 'Chat', 'chat_bubble'], ['Tasks', 'Tasks', 'task_alt'], ['More', 'More', 'svg']]);
+    assert.equal(await tabs.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join('')), '', 'no words in the tabs');
     for (const width of [390, 320]) {
       await page.setViewportSize({width, height: 700});
       for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
@@ -1034,6 +1049,7 @@ let browser: import('playwright').Browser | null = null;
     await shot(page, 'bot-tabs-phone');
     await page.locator('#bot-incognito').tap();
     await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'true');
+    assert.equal(await page.locator('#bot-incognito .bi-label').isVisible(), false, 'Incognito is the lock alone, raised when on');
     await page.locator('#bot-incognito').tap();
     await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
@@ -1235,6 +1251,81 @@ let browser: import('playwright').Browser | null = null;
       await page.close();
     }
     threadsOff = false;
+  }
+  // Nothing pinned or opened before, and three chats in Catch up: the pane says what waits and offers Catch up, never
+  // the empty picture; it marks nothing read, follows the count, and leaves the page behind Catch up alone.
+  {
+    pinsAtOpen = [];
+    const {page, seen} = await open(browser, 'ana');
+    await page.goto('https://tico-ui.test/#/threads');
+    const line = page.locator('.tr-pane [data-tr-unread-n]');
+    await line.waitFor();
+    assert.equal(await line.textContent(), '3 chats with new messages', 'what waits, in one line');
+    assert.equal(await page.locator('.tr-pane .empty-state .ea-art').count(), 1, 'its own little picture');
+    assert.equal(await page.locator('.tr-pane', {hasText: 'Talk with your team here'}).count(), 0, 'never the empty picture while chats wait');
+    assert.deepEqual(await page.locator('.tr-pane button.primary').allTextContents(), ['Catch up'], 'one worded action');
+    assert.equal(await page.evaluate(() => location.hash), '#/threads', 'no thread opened by itself');
+    assert.deepEqual([seen.reads, seen.readAll], [[], []], 'nothing marked read');
+    await page.evaluate(() => { (THREADS as unknown as {cu: Set<string>}).cu.delete('t4'); railRender(); });
+    assert.equal(await line.textContent(), '2 chats with new messages', 'the line follows the count');
+    await page.evaluate(() => { (THREADS as unknown as {cu: Set<string>}).cu.delete('t11'); railRender(); });
+    assert.equal(await line.textContent(), '1 chat with new messages', 'one chat, singular');
+    await page.locator('.tr-pane [data-tr-catchup]').click();
+    await page.locator('#catch-up[open]').waitFor();
+    assert.deepEqual(seen.readAll, [], 'opening Catch up marks nothing read');
+    await page.evaluate(() => { (THREADS as unknown as {cu: Set<string>}).cu.clear(); railRender(); });
+    assert.equal(await line.textContent(), '1 chat with new messages', 'nothing behind Catch up changes while it is open');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catch-up')?.open);
+    await page.locator('.tr-pane', {hasText: 'Talk with your team here'}).waitFor();
+    assert.equal(await line.count(), 0, 'at 0 the line is gone');
+    assert.deepEqual(seen.errors, [], 'no page errors');
+    await page.close();
+    pinsAtOpen = ['t-plan'];
+  }
+  // ---- Ana's private chat with Ops (#282): its Archive leaves the top line for More, as a word that turns into Unarchive.
+  {
+    opsDm = {id: 't-opsdm', title: 'Chat with Ops', audience: 'personal', last_seq: 1, last_unread_seq: 1, me: me(0, {can_manage: true}),
+      dm_with: [{actor: 'bot:ops', name: 'Ops'}], dm_with_count: 1, archived_at: null};
+    const {page, seen} = await open(browser, 'ana');
+    await page.setViewportSize({width: 1000, height: 800});
+    await page.goto('https://tico-ui.test/#/bot/ops/dm');
+    await page.getByText('Just us here.').waitFor();
+    await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();
+    assert.equal(await page.locator('#bot-incognito .bi-label').isVisible(), false, 'the lock, no word');
+    assert.equal(await page.locator('#bot-top-acts [data-thv-archive]').isVisible(), false, 'no Archive in the top line');
+    assert.deepEqual(await page.locator('#bot-top').evaluate(top => [...top.querySelectorAll<HTMLElement>('button, a')]
+      .filter(b => b.offsetParent && !/\p{L}/u.test(b.innerText) && !b.getAttribute('aria-label')).map(b => b.outerHTML.slice(0, 160))), [],
+      'a button with no word in the top line names itself');
+    await page.locator('#btabs [data-bt="info"]').click();
+    const row = page.locator('#bot-more-top #bot-dm-arch');
+    await row.waitFor();
+    assert.equal((await row.innerText()).trim(), 'Archive private chat');
+    await row.click();
+    await page.locator('.toast', {hasText: 'Archived'}).waitFor();
+    assert.deepEqual(seen.patches.at(-1), {archived: true});
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
+    await page.locator('#bot-dm-arch').click();
+    assert.deepEqual(seen.patches.at(-1), {archived: false});
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    // The toast's Undo puts the row back too.
+    await page.locator('#bot-dm-arch').click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
+    await page.locator('.toast button', {hasText: 'Undo'}).last().click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    assert.deepEqual(seen.patches.slice(-2), [{archived: true}, {archived: false}], 'Undo sent one unarchive');
+    await shot(page, 'bot-more-archive-private-chat');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    opsDm = null;
+    // A bot with no private chat shows no row.
+    const {page: none} = await open(browser, 'ana');
+    await none.setViewportSize({width: 1000, height: 800});
+    await none.goto('https://tico-ui.test/#/bot/ops/info');
+    await none.locator('#bot-more-top').waitFor({state: 'attached'});
+    await none.waitForTimeout(300);
+    assert.equal(await none.locator('#bot-dm-arch').count(), 0, 'no private chat: no row');
+    await none.close();
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});

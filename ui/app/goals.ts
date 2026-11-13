@@ -8,7 +8,7 @@
 // comes from its owner: `company`, a human or a bot. Its parent is optional ("Supports"); a goal with
 // none is simply not linked. A bot reads its own with `tico goal list`; nothing here is pushed into a run.
 /** The Goals page's state (pageGoals): the tree's data, what needs the person, and the open panel (ui/goals-kpis.ts). */
-interface GoalsState extends GkState<GkPanel | null> { owners: Record<string, unknown>; open: string }
+interface GoalsState extends GkState<GkPanel | null> { owners: Record<string, unknown>; open: string; pick: string }
 /** A to-do on the Goals page as the server sends it: GkNeed plus the owner fields the built-in-bot filter reads. */
 interface GoalsNeed extends GkNeed { goal_owner?: string; owner_id?: string; goal_id?: string }
 /** GET /v2/goals/tree. */
@@ -189,6 +189,7 @@ function goalPressed(el: HTMLElement & {_pressed?: boolean}) { if (!el._pressed)
 function goalSheetOpen(state: GoalSheetState, {goal = '', owner = ''}: {goal?: string; owner?: string} = {}) {
   const g = goal ? state.goals.find(x => x.id === goal) : null;
   if (goal && !g) return;
+  goalsPick(state, goal);
   if (!g) { const me = mePerson(); owner = owner || (me ? 'human:' + me.id : S.me?.role === 'owner' ? GOAL_COMPANY : ''); }
   let dlg = document.getElementById('goal-sheet') as HTMLDialogElement;
   if (!dlg) {
@@ -477,8 +478,11 @@ function pageGoals() {
   const was = document.getElementById('goal-panel') as (HTMLDialogElement & {_state?: GkState<GkPanel | null> | null}) | null;
   if (was) { was._state = null; if (was.open) was.close(); }
   const sheet = document.getElementById('goal-sheet') as GkDialog | null; if (sheet?.open) sheet.close();
-  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null, q: ''};
-  // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
+  // The goal last opened stays picked while the person stays on Goals (the page's chat is still Goals'): opening one
+  // draws the page again at its address.
+  const pick = open || (PGC?.page === 'goals' && GOALS_ST?.pick) || '';
+  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, pick, panel: null, strategy: null, q: ''};
+  // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is its owner's chat.
   $('#main').classList.add('strategy-layout', 'rd-goals');
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><input type="search" id="goal-search" class="goal-search" aria-label="Search goals or people" autocomplete="off" placeholder="Search goals or people…"><div id="goal-body"><p class="muted">Loading…</p></div>
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
@@ -487,12 +491,26 @@ function pageGoals() {
     actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
+  // Chat with the page's owner (page-chat.ts), the Strategy Owner by default: the goal last opened rides along.
+  $('#strat-actions')?.insertAdjacentHTML('afterend', '<span class="goal-chat"></span>');
+  const chat = $('#main .goal-chat');
+  if (chat) void pageChatMount({page: 'goals', label: 'Goals', button: chat, stays: r => rdUnder(r, goalsBase()), item: () => goalsPicked(state)});
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
   const search = $('#goal-search');
   search.oninput = () => { state.q = search.value; goalsRender(state); };
   search.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Escape' && search.value) { ev.preventDefault(); ev.stopPropagation(); search.value = ''; search.oninput(); } };
   goalsLoad(state);
   goalsKpiViews($('#goal-kpis'));   // Tree · Loops · Journey (ui/app/goals-kpi-views.ts)
+}
+// The goal the person last opened on Goals, for its chat's chip: what "this goal" means in the next message.
+function goalsPick(state: object, id: string) {
+  if (state !== GOALS_ST || !id || id === 'new') return;
+  GOALS_ST.pick = id;
+  pageChatPicked();
+}
+function goalsPicked(state: GoalsState): PageChatItem | null {
+  const g = state.pick ? state.goals.find(x => x.id === state.pick) : null;
+  return g && g.title ? {kind: 'goal', id: g.id, name: g.title} : null;
 }
 function goalsApply(state: GoalsState, data: GoalsTreeData, needs?: {items?: GoalsNeed[]} | null) {
   state.goals = (data.goals || []).filter(g => !goalBuiltInOwner(g.owner_id));
@@ -516,6 +534,7 @@ async function goalsLoad(state: GoalsState) {
   goalsApply(state, data, needs);
   state.loaded = true;
   goalsRender(state);
+  pageChatPicked();   // the picked goal's title is known now
   const g = state.open && state.goals.find(x => x.id === state.open);
   if (g) goalPanelOpen(state, g.owner_id, {goal: g.id});
 }

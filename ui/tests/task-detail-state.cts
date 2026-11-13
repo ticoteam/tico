@@ -90,6 +90,8 @@ async function show(page: Page) {
    await show(page); await reached.promise;
    // A change to the task arrives on the live stream while the first read is still out: the files are read again.
    await page.evaluate(() => taskChatLive(TASK_CHAT));
+   // A phone shows the task's files in its Info tab (task #409).
+   await page.locator('#task-modal[open]').getByRole('tab', {name: 'Info'}).click();
    await page.locator('#task-modal [data-tf-file="f-notes"] .tf-meta', {hasText: 'v2'}).waitFor({timeout: t(12000)});
    await page.locator('#task-modal [data-tf-file="f-notes"]').click();
    await page.locator('#task-modal [data-tf-view]', {hasText: 'Receipt check version 2.'}).waitFor();
@@ -105,6 +107,9 @@ async function show(page: Page) {
    const {page, errors} = await visit(browser); await show(page);
    const held = gate(), reached = gate();
    await page.route('**/api/v2/tasks/t-checkout/links', async r => { reached.resolve(); await held.promise; await r.fulfill({contentType: 'application/json', body: '{}'}); });
+   // A phone shows Links in the task window's Info tab; adding one starts from ⋯ › Activity and links (task #409).
+   await page.locator('#task-modal[open] [data-task-tab="info"]').click();
+   if (!remove) { await page.locator('#task-modal [data-task-more]').click(); await page.locator('#task-modal .prop-pop').getByRole('menuitem', {name: 'Activity and links'}).click(); }
    if (remove) await page.locator('#task-modal [data-drop-link="d1"]').click();
    else {
     await page.locator('#task-modal [data-link-add]').click();

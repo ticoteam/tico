@@ -2171,6 +2171,18 @@ impl Runner {
         // The thread a turn the model's capacity stopped after it acted left to continue (backend/execution.py
         // capacity_continuation): only that thread, on the bot's own login, takes it; never a fallback or a fresh one.
         let continuing = text_of(&attempt["continue_thread"]);
+        // A job the server released warm names the bot's latest session on this computer (lanes::FORK_SESSION): a
+        // turn that would start a brand-new thread starts it on a fork of that one instead, which is left as it was.
+        let fork_thread = text_of(&attempt["fork_thread"]);
+        // A job the server releases as a run of its own (lanes::FRESH_SESSION) starts a new thread too, never resuming the
+        // conversation's saved one.
+        let fresh_session = truthy(attempt.get("fresh_session"));
+        // Either makes a release run: it never resumes the conversation's saved session. In a conversation that has one
+        // (the bot's room) the run is one-off and is never saved over it, so the room's long-lived session stays the one
+        // its next ordinary turn resumes; in one that has none (a routine's new task) its thread is that conversation's
+        // first session and is kept like any other. Set once the turn's kind is known.
+        let mut release_run = false;
+        let mut one_off = false;
         let mut uses: Vec<String> = vec![runtime.clone()];
         if let Some(hop) = crate::fallback::configured(&config) {
             uses.push(hop.runtime);
@@ -2407,8 +2419,17 @@ impl Runner {
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
-            let mut previous = if packet_only || side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
-            if previous.is_none() && !(packet_only || side_run || binding_changed || fresh_chat) && conv == key {
+            release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat && !packet_only;
+            if release_run {
+                let adopted = if conv == key { adopted_key(&key) } else { None };
+                one_off = self.state.session(&bot, &conv, &session_runtime)?.is_some()
+                    || match adopted {
+                        Some(old) => self.state.session(&bot, &old, &session_runtime)?.is_some(),
+                        None => false,
+                    };
+            }
+            let mut previous = if packet_only || side_run || binding_changed || fresh_chat || release_run { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            if previous.is_none() && !(packet_only || side_run || binding_changed || fresh_chat || release_run) && conv == key {
                 // The first native-threads turn of a root resumes the thread its conversation had (adopted_key).
                 if let Some(old) = adopted_key(&key) {
                     previous = self.state.session(&bot, &old, &session_runtime)?;
@@ -2532,20 +2553,33 @@ impl Runner {
                     since = self.state.cursor(prev, None)?;
                 }
             } else {
-                session = Some(crate::continuity::Session::new(crate::continuity::NONE_SAVED, None));
+                let why = if release_run { crate::continuity::FRESH } else { crate::continuity::NONE_SAVED };
+                session = Some(crate::continuity::Session::new(why, None));
             }
             if thread.is_none() {
                 self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
                 // without creating or saving a replacement session before that acknowledgement.
-                thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
+                // A one-off thread the server named a session for starts on a fork of it.
+                let fork = release_run && !fork_thread.is_empty();
+                thread = Some(if !continuing.is_empty() {
+                    continuing.clone()
+                } else if fork {
+                    let (th, forked) = h.start_thread_forked(&bot, &settings, &fork_thread).await?;
+                    if forked {
+                        session = Some(crate::continuity::Session::new(crate::continuity::FORKED, None));
+                    }
+                    th
+                } else {
+                    h.start_thread(&bot, &settings).await?
+                });
             }
             let th = thread.clone().unwrap();
             self.note_session(&aid, &bot, session.as_ref());
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && !side_run && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
+            fresh = (!resumed && !side_run && !one_off && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: session_runtime.clone(),
@@ -2555,7 +2589,7 @@ impl Runner {
                 confirmed: Mutex::new(None),
                 source: None,
             });
-            if fresh.is_none() && !side_run && continuing.is_empty() && !fresh_chat {
+            if fresh.is_none() && !side_run && !one_off && continuing.is_empty() && !fresh_chat {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -2758,7 +2792,17 @@ impl Runner {
         // future, before a fallback can stop this host or settlement applies the interrupt-resume capability.
         if let (Some(h), Some(th)) = (&host, &thread) {
             let saved = h.session_id(th);
-            if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
+            if session
+                .as_ref()
+                .is_some_and(|s| s.why == Some(crate::continuity::FORKED))
+                && h.restored(th)
+            {
+                // The session it was to fork is not on this computer: Claude Code began a plain new one.
+                session = Some(crate::continuity::Session::new(
+                    crate::continuity::FRESH,
+                    Some("the session it was to fork is not on this computer".into()),
+                ));
+            } else if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
                 // Claude Code and Gemini find out only when the turn runs that the saved session is not on this computer.
                 session = Some(crate::continuity::Session::new(
                     crate::continuity::NOT_FOUND,
@@ -2780,6 +2824,7 @@ impl Runner {
                 // or a refused resume. A fresh session that never came up and a side session are not kept.
                 if continuing.is_empty()
                     && !side_run
+                    && !one_off
                     && fresh
                         .as_ref()
                         .is_none_or(|f| f.confirmed.lock().unwrap().is_some())
@@ -8741,6 +8786,298 @@ else:
             server.abort();
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    /// A synthetic Claude process that answers every turn under the session it was given (`--session-id`, else the one
+    /// it resumes), and refuses a fork of `gone-session` as a session not on this computer. Every argv is kept in
+    /// argv.jsonl.
+    fn one_off_host(dir: &Path) {
+        let script = dir.join("synthetic_claude.py");
+        std::fs::write(&script, r#"import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+with (root / 'argv.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+sys.stdin.readline()
+if 'gone-session' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'error_during_execution','is_error':True,'num_turns':0,
+                      'errors':['No conversation found with session ID: gone-session']}), flush=True)
+    sys.exit(1)
+flag = '--session-id' if '--session-id' in sys.argv else '--resume'
+sid = sys.argv[sys.argv.index(flag) + 1]
+print(json.dumps({'type':'system','subtype':'init','session_id':sid}), flush=True)
+print(json.dumps({'type':'result','subtype':'success','result':'Sent the Acme invoice.'}), flush=True)
+"#).unwrap();
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec![
+                crate::env::python().display().to_string(),
+                script.display().to_string(),
+            ])
+        });
+        HOST_CLAUDE.with(|on| on.set(true));
+        RUN_SESSION.with(|on| on.set(Some(true)));
+    }
+
+    /// A turn in the bot's own room, with `extra` merged into the claim (`fresh_session`, `fork_thread`).
+    fn room_attempt(id: &str, extra: Value) -> Value {
+        let mut attempt = json!({"id": id, "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+               "conversation": {"id": "c1"}, "message": {"refs": {}},
+               "config": {"runtime": "claude", "harness": "claude", "model": "synthetic", "session": "bot"}});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            attempt[k] = v;
+        }
+        attempt
+    }
+
+    async fn run_room_turns(
+        runner: &Arc<Runner>,
+        seen: &Mutex<Vec<(String, String, Value)>>,
+        turns: &[(&str, Value)],
+    ) {
+        for (id, extra) in turns {
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                runner.clone().execute(room_attempt(id, extra.clone())),
+            )
+            .await
+            .expect("the turn ends")
+            .unwrap();
+            assert_eq!(completion(seen, id)["outcome"], "completed", "{id}");
+        }
+    }
+
+    fn argvs(dir: &Path) -> Vec<Vec<String>> {
+        std::fs::read_to_string(dir.join("argv.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn session_kind_why(completion: &Value) -> (Option<&str>, Option<&str>) {
+        (
+            completion["session"]["kind"].as_str(),
+            completion["session"]["why"].as_str(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_fresh_release_job_in_the_bots_room_starts_a_new_session_and_leaves_the_rooms_own() {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "fresh-session");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        one_off_host(&dir);
+        // The room already has its long-lived session (the daily update request posted into the bot's own room).
+        runner
+            .state
+            .save_session("ops", "bot", "claude", "room-session")
+            .unwrap();
+        run_room_turns(
+            &runner,
+            &seen,
+            &[
+                ("a-fresh", json!({"fresh_session": true})),
+                ("a-next", json!({})),
+            ],
+        )
+        .await;
+        let args = argvs(&dir);
+        assert_eq!(args.len(), 2, "{args:?}");
+        assert!(!args[0].contains(&"room-session".to_string()), "{args:?}");
+        let new = args[0]
+            .windows(2)
+            .find(|w| w[0] == "--session-id")
+            .map(|w| w[1].clone())
+            .expect("a new session");
+        assert!(!args[0].contains(&"--resume".to_string()), "{args:?}");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-fresh")),
+            (Some("new"), Some("fresh"))
+        );
+        // The room's session is still the one its next ordinary turn resumes; the fresh one was not saved over it.
+        assert_eq!(
+            runner
+                .state
+                .session("ops", "bot", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("room-session")
+        );
+        assert!(
+            args[1]
+                .windows(2)
+                .any(|w| w == ["--resume", "room-session"]),
+            "{args:?}"
+        );
+        assert!(!args[1].contains(&new), "{args:?}");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-next")).0,
+            Some("resumed")
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_release_run_in_a_conversation_with_no_session_keeps_its_thread_for_the_next_turn() {
+        // A routine's run gets a task of its own, with a conversation that has no session yet: its fresh or forked
+        // thread is that conversation's first session, and the next turn there (a person's answer, the next stage)
+        // resumes it rather than starting over.
+        for (name, extra, why) in [
+            ("fresh-empty", json!({"fresh_session": true}), "fresh"),
+            (
+                "fork-empty",
+                json!({"fork_thread": "latest-session"}),
+                "forked",
+            ),
+        ] {
+            let _controls = RunControls;
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, name);
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            one_off_host(&dir);
+            assert!(runner
+                .state
+                .session("ops", "bot", "claude")
+                .unwrap()
+                .is_none());
+            run_room_turns(&runner, &seen, &[("a-first", extra), ("a-next", json!({}))]).await;
+            let args = argvs(&dir);
+            assert_eq!(args.len(), 2, "{name}: {args:?}");
+            let first = args[0]
+                .windows(2)
+                .find(|w| w[0] == "--session-id")
+                .map(|w| w[1].clone())
+                .expect("a new session");
+            assert_eq!(
+                session_kind_why(&completion(&seen, "a-first")),
+                (Some("new"), Some(why)),
+                "{name}"
+            );
+            assert_eq!(
+                runner
+                    .state
+                    .session("ops", "bot", "claude")
+                    .unwrap()
+                    .as_deref(),
+                Some(first.as_str()),
+                "{name}: the first session is kept as the conversation's"
+            );
+            assert!(
+                args[1]
+                    .windows(2)
+                    .any(|w| w == ["--resume", first.as_str()]),
+                "{name}: {args:?}"
+            );
+            assert_eq!(
+                session_kind_why(&completion(&seen, "a-next")).0,
+                Some("resumed"),
+                "{name}"
+            );
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_release_job_forks_the_bots_latest_session_and_leaves_the_rooms_own() {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "fork");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        one_off_host(&dir);
+        runner
+            .state
+            .save_session("ops", "bot", "claude", "room-session")
+            .unwrap();
+        run_room_turns(
+            &runner,
+            &seen,
+            &[
+                ("a-fork", json!({"fork_thread": "latest-session"})),
+                ("a-next", json!({})),
+                // A fork source that is not on this computer: Claude Code begins a plain new session instead.
+                (
+                    "a-gone",
+                    json!({"fork_thread": "gone-session", "fresh_session": true}),
+                ),
+                ("a-last", json!({})),
+            ],
+        )
+        .await;
+        let args = argvs(&dir);
+        assert_eq!(
+            args.len(),
+            5,
+            "the fork of gone-session restarts once: {args:?}"
+        );
+        let fork = args[0]
+            .windows(5)
+            .find(|w| {
+                w[..4]
+                    == [
+                        "--resume",
+                        "latest-session",
+                        "--fork-session",
+                        "--session-id",
+                    ]
+            })
+            .map(|w| w[4].clone())
+            .unwrap_or_else(|| panic!("a fork: {args:?}"));
+        assert_ne!(fork, "room-session");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-fork")),
+            (Some("new"), Some("forked"))
+        );
+        assert!(
+            args[1]
+                .windows(2)
+                .any(|w| w == ["--resume", "room-session"]),
+            "{args:?}"
+        );
+        assert!(!args[1].contains(&"--fork-session".to_string()), "{args:?}");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-next")).0,
+            Some("resumed")
+        );
+        assert!(
+            args[2]
+                .windows(3)
+                .any(|w| w == ["--resume", "gone-session", "--fork-session"]),
+            "{args:?}"
+        );
+        assert!(
+            !args[3]
+                .iter()
+                .any(|a| a == "--fork-session" || a == "gone-session" || a == "room-session"),
+            "{args:?}"
+        );
+        let gone = completion(&seen, "a-gone");
+        assert_eq!(
+            session_kind_why(&gone),
+            (Some("new"), Some("fresh")),
+            "{gone:?}"
+        );
+        assert!(
+            args[4]
+                .windows(2)
+                .any(|w| w == ["--resume", "room-session"]),
+            "{args:?}"
+        );
+        assert_eq!(
+            runner
+                .state
+                .session("ops", "bot", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("room-session")
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

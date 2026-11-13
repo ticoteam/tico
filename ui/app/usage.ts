@@ -83,6 +83,7 @@ interface UseState {
   edit: UseEdit | null;
   limits?: UseLimits | null;
   detail?: UseData;
+  why?: boolean;
 }
 /** What a queue purge answers (POST /api/v2/usage/queues/purge). */
 interface UsePurged { cancelled: number; kept_people: number; still_running: number }
@@ -94,6 +95,8 @@ interface UsePurged { cancelled: number; kept_people: number; still_running: num
 const USE_RANGES: [string, string][] = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
 const USE_DIMENSIONS: [string, string][] = [['harness', 'Harness'], ['model', 'Model'], ['effort', 'Effort'], ['subscription', 'Subscription']];
 let USE: UseState | null = null;
+// The Filter panel's click-outside listener: one at a time, replaced each time the page is drawn (useFilterWire).
+let USE_OUTSIDE: ((ev: MouseEvent) => void) | null = null;
 // The value of the select an event came from (its own control, so a plain read of the value).
 const eventValue = (ev: Event): string => { const el = eventElement(ev); return el && 'value' in el ? String(el.value) : ''; };
 const useDay = (date: Date): string => date.toISOString().slice(0, 10);
@@ -127,6 +130,8 @@ const useSpend = (r: UseFigures): number => (r.est_cost_usd || 0) + (r.subscript
 const useRuns = (n: number | null | undefined): string => `${(n || 0).toLocaleString()} run${n === 1 ? '' : 's'}`;
 // Runs on a model whose long prompts cost more, without each request's tokens, were priced at the lower rate.
 const useLowWhy = (n: number): string => `${useRuns(n)} on a model that charges more for long prompts did not report each request's tokens, so they are priced at the lower rate`;
+// How the total is counted: behind the help button beside it (usePaint).
+const USE_WHY = 'API list price, including runs on subscriptions. Details a runner did not report stay unknown. A run that used a fallback can count in two groups.';
 const useLow = (r: UseFigures): string => r.low_estimate_runs > 0 ? `<span class="use-sub use-low" title="${esc(useLowWhy(r.low_estimate_runs))}">estimate, may be low</span>` : '';
 // API-equivalent, or a dash for tokens on a model with no list price and no subscription runs.
 const useEquiv = (r: UseFigures): number | null => r.est_cost_usd == null && !(r.subscription_equiv_usd > 0) ? null : useSpend(r);
@@ -156,16 +161,20 @@ function pageUsage(): void {
     <div id="use-spend"><div class="use-bar-row">
       <div class="use-seg" role="tablist" aria-label="Range">${USE_RANGES.map(([k, label]) =>
         `<button type="button" role="tab" data-use-range="${k}" aria-selected="${k === state.range}">${label}</button>`).join('')}</div>
-      <select id="use-dept" aria-label="Group" hidden></select>
       <span class="use-custom" hidden><input type="date" id="use-from" aria-label="From"><input type="date" id="use-to" aria-label="To"></span>
+      <span class="use-filter-at">
+        <button type="button" class="ghost use-filter" aria-haspopup="dialog" aria-expanded="false" aria-controls="use-filter-panel"><span class="nav-icon" aria-hidden="true">filter_list</span><span class="use-filter-t">Filter</span></button>
+        <div id="use-filter-panel" class="use-filter-panel" role="dialog" aria-label="Filter usage" hidden>
+          <label class="use-frow" hidden><span>Group</span><select id="use-dept"></select></label>
+          ${USE_DIMENSIONS.map(([key, label]) => `<label class="use-frow" hidden><span>${label}</span><select data-use-filter="${key}" aria-label="Filter ${label}"><option value="">All</option></select></label>`).join('')}
+          <hr class="use-fsep">
+          <label class="use-frow"><span>Group by</span><select id="use-group">${[['bot', 'Bot'], ...USE_DIMENSIONS].map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
+          <label class="use-frow"><span>Sort by</span><select id="use-sort"><option value="cost">Cost</option><option value="tokens">Tokens</option><option value="runs">Runs</option><option value="name">Name</option></select></label>
+          <div class="use-ffoot"><button type="button" class="linkish" data-use-reset>Reset</button></div>
+        </div>
+      </span>
       <button type="button" class="ghost use-default" id="use-purge" hidden>Clear automatic queue</button>
     </div>
-    <div class="use-bar-row">
-      <label>Group by <select id="use-group">${[['bot', 'Bot'], ...USE_DIMENSIONS].map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
-      <label>Sort by <select id="use-sort"><option value="cost">Cost</option><option value="tokens">Tokens</option><option value="runs">Runs</option><option value="name">Name</option></select></label>
-      ${USE_DIMENSIONS.map(([key, label]) => `<label>${label} <select data-use-filter="${key}" aria-label="Filter ${label}"><option value="">All</option></select></label>`).join('')}
-    </div>
-    <p class="muted">Historical details not reported by a runner remain unknown. A run using a fallback can appear in more than one group.</p>
     <div id="use-body" aria-live="polite"></div></div>
   </div>`;
   const main = $('#main');
@@ -176,9 +185,10 @@ function pageUsage(): void {
   $('#use-group').onchange = (ev: Event) => { state.group = eventValue(ev); state.open = ''; useLoad(); };
   $('#use-sort').onchange = (ev: Event) => { state.sort = eventValue(ev); usePaint(); };
   main.querySelectorAll('[data-use-filter]').forEach((select: HTMLSelectElement) => select.onchange = () => {
-    state.filters[String(select.dataset.useFilter)] = select.value; state.open = ''; useLoad();
+    state.filters[String(select.dataset.useFilter)] = select.value; state.open = ''; useFilterCount(); useLoad();
   });
-  $('#use-dept').onchange = (ev: Event) => { state.department = eventValue(ev); state.open = ''; useSave(); useLoad(); };
+  $('#use-dept').onchange = (ev: Event) => { state.department = eventValue(ev); state.open = ''; useSave(); useFilterCount(); useLoad(); };
+  useFilterWire(state);
   $('#use-from').onchange = $('#use-to').onchange = () => {
     state.custom = {from: $('#use-from').value, to: $('#use-to').value};
     if (state.custom.from && state.custom.to && state.custom.from <= state.custom.to) { state.open = ''; useLoad(); }
@@ -192,13 +202,63 @@ function pageUsage(): void {
     const line = el?.closest<HTMLElement>('.use-line');
     if (line && state.group === 'bot') return void useOpen(String(line.closest<HTMLElement>('.use-row')?.dataset.bot));
     if (el?.closest('[data-use-csv]')) useCsv();
+    const why = el?.closest<HTMLElement>('.use-why');
+    if (why) {
+      state.why = !state.why;
+      why.setAttribute('aria-expanded', String(state.why));
+      const text = $('#use-why-text'); if (text) text.hidden = !state.why;
+    }
   };
   main.querySelector('.use-tabs').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-use-view]'); if (b) useView(String(b.dataset.useView)); };
   $('#use-purge').onclick = () => usePurgeDialog(state.limits, (result: UsePurged) => {
     if (USE === state && $('#use-purge')) toast(`Cleared ${result.cancelled} queued · ${result.kept_people} kept · ${result.still_running} running`);
   });
   void useLimits();
+  useFilterCount();
   useLoad();
+}
+
+// The Filter button reads "Filter · N" for the filters set (Group and the four dimensions; Group by and Sort by are how
+// the list is shown, not what it holds). A Group kept from an earlier visit counts from the start.
+function useFilterCount(): void {
+  const state = USE, b = $('#main')?.querySelector('.use-filter'); if (!state || !b) return;
+  const n = +!!state.department + USE_DIMENSIONS.filter(([key]) => state.filters[key]).length;
+  b.querySelector('.use-filter-t').textContent = n ? `Filter · ${n}` : 'Filter';
+  if (n) b.setAttribute('aria-label', `Filter, ${n} on`); else b.removeAttribute('aria-label');
+}
+// The panel stays in the page while closed (useLoad fills its selects by id). Opening puts the cursor in its first select;
+// Escape, a click outside it or the button again closes it and gives the button the focus back.
+function useFilterWire(state: UseState): void {
+  const main = $('#main'), b = main.querySelector('.use-filter'), panel = $('#use-filter-panel');
+  const close = (refocus: boolean): void => {
+    if (panel.hidden) return;
+    panel.hidden = true; b.setAttribute('aria-expanded', 'false');
+    if (refocus) b.focus();
+  };
+  const open = (): void => {
+    panel.hidden = false; b.setAttribute('aria-expanded', 'true');
+    // Under the button, left edges aligned, moved left as far as it takes to stay in the window.
+    panel.style.left = '0px';
+    const over = panel.getBoundingClientRect().right - (document.documentElement.clientWidth - 12);
+    if (over > 0) panel.style.left = -over + 'px';
+    [...panel.querySelectorAll('select')].find((s: HTMLSelectElement) => !s.closest('[hidden]'))?.focus();
+  };
+  b.onclick = () => panel.hidden ? open() : close(true);
+  panel.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.preventDefault(); close(true); } };
+  panel.querySelector('[data-use-reset]').onclick = () => {
+    state.department = ''; state.filters = {}; state.open = '';
+    useSave(); useFilterCount(); useLoad();
+  };
+  const outside = (ev: MouseEvent): void => {
+    if (!panel.isConnected) { document.removeEventListener('click', outside, true); if (USE_OUTSIDE === outside) USE_OUTSIDE = null; return; }
+    const el = eventElement(ev);
+    if (panel.hidden || el?.closest('.use-filter-at')) return;
+    const inside = panel.contains(document.activeElement) || document.activeElement === document.body;
+    close(inside);
+  };
+  if (USE_OUTSIDE) document.removeEventListener('click', USE_OUTSIDE, true);
+  USE_OUTSIDE = outside;
+  document.addEventListener('click', outside, true);
 }
 
 // The team default limit, the team's and groups' limits, and each bot's: the Limits tab shows when any is ours to change.
@@ -249,9 +309,11 @@ async function useLoad(): Promise<void> {
   const select = $('#use-dept');
   select.innerHTML = `<option value="">All groups</option>` + (data.departments || []).map(d =>
     `<option value="${esc(d)}"${d === state.department ? ' selected' : ''}>${esc(d)}</option>`).join('');
-  select.hidden = !(data.departments || []).length;
+  select.closest('.use-frow').hidden = !(data.departments || []).length;
+  // A dimension shows in Filter when there is a choice to make in it, or one is made.
   for (const [key] of USE_DIMENSIONS) {
     const filter = $(`[data-use-filter="${key}"]`), selected = state.filters[key] || '';
+    filter.closest('.use-frow').hidden = !selected && (data.dimensions?.[key] || []).length < 2;
     const values = [...new Set([...(data.dimensions?.[key] || []), ...(selected ? [selected] : [])])].sort();
     filter.innerHTML = '<option value="">All</option>' + values.map(value => `<option value="${esc(value)}">${esc(data.dimension_labels?.[key]?.[value] || (value === '__unknown__' ? 'Not recorded / not applicable' : value))}</option>`).join('');
     filter.value = selected;
@@ -270,8 +332,12 @@ function usePaint(): void {
   if (!rows.length) { body.innerHTML = '<div class="empty">No usage yet.</div>'; return; }
   const t = data.totals;
   const top = Math.max(...rows.map(useSpend), 0);
-  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note">API-equivalent · ${useRuns(t.runs)}</span>
-      ${t.low_estimate_runs > 0 ? `<div class="use-sub use-low">Estimate, may be low: ${esc(useLowWhy(t.low_estimate_runs))}.</div>` : ''}</div>
+  // The total, then the list; how it is counted waits behind the help button.
+  const low = t.low_estimate_runs > 0 ? useLowWhy(t.low_estimate_runs) : '';
+  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note">API-equivalent · ${useRuns(t.runs)}</span>${
+      low ? `<span class="use-low" title="${esc(low)}"> · may be low</span>` : ''}
+      <button type="button" class="use-why" aria-expanded="${!!state.why}" aria-controls="use-why-text" aria-label="How this is counted"><span class="nav-icon" aria-hidden="true">help</span></button>
+      <p id="use-why-text" class="muted"${state.why ? '' : ' hidden'}>${esc(USE_WHY)}${low ? ' ' + esc(low) + '.' : ''}</p></div>
     <ul class="use-list">${rows.map(r => `<li class="use-row" data-bot="${esc(r.bot)}">
       ${state.group === 'bot' ? useLimitButton(r.bot, r.name, r.limit) : '<span class="use-limit"></span>'}
       <${state.group === 'bot' ? 'button type="button"' : 'div'} class="use-line"${state.group === 'bot' ? ` aria-expanded="${state.open === r.bot}"` : ''}>
@@ -313,8 +379,10 @@ async function useDetail(slug: string): Promise<void> {
     return `<span class="use-col" title="${esc(tip)}" data-day="${esc(d.day)}">${v ? `<i class="use-api" style="height:${(100 * v / peak).toFixed(1)}%"></i>` : ''}</span>`;
   }).join('');
   const routines = (data.routines || []).filter(r => r.runs);
-  host.innerHTML = `<div class="use-chart" role="img" aria-label="Daily API-equivalent cost, ${esc(days[0]?.day || '')} to ${esc(days[days.length - 1]?.day || '')}">${bars}</div>
-    <div class="use-axis"><span>${esc(days[0]?.day || '')}</span><span>${peak ? useMoney(peak) + ' a day at most' : ''}</span><span>${esc(days[days.length - 1]?.day || '')}</span></div>
+  // A range of one day has no daily chart: its one bar would only fill the width and repeat the row's own figure.
+  const chart = days.length < 2 ? '' : `<div class="use-chart" role="img" aria-label="Daily API-equivalent cost, ${esc(days[0]?.day || '')} to ${esc(days[days.length - 1]?.day || '')}">${bars}</div>
+    <div class="use-axis"><span>${esc(days[0]?.day || '')}</span><span>${peak ? useMoney(peak) + ' a day at most' : ''}</span><span>${esc(days[days.length - 1]?.day || '')}</span></div>`;
+  host.innerHTML = `${chart}
     <table class="use-routines"><thead><tr><th>Automation</th><th>Runs</th><th>Cost</th></tr></thead><tbody>${routines.map(r =>
       `<tr><td>${esc(r.title)}</td><td class="tnum">${r.runs}</td><td class="tnum"><span class="use-cost">${useCost(r)}</span></td></tr>`).join('')
       || '<tr><td colspan="3" class="muted">None.</td></tr>'}</tbody></table>

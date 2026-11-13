@@ -162,9 +162,10 @@ Lane = Literal["company", "product"]
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
-# A relation is a note between two tasks. A task waits on no relation but `after`, and that only in Merge: it merges
-# after the other task (backend/merge_order.py). Otherwise it waits on the tasks it filed (`parent`).
-RelationKind = Literal["related", "duplicate_of", "follow_up", "after"]
+# A relation is a note between two tasks. A task waits on two relations: `after`, only in Merge, where it merges after
+# the other task (backend/merge_order.py), and `depends_on`, in any stage, where it is blocked until the other task ends
+# (backend/task_depends.py). Otherwise it waits on the tasks it filed (`parent`).
+RelationKind = Literal["related", "duplicate_of", "follow_up", "after", "depends_on"]
 
 
 class TaskRelationRef(Contract):
@@ -315,6 +316,9 @@ class TaskMove(Contract):
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
+    # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
+    # next. Refused when the task now waits on someone else (H.task_let_see).
+    let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
 
 
 class TaskQueue(Contract):
@@ -582,7 +586,8 @@ class TaskLink(Contract):
 
 class TaskRelation(Contract):
     """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
-    merges after task: in Merge its PRs are not queued until task has merged). The others are notes."""
+    merges after task: in Merge its PRs are not queued until task has merged), depends_on (it is blocked until task
+    ends). The others are notes."""
 
     task: ID
     kind: RelationKind = "related"
@@ -1545,6 +1550,8 @@ class Heartbeat(Contract):
             "model_switch_to_key_v1",
             "computer_logins_v1",
             "capacity_continue_v1",
+            "fork_session_v1",
+            "fresh_session_v1",
             "source_continue_v1",
             "turns_at_once_v1",
             "private_lanes_v1",
@@ -2173,13 +2180,9 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: CompactAt
-    expected_revision: int = Field(ge=1)
-
-
-class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"] = Field(
-        description="Token saver or Performance; legacy current is accepted as an alias for Performance."
+    # Required: null clears the saved size, and the bot follows its model's default again (providers.compact_default).
+    compact_at: CompactAt | None = Field(
+        description="Where the bot's conversation compacts, in tokens; null puts it back on its model's default"
     )
     expected_revision: int = Field(ge=1)
 
@@ -2453,6 +2456,30 @@ class PageOwnerSet(Contract):
     """A page's owner (backend/page_owners.py): a bot's id or slug, or null for no owner (the page has no Chat)."""
 
     bot: str | None = None
+
+
+class KeyGrantRow(Contract):
+    """One row of the Tools owner's proposal (backend/key_grants.py): a key saved in the Tools chat, by name; a tool,
+    by id or name; read or read_write; the bots, by slug or id."""
+
+    key: str = Field(min_length=1, max_length=150)
+    tool: str = Field(min_length=1, max_length=200)
+    level: Literal["read", "read_write"] = "read"
+    bots: list[str] = Field(min_length=1, max_length=10)
+
+
+class KeyGrantProposal(Contract):
+    """The Tools owner's proposal in its chat with a person (`thread_id`); the server builds the card from it."""
+
+    thread_id: str = Field(min_length=1, max_length=200)
+    rows: list[KeyGrantRow] = Field(min_length=1, max_length=20)
+    note: str = Field(default="", max_length=500)
+
+
+class KeyGrantGrant(Contract):
+    """Grant on the card: the positions of the rows kept (null: all)."""
+
+    keep: list[int] | None = Field(default=None, max_length=20)
 
 
 class AccessRules(Contract):
@@ -3465,15 +3492,24 @@ class GrowthChannelUpdate(Contract):
     sort: int | None = None
 
 
-# A synced source's kind (backend/growth_sync.py). Part 1 brings file import; database query, Finance ad spend and bot
-# cost follow in later parts.
-GrowthSyncKind = Literal["file"]
+# A synced source's kind (backend/growth_sync.py): file import, database query and Finance ad spend
+# (backend/growth_finance.py); bot cost follows in a later part.
+GrowthSyncKind = Literal["file", "db_query", "finance_ad_spend"]
 
 
 class GrowthSyncMap(Contract):
     month: str | None = Field(default=None, min_length=1, max_length=80)
     channel: str | None = Field(default=None, min_length=1, max_length=80)
-    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]]
+    fields: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=80)]] | None = None
+    # A database query source: the database (as `tico db` names it), a named query in its catalog, and the bot granted
+    # that database, which runs it daily.
+    database: str | None = Field(default=None, min_length=1, max_length=80)
+    query: str | None = Field(default=None, min_length=1, max_length=120)
+    bot: str | None = Field(default=None, min_length=1, max_length=200)
+    # Finance ad spend: campaign key (platform:account:campaign) -> channel slug; "unknown" or "" is Unknown.
+    campaigns: dict[Annotated[str, Field(max_length=200)], Annotated[str, Field(max_length=80)]] | None = Field(
+        default=None, max_length=2000
+    )
 
 
 class GrowthSourceCreate(Contract):
@@ -3538,6 +3574,23 @@ class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
+    min_cohort: int | None = Field(default=None, ge=5, le=100000)  # the fewest customers a cohort needs for a rate
+    time_zone: str | None = Field(default=None, min_length=1, max_length=64)  # IANA; customer dates are read in it
+    key_readers: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=50)
+
+
+# Customer facts (backend/growth_customers.py): CSV text, or rows as objects. The cells are checked by the load itself,
+# whose refusals never echo a value; nothing here constrains a cell, so the contract's 422 has none to echo either.
+class GrowthCustomersLoad(Contract):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, defer_build=True)
+    csv: str | None = Field(default=None, max_length=20_000_000)
+    rows: list[dict[str, str | float | int | None]] | None = Field(default=None, max_length=200_000)
+
+    @model_validator(mode="after")
+    def one_shape(self):
+        if (self.csv is None) == (self.rows is None):
+            raise ValueError("send csv or rows, not both")
+        return self
 
 
 # Tools (backend/mailboxes.py): connect a mailbox, and who can use it.

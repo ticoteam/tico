@@ -3,6 +3,8 @@ silently: BotOps gets it and the task says what it waits on (Acme, Nov 11: Revie
 on its Review 2 task with "the bot's checkout's upstream could not be read", two minutes apart, and the task read
 "Queued")."""
 
+import json
+
 from backend import execution, start_holds, task_wakes, waiting_on
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401 (fixture)
@@ -62,6 +64,14 @@ def test_three_hand_backs_for_the_same_reason_go_to_botops_and_pause_the_task(ap
     for n in range(start_holds.SAME):
         assert attempt and attempt["job_id"] == job_id
         hand_back(api, machine, attempt, reason)
+        with api.app.state.store.read() as c:
+            [detail] = [
+                json.loads(r[0])
+                for r in c.execute(
+                    "SELECT detail FROM events WHERE action='attempt.returned' AND target=?", (attempt["id"],)
+                )
+            ]
+        assert detail["cause"] == "handed_back"  # the category the server logs it with
         if n < start_holds.SAME - 1:
             assert job_state(api, job_id) == "queued"
             assert not botops_tasks(api)

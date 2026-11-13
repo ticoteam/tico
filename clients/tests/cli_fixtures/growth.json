@@ -547,6 +547,7 @@
    [
     "tico_growth_cohort_list",
     {
+     "customers": false,
      "operation_id": null
     }
    ]
@@ -916,6 +917,155 @@
    ]
   ],
   "stdout": "{\n  \"done\": false,\n  \"steps\": [\n    {\n      \"step\": \"settings\",\n      \"done\": true,\n      \"at\": \"2026-11-13T09:00:00Z\"\n    },\n    {\n      \"step\": \"channel\",\n      \"done\": false,\n      \"at\": null\n    },\n    {\n      \"step\": \"source\",\n      \"done\": false,\n      \"at\": null\n    },\n    {\n      \"step\": \"month\",\n      \"done\": false,\n      \"at\": null\n    }\n  ],\n  \"next\": {\n    \"step\": \"channel\",\n    \"number\": 2,\n    \"says\": \"Add your first channel: where customers come from (search ads, SEO, partners).\",\n    \"command\": \"tico growth channel add <slug> --name \\\"<name>\\\"\",\n    \"tool\": \"tico_growth_channel_add\",\n    \"you_may\": false,\n    \"who_may\": [\n      {\n        \"ref\": \"human:ana\",\n        \"name\": \"Ana\"\n      }\n    ],\n    \"bots_may\": false\n  },\n  \"channel\": null,\n  \"you_may\": {\n    \"settings\": false,\n    \"channels\": false,\n    \"sources\": false,\n    \"months\": true\n  },\n  \"first_opened_at\": \"2026-11-13T08:55:00Z\",\n  \"numbers_seen_at\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--by",
+   "plan",
+   "--month",
+   "2026-09"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "by": "plan",
+     "customers": false,
+     "month": "2026-09",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/computed?by=plan&month=2026-09",
+    null
+   ]
+  ],
+  "stdout": "period   plan  new  day 30         day 90              day 180             LTV      CAC        payback    source\n2026-09  pro   71   78.9% (56/71)  not yet 2026-12-29  not yet 2027-03-29  640      not split  not split  computed\n2026-09  solo  19   12 of 19       not yet 2026-12-29  not yet 2027-03-29  too few  not split  not split  computed\nUnder 30 customers a cohort shows counts only: too few for a rate.\nCAC and payback are per channel: spend is not split by plan.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--by",
+   "segment",
+   "--grain",
+   "week",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "by": "segment",
+     "customers": false,
+     "grain": "week",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/computed?by=segment&grain=week",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"by\": \"plan\",\n  \"grain\": \"month\",\n  \"min_cohort\": 30,\n  \"cac_note\": \"spend is not split by plan\",\n  \"keys_visible\": false,\n  \"cohorts\": [\n    {\n      \"period\": \"2026-09\",\n      \"value\": \"pro\",\n      \"too_few\": false,\n      \"new_customers\": {\n        \"value\": 71,\n        \"status\": \"ok\"\n      },\n      \"kept_d30\": {\n        \"value\": 78.9,\n        \"status\": \"ok\",\n        \"count\": 56,\n        \"denominator\": 71\n      },\n      \"kept_d90\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2026-12-29\"\n      },\n      \"kept_d180\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2027-03-29\"\n      },\n      \"ltv\": {\n        \"value\": 640,\n        \"status\": \"ok\"\n      },\n      \"cac\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      },\n      \"payback_months\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      }\n    },\n    {\n      \"period\": \"2026-09\",\n      \"value\": \"solo\",\n      \"too_few\": true,\n      \"new_customers\": {\n        \"value\": 19,\n        \"status\": \"ok\"\n      },\n      \"kept_d30\": {\n        \"value\": null,\n        \"status\": \"too_few\",\n        \"count\": 12,\n        \"denominator\": 19\n      },\n      \"kept_d90\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2026-12-29\"\n      },\n      \"kept_d180\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2027-03-29\"\n      },\n      \"ltv\": {\n        \"value\": null,\n        \"status\": \"too_few\"\n      },\n      \"cac\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      },\n      \"payback_months\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      }\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "campaigns",
+   "--months",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_campaigns",
+    {
+     "months": 3,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/finance-campaigns?months=3",
+    null
+   ]
+  ],
+  "stdout": "From Finance: Meta Ads act_111. Unmapped spend counts on Unknown.\nkey                 campaign      month    spend\nmeta_ads:111:brand  Brand search  2026-10  4210.5\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "s1",
+   "--sync",
+   "finance_ad_spend",
+   "--campaign",
+   "meta_ads:111:brand=search-ads",
+   "--campaign",
+   "meta_ads:111:promo=unknown"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "campaign": [
+      "meta_ads:111:brand=search-ads",
+      "meta_ads:111:promo=unknown"
+     ],
+     "id": "s1",
+     "operation_id": null,
+     "sync_kind": "finance_ad_spend"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/s1",
+    {
+     "sync_kind": "finance_ad_spend",
+     "sync_map": {
+      "campaigns": {
+       "meta_ads:111:brand": "search-ads",
+       "meta_ads:111:promo": "unknown"
+      }
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
   "stderr": "",
   "exit": 0
  }

@@ -1055,8 +1055,9 @@ STABLE = [
         "post",
         "Tasks",
         "relateTask",
-        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after), or take the relation "
-        "off with remove. A task waits on no relation but after, in Merge: its PRs are not queued until task merged",
+        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take "
+        "the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and "
+        "on depends_on, in any stage (Blocked by task until it ends)",
         "TaskResult",
     ),
     (
@@ -1382,6 +1383,14 @@ STABLE = [
         "listFileActivity",
         "A file's append-only activity, newest first",
         "FileActivity",
+    ),
+    (
+        "/api/v2/files/{fid}/info",
+        "get",
+        "Files",
+        "getBotFile",
+        "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+        "BotFileResult",
     ),
     (
         "/api/v2/files/{fid}/versions",
@@ -2604,6 +2613,10 @@ SCHEMAS = {
             "late": {
                 "oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}],
             },
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "lane": "s",
             "labels": items({"type": "string"}),
             "acceptance_criteria": items({"type": "string"}),
@@ -2705,9 +2718,10 @@ SCHEMAS = {
         relations={
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up, "
-            "after): each {id, title, status, owner, direction}; an `after` entry also has the other task's number and "
-            "stage (out: this task merges after it; in: it merges after this one). A task waits on no relation but "
-            "after, in Merge. Sub-tasks are in the task's children.",
+            "after, depends_on): each {id, title, status, owner, direction}; an `after` or `depends_on` entry also has "
+            "the other task's number and stage (after out: this task merges after it; in: it merges after this one; "
+            "depends_on out: this task is blocked by it; in: it blocks this one). A task waits on after, in Merge, and "
+            "on depends_on. Sub-tasks are in the task's children.",
             "additionalProperties": items(
                 obj(
                     {"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"},
@@ -2759,6 +2773,12 @@ SCHEMAS = {
             "type": "boolean",
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
             "again",
+        },
+        share={
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "A private task waits on these actors being let in (the next stage's owner and those it "
+            "asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list",
         },
     ),
     "TaskRequirement": obj(
@@ -3668,6 +3688,10 @@ SCHEMAS = {
             "due_at": "n",
             "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "snoozed": "b",
             "pushed_past": "b",
             "stage_since": "n",
@@ -7298,9 +7322,6 @@ SCHEMAS.update(
                 "name": "s",
                 "label": "s",
                 "description": "s",
-                "batch_seconds": "i",
-                "batch_scope": "s",
-                "sweep_seconds": "i",
                 "digest_hour": {"type": ["integer", "null"]},
                 "pulls": "s",
                 "sweeps": "b",

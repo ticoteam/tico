@@ -268,6 +268,16 @@ def _pair(text):
     return key.strip(), value
 
 
+def _compact_at(text):
+    """`--compact-at` of `tico bot model`: a size in tokens, or `default` for the model's own."""
+    if text == "default":
+        return text
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text} is not a number of tokens or default") from None
+
+
 def thread_page_flags(s, key="next_cursor"):
     """The paging flags of a thread list: a page's next_cursor (or `key`) reads on, and --limit sets the size."""
     s.add_argument("--cursor", help=f"the page after this cursor: a page's {key}")
@@ -768,9 +778,23 @@ def parser():
     s.set_defaults(fn="doc search")
     s = docs.add_parser("write", help="create or replace an internal doc at a path")
     s.add_argument("path")
+    s.add_argument(
+        "--base-version",
+        dest="base_version",
+        type=int,
+        help="the version you read (tico doc read); refused if someone saved since. Leave out only to create a doc "
+        "or to replace your own latest version",
+    )
     s.add_argument("--title")
     s.add_argument("--body-file", dest="body_file", help="the Markdown file; standard input when omitted")
     s.add_argument("--note", help="one line on what changed")
+    s.add_argument(
+        "--section",
+        help="a heading's text: replace only the text under it, up to the next heading of the same or a higher level",
+    )
+    s.add_argument(
+        "--append", action="store_true", default=None, help="add the text at the end of the doc, or of --section"
+    )
     s.set_defaults(fn="doc write")
     s = docs.add_parser("history", help="the versions of a doc")
     s.add_argument("ref", help="a doc id or a path")
@@ -1191,17 +1215,23 @@ def parser():
         s.set_defaults(
             fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
         )  # one tool: tico_task_follow
-    s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
-    s.add_argument("id")
-    s.add_argument("task")
-    s.add_argument(
-        "--kind",
-        default="related",
-        help="related (default); duplicate_of; follow_up: it was split off or followed up from task. A relation is a "
-        "note: a task waits only on its requirements and the tasks it filed",
-    )
-    s.add_argument("--remove", action="store_true", help="take it off instead")
-    s.set_defaults(fn="task relate")
+    for change, words in (
+        ("relate", "relate another task to this one: <id> [<kind>] <task>, e.g. <id> depends_on <task>"),
+        ("unrelate", "take a relation off: <id> [<kind>] <task>"),
+    ):
+        s = task.add_parser(change, help=words)
+        s.add_argument("id")
+        s.add_argument("task", help="the other task, or the kind when a third word names the task")
+        s.add_argument("other", nargs="?", help="the other task, when the second word is the kind")
+        s.add_argument(
+            "--kind",
+            default="related",
+            help="related (default); duplicate_of; follow_up: it was split off or followed up from task; depends_on: "
+            "this task cannot go on until task ends (Blocked by it, no date; never snooze for that)",
+        )
+        if change == "relate":
+            s.add_argument("--remove", action="store_true", help="take it off instead")
+        s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
     s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
     s.add_argument("id", help="the task that merges later")
     s.add_argument("task", help="the task it merges after")
@@ -2126,12 +2156,6 @@ def parser():
         help="the profile to set; leave out to read the bot's and the choices",
     )
     s.add_argument(
-        "--batch-seconds", dest="batch_seconds", type=int, help="how long news waits to be batched (seconds)"
-    )
-    s.add_argument(
-        "--sweep-seconds", dest="sweep_seconds", type=int, help="least seconds between two runs of the same sweep"
-    )
-    s.add_argument(
         "--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest"
     )
     s.add_argument("--pulls", choices=["all", "review", "none"], help="custom: which open tasks it starts by itself")
@@ -2163,9 +2187,9 @@ def parser():
     s.add_argument("--effort")
     s.add_argument(
         "--compact-at",
-        type=int,
+        type=_compact_at,
         help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
-        "600000, 700000, 800000, 900000 or 1000000",
+        "600000, 700000, 800000, 900000 or 1000000; default puts it back on its model's default",
     )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")

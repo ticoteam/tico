@@ -134,6 +134,7 @@ function askToggle(open = !ASK?.open, focus = true) {
   const foot = open ? askFootNow() : null;
   const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
   askFoot(foot);
+  if (open && pageChatShown()) pageChatToggle(false);   // Ask and a page's chat are never open together
   ASK.open = open;
   askSync();
   const to = askLiveDot();
@@ -310,6 +311,8 @@ $('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK
 $('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
 document.addEventListener('keydown', ev => {
+  // ⌘J is the page's own chat where the page has one (page-chat.ts), else Ask.
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'j' && pageChatKey()) { ev.preventDefault(); return; }
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'j' && !askAway()) { ev.preventDefault(); askToggle(); return; }
   if (ev.key !== 'Escape' || !ASK?.open || document.querySelector('dialog[open]')) return;
   if ($('#ask-panel').contains(document.activeElement)) askToggle(false);

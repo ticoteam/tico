@@ -394,6 +394,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     // ---- phone width: no sideways scroll, with the strip and an open video
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await cutTile.getAttribute('aria-expanded'), 'true', 'still open');
+    // A phone opens on Chat, its files in the Info tab (task #409); a file open stays in view on either.
     await view.locator('video').waitFor();
     await noSideways('phone, task with an open video');
     for (const mode of ['dark', 'light']) { await theme(mode); await modal.evaluate(d => { (d as HTMLElement).scrollTop = 0; }); await shot(`task-files-strip-phone-${mode}`); await view.scrollIntoViewIfNeeded(); await shot(`task-video-versions-phone-${mode}`); }
@@ -416,11 +417,13 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       assert.equal(await modal.locator('.task-chat form').isHidden(), true, 'no comment box');
       assert.equal(await modal.locator('.task-files [data-tf-add]').isHidden(), true, 'a reader cannot add files');
       await font.locator('.ask-opt.ro').first().click();
+      if (where === 'phone') await modal.getByRole('tab', {name: 'Info'}).click();
       await modal.locator('.tf-tile[data-tf-file="f-notes"]').click();
       await view.locator('.ask-q[data-qid="ok"]').waitFor();
       assert.equal(await view.locator('.ask button, .ask input').count(), 0);
       await noSideways(`${where}, a reader's task`);
       await fold();
+      if (where === 'phone') await modal.getByRole('tab', {name: 'Chat'}).click();
       for (const mode of ['dark', 'light']) { await theme(mode); await legacy.scrollIntoViewIfNeeded(); await shot(`legacy-answer-${where}-${mode}`); }
       await modal.locator('[data-modal-close]').click();
     }

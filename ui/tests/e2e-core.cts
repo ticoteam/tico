@@ -23,8 +23,12 @@ const tasks = (() => {
   const CREATED = /[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/;
 
   async function detail(page: Page) {
+    // A phone shows the rows on its Info tab: the Chat tab hides them.
+    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click());
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      // Details is one line until opened: its rows are read open.
+      m?.querySelectorAll<HTMLDetailsElement>('details.task-details').forEach(x => { x.open = true; });
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
@@ -180,7 +184,9 @@ const needsYou = (() => {
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
     const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
     await row(QUESTION).waitFor({timeout: t(20000)});
-    await row(OK).waitFor({timeout: t(20000)});
+    // An OK row leads with its task's title, the ask is its tooltip (a question keeps its line under the title).
+    const okRow = page.locator('#task-body [data-need]', {hasText: 'Set the beta budget'}).first();
+    await okRow.waitFor({timeout: t(20000)});
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
@@ -194,7 +200,7 @@ const needsYou = (() => {
     assertClean(page, `${where}: answered`);
 
     // The OK: the card goes on to it (or its row opens it), and she approves it there.
-    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await row(OK).click();
+    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();
     await until(async () => (await ok())?.met, `${where}: the OK given on the hub`);
@@ -294,8 +300,12 @@ const newBot = (() => {
     go(page, '#/task/' + task);
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
       && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
-    const owner = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
-      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '');
+    const owner = await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click();
+      document.querySelectorAll<HTMLDetailsElement>('#task-modal details.task-details').forEach(x => { x.open = true; });
+      return [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '';
+    });
     assert.match(owner, /Sales Helper|revenue-helper/, `${where}: the task's owner row names the bot`);
     assert.doesNotMatch(owner, new RegExp(bot), `${where}: the owner row shows no id`);
     assertClean(page, `${where}: after the rename`);

@@ -6,6 +6,11 @@
 .bot-learn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bot-learn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
 .bot-learn .bl-label{display:none}
+/* A word, not an icon (#282): "Learnings 3", "Screen". */
+#bot-top .bot-learn{display:inline-flex;align-items:center;gap:5px;width:auto;padding:0 8px;font:500 var(--t-sm)/var(--lh-none) var(--sans)}
+#bot-top .bot-learn .nav-icon{display:none}
+#bot-top .bot-learn .bl-label{display:inline}
+#bot-top .bot-learn .bl-n{position:static;background:none;color:var(--ink);padding:0;min-width:0;font-size:var(--t-sm)}
 /* At the top of More on a phone it is a labelled row: icon, "Learnings", how many are new. */
 .bot-more-top .bot-learn{display:inline-flex;width:auto;gap:6px;margin:0;padding:6px 10px 6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:var(--t-base);color:var(--ink)}
 .bot-more-top .bot-learn .bl-label{display:inline}

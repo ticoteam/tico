@@ -78,7 +78,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .tp-head,.tp-actions,.tp-search{display:flex;align-items:center;gap:8px}
 .tp-head{justify-content:space-between}
 .tp-head button,.tp-search button,.tp-unlink{font-size:var(--t-sm)}
-.tp-actions{flex-wrap:wrap;justify-content:flex-end}
+.tp-actions{flex-wrap:wrap;justify-content:flex-start;margin:4px 0}
 .tp-picker{border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
 .tp-search input{min-width:0;flex:1;width:100%}
 .tp-results{max-height:240px;overflow:auto}
@@ -86,8 +86,16 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .tp-result{display:block;width:100%;border:0;background:none;color:var(--ink);text-align:left;padding:9px 6px;font:inherit;font-size:var(--t-sm);border-radius:6px;overflow-wrap:anywhere}
 .tp-result:hover{background:var(--hover)}
 .tp-pages{display:flex;flex-direction:column;gap:12px}
-.tp-page{min-width:0}
-.tp-unlink{display:block;margin:4px 0 0 auto}
+.tp-page{min-width:0;display:flex;align-items:center;gap:4px}
+/* A page on a task is one row, its icon and name; the row opens the page (task #409). */
+.tp-row{flex:1;min-width:0;display:flex;align-items:center;gap:6px;padding:4px 2px;border-radius:6px;color:var(--ink);text-decoration:none}
+.tp-row:hover{background:var(--surface2)}
+.tp-row .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted);flex:none}
+.tp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-unlink{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;opacity:0}
+.tp-page:hover .tp-unlink,.tp-unlink:focus-visible{opacity:1}
+@media (hover:none){.tp-unlink{opacity:1;width:40px;height:40px}}
+.tp-actions[hidden]{display:none}
 .tp-make{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
 .tp-make[hidden],.tp-making[hidden],.tp-error[hidden]{display:none}
 .tp-make input{min-width:0;flex:1;width:100%}

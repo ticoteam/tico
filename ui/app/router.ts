@@ -7,6 +7,8 @@ let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', RO
 // beside it changes).
 const routePage = (h: string | undefined): string => { const [p = ''] = String(h || '').split('?'); return p === THREADS_ROUTE || p === THREADS_NEW || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
 function route(hash: string = location.hash): void {
+  // A file's review view opens over the page and closes back to it, which is not drawn again (file-review.ts).
+  if (fileReviewRoute(hash)) return;
   if (hash.startsWith('#/settings?recruit=')) {
     try {
       const raw = new URLSearchParams(hash.split('?')[1]).get('recruit');
@@ -50,6 +52,7 @@ function route(hash: string = location.hash): void {
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
   if (!isAutomationsRoute(S.route)) automationsStop();
+  pageChatRoute(S.route);   // a page's owner's chat closes with its page (ui/app/page-chat.ts)
   taskChatStop(); taskModalRouteClose();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and
@@ -188,6 +191,7 @@ function route(hash: string = location.hash): void {
 // still surfaces as an error (not a rejected transition).
 function routeChanged(): void {
   const path = (h: string | undefined): string => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
+  if (fileReviewOwns(location.hash)) { route(); return; }        // the review view opening or closing: no page fades
   // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
   // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
   // first page writes for itself (Settings names its tab) gives way to the newer one.

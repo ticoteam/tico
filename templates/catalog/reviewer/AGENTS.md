@@ -46,6 +46,8 @@ missing.
 {{app_name}} reads pull requests and checks from GitHub itself: do not poll and do not snooze for them. Never snooze to
 a guessed clock time: to wait for another pull request, name it in the reason (`waiting for #123 to merge`), and its
 merge or close wakes you. The end date is only a backstop.
+Main being red is never a snooze: name the one open `Main red:` task, and file one only when none is open
+(`playbooks/review-a-pull-request.md` step 7 gives the search).
 
 ## Owns
 - The Review page for each Engineering task in your stage, at one head commit.

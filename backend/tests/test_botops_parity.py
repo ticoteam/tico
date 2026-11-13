@@ -1094,6 +1094,14 @@ def _fire(api, aid):
         row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
         automations.queue(c, row, {"schedule": {"at": at}}, "schedule:" + at)
     api.app.state.store.automations.drain()
+    # A scheduled run waits on its release policy (backend/wake_presets.py) and the routine repeat guard; the scheduler
+    # tick lets it go once both have passed.
+    from backend import wake_presets
+
+    with api.app.state.store.transaction() as c:
+        wake_presets.tick(c, H.now())
+    with api.app.state.store.transaction() as c:
+        wake_presets.tick(c, H.shift(H.now(), seconds=wake_presets.REPEAT_SECONDS + 1))
 
 
 def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, botops):

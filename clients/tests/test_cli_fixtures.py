@@ -132,6 +132,14 @@ ANSWERS = {
         "not_written": [{"row": 4, "channel": "podcast", "month": "2026-10", "reason": "no such channel"}],
         "not_written_count": 1,
     },
+    "GET growth/finance-campaigns": {
+        "accounts": [
+            {"platform": "meta_ads", "account": "act_111", "label": "Meta Ads act_111", "name": "Paid rental"}
+        ],
+        "campaigns": [
+            {"key": "meta_ads:111:brand", "name": "Brand search", "last_month": "2026-10", "last_month_spend": 4210.5}
+        ],
+    },
     "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},
     "GET growth/economics": {
         "month": "2026-10",
@@ -146,6 +154,46 @@ ANSWERS = {
         "you_may": _GROWTH_MAY,
         "first_opened_at": "2026-11-13T08:55:00Z",
         "numbers_seen_at": None,
+    },
+    "GET growth/computed": {
+        "by": "plan",
+        "grain": "month",
+        "min_cohort": 30,
+        "cac_note": "spend is not split by plan",
+        "keys_visible": False,
+        "cohorts": [
+            {
+                "period": "2026-09",
+                "value": "pro",
+                "too_few": False,
+                "new_customers": {"value": 71, "status": "ok"},
+                "kept_d30": {"value": 78.9, "status": "ok", "count": 56, "denominator": 71},
+                "kept_d90": {"value": None, "status": "not_yet", "fills_on": "2026-12-29"},
+                "kept_d180": {"value": None, "status": "not_yet", "fills_on": "2027-03-29"},
+                "ltv": {"value": 640, "status": "ok"},
+                "cac": {"value": None, "status": "not_split"},
+                "payback_months": {"value": None, "status": "not_split"},
+            },
+            {
+                "period": "2026-09",
+                "value": "solo",
+                "too_few": True,
+                "new_customers": {"value": 19, "status": "ok"},
+                "kept_d30": {"value": None, "status": "too_few", "count": 12, "denominator": 19},
+                "kept_d90": {"value": None, "status": "not_yet", "fills_on": "2026-12-29"},
+                "kept_d180": {"value": None, "status": "not_yet", "fills_on": "2027-03-29"},
+                "ltv": {"value": None, "status": "too_few"},
+                "cac": {"value": None, "status": "not_split"},
+                "payback_months": {"value": None, "status": "not_split"},
+            },
+        ],
+    },
+    "POST growth/customers": {
+        "customers": 120,
+        "spells": 121,
+        "removed": 2,
+        "unknown_channel": 4,
+        "new_by_month": [{"month": "2026-09", "channel": "google-search", "new_customers": 116}],
     },
     "GET goals": {"goals": [_GOAL]},
     "POST goals": {"goal": _GOAL},

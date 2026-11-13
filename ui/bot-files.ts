@@ -1,7 +1,8 @@
 /* The Files section of a bot's right rail (docs/files.md): what the bot created, revised or delivered,
    newest activity first, as a plain list of names. Three rows; a small "+N" opens the rest inline, a
-   page at a time, and "Less" folds them back. No files, no section. A stored file opens in Tico's own viewer (deps.openFile), a linked document at its
-   provider in a new tab (the provider decides who may open it). Adding a link, promoting and removing
+   page at a time, and "Less" folds them back. No files, no section. A stored file and a Google file open in Tico's review view
+   (deps.openFile, ui/app/file-review.ts), any other linked document at its provider in a new tab (the provider decides
+   who may open it). Adding a link, promoting and removing
    are the API and the bot's own tools (PATCH /api/v2/files/{id}), not buttons here.
    ui/app/bot-page.ts calls window.botFiles.mount(host, deps) once per bot page; deps keeps this file free
    of the page's globals (get, esc, openFile). */
@@ -39,6 +40,7 @@ interface Window {
 .bot-files .bf-foot{display:flex;gap:10px;align-items:center;padding-top:2px}
 .bot-files .bf-err{color:var(--fail);font-size:12.5px}`;
 
+  const GOOGLE_FILE = /^https:\/\/(docs|drive)\.google\.com\//;
   const httpsOnly = (url: unknown): string => { try { const text = String(url); return new URL(text).protocol === 'https:' ? text : ''; } catch { return ''; } };
 
   function mount(host: HTMLElement | null, deps: BotFilesDeps): void {
@@ -71,7 +73,7 @@ interface Window {
       const name = esc(f.title);
       // A file that never synced has nothing to open: its name is plain text.
       const label = !url ? `<span class="bf-name" title="${esc(f.title)}">${name}</span>` : link
-        ? `<a class="bf-name" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-bf-open="external" title="${esc(f.title)}">${name}</a>`
+        ? `<a class="bf-name" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-bf-open="external"${GOOGLE_FILE.test(String(url)) ? ` data-bf-id="${esc(f.id)}" data-bf-file="${esc(f.title)}"` : ''} title="${esc(f.title)}">${name}</a>`
         : `<a class="bf-name" href="${esc(url)}" data-bf-open="tico" data-bf-id="${esc(f.id)}" data-bf-file="${esc(f.name || f.title)}" title="${esc(f.title)}">${name}</a>`;
       return `<div class="bf-row" data-file="${esc(f.id)}">${label}</div>`;
     }
@@ -94,6 +96,9 @@ interface Window {
       const hit = (selector: string): HTMLElement | null => eventElement(event)?.closest<HTMLElement>(selector) ?? null;
       const stored = hit('[data-bf-open=tico]');
       if (stored) { event.preventDefault(); openFile(stored.dataset.bfId ?? '', stored.dataset.bfFile ?? ''); return; }
+      // A Google file opens in the app's review view, in Google's own preview; a modified click still opens a tab.
+      const google = hit('[data-bf-open=external][data-bf-id]');
+      if (google && !event.metaKey && !event.ctrlKey && !event.shiftKey) { event.preventDefault(); openFile(google.dataset.bfId ?? '', google.dataset.bfFile ?? ''); return; }
       try {
         if (hit('[data-bf-all]')) { state.expanded = true; await load(); }
         else if (hit('[data-bf-less]')) { state.expanded = false; state.rows = state.rows.slice(0, SHORT); await load(); }

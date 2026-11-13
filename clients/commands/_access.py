@@ -179,6 +179,7 @@ AUDIENCE = {
         name: REQUESTER
         for name in (
             "tico_credential_grant",
+            "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
             "tico_credential_revoke",
             "tico_credential_import",
             "tico_credential_delete",
@@ -340,7 +341,10 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_contacts_types",
         "tico_contacts_describe",
         "tico_contacts_history",
+        # Finance ad spend setup, run from the CLI; hidden to keep the listing under its size cap.
+        "tico_growth_source_campaigns",
         "tico_credential_grant",
+        "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",
         "tico_credential_delete",
         "tico_credential_set",

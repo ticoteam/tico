@@ -1,26 +1,33 @@
-"""Auto dream (docs/learnings.md, Dream): a dream for each bot whose memory changed a lot since its last dream. Plain code
-end to end: no model call decides who is due. The dream is the task a person starts from the panel (backend/dream.py
-`start`), with the auto variant of its instructions, a `dream.auto` event under the system actor, and the reason line at
-the top of its body.
+"""Auto dream (docs/learnings.md, Dream): the Maintenance pass queues a dream for each bot most in need of one, on the
+release policy for runs that can wait (the job hold in backend/wake_presets.py). Plain code end to end: no model call
+decides who is in need. The dream is the task a person starts from the panel (backend/dream.py `start`), with the auto
+variant of its instructions, a `dream.auto` event under the system actor, and the reason line at the top of its body.
+Its wake carries `release` (Prefers warm, wait 48 hours, Skip at the deadline, Fork), so the hold starts it in a 45-55
+minute warm window on a fork of the bot's latest session, or drops it at the deadline. The original session is left
+alone.
 
-A bot is due when, read from `bot_memory_updates` (the commits its computer reported):
-- it is active, keeps memory, and has no open dream;
+A bot is in need when:
+- it is active, keeps memory, has no dream job waiting (held and queued) and no open dream;
 - its last dream of either kind started at least MIN_GAP_HOURS ago (a bot that never dreamed must be that old);
-- its memory since that dream's start (or LOOKBACK_DAYS ago, whichever is later) changed at least MIN_LINES lines over
-  at least MIN_TURNS memory turns. Counted: memory/, and AGENTS.md, CLAUDE.md and AGENT.md. Not
-  counted: the commits of dreams and of the retired Nightly memory tidy pilot's passes (its Keep commits and the runs
-  of its pass tasks, still in bot repositories and in memory_tidy_passes).
+- its need since that dream's start (or SINCE_DAYS ago, whichever is later) is at least MIN_NEED. Need is work since the
+  last dream: its turns (finished runs, the dreams' own left out), plus people's corrections weighed CORRECTION_WEIGHT
+  each: a person's thumbs-down on its work, and an org rule that applies to it added, changed or retired by a person.
+  Memory diffs no longer count: auto memory writes as the bot works, so their size says little about how much there is
+  to tidy. A person's edit to its instructions does not count yet: the runner reports only memory/ and knowledge/
+  commits, and a commit with no known run may be Tico's own (a migration) as well as a person's.
+
+A queued dream whose job is skipped at the deadline (no warm window in 48 hours) has its task closed by the release
+policy itself (wake_presets). It never ran, so it is not the bot's last dream (dream.RAN): its work still counts, and the
+next dream reads from the last one that ran, so the bot is in need again on a later pass.
 
 The requester is the bot's nearest human manager (org_rule_check.represented), else the company owner. The dream lands
 where that requester's work goes (shared_bots.route, as the dream route files it), and the gates are read on that bot.
 
-`run` starts at most `limit` of them, most changed lines first: the Maintenance run's dream step passes its "Most bots
-per run". A bot that is refused or fails is held, and the pass goes on. Maintenance claims each run once, so a restart
-does not start the same occurrence twice; the pacing gate stops a second start of one bot anyway, since a started
-dream is that bot's last one.
+`run` queues at most `limit` of them, most need first: the Maintenance run's dream step passes its "Most bots per run".
+A bot that is refused or fails is held, and the pass goes on. Maintenance claims each run once, so a restart does not
+queue the same occurrence twice; an open dream stops a second one of one bot anyway.
 """
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -36,12 +43,10 @@ LOG = logging.getLogger("tico.dream_auto")
 
 MIN_GAP_HOURS = 48  # between dreams of any kind; a bot's first must be this old
 MAX_PER_RUN = 3  # the default "Most bots per run" (backend/maintenance_steps/dream.py)
-MIN_LINES = 200  # changed lines of counted memory since the last dream
-MIN_TURNS = 10  # memory turns (commits that changed a counted file) since the last dream
-# AGENT.md: the instruction file's name in a repository the runner has not moved to AGENTS.md yet.
-INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "AGENT.md")
-DREAM_SUBJECT = "Dream:"  # a dream's own commits
-TIDY_SUBJECT = "Dreamed "  # a Keep commit of the retired Nightly memory tidy pilot
+MIN_NEED = 10  # turns, plus corrections weighed below, since the last dream
+CORRECTION_WEIGHT = 5  # one person's correction counts as this many turns
+WAIT_HOURS = 48  # how long a queued dream waits for a warm window before it is skipped
+WAKE_CLASS = "dream"  # the held job's class, as wake_presets labels it from refs.release_kind
 # The task ids of every dream of one owner, as a subquery: the runs that worked on them are that owner's dream runs.
 DREAM_IDS = (
     f"SELECT tasks.id FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
@@ -53,104 +58,74 @@ DREAM_IDS = (
 class Verdict:
     bot: str
     name: str
-    status: str  # "due", or why not: "inactive", "stateless", "busy", "new", "paced", "quiet"
-    lines: int = 0
+    status: str  # "due", or why not: "inactive", "stateless", "waiting", "busy", "new", "paced", "quiet"
     turns: int = 0
+    corrections: int = 0
     since: datetime | None = None
+
+    @property
+    def need(self):
+        return self.turns + CORRECTION_WEIGHT * self.corrections
 
 
 def stamp(at):
-    """A timestamp as bot_memory_updates stores committed_at, for comparing."""
+    """A timestamp as the tables store them (H.now's form), for comparing."""
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def counted(path):
-    """Whether a changed file counts: memory/ and the instruction files."""
-    return path in INSTRUCTION_FILES or path.startswith("memory/")
+def release():
+    """The release policy every auto dream's wake carries (spec: Dreaming, the first built-in user), in the shape the job
+    hold reads from `refs.release`: Due is the job's creation (None), then Prefers warm for up to WAIT_HOURS, Skip at the
+    deadline, on a fork of the bot's latest session. A server without the hold starts the dream at once, as before."""
+    return {"due": None, "wait": WAIT_HOURS * 3600, "warm": True, "deadline": "skip", "session": "fork"}
 
 
-def _name(rest, prefix):
-    """A path from the rest of a `---` or `+++` header line: the `a/` or `b/` prefix off, git's tab after a name with a
-    space off, and None for /dev/null (an added or deleted side)."""
-    name = rest.rstrip("\t")
-    if name == "/dev/null":
-        return None
-    return name[len(prefix) :] if name.startswith(prefix) else name
+def waiting(c, bot):
+    """Whether the bot already has a dream job held and queued: a waiting bot is skipped, so it never blocks another (the
+    spec's rule, read from the job). Its open dream task says the same to `busy`; this names why it is not picked."""
+    sql = "SELECT 1 FROM jobs WHERE bot_id=? AND held=1 AND state='queued' AND wake_class=? LIMIT 1"
+    return c.execute(sql, (bot, WAKE_CLASS)).fetchone() is not None
 
 
-def changed_lines(diff):
-    """{path: changed lines} of one commit's diff: the `+` and `-` lines inside each file's hunks. The path is read from
-    the `+++ b/` header, the rest of its line, so a name with spaces reads whole; a deletion has `+++ /dev/null`, so its
-    path comes from the `--- a/` header. The headers before a file's first hunk are not counted."""
-    counts, path, old, in_hunk = {}, None, None, False
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            path, old, in_hunk = None, None, False
-        elif line.startswith("@@"):
-            in_hunk = True
-        elif in_hunk:
-            if path and line[:1] in ("+", "-"):
-                counts[path] = counts.get(path, 0) + 1
-        elif line.startswith("--- "):
-            old = _name(line[4:], "a/")
-        elif line.startswith("+++ "):
-            path = _name(line[4:], "b/") or old
-    return counts
+def _turns(c, bot, since, owner):
+    """The bot's finished runs since `since`, its dreams' runs left out. Every settled run counts, a failed one or a retry
+    of one turn included: each is a turn the bot took."""
+    row = c.execute(
+        "SELECT count(*) FROM attempts a WHERE a.bot_id=? AND a.created_at>? AND a.settled_at IS NOT NULL "
+        f"AND (a.task_id IS NULL OR a.task_id NOT IN ({DREAM_IDS}))",
+        (bot, since, dream.LABEL, owner),
+    ).fetchone()
+    return row[0]
 
 
-def _own_runs(c, owner):
-    """The runs that worked on any dream of this owner, in one query: a run started by a message of one of its dreams, or
-    handed one as an input (learnings.run_attempts, for every dream at once). Their commits are the dream's, not memory.
-    A run is its attempts row, so its id is the attempt's id."""
-    params = (dream.LABEL, owner)
-    return {
-        row[0]
-        for row in c.execute(
-            "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-            f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({DREAM_IDS}) UNION "
-            "SELECT i.attempt_id FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-            f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({DREAM_IDS})",
-            params + params,
-        )
-    }
+def _rule_changes(c, bot, since):
+    """Org rules that apply to the bot, added, changed or retired by a person since `since`."""
+    from . import org_rules
 
-
-def _tidy_runs(c, bot):
-    """The runs of this bot's passes of the retired Nightly memory tidy pilot (memory_tidy_passes stays as history)."""
-    return {
-        row[0]
-        for row in c.execute(
-            "SELECT t.id FROM attempts t JOIN memory_tidy_passes p ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
-            "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND p.bot=?",
-            (bot,),
-        )
-    }
-
-
-def change(c, bot, since, owner=None):
-    """(changed lines, memory turns) of the bot's counted memory committed after `since` (a stamp). With no commit since,
-    nothing else is looked up: the dream and tidy runs are only needed to tell which commits count."""
     rows = c.execute(
-        "SELECT subject,files,diff,attempt_id FROM bot_memory_updates WHERE bot=? AND shared=1 AND committed_at>?",
-        (bot, since),
+        "SELECT * FROM org_rules WHERE updated_at>? AND status IN ('active','retired') "
+        "AND (coalesce(decided_by, suggested_by) LIKE 'human:%')",
+        (since,),
     ).fetchall()
     if not rows:
-        return 0, 0
-    skip = _own_runs(c, owner or "bot:" + bot) | _tidy_runs(c, bot)
-    lines = turns = 0
-    for row in rows:
-        if row["subject"].startswith((DREAM_SUBJECT, TIDY_SUBJECT)) or row["attempt_id"] in skip:
-            continue
-        if not any(counted(path) for path in json.loads(row["files"])):
-            continue
-        turns += 1
-        lines += sum(n for path, n in changed_lines(row["diff"]).items() if counted(path))
-    return lines, turns
+        return 0
+    return len(org_rules.applies_to(c, bot, [org_rules._row(r) for r in rows]))
+
+
+def work(c, bot, since, owner=None):
+    """(turns, corrections) of the bot since `since` (a stamp): its work since the last dream."""
+    owner = owner or "bot:" + bot
+    downs = c.execute(
+        "SELECT count(*) FROM feedbacks WHERE bot_id=? AND rating='down' AND created_at>?", (bot, since)
+    ).fetchone()[0]
+    corrections = downs + _rule_changes(c, bot, since)
+    return _turns(c, bot, since, owner), corrections
 
 
 def verdict(c, bot, at, owner=None):
-    """Whether `bot` is due an auto dream at `at`, with the numbers behind it. `owner` is the bot the dream would land on
-    (run resolves it with shared_bots.route); its busy and pacing checks read that owner's dreams. Default: the bot."""
+    """Whether `bot` is in need of an auto dream at `at`, with the numbers behind it. `owner` is the bot the dream would
+    land on (run resolves it with shared_bots.route); its busy and pacing checks read that owner's dreams. Default: the
+    bot."""
     row = H.bot(c, bot)
     name = (row or {}).get("display_name") or bot
     if not row or row["state"] != "active":
@@ -158,6 +133,8 @@ def verdict(c, bot, at, owner=None):
     if dream.stateless(c, bot):
         return Verdict(bot, name, "stateless")
     owner = owner or "bot:" + bot
+    if waiting(c, H.actor_id(owner)):
+        return Verdict(bot, name, "waiting")
     if dream._open(c, [owner]):
         return Verdict(bot, name, "busy")
     dreams = dream.dreams(c, owner)
@@ -171,9 +148,9 @@ def verdict(c, bot, at, owner=None):
         return Verdict(bot, name, "paced")
     floor = at - timedelta(days=dream.SINCE_DAYS)
     since = max(last or floor, floor)
-    lines, turns = change(c, bot, stamp(since), owner)
-    status = "due" if lines >= MIN_LINES and turns >= MIN_TURNS else "quiet"
-    return Verdict(bot, name, status, lines, turns, since)
+    turns, corrections = work(c, bot, stamp(since), owner)
+    found = Verdict(bot, name, "quiet", turns, corrections, since)
+    return found if found.need < MIN_NEED else Verdict(bot, name, "due", turns, corrections, since)
 
 
 def requester(c, bot, auth):
@@ -190,17 +167,20 @@ def requester(c, bot, auth):
 
 def reason(v):
     """The line at the top of an auto dream's body, and the reason its event keeps."""
-    return f"Auto dream: {v.lines} memory lines changed in {v.turns} turns since {v.since.astimezone(ZONE):%Y-%m-%d}"
+    said = f"Auto dream: {SR.count_words(v.turns, 'turn')}"
+    if v.corrections:
+        said += f" and {SR.count_words(v.corrections, 'correction')} from people"
+    return f"{said} since {v.since.astimezone(ZONE):%Y-%m-%d}"
 
 
-def _words(started, held, over, not_due, limit):
-    if not (started or held or over):
+def _words(queued, held, over, not_due, limit):
+    if not (queued or held or over):
         return "Nothing due"
     parts = []
-    if started:
-        parts.append(f"Started {SR.count_words(len(started), 'dream')} ({', '.join(started)})")
+    if queued:
+        parts.append(f"Queued {SR.count_words(len(queued), 'dream')} ({', '.join(queued)})")
     if held:
-        parts.append(f"{len(held)} not started")
+        parts.append(f"{len(held)} not queued")
     if over:
         parts.append(f"{over} due past the {limit} this run")
     parts.append(f"{not_due} not due")
@@ -208,9 +188,9 @@ def _words(started, held, over, not_due, limit):
 
 
 def run(store, auth, at, limit=MAX_PER_RUN, report=None):
-    """The due bots, most changed lines first, up to `limit` started in this pass. Each start is one write transaction that
-    resolves where the dream lands, judges that bot again and files it. A refusal or a failure holds that bot only. Returns
-    the names started; `report`, when given, gets the counts and the summary words."""
+    """The bots in need, most need first, up to `limit` queued in this pass. Each is one write transaction that resolves
+    where the dream lands, judges that bot again and files it with its wake held on the release policy. A refusal or a
+    failure holds that bot only. Returns the names queued; `report`, when given, gets the counts and the summary words."""
     create = dream.creator(store)
     if create is None:
         raise Problem("conflict", "The dream's task path is not wired on this server", 409)
@@ -218,10 +198,11 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
         judged = [
             verdict(c, row["id"], at) for row in c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")
         ]
-    due = sorted((v for v in judged if v.status == "due"), key=lambda v: (-v.lines, v.bot))
-    started, held, limited, over = [], [], [], 0
+    due = sorted((v for v in judged if v.status == "due"), key=lambda v: (-v.need, v.bot))
+    queued, held, limited, over = [], [], [], 0
+    wake = {"release": release(), "release_kind": WAKE_CLASS}
     for v in due:
-        if len(started) >= limit:
+        if len(queued) >= limit:
             over += 1
             continue
         try:
@@ -234,19 +215,20 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
                 again = verdict(c, v.bot, at, owner=landing)
                 if again.status != "due":
                     continue
-                if landing != "bot:" + v.bot:  # a branch takes it: this bot's own pass does not start it
+                if landing != "bot:" + v.bot:  # a branch takes it: this bot's own pass does not queue it
                     held.append(v.name)
                     continue
                 if not L.allow(c, v.bot):  # the Maintenance wake limits (maintenance_limits.py)
                     held.append(v.name)
                     limited.append(v.name)
                     continue
-                row, _ = dream.start(c, auth.identity_for_actor(c, actor), landing, create, reason=reason(again))
+                who = auth.identity_for_actor(c, actor)
+                row, _ = dream.start(c, who, landing, create, reason=reason(again), wake_refs=wake)
                 if row is None:
                     held.append(v.name)
                     continue
                 L.record(c, v.bot)
-                started.append(v.name)
+                queued.append(v.name)
         except (Problem, H.Refused):
             held.append(v.name)
         except Exception:
@@ -254,12 +236,12 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
             held.append(v.name)
     if report is not None:
         report.update(
-            reason=_words(started, held, over, len(judged) - len(due), limit),
+            reason=_words(queued, held, over, len(judged) - len(due), limit),
             judged=len(judged),
             due=len(due),
-            started=started,
+            started=queued,
             held=held,
             limited=limited,
             over=over,
         )
-    return started
+    return queued

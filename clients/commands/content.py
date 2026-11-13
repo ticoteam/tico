@@ -722,11 +722,25 @@ def docs_search(api, args):
 @tool(
     "tico_doc_write",
     "Create or replace an internal doc at a path (Markdown). Every write is a version the "
-    "history shows as yours, so write freely and say what changed in `note`. A locked doc is refused. If someone "
-    "changed the doc since you read it, the call reads it again and retries once.",
+    "history shows as yours, so say what changed in `note`. Pass `base_version`: the `version` tico_doc_read gave "
+    "you. The write lands only if nobody saved since; otherwise it is refused (version_conflict, with who saved which "
+    "version): read the doc again, apply your change to it and write with the new version. Without `base_version` you "
+    "may replace only your own latest version. Nothing is ever resent on its own. A locked doc is refused. To change "
+    "one part: `section` replaces only the text under that # heading (up to the next heading of the same or a higher "
+    "level; the heading line stays), and `append` adds `body` at the end of the doc, or of `section`. These land even "
+    "if someone saved since your `base_version`, as long as that section is unchanged (an append always lands). A "
+    "missing or repeated heading is refused with the doc's headings.",
     {
         "path": _s("Folder and file, e.g. sales/pricing.md"),
-        "body": _s("The whole doc, in Markdown"),
+        "body": _s("The whole doc in Markdown; with `section` or `append`, only the text to write there"),
+        "section": _s("A heading's text (case and surrounding spaces ignored): write only under that heading"),
+        "append": {"type": "boolean", "description": "Add `body` at the end of the doc, or of `section`"},
+        "base_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The version you read (tico_doc_read's `version`); leave out only to create a doc or to "
+            "replace your own latest version",
+        },
         "title": _s("What people see; defaults to the first # heading, else the file name"),
         "note": _s("One line on what changed"),
     },
@@ -737,24 +751,73 @@ def docs_write(api, args):
     path, text = _doc_path(args["path"]), str(args["body"])
     heading = re.match(r"\s*#\s+(.+)", text)
     title = args.get("title") or (heading.group(1).strip() if heading else path.rsplit("/", 1)[-1].rsplit(".", 1)[0])
-    note = args.get("note") or ""
+    note, base = args.get("note") or "", args.get("base_version")
+    section, append = args.get("section") or None, bool(args.get("append"))
     current = _doc_lookup(api, path)
-    for attempt in (0, 1):
-        suffix = "" if attempt == 0 else "-retry"
-        try:
-            if current is None:
-                return api.post(
-                    "docs", {"path": path, "title": title, "body": text, "note": note}, key=_key(args, suffix)
+    # Exactly one write request per call: a refusal goes back to the bot, which reads again and redoes its change on
+    # the newer version. Resending the same body would replace an edit the bot never read (docs/docs.md).
+    try:
+        if current is None:
+            if base is not None:
+                raise APIError(
+                    "not_found",
+                    f"No doc at {path} now, though you read version {base} of it: it was moved or archived. "
+                    f"`tico doc list` shows where it is.",
+                    404,
                 )
-            fields = {"version": current["version"], "body": text, "note": note}
-            if args.get("title"):
-                fields["title"] = args["title"]
-            return api.patch("docs/" + current["id"], fields, key=_key(args, suffix))
-        except Exception as exc:  # the api's own error type, whichever transport
-            code = getattr(exc, "code", "")
-            if attempt or code not in ("version_conflict", "path_taken"):
+            if section or append:
+                raise APIError(
+                    "not_found",
+                    f"No doc at {path} to write a section of or add to. Leave out --section and --append to create it.",
+                    404,
+                )
+            return api.post("docs", {"path": path, "title": title, "body": text, "note": note}, key=_key(args))
+        # Always sent, so the server can tell a write on the version read (False) from an older client's write that
+        # sends neither (backend/docs.py bot_write).
+        fields = {
+            "version": int(base) if base is not None else current["version"],
+            "body": text,
+            "note": note,
+            "own_version_only": base is None,
+        }
+        if args.get("title"):
+            fields["title"] = args["title"]
+        if section:
+            fields["section"] = section
+        if append:
+            fields["append"] = True
+        return api.patch("docs/" + current["id"], fields, key=_key(args))
+    except Exception as exc:  # the api's own error type, whichever transport
+        refusal = _write_refusal(api, exc, path, base)
+        if refusal is exc:
+            raise
+        raise refusal from None
+
+
+def _write_refusal(api, exc, path, base):
+    """A refused bot write, in words that name who saved which version and the next step."""
+    code, extra = getattr(exc, "code", ""), dict(getattr(exc, "extra", None) or {})
+    if code == "path_taken" and extra.get("doc_id"):
+        try:
+            doc = api.get("docs/" + str(extra["doc_id"]))["doc"]
+            extra.update(version=doc["version"], updated_by_name=doc["updated_by_name"], updated_at=doc["updated_at"])
+        except Exception as unread:  # the api's own error type, whichever transport
+            if not getattr(unread, "code", ""):
                 raise
-            current = _doc_lookup(api, path)
+            return exc  # unreadable: the server's own words still refuse
+    if code not in ("version_conflict", "base_version_required", "path_taken") or "version" not in extra:
+        return exc
+    who, now = extra.get("updated_by_name") or "Someone", extra["version"]
+    next_step = f"Read it again (`tico doc read {path}`), apply your change to it, and write with --base-version {now}."
+    if code == "version_conflict" and base is not None:
+        said = f"{who} saved version {now} after you read version {base}."
+    elif code == "path_taken":
+        said = f"{who} created {path} (now version {now}) after you looked."
+    else:
+        said = f"{who} saved version {now}, the latest, and you did not say which version you read."
+    # Same class as the transport's own error (clients/tico.py APIError, backend/mcp.py ApiProblem), so both
+    # clients print it alike.
+    return type(exc)(code, f"{said} {next_step}", exc.status, exc.retryable, exc.operation_id, extra)
 
 
 @tool(

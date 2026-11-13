@@ -649,8 +649,12 @@ class Vault:
             cid,
             {'secret_changed': secret is not None},
         )
-        from . import api_tools
+        from . import api_tools, key_grants
 
+        if body.source == 'tools-chat' and secret is not None:
+            key_grants.drop_owner(
+                c, who, cid
+            )  # the Tools owner never holds a key dropped in its chat, Replace included
         api_tools.ensure_tool(c, who, cid)  # a tool's key shows on Tools however it was stored
         return self.brief(self.row(c, cid))
 

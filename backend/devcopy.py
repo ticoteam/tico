@@ -38,6 +38,9 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Customer facts a team loaded into Growth (backend/growth_customers.py): its customers' keys never leave the install.
+    "growth_customers",
+    "growth_customer_loads",
     # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
     "approvals",
     # Provider jobs and send grants never become actionable in a rehearsal copy.
@@ -108,6 +111,7 @@ EMPTY = (
     "bookkeeper_watch_listed",  # the Finance Owner's ledgers: the copy starts its checks fresh
     "org_rule_holds",  # org rules: a held output could still be sent anyway from the copy
     "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
+    "org_rule_late",  # org rule checks still to run after a write: the copy has its own judge, and never re-warns
     "watcher_pending",
     "watcher_triage",  # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending",
@@ -629,6 +633,7 @@ KEEP = (
             "growth_settings",
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
+            "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",

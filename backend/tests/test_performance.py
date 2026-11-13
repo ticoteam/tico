@@ -395,3 +395,59 @@ def test_health_load_names_the_bots_that_ran_never_their_ids(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE perf_overloads SET bots=? WHERE runner_id=?", (f'[{{"bot": "{gone}", "runs": 1}}]', rid))
     assert "running: Deleted bot" in load() and gone not in load()
+
+
+def test_an_overload_lists_each_bot_once_with_the_most_turns_it_ran_at_once(api):
+    """Health > Load said "running: Reviewer 1 x4, Reviewer 1 x4" for a bot limited to 3 turns at once: one bot was
+    split by model (a running turn has no model yet), and each row counted every turn in the window, one after another,
+    not the turns that ran at the same time. Each bot is one row, counted at its busiest moment."""
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    start = (int(time.time()) // 60 - 12) * 60
+    columns = "id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at,finished_at"
+
+    def turn(c, n, began, ended, model=None):
+        c.execute(
+            f"INSERT INTO attempts({columns},lane,usage_model) SELECT ?,job_id,bot_id,runner_id,generation,?,?,"
+            "lease_until,?,?,?,?,? FROM attempts WHERE id=?",
+            (
+                f"t-{n}",
+                f"tok-{n}",
+                "completed" if ended else "running",
+                P._iso(began),
+                P._iso(began),
+                ended and P._iso(ended),
+                f"lane-{n}",
+                model,
+                attempt["id"],
+            ),
+        )
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Operations Lead' WHERE id='ops'")
+        # The claimed turn runs the whole window; four more come and go beside it, never more than two at a time.
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        turn(c, "a", start - 600, start + 120, "model-1")
+        turn(c, "b", start + 120, start + 300, "model-1")  # starts as a ends: never beside it
+        turn(c, "c", start + 360, start + 480, "model-2")
+        turn(c, "d", start + 400, None)  # still running: no model yet
+    busy = [sample(start + 60 * i, cpu=97.0) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])
+    (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
+    assert o["bots"] == [{"bot": "ops", "runs": 3}]  # the claimed turn, c and d
+    load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
+    assert load.count("Operations Lead") == 1 and "running: Operations Lead x3" in load
+
+
+def test_turns_that_ended_as_the_window_opened_are_not_counted_in_it():
+    """_runs reads finished_at>=start, so three turns ending exactly at the start came back and their earlier peak of 3
+    was reported for a window where one turn ran."""
+    import sqlite3
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute("CREATE TABLE attempts(id,bot_id,runner_id,started_at,created_at,finished_at,state,usage_model)")
+    rows = [(str(i), "ops", "r", P._iso(0), P._iso(0), P._iso(100), "completed", "m") for i in range(3)]
+    rows.append(("new", "ops", "r", P._iso(100), P._iso(100), None, "running", None))
+    c.executemany("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?)", rows)
+    assert P.at_once(c, "r", 100, 200) == [{"bot": "ops", "runs": 1}]

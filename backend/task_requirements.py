@@ -394,7 +394,8 @@ STALE_REVIEW = "New commits since the review"
 
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
-    exact version when the requirement names one or is people only. An answer counts only for the page version it was given on.
+    exact version when the requirement names one or is people only. An answer counts only for the page version it was given on,
+    except a person's OK of an earlier version of the same page at the same commits (`_same_code_ok`), which stays.
     Jev's send back is the owner's turn; on a page a person OKs anyway, the next send back on the same visit is that
     person's to decide. Jev unsure on a stage a bot holds goes to bots first (two sign-offs rule, Nov 11; `_unsure_to_bots`): back to that bot
     once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
@@ -420,7 +421,15 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
     answer = answer or carried
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
-        answer = None  # given on an earlier page
+        # Given on an earlier page. A person's OK of an earlier version of this same page, at the commits the PRs are
+        # at now, stays: publishing the page again changed no code (Nov 13, #3584: Chris was asked again for nothing).
+        # Only on the visit where it was given: an OK brought back from Merge is the Merge return's to judge.
+        if signoff and answer is not carried and _same_code_ok(conn, task, requirement, answer, page):
+            name, was = _name(conn, answer["by_id"]), answer["page_version"]
+            return Standing(requirement, MET, line=f"OK'd by {name} on version {was}; no new commits since")
+        answer = None
+    if signoff and carried and answer is carried and (held := _queued_as_is(conn, task, requirement)):
+        return held  # back from Merge at the commits the queue just ran: the OK waits for a fix (task #344)
     lapsed, lapsed_by, since_ok = "", None, None
     if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
         # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
@@ -505,6 +514,22 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
             requirement, WAITING, person, f"{after}OK {name} (version {page['version']})", since=asked, notices=notices
         )
     return Standing(requirement, MET, line="Jev passed it")
+
+
+def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:
+    """Whether `answer`, given on an earlier version of the page now attached, is a person's OK that still holds: the
+    same file (another page is another thing to OK), and the linked PRs' newest commits the ones it was given at."""
+    if answer["answer"] != "ok" or not str(answer["by_id"]).startswith("human:"):
+        return False
+    heads = _heads_of(answer.get("heads"))
+    if not heads or heads != heads_now(conn, task):
+        return False
+    shown = conn.execute(
+        "SELECT file_id, version FROM requirement_pages WHERE visit_id=? AND requirement_id=? AND created_at<=? "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (answer["visit_id"], requirement["id"], answer["created_at"]),
+    ).fetchone()
+    return bool(shown) and shown[0] == page["file_id"] and shown[1] == answer.get("page_version")
 
 
 def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
@@ -690,6 +715,47 @@ def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row 
     if not ok or ok["answer"] != "ok" or not ok.get("heads") or not str(ok["by_id"]).startswith("human:"):
         return None
     return ok
+
+
+# The end of the line when a task came back from the stage that queues its PRs at the commits the queue ran (task #344).
+QUEUED_AS_IS = "The OK from before {stage} comes back once there are new commits"
+
+
+def _queued_as_is(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Standing | None:
+    """The person's OK carried back from Merge (`page_for`) does not count while a linked PR is still at the commit it
+    was last queued at: the queue ran that commit and it did not merge, so the task waits for the Builder's fix instead
+    of going straight back to be queued as it is (Tico Team, Nov 12-13: four bounces, a queue run each). Once every PR
+    has new commits, C22 decides (`_after_ok`). None when no PR is at its queued commit."""
+    from .item_sources import github as F
+
+    still = F.queued_as_is(conn, task["id"])
+    if not still:
+        return None
+    one = len(heads_now(conn, task)) == 1
+    said: list[str] = []
+    for each in still:
+        at = str(each["head"])[:7] if one else f"{each['ref']} at {str(each['head'])[:7]}"
+        why = ", ".join(str(word) for word in (each.get("reason"), each.get("check")) if word)
+        # "failed" only for a failed check: a removal by hand or a conflict says the run did not merge, and why.
+        outcome = "it failed" if each.get("failed") else "it did not merge"
+        # No removal recorded: it was taken out of Merge while still queued, so the queue may never have run it.
+        said.append(
+            f"Merge queue ran {at} and {outcome} ({why}): push a fix"
+            if why
+            else f"Merge queue had {at} and it did not merge: push a fix"
+        )
+    # The visit it came back from: its stage's name, and the note the move back gave, so the one wake on entering
+    # (task_engine._wake_turn, whose "Missing to leave" carries this line) says what the mover said.
+    found = conn.execute(
+        "SELECT s.name, v.how, v.why FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
+        "ORDER BY v.entered_at DESC, v.rowid DESC LIMIT 1 OFFSET 1",
+        (task["id"],),
+    ).fetchone()
+    stage = str(found[0]) if found and found[0] else "Merge"
+    note = " ".join(str(found[2] or "").split()) if found and found[1] == "back" else ""
+    if note:
+        said.append(f"Sent back from {stage}: {note}")
+    return Standing(requirement, NOT_MET, task.get("owner_id"), sentences(*said, QUEUED_AS_IS.format(stage=stage)))
 
 
 def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> tuple[Standing | None, list[Row]]:

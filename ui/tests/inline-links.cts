@@ -60,6 +60,10 @@ const BODY = ['Two drafts for review.', '',
     await page.goto('https://tico-ui.test/#/bot/finance/dm');
     await page.getByRole('link',{name:'the drafts'}).click();
     const desc=page.locator('#task-modal[open] .tdesc.md').first();
+    // A phone shows the task's details in its Info tab (task #409).
+    const info=page.locator('#task-modal[open] [data-task-tab="info"]');
+    await info.waitFor();
+    if(await info.isVisible())await info.click();
     await desc.waitFor();
     // The mapped bucket: the bare URI is a link to the view URL, and a .md draft shows as a card naming the file.
     const draft=desc.locator(`a[href="${VIEW}/email/deliverables/1234/2026-09-09-launch.md"]`);

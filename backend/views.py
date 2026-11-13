@@ -2492,7 +2492,9 @@ def fleet_snapshot(c, auth, identity, task_view):
 
 
 def install_views(app, store, auth, mutate, task_view):
-    def visible_turns(c, who, bot=None, limit=200):
+    def visible_turns(c, who, bot=None, limit=200, failed_since=None):
+        """The runs `who` may read, newest first; with `failed_since`, only each job's failed try since then
+        (runs.failed), the list Health's Failed runs opens."""
         auth.domain(who)
         readable = None
         if bot:
@@ -2501,8 +2503,13 @@ def install_views(app, store, auth, mutate, task_view):
             auth.require_read(c, who, bot)
         else:
             readable = {slug for slug, level in auth.bot_accesses(c, who).items() if level["read"]}
-        rows = []
-        for turn in H.turns(c, bot, limit=limit):
+        rows, failed = [], None
+        if failed_since is None:
+            turns = H.turns(c, bot, limit=limit)
+        else:
+            failed = {r["id"] for r in runs.failed(c, failed_since, limit=limit)[1]}
+            turns = [turn for turn in (H.turn(c, aid) for aid in failed) if turn and bot in (None, turn["bot"])]
+        for turn in turns:
             if readable is not None and turn["bot"] not in readable:
                 continue
             message = H.message(c, turn["message_id"])
@@ -2515,8 +2522,9 @@ def install_views(app, store, auth, mutate, task_view):
             except Problem:
                 continue
             rows.append((turn, message))
-        for attempt in failed_attempts(c, who, auth, bot, limit=limit):
-            rows.append((attempt, H.message(c, attempt["message_id"])))
+        for attempt in failed_attempts(c, who, auth, bot, since=failed_since, limit=limit):
+            if failed is None or attempt["id"] in failed:
+                rows.append((attempt, H.message(c, attempt["message_id"])))
         rows.sort(key=lambda item: item[0].get("started_at") or "", reverse=True)
         return rows[:limit]
 
@@ -2752,7 +2760,7 @@ def install_views(app, store, auth, mutate, task_view):
                     "icon": icon_of(config),
                     "helper": helper(config),
                     # What Settings and the branch editor show and pick from (backend/wake_presets.py).
-                    "wake": wake_presets.effective(config),
+                    "wake": wake_presets.waits(config),
                     "profile": profiles.effective(config),
                     "my_access": mine_level,
                     **policy,
@@ -3253,10 +3261,16 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/runs")
-    def runs(request: Request):
+    def runs_list(request: Request, bot: str | None = None, failed: bool = False):
+        """The newest runs a person may read, or one bot's (`bot`, its id or slug). A bot page asks for its own: the
+        newest 200 of the whole company left a quiet bot's failed starts off its Runs card (Nov 12). `failed`: only
+        the day's failed runs, as Health counts them."""
         human_only(request.state.identity)
+        since = H.shift(H.now(), hours=-runs.FAILED_HOURS) if failed else None
         with store.read() as c:
-            rows = [turn for turn, _ in visible_turns(c, request.state.identity)]
+            if bot:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            rows = [turn for turn, _ in visible_turns(c, request.state.identity, bot, failed_since=since)]
             made = ran_on(c, [turn["id"] for turn in rows])
             return [run_view(turn, c, made[turn["id"]]) for turn in rows]
 

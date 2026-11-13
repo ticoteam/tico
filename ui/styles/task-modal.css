@@ -85,7 +85,7 @@
 #task-modal.thread[open] .tthread-back{order:-2;flex:none;display:grid;place-items:center;color:var(--ink)}
 #task-modal.thread[open] .tthread-back svg{width:14px;height:14px;flex:none}
 #task-modal.thread[open] .tthread-title{order:-1;flex:1;min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:600;color:var(--ink);outline:0;letter-spacing:var(--track-snug)}
-#task-modal.thread[open]>.tmodal-title,#task-modal.thread[open]>.tmeta,#task-modal.thread[open] .tmodal-main,#task-modal.thread[open] .task-side{display:none}
+#task-modal.thread[open]>.tmodal-title,#task-modal.thread[open]>.tmeta,#task-modal.thread[open] .tmodal-main,#task-modal.thread[open] .task-side,#task-modal.thread[open] .task-tabs,#task-modal.thread[open]>.task-wait{display:none}
 #task-modal.thread[open] .tmodal-body.task-layout{flex:1;min-height:0;max-height:none;display:flex;flex-direction:column;align-items:stretch;overflow:hidden;padding:0 16px max(12px,env(safe-area-inset-bottom))}
 #task-modal.thread[open] .task-chat{flex:1;min-height:0;display:flex;flex-direction:column;margin:0;padding:0;border:0}
 #task-modal.thread[open] .task-chat>h3{display:none}

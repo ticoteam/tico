@@ -629,6 +629,12 @@ class Scheduler:
             screening.tick(self.store)  # outside text a restart left waiting for its check
             run.did("Done", quiet=True)
         try:
+            from . import org_rule_check
+
+            org_rule_check.late_tick(self.store)  # org rule checks a restart left for after their writes
+        except Exception as exc:  # noqa: BLE001 - one step's fault goes on this pass's health row, never stops the tick
+            failures.append({"org_rule_late": type(exc).__name__})
+        try:
             from . import webhook_delivery
 
             webhook_delivery.ensure()  # a delivery worker that died comes back on the next tick

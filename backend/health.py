@@ -27,6 +27,7 @@ from . import (
     releases,
     replication,
     runner_versions,
+    runs,
     setup_stuck,
     sleep_idle,
     usage_limits,
@@ -76,6 +77,7 @@ NEEDS_YOU_MINUTES = 30  # this quiet, its owner is asked to bring it back
 # getting through. The floor is for the default one-minute sync; a longer interval holds more files between uploads.
 BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
+FAILED_RUNS = "#/settings/history?view=runs&failed=1"
 GITHUB_HEALTH = "github:token"
 PROXIES = {
     "cloudflare": "Cloudflare Access",
@@ -2290,15 +2292,9 @@ def _server_settings(c, settings):
 
 
 def _failed(c):
-    since = H.shift(H.now(), hours=-RECENT_HOURS)
-    rows = c.execute(
-        "SELECT bot_id,state,finished_at FROM attempts WHERE state IN ('failed','expired') AND finished_at>? "
-        "ORDER BY finished_at DESC LIMIT 5",
-        (since,),
-    ).fetchall()
-    total = c.execute(
-        "SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished_at>?", (since,)
-    ).fetchone()[0]
+    """How many jobs failed in the last day and the newest five of them (runs.failed): a retry that went back in the
+    queue is not one."""
+    total, rows = runs.failed(c, H.shift(H.now(), hours=-runs.FAILED_HOURS), limit=5)
     return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 
@@ -2730,7 +2726,7 @@ def never_stuck_reading(c):
     tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
     reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
     runs hourly (record_never_stuck), not on each page load."""
-    from . import never_stuck, waiting_on
+    from . import never_stuck, task_depends, waiting_on
 
     found = never_stuck.rules_hold(c)
     breaks = [line for line in found if not getattr(line, "held", False)]
@@ -2739,7 +2735,8 @@ def never_stuck_reading(c):
     for task_id, level in c.execute(
         "SELECT t.id, CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END "
         "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL)"
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL) "
+        f"AND NOT {task_depends.BLOCKED % 't'}"
     ):
         if level in ("retry", "manager", "person"):
             tasks[level].append(task_id)
@@ -3980,7 +3977,8 @@ def view(c, who, settings, auth, github, config):
             "Failed runs",
             "warn" if failed else "ok",
             f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
-            [_fix("Open Runs", "#/settings", "runs")] if failed and full else [],
+            # Runs showing only these failures (backend/views.py runs), so none is lost among the day's other runs.
+            [_fix("Open failed runs", FAILED_RUNS)] if failed and full else [],
         )
     )
     return {

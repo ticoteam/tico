@@ -875,6 +875,91 @@ def test_a_send_back_of_the_commits_after_the_ok_asks_the_person_again_after_the
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
+def test_a_page_published_again_with_no_new_commits_keeps_the_persons_ok(c, store):
+    """Live, Nov 13 (#3584): Chris OK'd the Fixes 2 page, then the Builder published the same page again with the PR's
+    head unchanged, and Chris was asked "OK Chris (version 3)" again. The OK was for that code: a new version of the
+    same page at the same commits keeps it, and nobody is asked."""
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _pre_release(c, store, row, fid=fid)
+    standing = _f2(c, row)
+    assert standing.met and standing.line == "OK'd by Ben on version 1; no new commits since"
+    assert not _ben_asked(c, row)
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
+
+
+def test_another_page_after_the_ok_is_asked_again(c, store):
+    """The OK carries only for the same page: another file at the same commits is a person's to OK again."""
+    row, _, _ = _oked_at_bbbbbbb(c, store)
+    _pre_release(c, store, row)  # a new file replaces the OK'd one
+    standing = _f2(c, row)
+    assert standing.state == R.WAITING and standing.line.endswith("OK someone (version 1)")
+
+
+def test_a_page_published_again_after_new_commits_is_asked_again(c, store):
+    """The OK carries only at the commits it was given at: a new version after a new commit is asked again."""
+    row, rid, _ = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _push(c, "acme/app", 45, "ccccccc00000")
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d2")
+    _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc.")
+    assert _f2(c, row).met, "the reviewer's read keeps Ben's OK on version 1"
+    _pre_release(c, store, row, fid=fid)
+    standing = _f2(c, row)
+    assert (standing.state, standing.met) == (R.WAITING, False)
+    assert standing.line.endswith("OK someone (version 2)")
+
+
+def test_an_ok_brought_back_from_merge_is_not_carried_to_a_newer_version(c, store):
+    """An OK carried back from Merge (`page_for`) is left to the rules for a task back from Merge: the carry-over to a
+    newer version of the same page applies only on the visit where the person gave it."""
+    made = X.pipeline(
+        c,
+        "eng",
+        "Engineering",
+        (
+            {
+                "name": "Review",
+                "owner": REVIEWER,
+                "requirements": [{"kind": "page", "line": "Review", "settings": {"at_head": True}}],
+            },
+            {
+                "name": "QA",
+                "owner": WRITER,
+                "requirements": [
+                    {"kind": "page", "line": "Pre-release", "who_oks": "people_only"},
+                    {"kind": "owner_done"},
+                ],
+            },
+            {
+                "name": "Merge",
+                "owner": WRITER,
+                "on_enter": {"act": "github.queue"},
+                "requirements": [{"kind": "owner_done"}],
+            },
+        ),
+        manager="bot:manager",
+    )
+    rid = made["requirements"]["QA"][0]
+    row = X.new_task(c, ANA, "Absolute value", "eng", assignee=REVIEWER)
+    _link_pr(c, row["id"], "acme/app", 45, "62de57f623fc")
+    review, _ = _page(c, store, "<p>Reviewed 62de57f</p>")
+    _say(c, _attach(c, row, "page:" + review, by=REVIEWER, requirement="Review"), "met")
+    assert E.advance(c, row["id"])["stage"]["name"] == "QA"
+    fid = _pre_release(c, store, row)
+    A.answer(c, row["id"], rid, BEN, "ok")
+    _pre_release(c, store, row, fid=fid)  # version 2, same commits: Ben's OK stays
+    assert _f2(c, row).met
+    done_id = next(r["id"] for r in R.for_visit(c, E.task(c, row["id"])["visit"]) if r["kind"] == "owner_done")
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] == "Merge"
+    E.move(c, row["id"], "QA", ANA, "The queue dropped it")
+    standing = _f2(c, row)
+    assert not standing.met and standing.line.endswith("(version 2)")
+
+
 def _bodies(c, row):
     return c.execute(
         "SELECT recipient_id, body FROM messages WHERE wake_key LIKE ? ORDER BY created_at, id", (row["id"] + ":%",)

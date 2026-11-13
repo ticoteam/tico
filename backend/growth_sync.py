@@ -19,6 +19,11 @@ Rules, from the spec:
   value beside it (`held_*`) and the source's owner chooses (`resolve`); a value the owner declined is not held again.
   A typed estimate is replaced by the synced actual. A run that fails changes no number.
 - Two live synced sources never fill the same number: connecting or remapping one that would is refused.
+- Database query (`db_query`, task #307): `sync_map` also names the `database`, a named `query` in that database's
+  catalog (integrations/queries/<database>.yaml) and the `bot` granted that database. Connecting saves a daily schedule
+  automation (`automation` in the map) whose bot turn runs `tico growth source run <id>` on that bot's computer: the
+  query runs there through `tico db` and its rows, or the error it ended with (wrong column, timeout, login refused),
+  are posted to the same `run`. The server never holds the connection string.
 - Health: `fresh`, `stale` (no good run in twice `refresh_hours`), `failing` (its last run failed, with the reason) or
   `waiting` (connected, never run). `not_synced` for a source that only names a system. The source's owner gets one
   notice when it starts failing and one when it recovers.
@@ -31,6 +36,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from . import growth_finance as GF
 from .store import H as _H
 from .store import Problem
 
@@ -56,6 +62,8 @@ ROWS_MAX = 5000
 NOT_WRITTEN_MAX = 50  # rows listed per run; `not_written_count` has them all
 ERROR_CHARS = 300
 UNKNOWN = "unknown"
+DB_KEYS = ("database", "query", "bot")  # what a db_query source's map names besides its columns
+DB_CRON = "0 6 * * *"  # the daily run, in UTC
 
 
 # ----------------------------------------------------------------------------- months
@@ -125,7 +133,7 @@ def view(row: dict[str, Any]) -> dict[str, Any]:
         "name": row.get("system"),
         "kind": kind,
         "fills": fills(row),
-        "map": sync_map(row) if kind else {},
+        "map": (GF.public_map(sync_map(row)) if kind == GF.KIND else sync_map(row)) if kind else {},
         "refresh_hours": (row.get("refresh_hours") or REFRESH_HOURS.get(str(kind))) if kind else None,
         "health": state["health"],
         "health_since": state["since"],
@@ -143,6 +151,8 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
     if not kind:
         return {}
     given: dict[str, Any] = dict(mapping or {})
+    if kind == GF.KIND:
+        given = GF.check_map(given)
     raw: Any = given.get("fields") or {}
     if not isinstance(raw, dict) or not raw:
         raise Problem("validation", "A synced source fills at least one number: map FIELD=COLUMN", 422)
@@ -155,6 +165,16 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
         "channel": str(given.get("channel") or "channel").strip(),
         "fields": {f: str(fields[f] or f).strip() for f in FIELDS if f in fields},
     }
+    if kind == "db_query":
+        for key in DB_KEYS:
+            value = str(given.get(key) or "").strip()
+            if not value:
+                raise Problem(
+                    "validation", "A database query source names its database, query and bot (the one granted it)", 422
+                )
+            out[key] = value.removeprefix("bot:") if key == "bot" else value
+    if kind == GF.KIND:
+        out["campaigns"] = given["campaigns"]
     for live in H._rows(
         c.execute(
             "SELECT id, system, sync_map, sync_kind FROM gtm_sources WHERE sync_kind IS NOT NULL "
@@ -249,11 +269,18 @@ def _source(c: Any, sid: str) -> dict[str, Any]:
     return cast(dict[str, Any], row)
 
 
+def run_bot(row: dict[str, Any]) -> str | None:
+    """`bot:<slug>` of the bot that runs a database query source, else None."""
+    bot = sync_map(row).get("bot") if row.get("sync_kind") == "db_query" else None
+    return f"bot:{bot}" if bot else None
+
+
 def may_run(c: Any, sid: str, actor: str, is_admin: bool) -> dict[str, Any]:
-    """The source, when `actor` may run it: an owner or admin, or the source's own owner (a bot posting its rows)."""
+    """The source, when `actor` may run it: an owner or admin, the source's own owner (a bot posting its rows), or the
+    bot that runs its database query."""
     row = _source(c, sid)
-    if not is_admin and row.get("owner_ref") != actor:
-        raise Problem("forbidden", "Only the owner, an admin or the source's owner runs a source", 403)
+    if not is_admin and actor not in (row.get("owner_ref"), run_bot(row)):
+        raise Problem("forbidden", "Only the owner, an admin, the source's owner or its bot runs a source", 403)
     if not row.get("sync_kind"):
         raise Problem("conflict", f"{row['system']} does not sync: connect it first (tico growth source update)", 409)
     if row.get("retired_at"):

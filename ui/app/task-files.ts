@@ -296,6 +296,7 @@ function tfViewPaint(d: TfDialog, force = false): void {
   box.innerHTML = `<div class="tf-view-head"><strong class="tf-view-name" title="${esc(f.name)}">${esc(f.name)}</strong>${vers}
       ${cmp ? `<label class="tf-with">with <select data-tf-with aria-label="Compare with">${others.map(x => `<option value="${x.n}"${x.n === cmp.n ? ' selected' : ''}>v${x.n}</option>`).join('')}</select></label>` : ''}
       <span class="spacer"></span><span class="tf-break" aria-hidden="true"></span>${tfCanRemove(d) ? '<button type="button" class="ghost danger tf-rm" data-tf-remove>Remove</button>' : ''}<a class="tf-dl" href="${esc(v.url)}" download aria-label="Download ${esc(f.name)} v${v.n}">↓</a>
+      <button type="button" class="ghost tf-x" data-tf-review aria-label="Open full screen" title="Open full screen"><span class="nav-icon" aria-hidden="true">open_in_full</span></button>
       <button type="button" class="ghost tf-x" data-tf-close aria-label="Close" title="Close (Esc)" autofocus>✕</button></div>
     ${cmp ? tfCompareHTML(f, cmp, v, kind) : `<div class="tf-body">${tfBodyHTML(f, v, kind, d)}</div>`}
     ${tfVersionMetaHTML(d, v)}`;
@@ -440,6 +441,12 @@ function tfWire(d: TfDialog): void {
     const tile = eventElement(ev)?.closest<HTMLElement>('.tf-tile');
     if (tile) { const id = tile.dataset.tfFile; d.tfOpen?.id === id ? tfClose(d) : tfOpen(d, id); return; }
     if (eventElement(ev)?.closest('[data-tf-close]')) { tfClose(d); return; }
+    // The file full screen with the task's thread beside it (file-review.ts); the task's viewer stays under it.
+    if (eventElement(ev)?.closest('[data-tf-review]') && d.tfOpen) {
+      const f = tfFiles(d).find(x => x.id === d.tfOpen?.id);
+      if (f) fileReviewOpen(f.id, {name: f.name, version: d.tfOpen.n, task: String(d.dataset.task || '') || undefined});
+      return;
+    }
     if (eventElement(ev)?.closest('[data-tf-add]')) { $('[data-tf-input]', d.tfEl).click(); return; }
     const rm = eventElement(ev)?.closest<HTMLButtonElement>('[data-tf-remove]');
     if (rm && d.tfOpen) {

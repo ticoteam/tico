@@ -5,7 +5,10 @@
 // its tasks and "+N more"; Retention's shaded cells with dark text on light shades; the Growth board's lanes); a month
 // picked reads the cards again for it and the address keeps it; a Number added from its form sends its metric and
 // channel; Settings lists the channels with their months; a member reads and arranges nothing; a phone has one
-// column and no sideways scroll, in both themes. TICO_UI_SHOTS=<dir> saves screenshots.
+// column and no sideways scroll, in both themes. With synced sources (task #309): the banner names the failing and stale
+// sources and what they fill, each Number's line says where it came from, a conflict's Use sends the choice and goes,
+// Sources shows each source's health, Connect a source maps a file's columns and reports the run, and a month's synced
+// number is locked while its typed ones save alone. TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Locator, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';
@@ -40,6 +43,29 @@ const GENERAL = pipe('general', 'General', null, 'general');
 const PIPELINES = [GENERAL, pipe('lead', 'Lead', 'growth', 'lead'), pipe('growth-experiments', 'Growth Experiments', 'growth', 'growth-experiments')];
 const BOARD = '#/tasks?pipeline=growth-experiments&who=all';
 const upTo = (month: string) => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
+// Synced sources (backend/growth_sync.py), on for one block: one Fresh, one Failing, one Stale, one typed by hand; and a
+// conflict on October's new customers for Search (typed 120, the warehouse says 131) until someone chooses.
+const SYNC = {on: false, conflict: true, may: true, many: false, rowsFail: 0};
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3600e3).toISOString();
+const SOURCES = () => [
+  {id: 's1', system: 'Finance ad spend', truth_for: 'spend', reach_kind: 'person', may: 'read', owner_ref: 'human:ana', kind: 'file', fills: ['spend'], health: 'fresh', health_since: null,
+    last_good_run: hoursAgo(2), last_error: null, has_file: true, map: {month: 'month', channel: 'channel', fields: {spend: 'spend'}}},
+  {id: 's2', system: 'Signups (warehouse)', truth_for: 'new customers', reach_kind: 'person', may: 'read', owner_ref: 'human:ana', kind: 'file', fills: ['new_customers', 'revenue_month'],
+    health: 'failing', health_since: '2026-11-12T06:00:00Z', last_good_run: '2026-11-11T06:00:00Z', last_error: 'column "channel" not found', has_file: true},
+  {id: 's3', system: 'Retention sheet', truth_for: 'retention', reach_kind: 'person', may: 'read', owner_ref: null, kind: 'file', fills: ['kept_d30', 'kept_d90'], health: 'stale',
+    health_since: '2026-11-17T09:00:00Z', last_good_run: '2026-11-03T09:00:00Z', last_error: null, has_file: true},
+  {id: 's4', system: 'HubSpot', truth_for: 'leads', reach_kind: 'mcp', may: 'read', owner_ref: null, kind: null, fills: [], health: 'not_synced'},
+];
+const CONFLICT = () => ({channel: 'search', channel_name: 'Search', month: '2026-10', field: 'new_customers', typed: 120, value: 131, source: 'Signups (warehouse)', may: SYNC.may});
+const ORIGIN: Record<string, () => unknown> = {
+  new_customers: () => ({fields: [], synced: [{source_id: 's2', source: 'Signups (warehouse)', at: '2026-11-11T06:00:00Z', health: 'failing', since: '2026-11-12T06:00:00Z'}],
+    typed: {count: 1, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'actual'},
+    conflicts: !SYNC.conflict ? [] : SYNC.many ? Array.from({length: 5}, CONFLICT) : [CONFLICT()], conflict_count: !SYNC.conflict ? 0 : SYNC.many ? 7 : 1}),
+  cac: () => ({fields: ['spend', 'bot_cost', 'new_customers'], synced: [{source_id: 's1', source: 'Finance ad spend', at: hoursAgo(2), health: 'fresh', since: null}],
+    typed: {count: 3, by: 'human:ana', at: '2026-11-02T10:00:00Z', quality: 'estimate'}, conflicts: [], conflict_count: 0}),
+  kept_d30: () => ({fields: [], synced: [{source_id: 's3', source: 'Retention sheet', at: '2026-11-03T09:00:00Z', health: 'stale', since: '2026-11-17T09:00:00Z'}],
+    typed: null, conflicts: [], conflict_count: 0}),
+};
 const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
   growth_number: (s, month) => {
     const [metric, label, format, good] = METRICS.find(m => m[0] === s.metric)!, cal = upTo(month);
@@ -47,7 +73,7 @@ const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
     let at = values.length - 1;
     while (at > 0 && values[at] == null && metric.startsWith('kept')) at--;
     return {metric, label, format, good, month, value: values[at], prev: values[at - 1] ?? null, from: at === values.length - 1 ? '' : cal[at],
-      series: cal.map((m, i) => ({month: m, value: values[i]}))};
+      series: cal.map((m, i) => ({month: m, value: values[i]})), ...(SYNC.on ? {origin: ORIGIN[metric]?.() ?? null} : {})};
   },
   growth_funnel: (_, month) => {
     const k = MONTHS.indexOf(month), v = [12000, 480, 210, 160, 22].map(x => Math.round(x * (0.85 + 0.05 * k)));
@@ -79,20 +105,38 @@ const DEFAULTS: [string, string, CardSettings][] = [['growth_funnel', 'large', {
   ['growth_number', 'small', {metric: 'kept_d30'}], ['growth_channels', 'large', {count: 10}], ['growth_retention', 'medium', {months: 6}],
   ['growth_board', 'medium', {count: 3}]];
 
-function server(me: Person, pipelines: unknown[] = PIPELINES) {
+// GET /api/v2/growth/setup (backend/growth_setup.py show) with the first `done` steps done, as the panel reads it.
+const STEPS = ['settings', 'channel', 'source', 'month'];
+const SEARCH = {slug: 'search', name: 'Search'};
+interface Setup {done: boolean; celebrate: boolean; steps: {step: string; done: boolean}[]; next: Record<string, unknown> | null; channel: typeof SEARCH | null;
+  set: Record<string, unknown>; you_may: Record<string, boolean>}
+function setupAt(done: number, {may = true, sources = 1, celebrate = false}: {may?: boolean; sources?: number; celebrate?: boolean} = {}): Setup {
+  const step = STEPS[done];
+  const next = step ? {step, number: done + 1, says: '', you_may: may, ...(may ? {} : {who_may: [{ref: 'human:ana', name: 'Ana Silva'}, {ref: 'human:ben', name: 'Ben Ode'}]}),
+    ...(step === 'source' ? {sources} : {}), ...(step === 'month' ? {month: '2026-10'} : {})} : null;
+  return {done: done >= 4, celebrate, steps: STEPS.map((s, i) => ({step: s, done: i < done})), next, channel: done >= 1 ? SEARCH : null,
+    set: {settings: done >= 1 ? {unit: 'customers', revenue_month: 80, margin_pct: 70} : null, channel: done >= 2 ? SEARCH : null,
+      source: done >= 3 ? {system: 'Google Ads', truth_for: 'ad spend'} : null, month: done >= 4 ? {month: '2026-10', spend: 1800, new_customers: 6} : null},
+    you_may: {settings: may, channels: may, sources: may, months: may}};
+}
+
+function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = setupAt(4), emptyCards: string[] = []) {
   let n = 0, saved = false;
+  const empty = !setup.steps[3]!.done;   // a Growth with no month yet: every card shows nothing (backend/cards.py card_view)
+  const none = (template: string) => empty || emptyCards.includes(template);
   let pins: Pin[] = DEFAULTS.map(([template, size, settings], i) => ({id: null, item: null, position: i, size, made_by: null, card: {id: null, template, settings}}));
   const reads: unknown[] = [], writes: Write[] = [];
-  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: false,
-    data: DATA[c.template]!(c.settings, month)});
-  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS,
+  const draw = (c: PinCard, month: string) => ({...c, title: c.title || '', name: NAMES[c.template], heading: c.title || NAMES[c.template], team_name: '', hidden: none(c.template),
+    data: none(c.template) ? null : DATA[c.template]!(c.settings, month)});
+  const block = () => setup.done ? {done: true} : {done: false, steps: setup.steps, next: setup.next};
+  const view = (month: string) => ({place: 'growth', kind: 'growth', saved, can_edit: me.company_role !== 'member', month, months: MONTHS, setup: block(),
     pins: pins.map(p => ({...p, card: draw(p.card, month)}))});
   const save = () => {
     if (saved) return;
     saved = true;
     pins = pins.map(p => { const cid = 'c' + (++n); return {...p, id: 'p' + n, item: 'card:' + cid, card: {...p.card, id: cid}}; });
   };
-  return {reads, writes, handle(method: string, p: string, body: PostedCard, query: URLSearchParams): [number, unknown] | null {
+  return {reads, writes, setup, handle(method: string, p: string, body: PostedCard, query: URLSearchParams): [number, unknown] | null {
     if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|growth)\b/.test(p)) writes.push([method, p, body]);
     if (p === '/api/v2/places/dashboard' && method === 'GET') return [200, {
       place: 'dashboard', kind: 'dashboard', saved: true, can_edit: me.company_role !== 'member',
@@ -116,17 +160,36 @@ function server(me: Person, pipelines: unknown[] = PIPELINES) {
         card: {id: cid, template: body.template, settings: body.settings, title: body.title}});
       return [200, {card: draw(pins.at(-1)!.card, MONTHS.at(-1)!), pin: 'p' + n}];
     }
+    if (p === '/api/v2/growth/setup') return [200, setup];
+    if (p === '/api/v2/growth/setup/shown') { if (setup.done) setup.celebrate = false; return [200, setup]; }
+    // A channel added finishes step 2: the panel reads its steps again after the save.
+    if (p === '/api/v2/growth/channels' && method === 'POST') { Object.assign(setup, setupAt(2)); return [200, {slug: 'search', name: 'Search'}]; }
     if (p === '/api/v2/growth/settings') return [200, {unit: 'customers', revenue_month: 49, margin_pct: 80}];
     if (p === '/api/v2/growth/channels') return [200, {channels: CHANNELS.map(c => ({...c, stage: 'testing', owner_ref: 'human:ana', track: 'performance'})), may_edit: true}];
-    if (p === '/api/v2/growth/cohorts') return [200, {cohorts: MONTHS.map((month, i) => ({channel: query.get('channel'), month, new_customers: SERIES.new_customers![i],
-      kept_d30: SERIES.kept_d30![i], kept_d90: null, kept_d180: null, quality: 'actual'}))}];
+    if (p === '/api/v2/growth/cohorts' && method === 'GET') return [200, {cohorts: MONTHS.map((month, i) => ({channel: query.get('channel'), month, new_customers: SERIES.new_customers![i],
+      spend: SERIES.spend![i], bot_cost: null, kept_d30: SERIES.kept_d30![i], kept_d90: null, kept_d180: null, revenue_month: null, margin_pct: null, quality: 'actual',
+      origins: SYNC.on && month === '2026-10' ? {
+        spend: {origin: 'synced', quality: 'actual', source_id: 's1', source: 'Finance ad spend', at: hoursAgo(2), by: null, conflict: null},
+        new_customers: {origin: 'typed', quality: 'actual', source_id: null, source: null, at: '2026-11-02T10:00:00Z', by: 'human:ana',
+          conflict: SYNC.conflict ? {value: 131, source_id: 's2', source: 'Signups (warehouse)', at: '2026-11-11T06:00:00Z'} : null},
+        // The warehouse was remapped away from day-30 retention: still named, no longer its owner.
+        kept_d30: {origin: 'synced', quality: 'actual', source_id: 's2', source: 'Signups (warehouse)', at: '2026-11-11T06:00:00Z', by: null, conflict: null},
+      } : {}}))}];
+    if (p === '/api/v2/growth/cohorts' && method === 'PUT') return [200, {}];
+    if (p === '/api/v2/growth/sources' && method === 'GET') return [200, {sources: SYNC.on ? SOURCES() : [], conflicts: [], may_edit: me.company_role !== 'member'}];
+    if (p === '/api/v2/growth/sources' && method === 'POST') return [200, {...(body as object), id: 's5', kind: 'file', health: 'waiting'}];
+    if (p === '/api/v2/growth/sources/s5' && method === 'PATCH') return [200, {...(body as object), id: 's5', kind: 'file', health: 'waiting'}];
+    if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p) && SYNC.rowsFail > 0) { SYNC.rowsFail--; return [422, {error: {code: 'validation', detail: 'The file has no rows'}}]; }
+    if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p)) return [200, {ok: true, error: null, written: 4, held: 1,
+      not_written: [{row: 4, channel: 'podcast', month: '2026-10', reason: 'no such channel'}], not_written_count: 1}];
+    if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST') { SYNC.conflict = false; return [200, {kept: 'source', value: 131}]; }
     return null;
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[]} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER, theme = 'dark', pipelines = PIPELINES as unknown[], setup = setupAt(4), emptyCards = [] as string[]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors: string[] = [], fake = server(me, pipelines);
+  const errors: string[] = [], fake = server(me, pipelines, setup, emptyCards);
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch { /* none */ } }, theme);
   const config = {company_name: 'Acme'};
@@ -192,6 +255,8 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(await page.locator('[data-gr-month] option').allInnerTexts(), ['Oct 2026', 'Sep 2026', 'Aug 2026', 'Jul 2026'], 'newest first');
       assert.deepEqual((await boardLinks(page))[0], [BOARD, true], 'the Growth board opens Growth Experiments');
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
+      assert.equal(await page.locator('#gr-start').isVisible(), false, 'a set-up Growth has no Get started panel');
+      assert.equal(await page.locator('#dash-grid .grs-fill').count(), 0);
       assert.equal(await page.locator('.dash-actions').isVisible(), true);
       assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
       // Arranging is in edit mode: Edit shows the grips, menus and + Card / + Page; Done hides them.
@@ -404,6 +469,280 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Growth cards: head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes');
+
+    // ---- Growth's first run (ui/app/growth-start.ts): the Get started panel and the empty cards.
+    const panel = (page: Page) => page.locator('#gr-start');
+    const stepKinds = (page: Page) => page.locator('#gr-start .grs-step .grs-k').evaluateAll(els => els.map(el => (el.firstChild?.textContent || '').trim()));
+    const panelButtons = (page: Page) => page.locator('#gr-start button.grs-go');
+    {
+      // AC-1: an admin, nothing set: four steps in order, none done, step 1 next with one button that opens Settings.
+      // AC-7: every empty card names the step that fills it; the Funnel names Goals; none says only "No ... yet".
+      const {page, errors} = await open(browser, {setup: setupAt(0)});
+      await panel(page).locator('.grs-step').first().waitFor();
+      assert.equal(await panel(page).getAttribute('aria-label'), 'Get started');
+      assert.match(await panel(page).locator('.grs-h').innerText(), /Get started/);
+      assert.deepEqual(await page.locator('#gr-start .grs-step').evaluateAll(els => els.map(el => el.getAttribute('data-grs-step'))), STEPS);
+      assert.deepEqual(await stepKinds(page), ['Next', 'Step 2', 'Step 3', 'Step 4']);
+      assert.equal(await page.locator('#gr-start .grs-done').count(), 0);
+      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'settings');
+      assert.match(await page.locator('#gr-start .grs-prog').innerText(), /0 of 4 done/);
+      assert.equal(await panelButtons(page).count(), 1, 'one button');
+      // The panel sits between the head and the cards.
+      const [headBottom, panelTop, panelBottom, gridTop] = await page.evaluate(() => [document.querySelector('.dash-head')!.getBoundingClientRect().bottom,
+        ...(() => { const r = document.querySelector('#gr-start')!.getBoundingClientRect(); return [r.top, r.bottom]; })(), document.querySelector('#dash-grid')!.getBoundingClientRect().top]);
+      assert.ok(headBottom! <= panelTop! && panelBottom! <= gridTop!, 'under the head, over the cards');
+      const fills = page.locator('#dash-grid .grs-fill');
+      assert.equal(await fills.count(), 7, 'every card says what fills it');
+      assert.deepEqual(await fills.evaluateAll(els => els.map(el => el.getAttribute('data-grs-fill'))), ['goals', 'month', 'month', 'month', 'channel', 'month', 'board']);
+      assert.match(await fills.nth(1).innerText(), /step 4/);
+      assert.match(await fills.nth(3).innerText(), /kept 30 days/, 'a kept share waits for 30 days');
+      assert.match(await fills.nth(4).innerText(), /step 2/);
+      assert.equal(await fills.nth(0).locator('a').getAttribute('href'), '#/strategy/goals', 'the Funnel opens Goals');
+      assert.equal(await page.locator('#dash-grid .dash-none').evaluateAll(els => els.filter(el => /^No .* yet$/.test((el.textContent || '').trim())).length), 0);
+      // A card's step that is not next yet points at the panel's next step instead of a form.
+      await fills.nth(1).locator('[data-gr-step]').click();
+      await page.waitForFunction(() => document.querySelector('#gr-start .grs-next')?.classList.contains('grs-flash'));
+      assert.equal(await page.locator('dialog.gr-dlg[open]').count(), 0);
+      await shot(page, 'desktop-growth-start');
+      await panelButtons(page).click();
+      await page.locator('dialog.gr-dlg[open][aria-label="Settings"] [name="revenue_month"]').waitFor();
+      await page.keyboard.press('Escape');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // Synced sources: the banner, each Number's origin line, a conflict chosen on its card.
+      Object.assign(SYNC, {on: true, conflict: true, may: true});
+      const {page, errors, fake} = await open(browser);
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      const banner = page.locator('[data-gr-health]');
+      await banner.waitFor();
+      const said = await banner.innerText();
+      assert.match(said, /^1 source failing, 1 stale · Signups \(warehouse\) since Nov 12[^:]*: column "channel" not found; Retention sheet no good run since Nov 3/, 'the banner names them');
+      assert.match(said, /New customers, revenue \/ customer, kept 30 days and kept 90 days are marked where shown\./, 'and what they fill');
+      assert.equal(await banner.locator('a[data-gr-health-sources]').getAttribute('href'), '#/growth/sources');
+      const pin = (name: string) => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
+      const newLine = pin('New customers').locator('[data-gr-origin]');
+      assert.match(await newLine.innerText(), /^Signups \(warehouse\) · \d+d ago failing · typed · actual$/, 'a failing source is marked on the number it fills');
+      const cacLine = pin('CAC').locator('[data-gr-origin]');
+      assert.match(await cacLine.innerText(), /^from Finance ad spend · 2h ago · 3 typed · estimate$/, 'a worked-out figure names its sources');
+      assert.equal(await cacLine.getAttribute('title'), 'Worked out from spend, bot cost and new customers');
+      assert.match(await pin('Kept 30 days').locator('[data-gr-origin]').innerText(), /^Retention sheet · \d+d ago stale · actual$/, 'a synced number says actual');
+      const conflict = pin('New customers').locator('[data-gr-conflict]');
+      assert.match(await conflict.innerText(), /Search · Oct 26 · new customers: typed 120, Signups \(warehouse\) says 131\s*Keep 120\s*Use 131/);
+      await shot(page, 'desktop-growth-synced');
+      await conflict.getByRole('button', {name: 'Use 131'}).click();
+      await page.waitForFunction(() => !document.querySelector('#dash-grid [data-gr-conflict]'));
+      assert.deepEqual(fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/growth/cohorts/conflicts')![2],
+        {channel: 'search', month: '2026-10', field: 'new_customers', keep: 'source'}, 'the choice is sent');
+
+      // Settings → Months → October: spend is the source's, locked; new customers were typed, and Keep / Use show
+      // while the warehouse disagrees; a save sends only what changed.
+      SYNC.conflict = true;
+      await page.locator('[data-gr-settings]').click();
+      await page.locator('dialog.gr-dlg[open] [data-gs-months="search"]').click();
+      const months = page.locator('dialog.gr-dlg[open]', {hasText: 'Search · Months'});
+      await months.locator('.gc-coh').first().waitFor();
+      assert.match(await months.locator('.gc-coh').first().innerText(), /Finance ad spend[\s\S]*Source differs/, 'October says where and that a source differs');
+      await months.locator('[data-gc-edit="0"]').click();
+      const oct = page.locator('dialog.gr-dlg[open]', {hasText: 'Search · Oct 2026'});
+      await oct.locator('[name="spend"]').waitFor();
+      assert.equal(await oct.locator('[name="spend"]').isDisabled(), true, 'a synced number is locked');
+      assert.equal(await oct.locator('[name="kept_d30"]').isDisabled(), false, 'a number its source no longer fills is typed again');
+      assert.match(await oct.locator('[data-gc-origin="spend"]').innerText(), /^From Finance ad spend · 2h ago · actual$/);
+      assert.match(await oct.locator('[data-gc-origin="new_customers"]').innerText(), /^Typed by .+, Nov 2 · actual$/);
+      assert.match(await oct.locator('.gr-conflict').innerText(), /typed 48, Signups \(warehouse\) says 131\s*Keep 48\s*Use 131/);
+      await shot(page, 'desktop-growth-month-synced');
+      await oct.locator('[name="bot_cost"]').fill('120');
+      await oct.locator('[type="submit"]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.gr-dlg[open]'));
+      const putBody = fake.writes.find(([m, p]) => m === 'PUT' && p === '/api/v2/growth/cohorts')![2] as Record<string, unknown>;
+      assert.equal(putBody.bot_cost, 120);
+      assert.ok(!('spend' in putBody) && !('new_customers' in putBody) && !('kept_d90' in putBody), `only what changed is sent: ${JSON.stringify(putBody)}`);
+
+      // Sources: each synced source's health and when, a typed one as before; Connect a source maps a file's columns.
+      await page.evaluate(() => { location.hash = '#/growth/sources'; });
+      await page.locator('.gsrc-ul li').first().waitFor();
+      const row = (id: string) => ({innerText: async () => String(await page.locator(`.gsrc-ul li[data-src="${id}"] .gsrc-sync`).textContent()).replace(/\s+/g, ' ').trim()});
+      assert.match(await row('s1').innerText(), /^spend Fresh synced 2h ago$/);
+      assert.match(await row('s2').innerText(), /^new customers and revenue \/ customer Failing since .*12.* · column "channel" not found$/);
+      assert.match(await row('s3').innerText(), /^kept 30 days and kept 90 days Stale last good run Nov 3/);
+      assert.equal(await row('s4').innerText(), 'Typed by hand · not synced');
+      await shot(page, 'desktop-growth-sources');
+      await page.locator('[data-src-connect]').click();
+      const con = page.locator('dialog.gr-dlg[open]', {hasText: 'Connect a source'});
+      await con.locator('[name="system"]').fill('Signups sheet');
+      const csv = 'month,channel,Spend,signups\n2026-10,search,4210,131\n2026-10,referrals,300,12\n2026-10,podcast,10,1\n';
+      await con.locator('[name="file"]').setInputFiles({name: 'signups.csv', mimeType: 'text/csv', buffer: Buffer.from(csv)});
+      await page.waitForFunction(() => (document.querySelector('dialog.gr-dlg[open] [name="f_spend"]') as HTMLInputElement | null)?.value === 'Spend');
+      await con.locator('[name="f_new_customers"]').fill('signups');
+      await shot(page, 'desktop-growth-connect');
+      // A file over the 1,000,000 characters one run takes is refused before any source is made.
+      await con.locator('[name="file"]').setInputFiles({name: 'big.csv', mimeType: 'text/csv', buffer: Buffer.from('month,channel,Spend,signups\n' + 'x'.repeat(1_000_001))});
+      await con.getByRole('button', {name: 'Connect and fill 12 months'}).click();
+      await con.locator('[data-error]:not([hidden])').waitFor();
+      assert.match(await con.locator('[data-error]').innerText(), /^That file is over 1 MB/);
+      assert.equal(fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources').length, 0, 'nothing made for a file too big');
+      await con.locator('[name="file"]').setInputFiles({name: 'signups.csv', mimeType: 'text/csv', buffer: Buffer.from(csv)});
+      // The file is refused once: the source is made, the dialog says so, and saving again changes that source.
+      SYNC.rowsFail = 1;
+      await con.getByRole('button', {name: 'Connect and fill 12 months'}).click();
+      await con.locator('[data-error]:not([hidden])').waitFor();
+      assert.match(await con.locator('[data-error]').innerText(), /^Signups sheet is connected, but its file was not taken: The file has no rows\./);
+      await con.getByRole('button', {name: 'Save and run'}).click();
+      const result = page.locator('dialog.gr-dlg[open]', {hasText: 'Signups sheet · Synced'});
+      await result.waitFor();
+      assert.match(await result.innerText(), /Wrote 4 numbers\. 1 differs from a number someone typed as actual/);
+      assert.match(await result.innerText(), /Row 4 · podcast · 2026-10: no such channel/);
+      const made = fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources')![2];
+      assert.deepEqual(made, {system: 'Signups sheet', truth_for: 'spend and new customers', owner_ref: null, sync_kind: 'file',
+        sync_map: {month: 'month', channel: 'channel', fields: {spend: 'Spend', new_customers: 'signups'}}});
+      assert.deepEqual(fake.writes.find(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources/s5/rows')![2], {csv}, 'the file runs at once');
+      assert.equal(fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/sources').length, 1, 'the retry made no second source');
+      assert.equal(fake.writes.filter(([m, p]) => m === 'PATCH' && p === '/api/v2/growth/sources/s5').length, 1, 'it changed the one made');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A member sees the banner, the lines and the conflicts, but no Keep or Use; with 7 conflicts the list shows 5
+      // and says there are more.
+      Object.assign(SYNC, {on: true, conflict: true, may: false, many: true});
+      const {page, errors} = await open(browser, {me: MEMBER});
+      await page.locator('#dash-grid [data-gr-conflict]').waitFor();
+      await page.locator('[data-gr-health]').waitFor();
+      assert.match(await page.locator('#dash-grid [data-gr-conflict]').innerText(), /7 numbers differ from their source/);
+      await page.locator('#dash-grid [data-gr-conflicts]').click();
+      const list = page.locator('dialog.gr-dlg[open]');
+      assert.equal(await list.locator('li.gr-conflict').count(), 5);
+      assert.equal(await list.locator('[data-gr-conflicts-more]').innerText(), 'And 2 more, shown here once these are chosen.');
+      assert.equal(await page.locator('[data-gr-resolve]').count(), 0, 'no Keep or Use for a member');
+      assert.deepEqual(errors, []);
+      await page.close();
+      Object.assign(SYNC, {on: false, conflict: true, may: true, many: false, rowsFail: 0});
+    }
+    {
+      // AC-2: step 1 done shows what was set; step 2 next opens the new channel form. Adding it marks step 2 done at once.
+      const {page, errors} = await open(browser, {setup: setupAt(1)});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.deepEqual(await stepKinds(page), ['Done', 'Next', 'Step 3', 'Step 4']);
+      assert.equal(await page.locator('#gr-start [data-grs-step="settings"] .grs-l').innerText(), '$80 per customer a month · 70% margin');
+      assert.match(await page.locator('#gr-start .grs-prog').innerText(), /1 of 4 done/);
+      assert.equal(await panelButtons(page).getAttribute('data-gr-step'), 'channel');
+      await page.locator('#dash-grid .grs-fill[data-grs-fill="channel"] [data-gr-step]').click();
+      const dlg = page.locator('dialog.gr-dlg[open][aria-label="New channel"]');
+      await dlg.locator('[name="name"]').waitFor();
+      await page.keyboard.press('Escape');
+      await panelButtons(page).click();
+      await dlg.locator('[name="name"]').fill('Search');
+      await dlg.locator('[type="submit"]').click();
+      await page.waitForFunction(() => document.querySelector('#gr-start [data-grs-step="channel"]')?.classList.contains('grs-done'));
+      assert.match(await page.locator('#gr-start [data-grs-step="channel"]').getAttribute('class') || '', /grs-just/, 'the step just done pops');
+      assert.equal(await page.locator('#gr-start [data-grs-step="channel"] .grs-l').innerText(), 'Search');
+      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'source');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-3: step 3 next opens Search's form at its source picker; with no source yet, it opens Sources.
+      const {page, errors} = await open(browser, {setup: setupAt(2)});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.equal(await panelButtons(page).innerText(), 'Choose the source');
+      await panelButtons(page).click();
+      const dlg = page.locator('dialog.gr-dlg[open][aria-label="Search"]');
+      await dlg.locator('[name="source_id"]').waitFor();
+      await page.waitForFunction(() => document.activeElement?.getAttribute('name') === 'source_id');
+      await page.keyboard.press('Escape');
+      await page.close();
+      const none = await open(browser, {setup: setupAt(2, {sources: 0})});
+      await panel(none.page).locator('.grs-next').waitFor();
+      assert.equal(await panelButtons(none.page).innerText(), 'Add a source');
+      await panelButtons(none.page).click();
+      await none.page.waitForFunction(() => location.hash === '#/growth/sources');
+      assert.deepEqual([...errors, ...none.errors], []);
+      await none.page.close();
+    }
+    {
+      // AC-4: step 4 next opens the Months form on Search and the last full month.
+      const {page, errors} = await open(browser, {setup: setupAt(3)});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.equal(await page.locator('#gr-start [data-grs-step="source"] .grs-l').innerText(), 'Google Ads · ad spend');
+      assert.equal(await panelButtons(page).innerText(), 'Add Oct 2026');
+      await panelButtons(page).click();
+      const dlg = page.locator('dialog.gr-dlg[open][aria-label="Search · New month"]');
+      assert.equal(await dlg.locator('[name="month"]').inputValue(), '2026-10');
+      assert.equal(await dlg.locator('[name="spend"]').count(), 1);
+      assert.equal(await dlg.locator('[name="new_customers"]').count(), 1);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-5: all four done says so once and points at Search's numbers; the next open has no panel.
+      const setup = setupAt(4, {celebrate: true});
+      const {page, errors, fake} = await open(browser, {setup});
+      await panel(page).locator('.grs-yay').waitFor();
+      assert.match(await panel(page).innerText(), /You’re set up/);
+      assert.match(await panel(page).innerText(), /Search’s first numbers are in/);
+      await page.locator('#dash-grid .grc-ch tbody tr').first().waitFor();
+      await shot(page, 'desktop-growth-start-done');
+      assert.ok(fake.writes.some(([m, p]) => m === 'POST' && p === '/api/v2/growth/setup/shown'), 'said once: recorded');
+      await panel(page).locator('[data-grs-see]').click();
+      await page.waitForFunction(() => document.querySelector('#dash-grid tr[data-channel="search"]')?.classList.contains('grs-flash'));
+      assert.equal(await panel(page).isVisible(), false);
+      await page.evaluate(() => { location.hash = '#/overview'; });
+      await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
+      await page.evaluate(() => { location.hash = '#/growth'; });
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      await page.waitForTimeout(200);
+      assert.equal(await panel(page).isVisible(), false, 'it does not come back');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const me of [OWNER, MEMBER]) {
+      // AC-13: a set-up Growth with a card still empty (Retention waits 30 days for kept customers) reads as before the
+      // panel: plain words, no step link, nothing that says an admin may not.
+      const {page, errors} = await open(browser, {me, emptyCards: ['growth_retention', 'growth_board']});
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      const lines = page.locator('#dash-grid .dash-none');
+      await lines.first().waitFor();
+      assert.equal(await panel(page).isVisible(), false);
+      assert.equal(await page.locator('#dash-grid [data-gr-step]').count(), 0, `${me.id}: no step links once set up`);
+      const words = await lines.allInnerTexts();
+      assert.ok(words.every(w => !/step \d/i.test(w)), `${me.id}: no step named once set up: ${words}`);
+      assert.ok(words.some(w => /kept 30 days/.test(w)), `${me.id}: Retention says what fills it`);
+      assert.equal(await page.locator('.toast').count(), 0);
+      if (me === OWNER) await shot(page, 'desktop-growth-set-up-empty-card');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // AC-6: a member with step 2 next sees the owner and admins by name, and no button.
+      const {page, errors} = await open(browser, {me: MEMBER, setup: setupAt(1, {may: false})});
+      await panel(page).locator('.grs-next').waitFor();
+      assert.equal(await page.locator('#gr-start [aria-current="step"]').getAttribute('data-grs-step'), 'channel');
+      assert.equal(await page.locator('#gr-start [data-grs-who]').innerText(), 'Only Ana Silva and Ben Ode can do this.');
+      assert.equal(await panelButtons(page).count(), 0, 'no button');
+      // An empty card's link points at the panel rather than a form they may not use.
+      await page.locator('#dash-grid .grs-fill[data-grs-fill="channel"] [data-gr-step]').click();
+      await page.waitForFunction(() => document.querySelector('#gr-start .grs-next')?.classList.contains('grs-flash'));
+      assert.equal(await page.locator('dialog.gr-dlg[open]').count(), 0);
+      await shot(page, 'desktop-growth-start-member');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const theme of ['dark', 'light']) {
+      // A phone: the steps stack in one column, nothing past the edge, the button in reach.
+      const {page, errors} = await open(browser, {viewport: PHONE, theme, setup: setupAt(1)});
+      await panel(page).locator('.grs-next').waitFor();
+      const lefts = await page.locator('#gr-start .grs-step').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().left)));
+      assert.equal(new Set(lefts).size, 1, 'one column');
+      assert.equal(await sideways(page), false, 'no sideways scroll');
+      const box = (await panelButtons(page).boundingBox())!;
+      assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width, 'the button fits');
+      assert.ok(await contrast(page.locator('#gr-start .grs-next .grs-n')) >= 3, `the next step's number reads (${theme})`);
+      await shot(page, `phone-growth-start-${theme}`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('Growth cards: head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; Get started panel (AC-1 to AC-7) on desktop and phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -68,6 +68,8 @@ SAMPLES = {
     "release.bot": "finance",
     "release.writer": "finance",
     "pages.listening.owner": "finance",
+    "pages.goals.owner": "finance",
+    "pages.tools.owner": "finance",
     "mail.legal_bot": {"legal_bot_id": "finance"},
     "rules.task_rule": {"on": False},
     "rules.task_rule.create": {"name": "Parity rule", "when": {}, "then": {}},

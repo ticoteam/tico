@@ -849,7 +849,8 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   it that change the same lines (GitHub's diff of each from where it branched off, without line numbers or context,
   as `git patch-id` reads it) keep it. Others are read by Reviewer 2 the same way, the 2 rounds counted from the OK:
   its OK keeps the person's; its send back goes to the Builder, and the person is asked again once the next commits
-  were read. Until Tico has read what the new commits change, the page waits on GitHub.
+  were read. Until Tico has read what the new commits change, the page waits on GitHub. A new version of the same page
+  published at the commits the person OK'd keeps the OK: nobody is asked again (Nov 13); another page is asked again.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
@@ -1173,7 +1174,10 @@ late. Nothing depends on the exact 10 seconds.
   reads it in QA (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
   page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,
   and the person is asked after the next read. The task shows "Changed after OK" and the manager bot is told once
-  (C22).
+  (C22). Sent back while a PR is still at the commit it was last queued at, the OK that came back does not count:
+  the page waits on the Builder ("Merge queue ran 463f2e7 and it failed (…): push a fix."), with the mover's note,
+  until there are new commits, and then the rules above decide. A page attached on that visit is judged as any other.
+  *Added Nov 13: four tasks went straight back to Merge and were queued again at the commit that had just failed.*
 - **A PR linked in Merge.** While a task is in a stage that queues PRs, only a person links another PR to it: a bot is
   told "Send the task back before linking another pull request.", and a bot's worktree branch PR is not linked there.
 - **`tico/merge-ok`.** Before queuing a PR, the server posts a check run `tico/merge-ok` = success on exactly the commit

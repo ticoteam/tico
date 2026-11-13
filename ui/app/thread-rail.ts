@@ -115,7 +115,19 @@ async function pageThreads() {
   const id = (last && (listed.some(t => t.id === last) || THREADS.next) ? last : '') || THREADS.pinned[0]?.id || '';
   if (id) { location.replace(threadHref(id)); return; }
   threadUnmount(THREAD_PAGE?.view); THREAD_PAGE = null;
+  if (trUnreadPane(pane)) return;
   pane.innerHTML = TR_EMPTY_HTML;
+}
+// No thread to open but chats wait for you: say how many, and offer Catch up (never the empty picture).
+const trUnreadWords = (n: number): string => `${threadsCountText(n)} chat${n === 1 ? '' : 's'} with new messages`;
+function trUnreadPane(pane: Element): boolean {
+  const n = THREADS.rail === true ? threadsCatchUp() : 0;
+  if (!n) return false;
+  pane.innerHTML = `<div class="tr-empty" data-tr-unread-pane><div class="empty-state">${EMPTY_ART.unread}<p><b data-tr-unread-n>${esc(trUnreadWords(n))}</b></p>
+    <button type="button" class="primary" data-tr-catchup>Catch up</button></div></div>`;
+  const go = pane.querySelector<HTMLButtonElement>('[data-tr-catchup]');
+  if (go) go.onclick = () => void catchUpOpen();
+  return true;
 }
 // #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
 function pageThread(id: string) {
@@ -226,6 +238,10 @@ function railRender() {
   badge.hidden = !n; badge.textContent = threadsCountText(n);
   catchUp.setAttribute('aria-label', n ? `Catch up, ${n}` : 'Catch up');
   rail.querySelector('[data-tr-browse]').hidden = !can;
+  // The pane's "N chats with new messages" follows the count; at 0 (and Catch up closed: nothing moves behind it) the
+  // pane is emptied first, so this cannot run again, and pageThreads() picks what shows instead.
+  const un = document.querySelector('[data-tr-unread-n]'), unPane = un?.closest('.tr-pane');
+  if (un && unPane) { if (n) un.textContent = trUnreadWords(n); else if (!CU.open && S.route === THREADS_ROUTE) { unPane.innerHTML = ''; void pageThreads(); } }
 }
 
 // ----------------------------------------------------------------- browse

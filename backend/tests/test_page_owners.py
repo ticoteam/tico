@@ -27,7 +27,8 @@ def test_listening_is_owned_by_the_automations_owner_until_an_admin_changes_it(a
     # AC-6: the page follows Settings at its next read, with no release; AC-4: no owner, no chat.
     automations_owner(api)
     pages = get(api, 'page-owners', 'cara-test')['pages']
-    assert pages == {'listening': {'bot': 'bot:automations-owner', 'name': 'Listening'}}
+    assert pages['listening'] == {'bot': 'bot:automations-owner', 'name': 'Listening'}
+    assert pages['tools'] == {'bot': None, 'name': 'Tools'}  # no Tools Product Owner in the base fixture: no chat
     setup(api)
     assert put(api, 'page-owners/listening', {'bot': 'ops'}, 'ben-test')['bot'] == 'bot:ops'
     assert get(api, 'page-owners', 'cara-test')['pages']['listening']['bot'] == 'bot:ops'
@@ -49,6 +50,22 @@ def test_an_archived_owner_leaves_the_page_without_a_chat(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='archived' WHERE slug='ops'")
     assert get(api, 'page-owners')['pages']['listening']['bot'] is None
+
+
+def test_goals_is_owned_by_the_strategy_owner_until_an_admin_changes_it(api):
+    # Spec chat-on-every-page, Release 1: Goals' chat is the Strategy Owner's, changeable like Listening's.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('strategy-owner','strategy-owner','Strategy Owner','active')"
+        )
+    assert get(api, 'page-owners', 'cara-test')['pages']['goals'] == {'bot': 'bot:strategy-owner', 'name': 'Goals'}
+    setup(api)
+    assert put(api, 'page-owners/goals', {'bot': 'ops'}, 'ben-test')['bot'] == 'bot:ops'
+    assert get(api, 'page-owners')['pages']['goals']['bot'] == 'bot:ops'
+    assert get(api, 'page-owners')['pages']['listening']['bot'] is None
+    e = settings_catalog.entry('pages.goals.owner')
+    assert (e.method, e.route, e.field, e.who) == ('PUT', 'page-owners/goals', 'bot', 'admin')
+    assert e.read == 'page-owners#pages.goals.bot'
 
 
 def test_the_settings_catalogue_sets_listenings_owner(api):
