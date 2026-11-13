@@ -69,6 +69,8 @@ const UNSHOWN: string[] = [
   // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
   'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
+  // A website tool's live browser view (Open browser on the tool's page, or a browser ask): no page shows a live browser.
+  'ui/app/browser-view.ts', 'ui/styles/browser-view.css',
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.
