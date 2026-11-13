@@ -168,13 +168,19 @@ def end_own_snooze(c, task_id, why):
     """Every check on a head finished: a snooze the owner bot set on its own task is how it waits for them, so it ends
     here, as SYSTEM, and the head's `pr_checks_done` wakes it (stress run, Nov 12: "wakes when its checks finish" slept
     40 minutes past them). A snooze anyone else set stays, and so does the owner's while the task waits on a person:
-    those results stay notes (`rules._pr_decision`). True when it ended."""
+    those results stay notes (`rules._pr_decision`). When the checks passing was the last thing the stage asked, it is
+    nobody's turn: the snooze ends all the same and the task moves on at once when the next stage has room, else it
+    waits for room like any other (Nov 12: Tico Team's Build tasks sat for hours, snoozed "until checks pass", with
+    their checks passed and Review 1 unlimited). True when it ended."""
     from . import task_engine as E
 
     row = E.task(c, task_id)
-    snooze = (row or {}).get("snooze") or {}
-    if not row or not snooze or snooze.get("by_id") != row.get("owner_id") or not E.is_bot(row.get("owner_id")):
+    if not row or not E.own_snooze(row):
         return False
+    if E.ready_but_snoozed(c, row):
+        if not E.move_on_past_own_snooze(c, task_id, why):
+            E.unsnooze(c, task_id, E.SYSTEM, why)
+        return True
     if E._turn_of(c, {**row, "snooze": None})[0] != row["owner_id"]:
         return False
     E.unsnooze(c, task_id, E.SYSTEM, why)

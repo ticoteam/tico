@@ -456,6 +456,12 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
   #3417 to land") merges or closes. Merge adds its own news (see Engineering, Merge). A person's snooze stays, and the
   bot's snooze count is as it was. *Added Nov 12: Tico Team's Builder slept in Fixes 1 to 08:00 waiting for #3417,
   which merged at 03:01.*
+- A bot's snooze on its own task never holds it once everything the stage asks is met: the checks it waited for
+  passing end the snooze even when that leaves nobody a turn, and the task moves on at once when the next stage has
+  room (else it waits for room like any other). The never-stuck check does the same on each pass for such a snooze no
+  event ended. A person's snooze, or another bot's, stays. A move the engine refuses is in the server log with its
+  rule, the task and the stage. *Added Nov 13: Tico Team's Build tasks sat for hours snoozed "until checks pass", their
+  checks passed and Review 1 unlimited, showing "Moving to Review 1", until a person moved them.*
 - Run now on a snoozed task ends the snooze, in the name of whoever pressed it, as Wake does.
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
