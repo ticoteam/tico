@@ -786,7 +786,8 @@ def add(conn: Any, by: str, fields: Any, *, suggests: str = "") -> dict[str, Any
         "then_params": {},
         "reason": "",
     }
-    data = _check({**base, **fields}, retiring=(fields.get("then_params") or {}).get("retire") is not None)
+    params = cast(dict[str, Any], fields.get("then_params") or {})
+    data = _check({**base, **fields}, retiring=params.get("retire") is not None)
     ts, rid = H.now(), "sr_" + uuid.uuid4().hex[:12]
     status = "active" if _core.is_human(by) else "suggested"
     cols = _columns(data)
