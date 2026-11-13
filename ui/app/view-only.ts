@@ -9,7 +9,7 @@
 
 /** The controls a view hides outright (styles/components.css, html.view-only). */
 const VIEW_HIDDEN = [
-  '#task-new', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add',
+  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add',
   '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
 ];
 /** The controls that only read. Anything else that takes a click or input is greyed out and inert in a view.
@@ -17,7 +17,8 @@ const VIEW_HIDDEN = [
     a write added here by mistake fails the test. Do not make one list from the other. */
 const VIEW_READS = [
   '#side a', '#side button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
-  '#task-archive', '#task-layout button', '#task-archives button', '.tl-mi', '.tl-chip button', '.tk-row', '[data-task]',
+  '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x', '#task-archives button', '.tl-mi',
+  '.tl-chip button', '.tk-row', '[data-task]',
   '[data-need]', '[data-reload]', '[data-dash-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
   '[aria-label="Close"]', '[data-close]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
 ];

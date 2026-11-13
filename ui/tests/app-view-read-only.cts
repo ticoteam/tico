@@ -30,7 +30,8 @@ async function call<T = Record<string, unknown>>(hub: RealHubSupport.Hub, token:
 // and showing more. Anything else visible and enabled is a write a screenshot must not offer.
 const READS = [
   '#side a', '#side button', '#account', '#side-search', '#nav-toggle',
-  '#task-scope', '#task-q', '#task-filter', '#task-archive', '#task-layout button', '#task-archives button',
+  '#task-scope', '#task-q', '#task-filter', '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x',
+  '#task-archives button',
   '.tl-mi', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
   '.dash-tabs a', '.dash-tabs button', '[role="tab"]', '.tmodal [aria-label="Close"]', '.tmodal .x',
   '[data-show-more]', '.linkish[data-open]', 'a[href]',
@@ -87,6 +88,12 @@ const ready = (page: Page) => page.waitForFunction(() => {
     assert.match(await page.locator('#task-body').innerText(), /Needs you is a person's list/);
     assert.ok(await page.locator('#task-body .tk-group').count() >= 1, 'its tasks are grouped by stage');
     assert.deepEqual(await writesShown(page), [], 'Tasks offers nothing that writes');
+    // Its ⋯ menu keeps Archived and drops New task.
+    await page.locator('#task-menu').click();
+    await page.locator('#task-mi-archive').waitFor({state: 'visible', timeout: t(15000)});
+    assert.equal(await page.locator('#task-mi-new').isVisible(), false, 'no New task in ⋯');
+    assert.deepEqual(await writesShown(page), [], 'the Tasks ⋯ menu offers nothing that writes');
+    await page.keyboard.press('Escape');
 
     // A task window: no Follow, no page +, no answer buttons, no box; the box is a grey "Read-only view" line.
     await page.locator('#task-body .tk-row', {hasText: OWN}).click();
@@ -119,7 +126,9 @@ const ready = (page: Page) => page.waitForFunction(() => {
     const person = await pageAs(browser, hub, 'dana');
     await ready(person);
     await go(person, '#/tasks');
-    await person.locator('#task-new').waitFor({state: 'visible', timeout: t(15000)});
+    // New task sits in ⋯ (a first-run tour covers the page, so the menu is read rather than opened).
+    await person.locator('#task-mi-new').waitFor({state: 'attached', timeout: t(15000)});
+    assert.equal(await person.locator('#task-mi-new').evaluate(b => getComputedStyle(b).display !== 'none' && !(b as HTMLButtonElement).disabled), true, 'a person keeps New task');
     await person.route('**/api/v2/places/dashboard*', r => r.fulfill({status: 404, contentType: 'application/json',
       body: JSON.stringify({error: {code: 'not_found', message: 'No such place: places are dashboard, team:<group>'}})}));
     await go(person, '#/overview');

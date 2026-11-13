@@ -80,7 +80,7 @@ td.tags .pill{margin-right:2px}
 .stick-pill:hover,.stick-pill:focus-visible{border-color:var(--focus)}
 /* A bot's read-only view (ui/app/view-only.ts): the controls that only write are not shown, the message box is one grey
    line, and the other controls that are not reads show greyed out. */
-html.view-only :is(#task-new,#task-play,.add-ctl,[data-need-answer],[data-task-follow],.p-follow,.tm-page-add,[data-page-add],[data-page-link],[data-answer],[data-dash-mode],[data-dash-add],[data-view-box]){display:none!important}
+html.view-only :is(#task-mi-new,#task-mi-edit,#task-play,.add-ctl,[data-need-answer],[data-task-follow],.p-follow,.tm-page-add,[data-page-add],[data-page-link],[data-answer],[data-dash-mode],[data-dash-add],[data-view-box]){display:none!important}
 html.view-only [data-view-off]{opacity:.55;cursor:default;pointer-events:none}
 .view-only-line{margin:8px 0 0;padding:10px 12px;border-radius:8px;background:var(--surface-2,rgba(127,127,127,.08));color:var(--muted);font:var(--t-sm) var(--sans);text-align:center}
 .tk-view-note{margin:4px 0 12px}
