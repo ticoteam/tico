@@ -133,7 +133,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       await dialog.locator('[data-pe-close]').click();
       await dialog.waitFor({state: 'detached'});
       await page.reload();
-      await page.locator('#task-pipeline-edit').click();
+      await page.locator('#task-menu').click();
+      await page.locator('#task-mi-edit').click();
       await dialog.locator('.pe-stage > summary').click();
       await dialog.locator(`[data-pe-ri="${ri}"].pe-req > summary`).click();
       assert.equal(await prereleases.isChecked(), false, `${width}: the saved opt-out reloads as off`);

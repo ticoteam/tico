@@ -229,10 +229,11 @@ function pvPhoneHTML(state: PvState): string {
   }).join('');
   const rows = pvInStage(state, shown).map(pvCardHTML).join('');   // the column's cards (task #220)
   // A phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards.
-  const on = stages.find(s => s.id === shown), play = on ? pvPlayHTML(on) : '';
+  // No ▶ beside the tabs: the header's ▶ Review opens the open stage's items (tasks-page.ts tasksReview).
+  const on = stages.find(s => s.id === shown);
   const rules = on ? stageRulesButtonHTML(state.rec.id, on) : '';
   const tip = on && pvPersonCount(state, on) ? pvLimitTip(state, on) : '';
-  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${rules}${play}</div>`
+  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${rules}</div>`
     + `${tip ? `<p class="pv-slots">${esc(tip)}</p>` : ''}<div class="pv-phone">${rows}</div>`;
 }
 

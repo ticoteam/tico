@@ -14,13 +14,14 @@ const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.A
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 // `iconRow`: on a phone the header is one dense row of icons with the title kept for screen readers only (Tasks).
-type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean; opens?: [string, string]};
+// `row`: the header's own one-row height where it is not the shared 41px (Tasks' 56px row, spec "Pipeline board: one-row header").
+type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean; opens?: [string, string]; row?: number};
 // The week-one table. `button: false` = no filled button allowed; undefined = at most one.
 const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
-  {name: 'Tasks', hash: '#/tasks', button: true, iconRow: true},
+  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true, more: ['New task', 'Archived'], row: 56},
   {name: 'Automations', hash: '#/automations', button: true},
   {name: 'Listening', hash: '#/listening', button: true},
   {name: 'Rules', hash: '#/rules', tabs: true},
@@ -95,18 +96,20 @@ function desktopProblems(page: Page, s: Screen) {
   }, s);
 }
 
-// Tasks on a phone: one row (every shown control centred on the scope button's line), the + alone and named "New task",
+// Tasks on a phone: one 44 px row (every shown control centred on the scope button's line, ⋯ last), nothing accent on it,
 // the title only for screen readers, nothing sideways.
 function iconRowProblems(page: Page) {
   return page.evaluate(() => {
     const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!;
     const mid = (el: Element) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
     const scope = head.querySelector<HTMLElement>('#task-scope')!, line = mid(scope);
-    const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tools > *, :scope > .ph-act .primary')].filter(el => el.getClientRects().length);
+    const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tools > *, :scope > .ph-more')].filter(el => el.getClientRects().length);
     for (const el of shown) if (Math.abs(mid(el) - line) > 4) bad.push(`${el.id || el.className} is off the one row`);
-    const plus = head.querySelector<HTMLElement>('.ph-act .primary')!, pr = plus.getBoundingClientRect();
-    if (pr.width > 44.5 || pr.right > document.documentElement.clientWidth) bad.push(`+ is ${Math.round(pr.width)}px wide, right edge ${Math.round(pr.right)}`);
-    if ((plus.textContent || '').trim() !== 'New task') bad.push('+ is not named New task');
+    if (head.querySelector('.primary')) bad.push('a filled button on the row');
+    const more = head.querySelector<HTMLElement>(':scope > .ph-more');
+    if (!more || shown.at(-1) !== more) bad.push('⋯ is not last on the row');
+    const h = head.getBoundingClientRect().height - parseFloat(getComputedStyle(head).borderBottomWidth);
+    if (Math.abs(h - 44) > 0.5) bad.push(`the row is ${h}px high`);
     if (head.querySelector<HTMLElement>(':scope > h1.ph-t')!.getBoundingClientRect().width > 1) bad.push('the title shows');
     const de = document.documentElement;
     if (de.scrollWidth > de.clientWidth) bad.push(`the page scrolls sideways (${de.scrollWidth} > ${de.clientWidth})`);
@@ -176,7 +179,7 @@ const titleLeft = (page: Page) => page.evaluate(() =>
           for (const s of SCREENS) {
             try { await open(page, s); } catch { say(s, String(width), ['no header']); continue; }
             await page.waitForTimeout(t(100));   // the fit runs on the next frame
-            say(s, String(width), await page.evaluate(([oneRow]) => {
+            say(s, String(width), await page.evaluate(([oneRow, row]) => {
               const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
               const vw = document.documentElement.clientWidth;
               const name = (el: Element) => el.id ? '#' + el.id : (el.textContent || '').trim().slice(0, 24) || el.className;
@@ -199,10 +202,10 @@ const titleLeft = (page: Page) => page.evaluate(() =>
               if (oneRow) {
                 // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
                 const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
-                if (tall > 41.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
+                if (tall > (row ?? 41) + 0.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
               }
               return bad;
-            }, [width === 1100 && !['Rules', 'Meetings'].includes(s.name)] as const));
+            }, [width === 1100 && !['Rules', 'Meetings'].includes(s.name), s.row ?? null] as const));
           }
         }
       } finally { await page.context().close(); }

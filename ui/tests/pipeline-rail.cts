@@ -106,6 +106,11 @@ function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
       const icon = page.locator('#task-manager');
       assert.equal(await icon.isVisible(), true, 'the chat icon shows for a pipeline with a manager');
       assert.equal(await icon.getAttribute('aria-pressed'), 'false');
+      // It is the manager's own face, not a generic bubble, and says whose chat it opens.
+      assert.equal(await icon.locator('path[d^="M2.5 3.5h9v6"]').count(), 0, 'no generic chat bubble');
+      assert.equal(await icon.getAttribute('aria-label'), 'Chat with PM');
+      const faceBox = await box(page, '#task-manager > *');
+      assert.ok(Math.abs(faceBox.w - 20) < 1, `a 20 px face: ${JSON.stringify(faceBox)}`);
 
       // Opened: a column at the right, the full height beside the stages.
       await icon.click();

@@ -294,7 +294,10 @@ const SCREENS: Screen[] = [
     if (!id) return false;
     await go(page, '#/task/' + encodeURIComponent(id));
   }},
-  {name: 'New task', open: async page => { await go(page, '#/tasks'); return tapFirst(page, ['#task-new', '[data-new-task]', 'button:has-text("New task")', '[aria-label="New task"]']); }},
+  {name: 'New task', open: async page => {
+    await go(page, '#/tasks');
+    if (await tapFirst(page, ['#task-menu'])) return tapFirst(page, ['#task-mi-new']);   // in the Tasks header's ⋯
+    return tapFirst(page, ['[data-new-task]', 'button:has-text("New task")', '[aria-label="New task"]']); }},
   {name: 'Pipeline', open: async page => {
     await go(page, '#/tasks');
     const id = await page.evaluate(async () => {
