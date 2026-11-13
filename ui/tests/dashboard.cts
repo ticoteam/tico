@@ -416,6 +416,11 @@ async function shot(page: Page, name: string) {
         assert.deepEqual(await pin.locator('.dash-needs li > a > .muted').allInnerTexts(), ['Done', 'Done', 'OK', 'Answer', 'Reply'], 'the words, ' + where);
         assert.deepEqual(await pin.locator('.dash-needs li > a').evaluateAll(els => els.map(a => a.getAttribute('title'))), rows.map(r => r.line), 'the ask is the tooltip');
         assert.equal(await pin.locator('.dash-needs li > a').first().getAttribute('href'), '#/task/n1', 'the word is inside the link to the task');
+        // A screen reader hears the title and the word apart, not run together.
+        assert.equal(await pin.getByRole('link', {name: 'Fix the invoice export Done', exact: true}).count(), 1, 'the link reads its title, then its word');
+        // The spec's measure: no row's first line repeats another's while their tasks' titles differ.
+        const firsts = await pin.locator('.dash-needs-t').allInnerTexts(), byTitle = rows.map(r => r.title);
+        assert.equal(firsts.filter((t, i) => firsts.indexOf(t) !== i && byTitle.indexOf(byTitle[i]!) === i).length, 0, 'no repeated first line unless the titles repeat');
         assert.equal(await pin.locator('.dash-big').count(), 0, 'no big figure');
         assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention 13', 'the count on the header line');
         const n = pin.locator('h2 .dash-head-n');

@@ -360,6 +360,7 @@ async function you(browser: Browser) {
     assert.deepEqual(await rowTitles(page), ['Signup plans', 'Checkout flow', 'Book the team offsite']);
     assert.deepEqual(await page.locator('#task-body .tk-row .tk-ask').allInnerTexts(), ['Which plan do new signups get?']);
     assert.equal(await page.locator('[data-need="r2"] .tk-ask').count(), 1, 'the question under its title');
+    assert.equal(await page.getByRole('button', {name: /^Signup plans Which plan do new signups get\?/}).count(), 1, 'a screen reader hears the title and its question apart');
     assert.equal(await page.locator('[data-need="r1"]').getAttribute('title'), 'Approve the spec for Checkout flow', 'an OK has its ask as the tooltip');
     assert.equal(await page.locator('[data-need="task:t-3"]').getAttribute('title'), null, 'a task of your own has no tooltip');
     assert.match(await page.locator('#task-scope').innerText(), /You\s*3/);

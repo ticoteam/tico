@@ -95,6 +95,7 @@ function decideOrdered(items: NeedsEntry[]): NeedsEntry[] {
   const rank = {answer: 0, review: 1, do: 2};
   return items.map((it, i) => ({it, i})).sort((a, b) => rank[needsGroup(a.it)] - rank[needsGroup(b.it)] || a.i - b.i).map(x => x.it);
 }
+// The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
 function decideKind(it: NeedsEntry): AskKind {
   if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
   if (it.kind === 'paused') return 'fix';
