@@ -690,9 +690,10 @@ function treeBadge(n: number, st: string, slug: string): string {
 }
 // A row's name, with its marks (branch, onboarding, goal) riding its last word so a mark never sits alone on a line and
 // the name wraps between words rather than being cut (ui/styles/sidebar.css .tree .nm).
-function treeName(name: string, marks = '', lead = ''): string {
+// `tail` is words after the name (a seat's "· Recruiting"): they wrap like the name, so they are not held to its last word.
+function treeName(name: string, marks = '', lead = '', tail = ''): string {
   const text = name.trimEnd(), cut = text.search(/\S+$/), first = cut > 0 ? text.slice(0, cut) : '', last = cut > 0 ? text.slice(cut) : text;
-  return `<span class="nm">${lead}${esc(first)}<span class="nm-end">${esc(last)}${marks}</span></span>`;
+  return `<span class="nm">${lead}${esc(first)}<span class="nm-end">${esc(last)}${marks}</span>${tail}</span>`;
 }
 // A folded row whose subtree needs you: the dot rides its chevron, so the row keeps its room for the name.
 function treeChev(key: string, name: string, isCol: boolean, needs: boolean): string {
@@ -933,7 +934,7 @@ function renderTree() {
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
         ${kids ? treeChev(key, node.title, !!isCol, !!isCol && subtreeNeeds(key)) : ''}
         <a class="node seat" href="${esc(recruitAddress(node.id))}" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
-          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span>${treeName(node.title, cloud ? '<span class="seat-word connecting"> · Connecting</span>' : '<span class="seat-word"> · Recruiting</span>')}${
+          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span>${treeName(node.title, '', '', cloud ? '<span class="seat-word connecting"> ·\u00a0Connecting</span>' : '<span class="seat-word"> ·\u00a0Recruiting</span>')}${
             applicants === undefined || cloud ? '' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }

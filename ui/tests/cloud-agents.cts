@@ -147,7 +147,7 @@ const pulseIsOpacityOnly = (page: Page) => page.evaluate(() => {
       const node = page.locator('#tree [data-seat="s-devin"]');
       await node.waitFor();
       assert.equal(await node.getAttribute('href'), '#/seat/s-devin', 'the seat links to its own page');
-      assert.equal((await node.locator('.seat-word.connecting').innerText()).trim(), '· Connecting', 'a cloud agent seat\'s name ends in Connecting');
+      assert.equal((await node.locator('.seat-word.connecting').innerText()).replace(/\s+/g, ' ').trim(), '· Connecting', 'a cloud agent seat\'s name ends in Connecting');
 
       // Its address opens the Connecting page in Recruit's main area: three steps, the first in progress, its first task waiting.
       await node.click();

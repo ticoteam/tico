@@ -53,7 +53,7 @@ const seats = [
     await page.goto('https://tico-ui.test/#/tasks');
     const head = page.locator('#tree [data-seat="s-eng"]');
     await head.waitFor();
-    assert.equal((await head.locator('.seat-word').innerText()).trim(), '· Recruiting', 'the name ends in Recruiting, no pill');
+    assert.equal((await head.locator('.seat-word').innerText()).replace(/\s+/g, ' ').trim(), '· Recruiting', 'the name ends in Recruiting, no pill');
     assert.match(await head.getAttribute('title'), /^Head of Engineering \(Recruiting\)\n\nRuns the software factory\./);
     assert.equal(await head.getAttribute('draggable'), null, 'a seat is never dragged');
     assert.equal(await head.getAttribute('data-org'), null, 'nor a drop target');
