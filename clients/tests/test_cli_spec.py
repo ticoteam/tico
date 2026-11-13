@@ -188,7 +188,7 @@ def test_every_spec_command_has_an_example_that_runs_it(tmp_path, monkeypatch):
             continue  # a group run bare (`tico rules due`): its default leaf has its own example
         words = shlex.split(command.example)
         for word in words:
-            if word.endswith((".json", ".md")):
+            if word.endswith((".json", ".md", ".csv")):
                 (tmp_path / word).write_text("{}")
         if words[:1] != ["tico"] or cli_spec.of(hubcli.parser().parse_args(words[1:])) is not command:
             wrong.append(f"{command.path}: {command.example!r}")
