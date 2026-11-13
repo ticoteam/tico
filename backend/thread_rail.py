@@ -7,7 +7,8 @@ The rail is the threads a reader is in, by title: company, team and members root
 never a 1:1 DM, a Home, a task's thread or a meeting. `pinned` holds the ones pinned for them, `threads` the rest, paged.
 Browse lists the company and team roots a reader may read and is not in yet; following one (PUT .../follow) puts it in
 the rail. Catch up lists each root with something new for the reader, and each open Needs attention item, with the new
-messages in tree order.
+messages in tree order. The rail's first page also lists, as `unread`, each Catch up item the rail does not hold (a 1:1
+DM, a Home, a task's thread), so every chat the badge counts has a row.
 
 Every row passes the same read check as the sidebar (`threads.readable_sql`, then `thread_readable`), so a thread hidden
 from the reader never shows, nor does its existence. Each list is paged and byte-capped.
@@ -32,7 +33,7 @@ CATCH_UP_READS = 5  # batches of candidate messages one item reads whole, at mos
 CATCH_UP_HIDDEN = 200  # messages that can hide, read whole to count one batch of roots' new messages
 CATCH_UP_SCAN = 1000  # roots one Catch up looks at, over all its pages
 CATCH_UP_BATCH = 100  # roots read and checked together
-CATCH_UP_SHOWN = 99  # `count` stops here (the sidebar badge)
+CATCH_UP_SHOWN = 99  # `count` stops here (the sidebar badge), and the rail's `unread` with it
 ATTENTION_SCAN = 500  # open mentions and asks read for one Catch up
 DONE = 0  # a rail cursor's list that has no more rows
 EVERYONE_REFUSED = ("home", "task", "meeting")
@@ -297,8 +298,9 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     """The reader's threads by title: {"pinned", "threads", "catch_up", "catch_up_ids", "dms", "next_cursor"}.
     `pinned` holds the ones pinned for them (threads pinned for everyone they read but never joined among them), at most
     PINNED_MAX a page; `threads` the others they are in. Both go on through `next_cursor` until each is done.
-    `catch_up` is Catch up's count, `catch_up_ids` the roots it counts, and `dms` the unread in each one-teammate DM
-    (bots and people), on the first page only (later pages: null, [] and {})."""
+    `catch_up` is Catch up's count, `catch_up_ids` the roots it counts, `unread` the Catch up items the rail does not
+    hold (`_unread_items`), and `dms` the unread in each one-teammate DM (bots and people), on the first page only (later
+    pages: null, [], [] and {}). Count, ids and `unread` come from one Catch up walk, so they agree."""
     v = _viewer(v)
     limit = _limit(limit, RAIL_LIMIT, T.MAX_PAGE)
     first = not cursor
@@ -331,15 +333,64 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
         _rail_next(pinned_rows, pinned_items, pinned_more or pinned_cut),
         _rail_next(threads_rows, thread_items, threads_more or threads_cut),
     ]
-    count, ids = catch_up_count(c, v) if first else (None, [])
+    found = _first(_walk(c, v, _flags(c, v)), CATCH_UP_SHOWN) if first else []
     return {
         "pinned": pinned_items,
         "threads": thread_items,
-        "catch_up": count,
-        "catch_up_ids": ids,
+        "catch_up": len(found) if first else None,
+        "catch_up_ids": [it["row"]["id"] for it in found],
+        "unread": _unread_items(c, v, found, kind, args, marks),
         "dms": T.one_dm_unread(c, v, pairs=pairs, summaries=summaries) if first else {},
         "next_cursor": None if position == [DONE, DONE] else _encode(position),
     }
+
+
+def _unread_items(c, v, found, kind, args, marks):
+    """The Catch up items (`_walk`'s, in its order: mentions first, then newest activity) that the rail does not hold, as
+    the rail's Unread rows: {id, title, name, audience, dm_with, dm_with_count, home_actor, new_count, mention, task_id,
+    last_message_at}. A root is on the rail when it is a thread or group DM (`kind`) the reader is in or has pinned."""
+    if not found:
+        return []
+    rows = {it["row"]["id"]: it["row"] for it in found}
+    held = set()
+    for part in H.chunks(list(rows)):
+        marks_ids = ",".join(f":id{i}" for i in range(len(part)))
+        held.update(
+            r[0]
+            for r in c.execute(
+                f"SELECT r.id FROM conversations r WHERE r.id IN ({marks_ids}) AND {kind} "
+                f"AND ({_in(marks)} OR {PINNED_SQL})",
+                {**args, **{f"id{i}": rid for i, rid in enumerate(part)}},
+            )
+        )
+    dms = [r for rid, r in rows.items() if rid in held and T.audience_of(r) in ("personal", "participants")]
+    if dms:
+        members = T._member_rows(c, v, [r["id"] for r in dms])
+        held -= {r["id"] for r in dms if len(_others(c, v, r, members[r["id"]])) < 2}
+    off = [it for it in found if it["row"]["id"] not in held]
+    with_dm = T.dm_with(c, v, [it["row"] for it in off])
+    out = []
+    for it in off:
+        r = it["row"]
+        title = T._shown_title(c, v, r)
+        audience = T.audience_of(r)
+        dm = with_dm.get(r["id"]) or {}
+        out.append(
+            {
+                "id": r["id"],
+                "title": title,
+                "name": T._name(c, v, r, title),
+                "audience": audience,
+                "dm_with": dm.get("dm_with") or [],
+                "dm_with_count": int(dm.get("dm_with_count") or 0),
+                "home_actor": T.home_owner(r) if audience == "home" else None,
+                "new_count": it["new_count"],
+                "mention": it["mention"],
+                "task_id": r.get("task_id"),
+                "last_message_at": r.get("last_message_at"),
+            }
+        )
+    return out
 
 
 # ----------------------------------------------------------------------------- browse
@@ -494,10 +545,20 @@ def _readable_rows(c, v, rows):
     return [r for r in rows if r["id"] in ok]
 
 
+def _bot_home(cv):
+    """SQL: the root of thread `cv` is a bot's Home that is not the reader's (`:me` or the first `?` it is given)."""
+    return (
+        f"EXISTS (SELECT 1 FROM conversations hr WHERE hr.id=COALESCE({cv}.root_id,{cv}.id) "
+        f"AND COALESCE(hr.audience,{T._derived_audience('hr')})='home' AND hr.owner_id LIKE 'bot:%')"
+    )
+
+
 def _flags(c, v):
-    """({root id: [message ids]}, {root ids}): the roots that mention the reader, with their open mentions' and asks'
-    messages (thread_attention._addressed's rule, ids only, the newest ATTENTION_SCAN), and the roots of writes held
-    for their review. Every message passes the thread and the per-message check; only one that can hide is read whole."""
+    """({root id: [message ids]}, {root ids}, {root id: count}): the roots that mention the reader, with their open
+    mentions' and asks' messages (thread_attention._addressed's rule, ids only, the newest ATTENTION_SCAN); the roots of
+    writes held for their review; and the bots' Homes with a reply or mention for them past their mark (`_home_replies`).
+    Every message passes the thread and the per-message check; only one that can hide is read whole. A bot's reply in its
+    own Home is not an open item: it counts while unread (`_home_replies`), so reading it clears it."""
     from . import thread_attention
 
     me = v.actor
@@ -513,6 +574,7 @@ def _flags(c, v):
             "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason IN ('mention','reply')) "
             "AND m.deleted_at IS NULL AND m.superseded_at IS NULL AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "
             "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
+            f"AND NOT (d.reason='reply' AND m.sender_id LIKE 'bot:%' AND {_bot_home('cv')}) "
             "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
             "AND r.created_at>m.created_at AND r.deleted_at IS NULL) ORDER BY m.created_at DESC LIMIT ?",
             (me, me, me, ATTENTION_SCAN),
@@ -531,7 +593,31 @@ def _flags(c, v):
         row = T.thread_row(c, place) if place else None
         if row is not None:
             held.add(row.get("root_id") or row["id"])
-    return mentions, held
+    return mentions, held, _home_replies(c, v)
+
+
+def _home_replies(c, v):
+    """{root id: how many}: the bots' Homes (not the reader's) holding messages past the reader's mark that reply to them
+    (`in_reply_to` one of their messages: delivery reason `reply`) or mention, ask or assign them, each through the thread
+    and per-message check. Only these count in a bot's Home: its unprompted posts are Updates. At most ATTENTION_SCAN."""
+    mark = T._subtree_mark(c, v)
+    rows = [
+        dict(r)
+        for r in c.execute(
+            f"SELECT m.id, m.conversation_id, {PLAIN} AS plain, COALESCE(s.root_id,s.id) AS root FROM message_deliveries d "
+            "CROSS JOIN messages m ON m.id=d.message_id "
+            "CROSS JOIN conversations s ON s.id=m.conversation_id LEFT JOIN thread_followers f ON f.thread_id=s.id AND "
+            "f.actor=d.recipient WHERE d.recipient=? AND d.reason IN ('reply', 'mention', 'ask', 'assign') "
+            "AND d.state IN ('pending', 'delivered', 'read') "
+            f"AND m.seq>{mark} AND m.sender_id<>? AND m.deleted_at IS NULL AND {T._SUBTREE_OPEN} AND {_bot_home('s')} "
+            f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} LIMIT ?",
+            (v.actor, v.actor, ATTENTION_SCAN),
+        )
+    ]
+    out = {}
+    for r in _readable_rows(c, v, rows):
+        out[r["root"]] = out.get(r["root"], 0) + 1
+    return out
 
 
 def _mentioned(c, v):
@@ -602,10 +688,10 @@ def _walk(c, v, flags, after=None):
     newest activity first. At most CATCH_UP_SCAN roots are looked at in all: a page's cursor carries how many came
     before it, so a later page goes on from there and pages, `count` and `catch_up_ids` agree. Each item is {"row",
     "rank", "activity", "mention", "new_count", "unread", "attention", "scanned"}."""
-    mentions, held = flags
+    mentions, held, homes = flags
     history = T._history_only_roots(c, v)
     extra, marks = _names(v, c)
-    flagged = sorted(set(mentions) | held)
+    flagged = sorted(set(mentions) | held | set(homes))
     args = {
         "me": v.actor,
         "flagged": json.dumps(flagged),
@@ -655,7 +741,8 @@ def _walk(c, v, flags, after=None):
                 if r["id"] not in readable:
                     continue
                 mention = r["id"] in mentions
-                unread = counts.get(r["id"], 0)
+                # In a bot's Home only its replies and mentions for the reader count (`_home_replies`).
+                unread = homes.get(r["id"], 0) if _is_bot_home(r, v) else counts.get(r["id"], 0)
                 # An item has a new message the reader may read, or an open attention item they read.
                 if not unread and r["id"] not in held and not mention:
                     continue
@@ -671,6 +758,11 @@ def _walk(c, v, flags, after=None):
                 }
             if len(found) < batch:
                 break
+
+
+def _is_bot_home(row, v):
+    owner = str(row.get("owner_id") or "")
+    return T.audience_of(row) == "home" and owner.startswith("bot:") and owner != v.actor
 
 
 def _first(items, n):
