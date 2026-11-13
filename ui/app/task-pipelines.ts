@@ -23,11 +23,15 @@ interface PvState {
   /** Moves drawn before the engine answers: task id -> the stage it was moved to. */
   moving: Map<string, string>;
   bar: PvBar | null;
+  /** Where the columns were scrolled (scrollLeft, scrollTop), put back after each draw. */
+  x: number;
+  y: number;
 }
 
 let PV: PvState | null = null;
 const PV_BOUND = new WeakSet<HTMLElement>();
 const PV_STAGE_KEY = 'tico.pipeline.stage';
+const PV_SCROLL_KEY = 'tico.pipeline.scroll';
 
 /** The stage each pipeline last showed on a phone. Throws where storage is blocked. */
 const pvStagesKept = (): Record<string, string> => JSON.parse(localStorage.getItem(PV_STAGE_KEY) || '{}') as Record<string, string>;
@@ -42,11 +46,25 @@ function pvStageKeep(pipelineId: string, stage: string): void {
   } catch { /* storage blocked: not kept */ }
 }
 
+/** How far each pipeline's columns were scrolled sideways in this tab: a reload or another page and back opens there, a new
+ * tab at the first stage. Throws where storage is blocked. */
+const pvScrollsKept = (): Record<string, number> => JSON.parse(sessionStorage.getItem(PV_SCROLL_KEY) || '{}') as Record<string, number>;
+function pvScrollKept(pipelineId: string): number {
+  try { const x = pvScrollsKept()[pipelineId]; return typeof x === 'number' && x > 0 ? x : 0; } catch { return 0; }
+}
+function pvScrollKeep(pipelineId: string, x: number): void {
+  try {
+    const all = pvScrollsKept();
+    all[pipelineId] = x;
+    sessionStorage.setItem(PV_SCROLL_KEY, JSON.stringify(all));
+  } catch { /* storage blocked: not kept */ }
+}
+
 /** The view's state for a pipeline: the same one while the page draws the same pipeline again. */
 function pvStateFor(rec: PipelineRec): PvState {
   if (PV && PV.rec.id === rec.id) return PV;
   PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
-    stage: pvStageKept(rec.id), moving: new Map(), bar: null};
+    stage: pvStageKept(rec.id), moving: new Map(), bar: null, x: pvScrollKept(rec.id), y: 0};
   return PV;
 }
 
@@ -200,13 +218,32 @@ function pvHTML(state: PvState): string {
   return `<div class="pv${state.opts.phone ? ' pv-is-phone' : ''}">${pvBarHTML(state.bar)}${body}</div>`;
 }
 
-/** Draws the view again where the page put it, keeping a why being typed. */
+/** The columns drawn in the view's root now; null in the list and on a phone. */
+const pvColsOf = (state: PvState): HTMLElement | null => state.root?.querySelector<HTMLElement>(':scope > .pv > .pv-cols') ?? null;
+
+/** Takes where the columns are scrolled now, before a draw replaces them (it catches a drag's own scrolling too). */
+function pvScrollRead(state: PvState): void {
+  const cols = pvColsOf(state);
+  if (cols) { state.x = cols.scrollLeft; state.y = cols.scrollTop; }
+}
+
+/** Puts the columns back where they were after a draw. */
+function pvScrollRestore(state: PvState): void {
+  const cols = pvColsOf(state);
+  if (!cols) return;
+  if (cols.scrollLeft !== state.x) cols.scrollLeft = state.x;
+  if (cols.scrollTop !== state.y) cols.scrollTop = state.y;
+}
+
+/** Draws the view again where the page put it, keeping a why being typed and where the columns were scrolled. */
 function pvDraw(state: PvState): void {
   const root = state.root;
   if (PV !== state || !root?.isConnected) return;
+  pvScrollRead(state);
   const field = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
   const text = field?.value ?? '', typing = !!field && document.activeElement === field;
   root.innerHTML = pvHTML(state);
+  pvScrollRestore(state);
   const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
   if (next) { next.value = text; if (typing) next.focus(); }
   pipelineAskPaint();     // the Ask bar's stage and the tasks on screen follow the tab
@@ -336,7 +373,10 @@ function pvRefusedBar(t: TaskAny, stageId: string, stageName: string, error: unk
 
 TASK_PAGE_HOOKS.pipeline = {
   html(rec, tasks, opts) {
+    const again = PV?.rec.id === rec.id;
     const state = pvStateFor(rec);
+    // The page is about to replace the columns: take where they are scrolled while they are still there.
+    if (again) pvScrollRead(state);
     state.rec = rec;
     state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
     state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
@@ -347,10 +387,21 @@ TASK_PAGE_HOOKS.pipeline = {
   bind(root, rec) {
     const state = pvStateFor(rec);
     state.root = root;
+    pvScrollRestore(state);     // the page calls bind after each draw
     if (PV_BOUND.has(root)) return;
     PV_BOUND.add(root);
     // Bound once per element; each event reads the view drawn there now.
     root.addEventListener('click', ev => { if (PV?.root === root) pvClick(PV, ev); });
+    // Scroll does not bubble: listen in the capture phase. Sideways is kept for the tab, once a frame.
+    let saving = 0;
+    root.addEventListener('scroll', ev => {
+      const cols = ev.target instanceof HTMLElement && ev.target.classList.contains('pv-cols') ? ev.target : null;
+      const state = PV;
+      if (!cols || !state || state.root !== root) return;
+      state.x = cols.scrollLeft; state.y = cols.scrollTop;
+      if (saving) return;
+      saving = requestAnimationFrame(() => { saving = 0; pvScrollKeep(state.rec.id, state.x); });
+    }, {capture: true, passive: true});
     root.addEventListener('submit', ev => { if (PV?.root === root) pvSubmit(PV, ev); });
     taskBoardBind(root);
   },
