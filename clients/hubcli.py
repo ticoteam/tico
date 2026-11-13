@@ -788,6 +788,13 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--body-file", dest="body_file", help="the Markdown file; standard input when omitted")
     s.add_argument("--note", help="one line on what changed")
+    s.add_argument(
+        "--section",
+        help="a heading's text: replace only the text under it, up to the next heading of the same or a higher level",
+    )
+    s.add_argument(
+        "--append", action="store_true", default=None, help="add the text at the end of the doc, or of --section"
+    )
     s.set_defaults(fn="doc write")
     s = docs.add_parser("history", help="the versions of a doc")
     s.add_argument("ref", help="a doc id or a path")
