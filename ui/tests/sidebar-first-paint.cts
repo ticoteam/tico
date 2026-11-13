@@ -4,7 +4,7 @@
 // at 390 px with the phone drawer (More) open, with the bottom bar. Finance shows as the last answer this browser had
 // for the same person: none kept is hidden, a kept "shown" stands until /v2/finance/access says no (403, or a list with
 // nothing in view), a failed read changes nothing, and a sign-out or another person drops what was kept. Finish setup and
-// the folds (Company, Library, Rules, Team) are kept the same way. A sign-out in one tab stops every other tab keeping anything,
+// the folds (Company, Library, Rules, Team) are kept the same way; Company and Library start folded until opened here. A sign-out in one tab stops every other tab keeping anything,
 // and an Ask tap made before /me never opens Ask over the setup wizard.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -131,8 +131,14 @@ function same({painted, ran, settled}: {painted: Rail; ran: Rail; settled: Rail}
   assert.deepEqual(ran, painted, tag + ': the scripts move nothing');
   assert.deepEqual(settled, painted, tag + ': the reads move nothing');
 }
-const newContext = (browser: import('playwright').Browser, phone: boolean) => browser.newContext({viewport: phone ? PHONE : DESKTOP, serviceWorkers: 'block', reducedMotion: 'reduce',
-  ...(phone ? {isMobile: true, hasTouch: true} : {})});
+// Company and Library start folded unless opened in this browser; most cases here open both, so their rows (Finance
+// among them) can be seen. `folds: false` keeps this browser's choice as it is (nothing kept, or what a case sets).
+const newContext = async (browser: import('playwright').Browser, phone: boolean, {folds = true}: {folds?: boolean} = {}) => {
+  const context = await browser.newContext({viewport: phone ? PHONE : DESKTOP, serviceWorkers: 'block', reducedMotion: 'reduce',
+    ...(phone ? {isMobile: true, hasTouch: true} : {})});
+  if (folds) await context.addInitScript(() => { localStorage.setItem('tico.nav.company', 'open'); localStorage.setItem('tico.nav.library', 'open'); });
+  return context;
+};
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -193,6 +199,44 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
           const back = await visit(context, {phone, finance: 'yes'});   // shown again, for the next case
           await back.page.close();
         }
+      }
+      await context.close();
+    }
+
+    // No fold kept (most people): Company's six and Library's five rows are folded from the first paint, both chevrons
+    // say so, and nothing moves once the scripts and reads are in. Opened and reloaded, a fold stays open.
+    for (const phone of [false, true]) {
+      const tag = phone ? 'phone' : 'desktop';
+      const context = await newContext(browser, phone, {folds: false});
+      const v = await visit(context, {phone, hash: '#/home'});
+      same(v, tag + ', folds not kept');
+      const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
+      assert.deepEqual(keys.slice(0, 8), ['tasks', 'calendar', 'threads', 'updates', 'overview', 'Company pages', 'library', 'Library pages'],
+        tag + ': Company and Library folded from the first paint');
+      for (const nav of ['strategy', 'growth', 'automations', 'listening', 'rules', 'docs', 'files', 'skills', 'tools', 'meetings'])
+        assert.equal(shows(v.painted, nav), false, `${tag}: ${nav} folded`);
+      assert.deepEqual(await v.page.locator('#side .rd-lib-toggle').evaluateAll(els => els.map(el => el.getAttribute('aria-expanded'))), ['false', 'false'],
+        tag + ': both chevrons say folded');
+      if (!phone) {
+        await v.page.locator('#side .rd-lib-toggle:not(.rd-co-toggle)').click();
+        assert.equal(await v.page.evaluate(() => localStorage.getItem('tico.nav.library')), 'open', 'the choice is kept');
+      }
+      await v.page.close();
+      if (!phone) {
+        const again = await visit(context, {hash: '#/home'});
+        same(again, 'Library opened here');
+        assert.equal(shows(again.painted, 'docs'), true, 'Library open from the first paint once opened');
+        assert.equal(shows(again.painted, 'strategy'), false, 'Company still folded');
+        assert.equal(await again.page.locator('#side .rd-lib-toggle:not(.rd-co-toggle)').getAttribute('aria-expanded'), 'true');
+        // Same for Company.
+        await again.page.locator('#side .rd-co-toggle').click();
+        assert.equal(await again.page.evaluate(() => localStorage.getItem('tico.nav.company')), 'open');
+        await again.page.close();
+        const third = await visit(context, {hash: '#/updates'});
+        same(third, 'Company opened here');
+        assert.equal(shows(third.painted, 'strategy'), true, 'Company open from the first paint once opened');
+        assert.equal(await third.page.locator('#side .rd-co-toggle').getAttribute('aria-expanded'), 'true');
+        await third.page.close();
       }
       await context.close();
     }
@@ -304,7 +348,7 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
 
     // Finish setup and the folds: kept like Finance, so they too hold still from the first paint.
     {
-      const context = await newContext(browser, false);
+      const context = await newContext(browser, false, {folds: false});
       await context.addInitScript(() => {
         localStorage.setItem('tico.nav.company', 'closed');
         localStorage.setItem('tico.nav.library', 'closed');

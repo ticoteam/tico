@@ -147,7 +147,7 @@ const pulseIsOpacityOnly = (page: Page) => page.evaluate(() => {
       const node = page.locator('#tree [data-seat="s-devin"]');
       await node.waitFor();
       assert.equal(await node.getAttribute('href'), '#/seat/s-devin', 'the seat links to its own page');
-      assert.equal(await node.locator('.pill.connecting').count(), 1, 'a cloud agent seat shows the Connecting pill');
+      assert.equal((await node.locator('.seat-word.connecting').innerText()).replace(/\s+/g, ' ').trim(), '· Connecting', 'a cloud agent seat\'s name ends in Connecting');
 
       // Its address opens the Connecting page in Recruit's main area: three steps, the first in progress, its first task waiting.
       await node.click();
@@ -377,7 +377,7 @@ const pulseIsOpacityOnly = (page: Page) => page.evaluate(() => {
       const {page, errors} = await open(browser, {width: 1300, height: 900}, {reducedMotion: 'reduce'});
       await page.goto('https://tico-ui.test/#/tasks');
       await page.waitForSelector('#tree [data-seat="s-devin"]');
-      assert.equal(await page.locator('#tree [data-seat="s-devin"] .pill.connecting').evaluate(el => getComputedStyle(el).animationName), 'none');
+      assert.equal(await page.locator('#tree [data-seat="s-devin"] .seat-word.connecting').evaluate(el => getComputedStyle(el).animationName), 'none');
       await page.locator('#tree [data-seat="s-devin"]').click();
       await page.locator('#main .cloud-seat-page .cloud-pulse').waitFor();
       assert.equal(await page.locator('#main .cloud-seat-page .cloud-pulse').evaluate(el => getComputedStyle(el).animationName), 'none');

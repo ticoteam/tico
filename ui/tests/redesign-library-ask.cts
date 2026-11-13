@@ -34,6 +34,11 @@ run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}
     await at(page, '#/tasks');   // outside Library, where the fold is the person's own choice
     // ---- Library folds: kept across a reload, open again inside Library, closed again outside it
     const toggle = page.locator('.rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle)');
+    // Library starts folded: open while on its pages above, folded again once this page is drawn.
+    await page.waitForFunction(() => document.querySelector('[aria-controls="rd-lib"]')?.getAttribute('aria-expanded') === 'false', null, {timeout: t(5000)});
+    assert.equal(await libOpen(page), false);
+    await toggle.click();
+    assert.equal(await page.evaluate(() => localStorage.getItem('tico.nav.library')), 'open');
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
     assert.equal(await libOpen(page), true);
     await toggle.click();
@@ -58,7 +63,9 @@ run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}
     // ---- Company folds the same way: open on Strategy, Finance or Growth, folded again outside them; #/home lights its row
     const co = page.locator('#side .rd-co-toggle');
     const coOpen = () => page.locator('#rd-co').evaluate(el => !(el as HTMLElement).hidden && el.checkVisibility());
-    assert.equal(await coOpen(), true, 'Company starts open');
+    assert.equal(await coOpen(), false, 'Company starts folded');
+    await co.click();
+    assert.equal(await coOpen(), true);
     await co.click();
     assert.equal(await coOpen(), false);
     assert.equal(await page.evaluate(() => localStorage.getItem('tico.nav.company')), 'closed');

@@ -674,17 +674,31 @@ function treeLimitMark(slug: string): string {
 }
 // The unread in the viewer's 1:1 DM with this teammate (threads.js THREADS.dms): that DM is on their page, not on the
 // Threads rail.
-function treeDmBadge(actor: string, name: string): string {
+// Beside another count (Needs you, !, over limit, Paused) it is a dot with the same words: one count per row.
+function treeDmBadge(actor: string, name: string, dot = false): string {
   const n = typeof threadsDmUnread === 'function' ? threadsDmUnread(actor) : 0;
   if (!n) return '';
   const words = `${n} unread from ${esc(name)}`;
-  return `<span class="cnt tree-dm" role="img" aria-label="${words}" title="${words}">${n > 99 ? '99+' : n}</span>`;
+  return dot ? `<span class="cnt tree-dm dot" role="img" aria-label="${words}" title="${words}"></span>`
+    : `<span class="cnt tree-dm" role="img" aria-label="${words}" title="${words}">${n > 99 ? '99+' : n}</span>`;
 }
 function treeBadge(n: number, st: string, slug: string): string {
   const working = st === 'running';
   if (n) return `<span class="cnt needs${working ? ' working' : ''}" role="img" aria-label="${n} things ${esc(empName(slug))} needs from you" title="${n} things ${esc(empName(slug))} needs from you">${n}</span>`;
   if (st === 'needs') return `<span class="tree-alert${working ? ' working' : ''}" role="img" aria-label="Needs you">!</span>`;
   return working ? '<span class="tree-spin" role="img" aria-label="Working"></span>' : '';
+}
+// A row's name, with its marks (branch, onboarding, goal) riding its last word so a mark never sits alone on a line and
+// the name wraps between words rather than being cut (ui/styles/sidebar.css .tree .nm).
+// `tail` is words after the name (a seat's "· Recruiting"): they wrap like the name, so they are not held to its last word.
+function treeName(name: string, marks = '', lead = '', tail = ''): string {
+  const text = name.trimEnd(), cut = text.search(/\S+$/), first = cut > 0 ? text.slice(0, cut) : '', last = cut > 0 ? text.slice(cut) : text;
+  return `<span class="nm">${lead}${esc(first)}<span class="nm-end">${esc(last)}${marks}</span>${tail}</span>`;
+}
+// A folded row whose subtree needs you: the dot rides its chevron, so the row keeps its room for the name.
+function treeChev(key: string, name: string, isCol: boolean, needs: boolean): string {
+  const label = (isCol ? 'Expand ' : 'Collapse ') + name + (needs ? ' · something inside needs you' : '');
+  return `<button class="chev ${isCol ? 'col' : ''}${needs ? ' needs' : ''}" data-toggle="${esc(key)}" aria-label="${esc(label)}">›</button>`;
 }
 // "next to org see a history icon that when pressed, sorts my bots and people by
 // most recently viewed. With most recent on top" (he works with a couple of bots at a time). Every
@@ -708,7 +722,7 @@ function orgHistorySave() {
   orgHistoryTimer = setTimeout(() => { void post('/v2/preferences/' + ORG_HISTORY_PREF,
     {value: {items: orgHistory(), at: orgHistoryAt()}}).catch(() => {}); }, 800);
 }
-// "Only bots I can read or write" (the person icon beside the clock): hides the bots the caller may only
+// "Only bots I can open" (in the Team header's ⋯ menu): hides the bots the caller may only
 // see. Kept like the history: on this device at once, and with the account as preference org.mine,
 // stamped with when it last changed, the newer copy winning.
 const ORG_MINE_KEY = 'tico.org.mine', ORG_MINE_AT_KEY = 'tico.org.mine.at', ORG_MINE_PREF = 'org.mine';
@@ -749,19 +763,35 @@ function orgHistoryVisit(key: string) {
   if (orgHistoryOn()) renderTree();                      // the one just opened moves to the top
 }
 function orgHistoryOn() { try { return localStorage.getItem(ORG_HISTORY_ON_KEY) === '1'; } catch { return false; } }
-$('#org-mine').onclick = () => {
+// ⋯ on the Team header says which of its switches is on: a dot, and their names in its label; its menu's rows are
+// checked to match (the menu is ui/app/team-add.ts TEAM_MORE_MENU).
+const ORG_MINE_WORDS = 'Only bots I can open', ORG_HISTORY_WORDS = 'Recently viewed first';
+function orgMoreSync(mineOn = orgMineOn(), historyOn = orgHistoryOn()) {
+  const more = document.getElementById('org-more');
+  if (more) {
+    const on = [mineOn && ORG_MINE_WORDS, historyOn && ORG_HISTORY_WORDS].filter(Boolean);
+    const words = ['Team options', ...on].join(' · ');
+    more.classList.toggle('on', on.length > 0);
+    more.setAttribute('aria-label', words);
+    more.title = words;
+  }
+  document.querySelector('#team-more-menu [data-org-more="mine"]')?.setAttribute('aria-checked', String(mineOn));
+  document.querySelector('#team-more-menu [data-org-more="history"]')?.setAttribute('aria-checked', String(historyOn));
+}
+// The Team header's ⋯ menu (ui/app/team-add.ts TEAM_MORE_MENU) and the list's "Show all" call these.
+function orgMineToggle() {
   orgMineStore(!orgMineOn(), Date.now());
   orgMineSave();
   renderTree();
-};
-$('#org-history').onclick = () => {
+}
+function orgHistoryToggle() {
   try { localStorage.setItem(ORG_HISTORY_ON_KEY, orgHistoryOn() ? '0' : '1'); } catch {}
   if (orgHistoryOn() && navCollapsed.delete('organisation')) {
     try { localStorage.setItem(NAV_COLLAPSED_KEY, JSON.stringify([...navCollapsed])); } catch {}
     renderNavSections();
   }
   renderTree();
-};
+}
 // Built-ins and explicitly marked helpers are off the Team list; mailbox assignment does not make a bot a helper.
 // `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Owner is an Assistant helper.
 const isHelperBot = (e: Employee) => isBuiltInBot(e.id) || !!e.helper;
@@ -889,9 +919,8 @@ function renderTree() {
       if (!kids && !manage) return '';
       const renaming = manage && ORG_EDIT?.rename === node.id;
       return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}>
-        <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
+        ${treeChev(key, node.name || '', !!isCol, !!isCol && subtreeNeeds(key))}
         ${renaming ? orgGroupFieldHTML(node.name) : `<a class="dept-label" href="${TEAM_PAGE}${esc(encodeURIComponent(node.id))}" draggable="false"><span class="dept-name">${esc(node.name)}</span></a>`}
-        ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${plus && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-plus="${esc(node.id)}" title="Add" aria-label="Add to ${esc(node.name)}" aria-haspopup="menu" aria-expanded="${menuOpen}" aria-controls="team-add-menu"><span class="org-plus" aria-hidden="true">+</span></button>${manage ? `<button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button><button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button>` : ''}</span>` : ''}</div>${orgConfirmHTML(key)}
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
@@ -903,21 +932,19 @@ function renderTree() {
       const tip = node.title + (cloud ? ' (Connecting)' : ' (Recruiting)') + (node.description ? '\n\n' + node.description : '');
       const applicants = recruitSeatCount(node.id);    // known once its Applicants page listed them
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
-        ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.title)}">›</button>` : ''}
+        ${kids ? treeChev(key, node.title, !!isCol, !!isCol && subtreeNeeds(key)) : ''}
         <a class="node seat" href="${esc(recruitAddress(node.id))}" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
-          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span>${cloud
-            ? '<span class="pill waiting seat-pill connecting">Connecting</span>' : applicants === undefined
-            ? '<span class="pill waiting seat-pill">Recruiting</span>' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
+          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span>${treeName(node.title, '', '', cloud ? '<span class="seat-word connecting"> ·\u00a0Connecting</span>' : '<span class="seat-word"> ·\u00a0Recruiting</span>')}${
+            applicants === undefined || cloud ? '' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
     if (node.kind === 'person') {
       const p = node.person, key = 'p:' + p.id, isTop = !flat && key === topKey;
       const kids = !flat && !isTop && byParent[key], isCol = kids && collapsed.has(key);
       return `<li class="${kids ? 'dept' : isTop ? 'org-top' : ''}"><div class="noderow">
-        ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(p.name || p.id)}">›</button>` : ''}
+        ${kids ? treeChev(key, p.name || p.id, !!isCol, !!isCol && subtreeNeeds(key)) : ''}
         <a class="node person" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}" data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-          ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>${p.id === S.me?.id ? '' : treeDmBadge('human:' + p.id, p.name || p.id)}
-          ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
+          ${personAvatar(p, depth ? 16 : 20)}${treeName(firstName(p.name) || p.id)}${p.id === S.me?.id ? '' : treeDmBadge('human:' + p.id, p.name || p.id)}</a>
         ${mailPersonVisible(p) ? `<a class="person-mail-link" href="${MESSAGING}?bot=${encodeURIComponent(String(p.inbox_bot))}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>${orgConfirmHTML(key)}
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
@@ -926,12 +953,12 @@ function renderTree() {
     const own = !flat && sources[e.id];
     if (own) INBOX_PLACED.add(e.id);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
-      ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
+      ${kids ? treeChev(key, e.display_name || '', !!isCol, !!isCol && subtreeNeeds(key)) : ''}
       <a class="node ${e.status} ${st}" href="${botRowHref(e.id)}" title="${esc(e.display_name || e.slug)}" data-org="b:${esc(e.id)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
-        ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${frTreeMark(e)}
-        ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
-        ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge('bot:' + e.id, empName(e.id))}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
+        ${avatar(e.id, depth ? 16 : 20, st)}${treeName(isTempBot(e) ? (e.display_name || '').replace(TEMP_RE, '') : e.display_name || '',
+          orgBranchMark(e) + frTreeMark(e) + (e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''),
+          isTempBot(e) ? TEMP_FLAG : '')}
+        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge('bot:' + e.id, empName(e.id), !!n || st === 'needs' || !!overLimit(e.id) || stateOf(e.id) === 'paused')}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.slug)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
@@ -944,17 +971,19 @@ function renderTree() {
   };
   renderOnboardingNav();
   const historyOn = orgHistoryOn();
-  $('#org-history').setAttribute('aria-pressed', String(historyOn));
-  $('#org-mine').setAttribute('aria-pressed', String(orgMineOn()));
+  const mineOn = orgMineOn();
+  orgMoreSync(mineOn, historyOn);
   $('#tree').classList.toggle('history', historyOn);
   const manage = orgCanGroups() && !historyOn;
   teamAddRefresh();
   // Bot status events redraw the tree several times a minute: only the rows that changed are replaced (patchHTML). A
   // redrawn strip keeps the button that had focus.
   const confirmFocus = document.activeElement?.closest<HTMLElement>('#tree [data-org-confirm]')?.dataset.orgConfirm;
-  patchHTML($('#tree'), historyOn ? history()
+  // A filter hidden in ⋯ could look like missing bots: the list says it is on and offers the way back.
+  const mineNote = mineOn ? '<li class="org-filter-note">Only bots you can open · <button type="button" data-org-show-all>Show all</button></li>' : '';
+  patchHTML($('#tree'), mineNote + (historyOn ? history()
     : (manage && ORG_EDIT?.add === '' ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : '') + recTop()
-      + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : ''));
+      + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : '')));
   if (confirmFocus && !document.activeElement?.closest?.('#tree [data-org-confirm]')) $(`#tree [data-org-confirm="${confirmFocus}"]`)?.focus({preventScroll: true});
   navCurSync($('#tree'));
   orgPendingMark($('#tree'));
@@ -962,6 +991,7 @@ function renderTree() {
   orgDragWire($('#tree'));
   orgGroupFieldWire();
   $('#tree').onclick = (ev: MouseEvent) => {
+    if (eventElement(ev)?.closest('[data-org-show-all]')) { ev.preventDefault(); orgMineToggle(); return; }
     const seat = eventElement(ev)?.closest('[data-seat-open]');
     if (seat) { setDrawer(false); return; }        // its Applicants page (ui/app/recruit.ts)
     const confirm = eventElement(ev)?.closest<HTMLElement>('[data-org-confirm]');

@@ -58,7 +58,7 @@
 .cloud-task-dot{width:8px;height:8px;flex:none;border-radius:50%;border:1.5px solid var(--muted)}
 .cloud-label{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 
-/* The seat on the chart while its agent is requested: a dashed node with a Connecting pill (ui/app/sidebar.ts). */
-#tree .pill.connecting{border:1px dashed var(--line);color:var(--muted);background:none;animation:cloud-wait 1.6s ease-in-out infinite}
+/* The seat on the chart while its agent is requested: its name ends in a pulsing "· Connecting" (ui/app/sidebar.ts). */
+#tree .seat-word.connecting{animation:cloud-wait 1.6s ease-in-out infinite}
 
-@media (prefers-reduced-motion:reduce){.cloud-pulse,#tree .pill.connecting{animation:none}}
+@media (prefers-reduced-motion:reduce){.cloud-pulse,#tree .seat-word.connecting{animation:none}}
