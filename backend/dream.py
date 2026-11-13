@@ -154,13 +154,18 @@ def exempt(c, row):
     )
 
 
+# A finished dream counts as the bot's last one only when it ran: an auto dream skipped at its release deadline (no warm
+# window) is closed without a run, and the work it was queued for still waits for a dream that reads it.
+RAN = "EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=tasks.id)"
+
+
 def dreams(c, owner):
-    """Every dream of `owner`, open or finished, newest first: (id, created_at)."""
+    """Every dream of `owner` that is open or ran, newest first: (id, created_at). One closed before it ran is left out."""
     return c.execute(
         "SELECT tasks.id, tasks.created_at FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id "
         "JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND "
         + MARKED
-        + " ORDER BY tasks.created_at DESC, tasks.rowid DESC",
+        + f" AND (tasks.status='open' OR {RAN}) ORDER BY tasks.created_at DESC, tasks.rowid DESC",
         (LABEL, owner),
     ).fetchall()
 
@@ -187,11 +192,11 @@ def _ended_at(row):
 
 
 def since(c, owner):
-    """Where a dream's reading starts: the end of the bot's last finished dream, else SINCE_DAYS ago."""
+    """Where a dream's reading starts: the end of the bot's last finished dream that ran, else SINCE_DAYS ago."""
     row = c.execute(
         "SELECT max(coalesce(tasks.closed_at,tasks.done_at)) FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id "
         f"JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND tasks.status IN {ENDED} "
-        f"AND {MARKED}",
+        f"AND {MARKED} AND {RAN}",
         (LABEL, owner),
     ).fetchone()
     stamp = (row and row[0]) or H.shift(H.now(), days=-SINCE_DAYS)

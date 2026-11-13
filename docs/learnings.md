@@ -114,15 +114,17 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 A bot is in need when it is active, keeps memory, has no dream job waiting and no open dream, its last dream of either
 kind started at least 48 hours ago (a bot that never dreamed must be 48 hours old), and its work since that dream's start,
 or 14 days back if that is later, is at least 10: its finished turns (a dream's own left out), plus five for each
-correction by a person (a thumbs-down on its work, an org rule that applies to it added, changed or retired by a person,
-and a commit to its memory or instruction files made outside any run). Memory diffs do not count. At most "Most bots per
+correction by a person (a thumbs-down on its work, or an org rule that applies to it added, changed or retired by a
+person). Memory diffs do not count. A person's edit to the bot's instructions does not count yet: the runner reports
+only `memory/` and `knowledge/` commits, and one with no known run may be Tico's own as well as a person's. At most "Most bots per
 run" are queued a run (three by default), most need first; a bot whose dream is still waiting is skipped, so it never
 blocks another, and a restart does not queue them twice.
 Each dream's wake is held on the release policy for runs that can wait: Prefers warm, wait 48 hours, Skip at the
 deadline, Fork. It starts the first time the bot has been idle 45 to 55 minutes, on a fork of the bot's latest session,
 so it reads that cached conversation and leaves the original untouched; it reads the bot's other conversations since its
-last dream with the hub tools. If no warm window comes in 48 hours the job is skipped and its dream closed, so the bot
-can be in need again. `backend/dream_auto.py` holds the rule.
+last dream with the hub tools. If no warm window comes in 48 hours the job is skipped and its dream closed without a run.
+A dream that never ran is not the bot's last dream: its work still counts, and the next dream reads from the last one
+that ran. `backend/dream_auto.py` holds the rule.
 
 The requester is the bot's nearest human manager (the first person above it in its reporting chain, if still on the
 roster), else the company owner. The task is filed as a dream, with a `dream.auto` event under the system actor and

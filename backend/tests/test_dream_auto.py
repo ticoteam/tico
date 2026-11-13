@@ -158,7 +158,7 @@ def test_a_bot_that_never_dreamed_must_be_48_hours_old_and_an_inactive_one_is_no
     assert verdict(api, "ops", now() + timedelta(days=3)).status == "inactive"
 
 
-def test_a_persons_edits_reported_by_the_bots_computer_are_corrections_and_its_dream_is_for_the_manager(api):
+def test_memory_commits_reported_with_no_run_are_not_corrections_and_the_dream_is_for_the_manager(api):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -175,11 +175,13 @@ def test_a_persons_edits_reported_by_the_bots_computer_are_corrections_and_its_d
         }
         for n in range(1, 3)
     ]
-    # Reported with no run: a person's edits, two corrections, which weigh 10.
+    # Reported with no run: a person's edit or Tico's own (a migration) alike, so neither counts.
     assert post(api, "bots/ops/memory/report", {"commits": commits}, machine["token"])["recorded"] == 2
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
     aged(api)
+    assert verdict(api, "ops", now()).corrections == 0
+    thumbs_down(api, "ops", 2)  # two corrections, which weigh 10
 
     started = run(api)
     assert started == [verdict(api, "ops", now()).name]
@@ -200,7 +202,11 @@ def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     assert len(run(api)) == 1
     [first] = dream_rows(api, "ops")
     worked(api, "ops", 10, when=now() + timedelta(seconds=1))  # new work after the start
-    assert verdict(api, "ops", now() + timedelta(days=2)).status == "busy", "an open dream blocks a new one"
+    worked(api, "ops", 1, task=first["id"])  # the dream ran
+    # Busy on its own, waiting once the release hold holds the dream's job: either way not picked again.
+    assert verdict(api, "ops", now() + timedelta(days=2)).status in ("busy", "waiting"), (
+        "an open dream blocks a new one"
+    )
     close(api, "ops")
     assert verdict(api, "ops", now() + timedelta(hours=1)).status == "paced", "48 hours since the last dream's start"
     # The wake limiter's ledger is real time, so the first start's wake is 49 hours old by the second start.
@@ -537,16 +543,14 @@ def test_need_is_turns_plus_corrections_weighed_five_and_memory_diffs_do_not_cou
     worked(api, "assistant", 5)
     thumbs_down(api, "assistant")  # 5 + 5
     worked(api, "cpo", 2)
-    remember(api, "cpo", 30, attempt="a-run")  # memory written in a run: not a correction, not counted
-    remember(api, "cpo", 1, path="knowledge/notes.md")  # a person's edit outside memory and instructions
+    remember(api, "cpo", 30, attempt="a-run")  # memory written in a run: not counted
+    remember(api, "cpo", 3, path="AGENTS.md")  # commits with no known run: not counted either
     at = now()
     assert verdict(api, "ops", at).status == "quiet"
     helper = verdict(api, "assistant", at)
     assert (helper.status, helper.turns, helper.corrections, helper.need) == ("due", 5, 1, 10)
     cpo = verdict(api, "cpo", at)
     assert (cpo.status, cpo.turns, cpo.corrections) == ("quiet", 2, 0)
-    remember(api, "cpo", 1, path="AGENTS.md")  # a person changed its instructions
-    assert verdict(api, "cpo", at).corrections == 1
 
 
 def test_a_dreams_own_turns_and_work_before_the_last_dream_do_not_count(api):
@@ -623,3 +627,32 @@ def _waiting(api, bot):
             "INSERT INTO jobs(id,message_id,bot_id,state,created_at,held,wake_class) VALUES(?,?,?,'queued',?,1,'dream')",
             (jid, mid, bot, H.now()),
         )
+
+
+def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
+    """A dream the release hold skips at its deadline is closed without a run: the work it was queued for still counts,
+    and the next dream reads from the last dream that ran."""
+    aged(api)
+    worked(api, "ops", 12, when=now() - timedelta(days=3))
+    assert len(run(api)) == 1
+    [first] = dream_rows(api, "ops")
+    worked(api, "ops", 1, task=first["id"])  # it ran
+    close(api, "ops")
+    with api.app.state.store.read() as c:
+        read_from = dream.since(c, owner_of(c, "ops"))
+    with api.app.state.store.transaction() as c:  # 49 hours on: the limiter's ledger and the first dream are that old
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-49), first["id"]))
+        c.execute(
+            "UPDATE events SET created_at=? WHERE actor=? AND action=?",
+            (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
+        )
+    worked(api, "ops", 12)
+    assert len(run(api)) == 1
+    with api.app.state.store.transaction() as c:  # skipped at the deadline, as the hold closes it: no run on it
+        owner = owner_of(c, "ops")
+        row = dream._open(c, [owner])
+        H.task_close(c, H.KEEPER, row["id"], "Skipped: no warm window in 48 hours.")
+    v = verdict(api, "ops", now())
+    assert (v.status, v.turns) == ("due", 12), "the skipped dream's work still counts"
+    with api.app.state.store.read() as c:
+        assert dream.since(c, owner_of(c, "ops")) == read_from, "reading starts at the last dream that ran"

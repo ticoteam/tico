@@ -11,12 +11,14 @@ A bot is in need when:
 - its last dream of either kind started at least MIN_GAP_HOURS ago (a bot that never dreamed must be that old);
 - its need since that dream's start (or SINCE_DAYS ago, whichever is later) is at least MIN_NEED. Need is work since the
   last dream: its turns (finished runs, the dreams' own left out), plus people's corrections weighed CORRECTION_WEIGHT
-  each: a person's thumbs-down on its work, an org rule that applies to it added, changed or retired by a person, and a
-  commit to its memory or instruction files made outside any run (a person's edit). Memory diffs no longer count: auto
-  memory writes as the bot works, so their size says little about how much there is to tidy.
+  each: a person's thumbs-down on its work, and an org rule that applies to it added, changed or retired by a person.
+  Memory diffs no longer count: auto memory writes as the bot works, so their size says little about how much there is
+  to tidy. A person's edit to its instructions does not count yet: the runner reports only memory/ and knowledge/
+  commits, and a commit with no known run may be Tico's own (a migration) as well as a person's.
 
 A queued dream whose job is skipped at the deadline (no warm window in 48 hours) has its task closed by the release
-policy itself (wake_presets), so the bot can be in need again on a later pass.
+policy itself (wake_presets). It never ran, so it is not the bot's last dream (dream.RAN): its work still counts, and the
+next dream reads from the last one that ran, so the bot is in need again on a later pass.
 
 The requester is the bot's nearest human manager (org_rule_check.represented), else the company owner. The dream lands
 where that requester's work goes (shared_bots.route, as the dream route files it), and the gates are read on that bot.
@@ -26,7 +28,6 @@ A bot that is refused or fails is held, and the pass goes on. Maintenance claims
 queue the same occurrence twice; an open dream stops a second one of one bot anyway.
 """
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -46,8 +47,6 @@ MIN_NEED = 10  # turns, plus corrections weighed below, since the last dream
 CORRECTION_WEIGHT = 5  # one person's correction counts as this many turns
 WAIT_HOURS = 48  # how long a queued dream waits for a warm window before it is skipped
 WAKE_CLASS = "dream"  # the held job's class, as wake_presets labels it from refs.release_kind
-# AGENT.md: the instruction file's name in a repository the runner has not moved to AGENTS.md yet.
-INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "AGENT.md")
 # The task ids of every dream of one owner, as a subquery: the runs that worked on them are that owner's dream runs.
 DREAM_IDS = (
     f"SELECT tasks.id FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
@@ -74,11 +73,6 @@ def stamp(at):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def counted(path):
-    """Whether a person's commit to this file is a correction: memory/ and the instruction files."""
-    return path in INSTRUCTION_FILES or path.startswith("memory/")
-
-
 def release():
     """The release policy every auto dream's wake carries (spec: Dreaming, the first built-in user), in the shape the job
     hold reads from `refs.release`: Due is the job's creation (None), then Prefers warm for up to WAIT_HOURS, Skip at the
@@ -87,13 +81,15 @@ def release():
 
 
 def waiting(c, bot):
-    """Whether the bot already has a dream job held and queued: a waiting bot is skipped, so it never blocks another."""
+    """Whether the bot already has a dream job held and queued: a waiting bot is skipped, so it never blocks another (the
+    spec's rule, read from the job). Its open dream task says the same to `busy`; this names why it is not picked."""
     sql = "SELECT 1 FROM jobs WHERE bot_id=? AND held=1 AND state='queued' AND wake_class=? LIMIT 1"
     return c.execute(sql, (bot, WAKE_CLASS)).fetchone() is not None
 
 
 def _turns(c, bot, since, owner):
-    """The bot's finished runs since `since`, its dreams' runs left out."""
+    """The bot's finished runs since `since`, its dreams' runs left out. Every settled run counts, a failed one or a retry
+    of one turn included: each is a turn the bot took."""
     row = c.execute(
         "SELECT count(*) FROM attempts a WHERE a.bot_id=? AND a.created_at>? AND a.settled_at IS NOT NULL "
         f"AND (a.task_id IS NULL OR a.task_id NOT IN ({DREAM_IDS}))",
@@ -116,25 +112,13 @@ def _rule_changes(c, bot, since):
     return len(org_rules.applies_to(c, bot, [org_rules._row(r) for r in rows]))
 
 
-def _person_commits(c, bot, since):
-    """Commits to the bot's memory or instruction files made outside any run: a person's edits."""
-    count = 0
-    for row in c.execute(
-        "SELECT files FROM bot_memory_updates WHERE bot=? AND shared=1 AND attempt_id='' AND committed_at>?",
-        (bot, since),
-    ):
-        if any(counted(path) for path in json.loads(row["files"])):
-            count += 1
-    return count
-
-
 def work(c, bot, since, owner=None):
     """(turns, corrections) of the bot since `since` (a stamp): its work since the last dream."""
     owner = owner or "bot:" + bot
     downs = c.execute(
-        "SELECT count(*) FROM feedbacks WHERE bot_id=? AND rating='down' AND updated_at>?", (bot, since)
+        "SELECT count(*) FROM feedbacks WHERE bot_id=? AND rating='down' AND created_at>?", (bot, since)
     ).fetchone()[0]
-    corrections = downs + _rule_changes(c, bot, since) + _person_commits(c, bot, since)
+    corrections = downs + _rule_changes(c, bot, since)
     return _turns(c, bot, since, owner), corrections
 
 
