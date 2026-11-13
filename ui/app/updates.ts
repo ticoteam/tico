@@ -930,6 +930,7 @@ function updBind(state: UpdState): void {
 // Only your direct reports' updates alert, one level down the org chart.
 async function updUnreadRefresh(): Promise<UpdData | null> {
   const asked = Date.now();
+  if (UPD?.pending.size) void updFlush(UPD);           // a read whose save failed is sent again, or its count stays held
   const r = await v2Get('/v2/updates/unread?scope=direct');
   if (r) {
     // A count asked for while this page's reads were unsent, or before they settled, still counts them: the next
