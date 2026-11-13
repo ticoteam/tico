@@ -143,15 +143,15 @@ def test_an_ask_reaches_only_a_reader_and_reassignment_keeps_the_readers(api):
         )
 
     r = ask("ben")
-    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben cannot read" in r.text, r.text
-    assert "Who can see" in r.text and readers(api, row["id"]) == set()
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben can't see" in r.text, r.text
+    assert "Ask " in r.text and "Who can see" not in r.text and readers(api, row["id"]) == set()
     card = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
     assert card["private"] and card["requester_id"] == "bot:ops"
     assert readers(api, row["id"]) == {"ben"} and readers(api, card["id"]) == {"ben"}
     r = ask("ben")
     assert r.status_code == 200, r.text
     r = ask("cara")
-    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Cara cannot read" in r.text, r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Cara can't see" in r.text, r.text
     assert readers(api, row["id"]) == {"ben"}
     with api.app.state.store.transaction() as c:
         H.task_reassign(c, "bot:cpo", row["id"], "bot:cpo", "Cpo takes it back", H.task(c, row["id"])["version"])
@@ -245,14 +245,14 @@ def test_a_question_reaches_one_reader(api):
         )
 
     r = ask("ben")
-    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben cannot read" in r.text, r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben can't see" in r.text, r.text
     assert readers(api, row["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
     assert change(api, row["id"], {"add": ["ben"]}, attempt["token"]).status_code == 200
     asked = ask("ben")
     assert asked.status_code == 200, asked.text
     assert readers(api, row["id"]) == {"ben"}
     r = ask("cara")
-    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Cara cannot read" in r.text, r.text
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Cara can't see" in r.text, r.text
     assert readers(api, row["id"]) == {"ben"}
 
 

@@ -703,6 +703,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   related: v => v ? 'attached a related task' : 'removed a related task', duplicate_of: v => v ? 'marked it a duplicate' : 'unmarked it as a duplicate',
   duplicated_by: v => v ? 'marked a duplicate of it' : 'unmarked a duplicate of it', follow_up_of: v => v ? 'marked it a follow-up' : 'unmarked it as a follow-up',
   follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up',
+  reader: (v, x) => v ? `let ${actorLabel(v)} see this task` : `stopped ${actorLabel(x.old)} seeing this task`,
   link: v => v ? `linked ${v}` : 'removed a link', file: (v, x) => v ? `added ${v}` : `removed ${x.old || 'a file'}`, due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment',
   // The rest of the history the server writes (backend/task_engine.py and its neighbours), so no line reads

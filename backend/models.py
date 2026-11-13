@@ -316,6 +316,9 @@ class TaskMove(Contract):
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
+    # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
+    # next. Refused when the task now waits on someone else (H.task_let_see).
+    let_see: ID | None = None
 
 
 class TaskQueue(Contract):

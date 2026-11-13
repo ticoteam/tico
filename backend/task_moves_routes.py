@@ -27,6 +27,7 @@ from . import task_caps as _task_caps
 from . import task_rule_gate as _task_rule_gate
 from . import stage_rules as _stage_rules
 from . import task_engine as _task_engine
+from . import task_privacy as _task_privacy
 from .store import H as _H
 from .store import Problem
 
@@ -42,6 +43,7 @@ task_caps: Any = _task_caps
 task_rule_gate: Any = _task_rule_gate
 stage_rules: Any = _stage_rules
 task_engine: Any = _task_engine
+privacy: Any = _task_privacy
 
 # A snooze's bare date is the start of that day here, as the bot tools say ("the start of that day, Pacific").
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -265,6 +267,15 @@ def register(
         if str(body.to).strip().lower() == "done":
             setup_finished(c, who, task_id)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
+        if body.let_see:
+            if str(body.to).strip().lower() != "next":
+                raise Problem("bad_request", "Letting someone see a task moves it to the next stage: to is next", 422)
+
+            def check(added: list[str]) -> None:
+                privacy.require_readers(c, who, task_id, added, task_id)
+
+            H.task_let_see(c, who.actor, task_id, body.let_see, version, mover=mover(c, who) or None, check=check)
+            return
         H.task_move(c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None)
 
     says("task_move", M.TaskMove, lambda body: [("Why", body.why)], move_call)

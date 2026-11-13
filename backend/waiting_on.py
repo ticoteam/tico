@@ -69,7 +69,9 @@ class Wait:
     may not open that task is not told them (`unnamed`). `fix` is set on a Paused wait a person fixes before any bot
     can act (a requirement's `Standing.fix`, such as Connect GitHub): where they fix it. Nobody is woken for it. `href`
     is the page that shows a Paused bot's cause (task_wakes.cause_href: Settings > Computers for a bot with no computer,
-    Billing when out of credit), for a link beside the line; it changes nothing about who is woken."""
+    Billing when out of credit), for a link beside the line; it changes nothing about who is woken. `share` is who a
+    private task waits on to be let in (the next stage's owner, or someone it asks, who can't see it): the person who
+    has the task lets exactly them see it from their Needs you card (task #392; task_calls.task_let_see)."""
 
     state: str
     who: str | None = None
@@ -81,6 +83,7 @@ class Wait:
     about: str | None = None
     fix: str | None = None
     href: str | None = None
+    share: str | None = None
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -121,6 +124,8 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     del out["about"], out["fix"]
     if out["href"] is None:
         del out["href"]
+    if out["share"] is None:
+        del out["share"]
     return out
 
 
@@ -336,12 +341,13 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
     return None
 
 
-def _share_line(conn: "sqlite3.Connection", who: str, verb: str = "Add") -> str:
-    """What the person who has a private task does for someone it asks who may not open it (`unreadable`)."""
+def _share_line(conn: "sqlite3.Connection", who: str) -> str:
+    """Why a private task waits on its person, in their words (task #392): `who` (asked, or the next step's) can't see
+    it. Their card's button lets `who` see it (`Wait.share`)."""
     from . import hubdb
 
     H: Any = hubdb
-    return f"{verb} {H.actor_name(conn, who)} under Who can see"
+    return f"{H.actor_name(conn, who)} can't see this task"
 
 
 _FILED_OPEN_SQL = (
@@ -469,7 +475,8 @@ def of(
                 continue
             if shut and named and E.not_shared(conn, row, named):
                 # Someone who may not open it: the task's person shares it first. Work of theirs, not an ask.
-                out.append(Wait(PERSON, person_for(conn, row), _share_line(conn, named), requirement["id"], since))
+                line = _share_line(conn, named)
+                out.append(Wait(PERSON, person_for(conn, row), line, requirement["id"], since, share=named))
                 continue
             out.append(_turn(conn, row, named, line, requirement["id"], since, True, seen))
         elif by_hand or asked:
@@ -510,17 +517,18 @@ def of(
             H: Any = hubdb
             sharer = person_for(conn, row)
             by = str(H.actor_name(conn, sharer)) if sharer else "someone who can see it"
-            line = f"Waits on {by} to share it: {held['cause']}"
-        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
+            line = f"Waits on {by}: {held['cause']}"
+            shut = shut or str(held["who"])
+        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=held["who"] if held else None))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
         # first thing it says is why.
         late = visit.get("late_person_at")
         line = f"Late in {stage['name']}" if late else f"Stuck in {stage['name']}"
         if shut:
-            line = f"{line}: {_share_line(conn, shut, 'add')}"
+            line = f"{line}: {_share_line(conn, shut)}"
         since = late or visit.get("last_change_at") or entered
-        out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since))
+        out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).

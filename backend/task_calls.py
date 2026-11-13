@@ -273,6 +273,52 @@ def task_move(
 
 
 @_task_write()
+def task_let_see(
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    who: str,
+    seen_version: int | str | None = None,
+    *,
+    mover: bool | None = None,
+    check: Callable[[list[str]], None] | None = None,
+) -> Row:
+    """A person lets `who` see private task `task_id` and moves it on, in one write: the stuck card's one fix (task
+    #392). `who` must be exactly the one the task waits on to be let in now (`waiting_on.Wait.share`, as the card
+    showed it): when that changed, nobody is added and the refusal names who it is now. Only `who` is added (one reader
+    event, "<person> let <who> see this task"); then, with nothing else missing, the task moves to the next stage. A
+    bot never lets anyone in: it asks a person (task_engine.fix_for). `check(added)` may refuse the reader
+    (task_privacy.require_readers). A refused move adds nobody: the whole write is undone."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import waiting_on as W
+
+    H = _h()
+    if is_bot(actor):
+        _refuse(conn, actor, "task_needs_person", "Only a person lets someone see a private task. Ask one.", task_id)
+    row = _open(conn, actor, task_id, mover)
+    full = E.task(conn, task_id)
+    if not full:
+        _refuse(conn, actor, "not-found", "No such task")
+    E.check_version(conn, actor, full, seen_version)
+    now = next((str(wait.share) for wait in W.of(conn, full) if wait.share), None)
+    named = H.resolve_actor(conn, who) or who
+    if now != named:
+        said = (
+            f"{H.actor_name(conn, now)} is the one who can't see it now. Nobody was added."
+            if now
+            else "Nobody is waiting to see this task now. Nobody was added."
+        )
+        _refuse(conn, actor, "task_changed", said, task_id)
+    H.set_task_readers(conn, actor, task_id, add=[named], mover=mover, check=check)
+    after = E.task(conn, task_id)
+    if not after or R.unmet(conn, after):
+        return after or row  # an ask in this stage waited on them: it is theirs now, and the task stays
+    with task_effects.because(actor):
+        return E.move(conn, task_id, NEXT, actor, None, after.get("version"))
+
+
+@_task_write()
 def task_close(
     conn: "sqlite3.Connection",
     actor: str,
@@ -348,7 +394,7 @@ def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None
 
     unshared = E.not_shared(conn, row, who)
     if unshared:
-        _refuse(conn, actor, "private", f"{unshared['cause']}. {unshared['fix']}.", row["id"])
+        _refuse(conn, actor, "private", E.told(conn, actor, row, unshared), row["id"])
 
 
 @_task_write()
@@ -1014,7 +1060,7 @@ def task_view(
         if held and wait["state"] == W.ROOM:
             # Everything is met, and the next stage has someone who cannot read this private task: it waits there
             # until someone who can see it shares it (the never-stuck pass then moves it).
-            wait["line"], wait["fix"] = held["cause"], held["fix"]
+            wait["line"], wait["fix"] = held["cause"], E.fix_for(conn, viewer, row, held)
     # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
     # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
     above = _cached(conn, _FILED_BY, task_id)

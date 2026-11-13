@@ -8196,6 +8196,7 @@ from .task_calls import (
     task_close as task_close,
     task_done as task_done,
     task_give as task_give,
+    task_let_see as task_let_see,
     task_move as task_move,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,
