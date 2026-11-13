@@ -2637,9 +2637,9 @@ class AppGitHub:
             ((self._get(repo, f"/pulls/{int(number)}", permissions).json() or {}).get("base") or {}).get("ref") or ""
         )
         if not base:
-            return None
+            return {"diff_id": None, "commits": None, "files": None}
         path = f"/compare/{quote(base, safe='')}...{quote(sha, safe='')}"
-        return GS.diff_id((self._get(repo, path, permissions).json() or {}).get("files"))
+        return GS.diff_of(self._get(repo, path, permissions).json() or {})
 
     # ------------------------------------------------------------------ the merge queue
     def ready(self, repo, number):

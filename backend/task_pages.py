@@ -173,12 +173,14 @@ def attach(
     `NOT_HTML`: a page for an OK is drawn as HTML; `changed` or `answered` not in their form, or a note or line that
     quotes the person's last send back to them: page_rounds). `note`, `changed` and `answered` are what the bot says
     with this version (page_rounds.said), kept on the `page_attached` event. The route checks the caller may open the
-    file. Returns the `requirement_pages` row."""
+    file. Returns the `requirement_pages` row, with `said` when the new version keeps a person's OK (`ok_kept`): what the
+    bot is told, as the task's history says it too."""
     from . import hubdb
     from . import hubdb_core
     from . import page_rounds as R
     from . import page_verdicts as V
     from . import task_engine as E
+    from . import task_requirements as TR
     from . import waiting_on as W
 
     H: Any = hubdb
@@ -247,6 +249,9 @@ def attach(
         ),
     )
     V.owe(conn, file_id, version, key)
+    made = _one(conn, "SELECT * FROM requirement_pages WHERE id=?", (page_id,))
+    assert made is not None
+    kept = TR.ok_kept(conn, row, found, made)
     E._event(  # pyright: ignore[reportPrivateUsage]
         conn,
         task_id,
@@ -257,8 +262,24 @@ def attach(
         None,
         {"requirement": found["id"], "file_id": file_id, "version": version, **{k: v for k, v in saying.items() if v}},
     )
+    if kept:
+        # A new version of the page a person OK'd, at the commits they OK'd: their OK stands (task_requirements._page).
+        # The task's history and the bot both hear so, or the bot reads the new version as asking them again (#435).
+        name, was_version = TR.name_of_actor(conn, kept["by_id"]), kept["page_version"]
+        E._event(  # pyright: ignore[reportPrivateUsage]
+            conn,
+            task_id,
+            core.KEEPER,
+            "ok_kept",
+            None,
+            f"{name}'s OK (version {was_version}) carried to version {version}: same commits",
+            None,
+            {"requirement": found["id"], "answer": kept["id"], "from": was_version, "to": version},
+        )
+        made["said"] = (
+            f"{name}'s OK at {TR.short_heads(TR.heads_of(kept.get('heads')))} stands. "
+            f"This version is kept on the task and doesn't ask {name} again."
+        )
     if E.advance(conn, task_id) is None:
         E.changed(conn, task_id, by)
-    made = _one(conn, "SELECT * FROM requirement_pages WHERE id=?", (page_id,))
-    assert made is not None
     return made

@@ -81,9 +81,10 @@ class GitHub(Protocol):
         """Whether `commit_sha` is in the history of `release_sha` (GitHub's compare: behind or identical)."""
         ...
 
-    def pr_diff(self, repo: str, number: int, sha: str) -> str | None:
-        """What the PR changes at commit `sha`, as one id (`diff_id`): the diff from where `sha` branched off the PR's
-        base branch to `sha` (GitHub's compare, `<base>...<sha>`). None when GitHub cannot give the whole diff."""
+    def pr_diff(self, repo: str, number: int, sha: str) -> Row:
+        """What the PR changes at commit `sha` (`diff_of`): the diff from where `sha` branched off the PR's base branch
+        to `sha` (GitHub's compare, `<base>...<sha>`) as one id, None when GitHub cannot give the whole diff; the PR's
+        commits up to `sha`; and each file's part of the diff."""
         ...
 
     def ready(self, repo: str, number: int) -> None:
@@ -388,19 +389,18 @@ OK_HEADS_SQL = (
 )
 
 
-def diff_id(files: object) -> str | None:
-    """One id for what a PR changes, from GitHub's compare `files`: per file (by name) its status, old and new name, and
-    its added and removed lines without whitespace, line numbers or context, as `git patch-id` reads a patch. A file
-    GitHub gives no patch for (binary, or too large) counts by its contents at the commit (`sha`). None when GitHub left
-    part of the diff out: DIFF_FILES_MAX files or more, or a file with neither patch nor contents."""
+def _file_parts(files: object) -> dict[str, str] | None:
+    """{file name: one id of its part of the diff} from GitHub's compare `files`: its status, old and new name, and its
+    added and removed lines without whitespace, line numbers or context, as `git patch-id` reads a patch. A file GitHub
+    gives no patch for (binary, or too large) counts by its contents at the commit (`sha`). None when GitHub left part
+    of the diff out: DIFF_FILES_MAX files or more, or a file with neither patch nor contents."""
     if not isinstance(files, list):
         return None
     listed = cast("list[object]", files)
     if len(listed) >= DIFF_FILES_MAX:
         return None
-    parts: list[str] = []
-    rows = [cast("Row", f) for f in listed if isinstance(f, dict)]
-    for found in sorted(rows, key=lambda f: str(f.get("filename") or "")):
+    parts: dict[str, str] = {}
+    for found in [cast("Row", f) for f in listed if isinstance(f, dict)]:
         status = str(found.get("status") or "")
         patch = found.get("patch")
         if isinstance(patch, str):
@@ -411,15 +411,59 @@ def diff_id(files: object) -> str | None:
             body = f"contents {found['sha']}"
         else:
             return None
-        parts.append("\0".join((status, str(found.get("previous_filename") or ""), str(found.get("filename")), body)))
-    return hashlib.sha256("\0\0".join(parts).encode()).hexdigest()
+        parts[str(found.get("filename"))] = "\0".join(
+            (status, str(found.get("previous_filename") or ""), str(found.get("filename")), body)
+        )
+    return parts
 
 
-def save_diff(conn: "sqlite3.Connection", repo: str, sha: str, diff: str | None) -> None:
-    """Keep what commit `sha` of a PR in `repo` changes (`diff_id`; None: GitHub could not give it all)."""
+def diff_id(files: object) -> str | None:
+    """One id for what a PR changes, from GitHub's compare `files`: each file's part (`_file_parts`), by name. None when
+    GitHub left part of the diff out."""
+    parts = _file_parts(files)
+    if parts is None:
+        return None
+    return hashlib.sha256("\0\0".join(parts[name] for name in sorted(parts)).encode()).hexdigest()
+
+
+def diff_of(compare: object) -> Row:
+    """What GitHub's compare of a PR's base branch with one of its commits says it changes: {diff_id (`diff_id`),
+    commits: [[sha, title]] oldest first, the PR's own commits up to that one, files: {file name: id of its part}
+    (None when GitHub left part of the diff out)}. Kept per commit (`save_diff`) so a person asked again after new
+    commits is told how many came and what they changed (`since`)."""
+    body: Row = cast("Row", compare) if isinstance(compare, dict) else {}
+    commits: list[list[str]] = []
+    for found in body.get("commits") or []:
+        if isinstance(found, dict):
+            entry = cast("Row", found)
+            message = str((cast("Row", entry.get("commit") or {})).get("message") or "")
+            commits.append([str(entry.get("sha") or ""), (message.splitlines() or [""])[0].strip()])
+    parts = _file_parts(body.get("files"))
+    files = None if parts is None else {name: hashlib.sha256(part.encode()).hexdigest() for name, part in parts.items()}
+    return {"diff_id": diff_id(body.get("files")), "commits": commits, "files": files}
+
+
+def save_diff(
+    conn: "sqlite3.Connection",
+    repo: str,
+    sha: str,
+    diff: str | None,
+    *,
+    commits: list[list[str]] | None = None,
+    files: dict[str, str] | None = None,
+) -> None:
+    """Keep what commit `sha` of a PR in `repo` changes (`diff_id`; None: GitHub could not give it all), and when GitHub
+    gave them, the PR's commits up to it and each file's part of the diff (`diff_of`)."""
     conn.execute(
-        "INSERT OR REPLACE INTO github_pr_diffs (repo, sha, diff_id, read_at) VALUES (?,?,?,?)",
-        (repo.lower(), sha, diff, _h().now()),
+        "INSERT OR REPLACE INTO github_pr_diffs (repo, sha, diff_id, commits, files, read_at) VALUES (?,?,?,?,?,?)",
+        (
+            repo.lower(),
+            sha,
+            diff,
+            None if commits is None else json.dumps(commits),
+            None if files is None else json.dumps(files, sort_keys=True),
+            _h().now(),
+        ),
     )
 
 
@@ -444,6 +488,41 @@ def same_changes(conn: "sqlite3.Connection", before: dict[str, object], after: d
             return False
         unknown = unknown or not (read_a and read_b)
     return None if unknown else True
+
+
+def _kept(conn: "sqlite3.Connection", repo: str, sha: str) -> tuple[list[list[str]], dict[str, str]] | None:
+    """(the PR's commits up to `sha`, each file's part of its diff) as kept (`save_diff`), or None when Tico has not
+    read them, or GitHub did not give them all."""
+    found = conn.execute(
+        "SELECT commits, files FROM github_pr_diffs WHERE repo=? AND sha=?", (repo.lower(), sha)
+    ).fetchone()
+    if not found or found[0] is None or found[1] is None:
+        return None
+    return json.loads(found[0]), json.loads(found[1])
+
+
+def since(conn: "sqlite3.Connection", before: dict[str, object], after: dict[str, object]) -> Row | None:
+    """What came in the PRs between the commits `before` and `after` ({pr ref: commit}): {commits: how many new ones,
+    titles: the newest new ones' titles, newest first, up to 3, files: how many files' changes differ}. A commit counts
+    as new when the PR at `before` had none with its id or its title, so a rebase's copies are not counted again. None
+    while what one of them changes is not read yet (`_refresh_diffs`), GitHub did not give it all, or the PRs differ."""
+    if set(before) != set(after):
+        return None
+    count, files = 0, 0
+    titles: list[str] = []
+    for ref, sha in after.items():
+        if before[ref] == sha:
+            continue
+        repo = ref.rsplit("#", 1)[0]
+        old, new = _kept(conn, repo, str(before[ref])), _kept(conn, repo, str(sha))
+        if old is None or new is None:
+            return None
+        seen = {each[0] for each in old[0]} | {each[1] for each in old[0]}
+        added = [each for each in new[0] if each[0] not in seen and each[1] not in seen]
+        count += len(added)
+        titles.extend(each[1] for each in reversed(added) if each[1])
+        files += sum(1 for name in set(old[1]) | set(new[1]) if old[1].get(name) != new[1].get(name))
+    return {"commits": count, "titles": titles[:3], "files": files}
 
 
 def _diffs_wanted(conn: "sqlite3.Connection") -> list[tuple[str, str, int, str]]:
@@ -492,7 +571,7 @@ def _refresh_diffs(store: Any, github: GitHub) -> int:
 
     with store.read() as conn:
         wanted = _diffs_wanted(conn)[:REREAD_BATCH]
-    read: dict[tuple[str, str], str | None] = {}
+    read: dict[tuple[str, str], Row] = {}
     tasks: list[str] = []
     for task_id, repo, number, sha in wanted:
         if (repo, sha) not in read:
@@ -506,7 +585,7 @@ def _refresh_diffs(store: Any, github: GitHub) -> int:
         return 0
     with store.transaction() as conn:
         for (repo, sha), diff in read.items():
-            save_diff(conn, repo, sha, diff)
+            save_diff(conn, repo, sha, diff.get("diff_id"), commits=diff.get("commits"), files=diff.get("files"))
         moved = sorted(set(tasks))
         _nudge(conn, moved)
         for task_id in moved:

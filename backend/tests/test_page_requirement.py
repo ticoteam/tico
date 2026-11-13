@@ -871,6 +871,61 @@ def test_a_page_published_again_with_no_new_commits_keeps_the_persons_ok(c, stor
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
+def test_a_carried_ok_writes_a_history_line_and_tells_the_bot(c, store):
+    """Validate, rc.31 (#266's sequence, criterion 2): the OK carried to the new version, but nothing said so. Now the
+    task's history says whose OK carried from which version to which, and the attach reply tells the bot the OK at that
+    commit stands and the person is not asked again."""
+    row, rid, _ = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    fid, _ = _page(c, store, "<p>Built and checked, with the demo steps</p>", fid=fid)
+    made = _attach(c, row, "page:" + fid, requirement="Pre-release")
+    assert made["said"] == "Ben's OK at bbbbbbb stands. This version is kept on the task and doesn't ask Ben again."
+    (line,) = c.execute(
+        "SELECT actor_id, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='ok_kept'",
+        (row["id"],),
+    ).fetchall()
+    assert tuple(line) == ("keeper", "Ben's OK (version 1) carried to version 2: same commits")
+    assert not _ben_asked(c, row)
+
+
+def test_a_page_attached_after_new_commits_says_nothing_of_an_ok(c, store):
+    """No carry, no line: a new version after a new commit is the person's to OK again."""
+    row, rid, _ = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _push(c, "acme/app", 45, "ccccccc00000")
+    fid, _ = _page(c, store, "<p>Built and checked again</p>", fid=fid)
+    made = _attach(c, row, "page:" + fid, requirement="Pre-release")
+    assert "said" not in made
+    assert "ok_kept" not in X.events(c, row["id"])
+
+
+def test_the_person_asked_again_is_told_how_many_commits_came_since_their_ok(c, store):
+    """Validate, rc.31 (criterion 4): Ben was asked again with only "New commits since Ben's OK". The card now says how
+    many commits came, the newest one's title and how many files they changed, from what GitHub's compare gave for the
+    commit Ben OK'd and the newest one."""
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
+    old = [["a" * 40, "Absolute value"]]
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1", commits=old, files={"abs.py": "h1", "test_abs.py": "t1"})
+    _push(c, "acme/app", 45, "ccccccc00000")
+    _bot(c, row, done_id, WRITER, "done")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d2")
+    _bot(c, row, rid, REVIEWER, "no", "The conflict fix dropped the 0 case.")
+    _push(c, "acme/app", 45, "ddddddd00000")
+    new = [
+        *old,
+        ["c" * 40, "Handle the 0 case\n\nThe conflict fix dropped it."],
+        ["d" * 40, "card shows a pick wait's line"],
+    ]
+    F.save_diff(c, "acme/app", "ddddddd00000", "d3", commits=new, files={"abs.py": "h2", "test_abs.py": "t1"})
+    _bot(c, row, rid, REVIEWER, "ok", "Read ddddddd: 0 is back.")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, BEN)
+    assert standing.line == (
+        "2 new commits since your OK at bbbbbbb: 'card shows a pick wait's line' and 1 more, 1 file. "
+        "reviewer reviewed the commits since the reviews: Read ddddddd: 0 is back. OK Ben (version 1)"
+    )
+
+
 def test_another_page_after_the_ok_is_asked_again(c, store):
     """The OK carries only for the same page: another file at the same commits is a person's to OK again."""
     row, _, _ = _oked_at_bbbbbbb(c, store)

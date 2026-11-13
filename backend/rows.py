@@ -1731,11 +1731,15 @@ class GithubReleaseCommitRow(TypedDict):
 
 
 class GithubPrDiffRow(TypedDict):
-    """What a PR commit changes, as one id (item_sources.github.diff_id); None when GitHub could not give it all."""
+    """What a PR commit changes, as one id (item_sources.github.diff_id); None when GitHub could not give it all. With
+    it, as JSON, the PR's commits up to it ([[sha, title]]) and each file's part of the diff ({name: id}); None when
+    read before Tico kept them or GitHub did not give them all."""
 
     repo: str
     sha: str
     diff_id: str | None
+    commits: str | None
+    files: str | None
     read_at: str
 
 

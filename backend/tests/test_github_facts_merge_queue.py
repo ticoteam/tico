@@ -1070,6 +1070,45 @@ def test_a_rebase_after_the_ok_is_queued_again_by_the_release_owner(company):
     assert [call[0] for call in gh.calls].count("pr_diff") == 2, "each commit is read once"
 
 
+COMPARE_FILES = [
+    {"filename": "b.py", "status": "modified", "patch": "@@ -1 +1 @@\n-x = 1\n+x = 2"},
+    {"filename": "a.png", "status": "added", "sha": "abc"},
+    {"filename": "gone.py", "status": "removed"},
+]
+
+
+def test_what_a_commit_changes_keeps_its_id_and_now_its_commits_and_files():
+    """#435: the compare now also gives the PR's commits and each file's part, for the person asked again after new
+    commits. The id of what it changes stays the one kept before, or every OK'd PR would read as changed."""
+    assert F.diff_id(COMPARE_FILES) == "2a8086eabe7e1a84f7aface30699acab47f8a9e3fcf9d0f7e411f4a291517824"
+    body = {
+        "files": COMPARE_FILES,
+        "commits": [
+            {"sha": "a" * 40, "commit": {"message": "Absolute value"}},
+            {"sha": "b" * 40, "commit": {"message": "Handle the 0 case\n\nIt was dropped."}},
+        ],
+    }
+    got = F.diff_of(body)
+    assert got["diff_id"] == F.diff_id(COMPARE_FILES)
+    assert got["commits"] == [["a" * 40, "Absolute value"], ["b" * 40, "Handle the 0 case"]]
+    assert sorted(got["files"]) == ["a.png", "b.py", "gone.py"]
+    assert F.diff_of({"files": [{"filename": "x.bin", "status": "modified"}]})["files"] is None
+
+
+def test_new_commits_since_count_new_titles_and_changed_files(c):
+    """`since`: commits the OK'd one did not have (a rebase's copies keep their titles, so are not new), the newest
+    titles first, and the files whose part of the diff differs. None until both commits were read with their commits."""
+    ref = f"{REPO}#1"
+    first = [["a" * 40, "Absolute value"]]
+    F.save_diff(c, REPO, "old", "d1", commits=first, files={"abs.py": "h1", "keep.py": "k"})
+    assert F.since(c, {ref: "old"}, {ref: "new"}) is None, "the new commit is not read yet"
+    F.save_diff(c, REPO, "new", "d2")
+    assert F.since(c, {ref: "old"}, {ref: "new"}) is None, "read before Tico kept commits"
+    rebased = [["c" * 40, "Absolute value"], ["d" * 40, "Handle 0"], ["e" * 40, "Say why"]]
+    F.save_diff(c, REPO, "new", "d2", commits=rebased, files={"abs.py": "h2", "keep.py": "k", "new.py": "n"})
+    assert F.since(c, {ref: "old"}, {ref: "new"}) == {"commits": 2, "titles": ["Say why", "Handle 0"], "files": 2}
+
+
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):
     engineering(c)
     task_id = new(c, 1)
