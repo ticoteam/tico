@@ -6,6 +6,8 @@
 import type {Browser, Page} from 'playwright';
 declare const S: {emps: Record<string, unknown>[]; people: Record<string, unknown>[]; v2: {needs?: {id: string}[] | null}};
 declare function v2NeedsRead(): Promise<unknown>;
+declare function refresh(force?: boolean): Promise<void>;
+declare function giveToOpen(anchor: HTMLElement, opts: Record<string, unknown>): HTMLElement;
 declare function giveToEntries(selected?: string): {value: string; actor: string; name: string; role: string}[];
 declare function giveToMatch(q: string, entries: unknown[]): {name: {name: string}[]; role: {name: string}[]};
 declare function giveToSuggest(entries: unknown[], task: unknown, recent: string[]): {entry: {name: string}; why: string}[];
@@ -40,6 +42,10 @@ async function roster(page: Page): Promise<void> {
     S.emps.splice(0, S.emps.length, ...bots);
     S.people.splice(0, S.people.length, ...people);
   }, [BOTS, PEOPLE] as const);
+  // A roster read already on its way when the routes changed could still land with the fixture's bots: one read after
+  // them is shown last (refresh.ts keeps the newest read), so wait for it.
+  await page.evaluate(() => refresh(true));
+  await page.waitForFunction(() => S.emps.some(e => e['id'] === 'b-botops') && S.people.some(p => p['id'] === 'gone'));
 }
 
 async function desktop(browser: Browser): Promise<void> {
@@ -96,6 +102,35 @@ async function desktop(browser: Browser): Promise<void> {
   await pop.waitFor({state: 'detached'});
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-prop')), 'owner');
   assert.equal(await page.locator('#task-modal').evaluate(d => (d as HTMLDialogElement).open), true, 'Esc closes only the picker');
+
+  // The picker stays under its button when the window changes size.
+  await owner.click();
+  await pop.waitFor();
+  await page.setViewportSize({width: 1000, height: 700});
+  await page.waitForFunction(() => {
+    const p = document.querySelector('.gt-pop:popover-open')?.getBoundingClientRect(), b = document.querySelector('#task-modal [data-prop="owner"]')?.getBoundingClientRect();
+    return !!p && !!b && p.right <= innerWidth - 8 && Math.abs(p.top - (b.bottom + 4)) <= 20;
+  });
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
+  await page.setViewportSize({width: 1440, height: 900});
+
+  // Removed without being hidden (its dialog drew again): the next resize cleans up and the button is no longer expanded.
+  await owner.click();
+  await pop.waitFor();
+  await page.evaluate(() => document.querySelector('.gt-pop')!.remove());
+  await page.setViewportSize({width: 1400, height: 900});
+  await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="owner"]')?.getAttribute('aria-expanded') === 'false');
+  await page.setViewportSize({width: 1440, height: 900});
+
+  // Everyone already on it (People with a role that holds everyone): words, not an empty list.
+  await page.evaluate(() => giveToOpen(document.querySelector<HTMLElement>('#task-modal [data-prop="owner"]')!,
+    {label: 'Add as reviewer', exclude: giveToEntries().map(e => e.actor), none: 'Everyone is on it', onPick: () => {}}));
+  await pop.waitFor();
+  assert.equal(await pop.locator('[role=option]').count(), 0);
+  assert.equal((await pop.locator('.gt-status').textContent())!.trim(), 'Everyone is on it');
+  await page.keyboard.press('Escape');
+  await pop.waitFor({state: 'detached'});
 
   // Typing, ↓ ↑ and Enter.
   await owner.click();
@@ -209,6 +244,33 @@ async function needsYou(browser: Browser): Promise<void> {
   await give.click();
   for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(100);
   assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['b-botops'], 'Give sends the value the old list sent');
+
+  // 👎 on a bot's question, Wrong person: the same field, ✓ on the task's owner, and Give to… sends the pick.
+  const ask = {kind: 'ask', id: 'r-ny', task_id: 't-ask', requirement_id: 'r-ny', line: 'Which day does the beta start?', since: now,
+    task: {...brief, id: 't-ask', number: 8, title: 'Plan the beta with Finance Owner', owner_id: 'bot:jev'},
+    ask: {requirement_id: 'r-ny', kind: 'answer', line: 'Which day does the beta start?', asked_by: 'bot:eng', who: 'human:ana', choices: null,
+      may: ['answer', 'give', 'thumbs'], met: false, shows: [], standing: 'Waiting on Ana', answer: null}};
+  await page.unroute('**/api/v2/needs-you**');
+  await page.route('**/api/v2/needs-you**', route => route.fulfill({json: {items: [ask]}}));
+  const given: unknown[] = [];
+  await page.route('**/api/v2/tasks/t-ask/asks/r-ny/give', route => { given.push(route.request().postDataJSON()); return route.fulfill({json: {task: ask.task}}); });
+  await page.evaluate(() => v2NeedsRead());
+  await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 'r-ny'));
+  assert.equal(await page.evaluate(i => decideOpen('r-ny', [i]), ask), true);
+  await page.locator('.decide [data-dc="down"]').click();
+  await page.locator('.decide [data-dc-chip="person"]').click();
+  const why = page.locator('.decide button[data-give-to]'), whyGive = page.locator('.decide [data-dc="why-give"]');
+  assert.equal(await whyGive.isDisabled(), true, 'nothing chosen yet');
+  await why.click();
+  await pop.waitFor();
+  assert.deepEqual(await pop.locator('[aria-checked=true] .gt-name').allTextContents(), ['Jev'], "the task's owner shows ✓");
+  assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="finance"]').count(), 1, 'a bot the title names is suggested');
+  await page.keyboard.type('sam');
+  await page.keyboard.press('Enter');
+  await pop.waitFor({state: 'detached'});
+  await whyGive.click();
+  for (let i = 0; i < 50 && !given.length; i++) await page.waitForTimeout(100);
+  assert.deepEqual(given.map(b => (b as {to: string}).to), ['human:sam']);
   assert.deepEqual(errors, []);
   await page.close();
   console.log('give-to: needs you ok');

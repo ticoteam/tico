@@ -140,10 +140,13 @@ function giveToRemember(actor: string): void {
 }
 
 let GIVE_TO_SEQ = 0;
+/** Pickers opened and not yet cleaned up, with what cleans each up. */
+const GIVE_TO_OPEN = new Map<HTMLElement, () => void>();
 /** Opens the picker under `anchor` (a full-height sheet on a phone). Focus starts in the search box; ↑ ↓ move, Enter
     picks, Esc closes with nothing changed and focus back on `anchor`. */
 function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
-  for (const old of document.querySelectorAll<HTMLElement>('.gt-pop')) { if (old.matches(':popover-open')) old.hidePopover(); old.remove(); }
+  for (const [old, end] of GIVE_TO_OPEN) { end(); GIVE_TO_OPEN.delete(old); if (old.matches(':popover-open')) old.hidePopover(); old.remove(); }
+  for (const old of document.querySelectorAll<HTMLElement>('.gt-pop')) old.remove();
   const label = opts.label || 'Give to', n = ++GIVE_TO_SEQ, listId = `gt-list-${n}`;
   const skip = new Set(opts.exclude || []);
   const all = giveToEntries(opts.selected || '').filter(e => !skip.has(e.actor));
@@ -213,6 +216,7 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   });
   pop.addEventListener('mousedown', ev => { if (ev.target instanceof Element && ev.target.closest('.gt-row')) ev.preventDefault(); });   // the search box keeps focus
   function place(): void {
+    if (!pop.isConnected) { done(); return; }   // removed without being hidden (its dialog drew again): no toggle comes
     if (matchMedia('(max-width:760px)').matches) { pop.style.top = pop.style.left = ''; return; }
     const a = anchor.getBoundingClientRect();
     const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
@@ -222,19 +226,21 @@ function giveToOpen(anchor: HTMLElement, opts: GiveToOptions): HTMLElement {
   // A press on the button while the picker is open closes it (light dismiss); the click that follows must not open it
   // again. Esc and a pick do not count.
   const press = () => { if (pop.matches(':popover-open')) anchor.dataset.gtClosed = String(Date.now()); };
-  anchor.addEventListener('pointerdown', press, {capture: true});
+  // Its listeners go with it: on close, on the next picker opening, or when a resize finds it removed.
+  const off = new AbortController();
+  const done = () => { off.abort(); GIVE_TO_OPEN.delete(pop); anchor.setAttribute('aria-expanded', 'false'); };
+  GIVE_TO_OPEN.set(pop, done);
+  anchor.addEventListener('pointerdown', press, {capture: true, signal: off.signal});
   pop.addEventListener('toggle', ev => {
     if ((ev as ToggleEvent).newState !== 'closed') return;
-    anchor.removeEventListener('pointerdown', press, {capture: true});
-    removeEventListener('resize', place);
-    anchor.setAttribute('aria-expanded', 'false');
+    done();
     if (anchor.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
     pop.remove();
   });
   paint();
   pop.showPopover();
   place();
-  addEventListener('resize', place);   // under its button again when the window changes size (a phone width is the sheet)
+  addEventListener('resize', place, {signal: off.signal});   // under its button again when the window changes size (a phone width is the sheet)
   anchor.setAttribute('aria-expanded', 'true');
   input.focus();
   return pop;
