@@ -253,7 +253,9 @@ def test_the_migration_lets_an_old_table_take_after_and_keeps_its_rows():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
     conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    conn.executescript(TR.SCHEMA.replace(",'after'", ""))
+    # The table before it: no `after`, and no `until` (20261113070000 adds that column later).
+    until = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
+    conn.executescript(TR.SCHEMA.replace(",'after'", "").replace(until, ""))
     conn.execute("INSERT INTO task_relations VALUES('a','b','follow_up','human:ana','2026-11-12T00:00:00Z')")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO task_relations VALUES('b','a','after','human:ana','2026-11-12T00:00:00Z')")

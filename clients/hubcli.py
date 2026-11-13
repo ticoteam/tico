@@ -1231,6 +1231,12 @@ def parser():
         )
         if change == "relate":
             s.add_argument("--remove", action="store_true", help="take it off instead")
+            s.add_argument(
+                "--until",
+                choices=("released",),
+                help="depends_on only: stay blocked after task is Done, until production runs a release that holds "
+                "its merged PRs (how a Validate task waits for its work to reach production)",
+            )
         s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
     s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
     s.add_argument("id", help="the task that merges later")

@@ -587,11 +587,15 @@ class TaskLink(Contract):
 class TaskRelation(Contract):
     """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task), after (it
     merges after task: in Merge its PRs are not queued until task has merged), depends_on (it is blocked until task
-    ends). The others are notes."""
+    ends; with until released, until production runs the release that holds task's merged PRs). The others are
+    notes."""
 
     task: ID
     kind: RelationKind = "related"
     remove: bool = False
+    # depends_on only: it stays blocked after task is Done, until production runs a release that holds task's merged
+    # PRs (backend/task_depends.py).
+    until: Literal["released"] | None = None
 
 
 class TaskMerge(Contract):

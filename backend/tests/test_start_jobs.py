@@ -210,3 +210,16 @@ def test_a_database_that_stays_busy_ends_the_wait_and_the_job_is_captured(startu
     start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
     assert startup_jobs.ran == ["message_bots", "ship_deployed"]
     assert startup_jobs.captured == [("complete_company", busy)]
+
+
+def test_each_start_checks_the_dependencies_that_wait_for_the_release_it_runs(startup_jobs, monkeypatch):
+    """A task that depends on another until released goes on when the release this server runs holds that task's merged
+    PRs: every start-up asks task_depends.on_release, with the running version and the repository it was built from."""
+    from backend import releases, task_depends
+
+    seen = []
+    monkeypatch.setattr(releases, "version", lambda: "0.6.0-rc.10")
+    monkeypatch.setattr(task_depends, "on_release", lambda c, version, repo: seen.append((version, repo)) or [])
+    start_jobs.run(startup_jobs.store, startup_jobs.onboarding, startup_jobs.telemetry)
+    assert seen == [("0.6.0-rc.10", startup_jobs.store.settings.release_repo)]
+    assert startup_jobs.captured == []

@@ -109,7 +109,14 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
             changed = TR.relate(
-                c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None
+                c,
+                who.actor,
+                task_id,
+                other_id,
+                body.kind,
+                remove=body.remove,
+                mover=mover(c, who) or None,
+                until=body.until,
             )
             # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
             return {

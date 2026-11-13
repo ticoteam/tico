@@ -20,6 +20,17 @@ date. It is a named wait, not a state:
 - `check`: the writer must be able to change the waiting task and read the other one (task_relations.relate); a loop,
   or a dependency of or on a task that has ended, is refused.
 
+Until released (`until` `released` on the relation, `tico task relate <id> depends_on <task> --until released`): the
+dependency holds past the other task's Done, until production runs a release that holds that task's merged PRs. This is
+how a Validate task waits for its work to reach production, with no snooze. It reads "Blocked by #304 ..., done, until
+production runs its release". `in_production` asks it of the releases Tico has saved (the release that holds each merge
+commit, item_sources.github.release_of, as stage_inputs reads it) and the release this server runs (releases.version,
+in the repository of its release manifest), which `on_release` records at every start-up and checks then: the moment
+the running release holds them all, the dependency comes off and the owner is woken once, "#304 is in production". No
+poll. When the other task is Done and production already runs its release (or nothing of it merged into the repository
+production runs), it comes off at once, as a plain dependency does; closed without doing it, likewise. A dependency on
+a Done task is refused only when there is nothing left to wait for.
+
 Snooze stays for "look again on a date". A PR, main or a release is reached through the task that carries it.
 """
 
@@ -43,16 +54,24 @@ DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
 DELETED = "{ref} was deleted"
 WAKE = "unblocked"
+UNTIL = "released"  # task_relations.until: held past the other task's end, until production runs its release
+RELEASED_LINE = "Blocked by {ref} {title}, done, until production runs its release"
+IN_PRODUCTION = "{ref} is in production: it runs {version}"
+# registry_metadata: {"version", "repo"} of the release this server runs, as `on_release` saw it at start-up.
+RUNNING = "depends-release-running"
 
-# A task, aliased by `%s`, with a dependency still open: for filters beside the open snooze's (hubdb.SNOOZED).
+# A task, aliased by `%s`, with a dependency still open: for filters beside the open snooze's (hubdb.SNOOZED). Open: its
+# task is open, or Done and the dependency holds until production runs its release.
 BLOCKED = (
     "EXISTS (SELECT 1 FROM task_relations dep JOIN tasks blocker ON blocker.id = dep.to_task "
-    "WHERE dep.from_task = %s.id AND dep.kind = 'depends_on' AND blocker.status = 'open')"
+    "WHERE dep.from_task = %s.id AND dep.kind = 'depends_on' "
+    "AND (blocker.status = 'open' OR blocker.status = 'done' AND dep.until = 'released'))"
 )
 
 _OPEN = (
     "SELECT d.from_task, d.to_task, d.created_at FROM task_relations d JOIN tasks b ON b.id = d.to_task "
-    "WHERE d.from_task IN (SELECT value FROM json_each(?)) AND d.kind = 'depends_on' AND b.status = 'open' "
+    "WHERE d.from_task IN (SELECT value FROM json_each(?)) AND d.kind = 'depends_on' "
+    "AND (b.status = 'open' OR b.status = 'done' AND d.until = 'released') "
     "ORDER BY d.created_at, d.rowid"
 )
 
@@ -116,14 +135,19 @@ def is_wait(requirement_id: object) -> bool:
     return str(requirement_id or "").startswith(KIND + ":")
 
 
-_NAMED = "SELECT t.id, t.number, t.title, s.name FROM tasks t LEFT JOIN stages s ON s.id = t.stage_id WHERE t.id=?"
+_NAMED = (
+    "SELECT t.id, t.number, t.title, s.name, t.status FROM tasks t LEFT JOIN stages s ON s.id = t.stage_id WHERE t.id=?"
+)
 
 
 def line(conn: "sqlite3.Connection", blocker_id: str) -> str:
-    """ "Blocked by #304 Growth synced sources part 1, in Build"."""
+    """ "Blocked by #304 Growth synced sources part 1, in Build", or once it is Done and the dependency holds until its
+    release, "Blocked by #304 Growth synced sources part 1, done, until production runs its release"."""
     found = read_cache.one(conn, _NAMED, (blocker_id,))
     if not found:
         return UNNAMED
+    if found[4] != "open":
+        return RELEASED_LINE.format(ref=ref({"id": found[0], "number": found[1]}), title=str(found[2] or "").strip())
     said = LINE.format(ref=ref({"id": found[0], "number": found[1]}), title=str(found[2] or "").strip(), stage="")
     return said + str(found[3]) if found[3] else said.removesuffix(", in ")
 
@@ -201,12 +225,19 @@ def spans(conn: "sqlite3.Connection", task_id: str, since: str) -> list[tuple[st
 
 
 # ----------------------------------------------------------------------------- writes
-def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row) -> None:
+def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, until: str | None = None) -> None:
     """Refuse a dependency that cannot hold: of a task that has ended, on one that has ended, or a loop (#304 already
-    depends on #307, however far round). The writer's rights are checked by the caller (task_relations.relate)."""
+    depends on #307, however far round). Until released, a Done task may be depended on while production does not run
+    its release yet. The writer's rights are checked by the caller (task_relations.relate)."""
     from . import hubdb
 
     H: Any = hubdb
+    if until == UNTIL and blocker["status"] == "done":
+        if in_production(conn, str(blocker["id"])) is not None:
+            H.refuse(
+                conn, actor, "task_ended", f"{ref(blocker)} is in production already: there is nothing to wait for"
+            )
+        blocker = {**blocker, "status": "open"}
     for row, what in ((later, "it"), (blocker, ref(blocker))):
         if row["status"] != "open":
             who = "The task" if what == "it" else what
@@ -248,22 +279,117 @@ def _path(conn: "sqlite3.Connection", start: str, goal: str) -> list[str]:
 
 def release(conn: "sqlite3.Connection", ended_id: str, by: str) -> int:
     """`ended_id` ended: each dependency on it comes off, with a history row on both tasks, so a dependency holds only
-    until its task first ends (reopening that task blocks nothing again). Then each task that depended on it and has no
-    open dependency left moves on, or its owner is woken once (`release_one`). Returns how many were released."""
+    until its task first ends (reopening that task blocks nothing again). A dependency until released on a Done task
+    stays while production does not run its release (`in_production`; `on_release` takes it off then). Then each task
+    that depended on it and has no open dependency left moves on, or its owner is woken once (`release_one`). Returns
+    how many were released."""
+    found: Any = conn.execute("SELECT number, status FROM tasks WHERE id=?", (ended_id,)).fetchone()
+    done = bool(found and found[1] == "done")
+    named = ref({"id": ended_id, "number": found[0] if found else None})
+    said = (DONE if done else CLOSED).format(ref=named)
+    waiting = dependents(conn, ended_id)
+    held = set(_until_released(conn, ended_id)) if done else set()
+    shipped = in_production(conn, ended_id) if held else None
+    if shipped is None:  # they stay blocked until production runs its release (on_release)
+        waiting = [task_id for task_id in waiting if task_id not in held]
+    _off(conn, waiting, ended_id, by, "it ended")
+    live = IN_PRODUCTION.format(ref=named, version=shipped) if shipped else said
+    return sum(release_one(conn, task_id, ended_id, live if task_id in held else said) for task_id in waiting)
+
+
+def _off(conn: "sqlite3.Connection", waiting: list[str], ended_id: str, by: str, note: str) -> None:
     from . import task_relations
 
     TR: Any = task_relations  # untyped module
-    waiting = dependents(conn, ended_id)
     for task_id in waiting:
         conn.execute(
             "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (task_id, ended_id, RELATION)
         )
-        TR._history(conn, by, task_id, ended_id, RELATION, False, "it ended")
-    found: Any = conn.execute("SELECT number, status FROM tasks WHERE id=?", (ended_id,)).fetchone()
-    said = (DONE if found and found[1] == "done" else CLOSED).format(
-        ref=ref({"id": ended_id, "number": found[0] if found else None})
+        TR._history(conn, by, task_id, ended_id, RELATION, False, note)
+
+
+def _until_released(conn: "sqlite3.Connection", task_id: str) -> list[str]:
+    return [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT from_task FROM task_relations WHERE to_task=? AND kind=? AND until=? ORDER BY created_at, rowid",
+            (task_id, RELATION, UNTIL),
+        )
+    ]
+
+
+# ----------------------------------------------------------------------------- until released
+def running(conn: "sqlite3.Connection") -> tuple[str, str]:
+    """(version, repository) of the release this server runs, as the last start-up saw it ("", "" before any)."""
+    import json
+
+    found = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (RUNNING,)).fetchone()
+    try:
+        value: Any = json.loads(found[0]) if found else {}
+    except ValueError:
+        value = {}
+    value = value if isinstance(value, dict) else {}
+    return str(value.get("version") or ""), str(value.get("repo") or "")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+
+
+def in_production(conn: "sqlite3.Connection", task_id: str) -> str | None:
+    """Whether production runs a release that holds every merged PR of the task: the version it runs when it does, ""
+    when nothing of the task merged into the repository production runs (nothing to wait for), None while a merge is in
+    no release yet or in one newer than the running release. A release holds a merge when its saved history holds the
+    merge commit (item_sources.github.release_of, pre-releases counted, as stage_inputs reads it); it runs in
+    production when its tag is the running version or older (releases.parse: rc.10 after rc.9)."""
+    from . import releases
+    from .item_sources import github as G
+
+    GS: Any = G
+    RL: Any = releases  # untyped module
+    version, repo = running(conn)
+    have = RL.parse(version)
+    held: list[str] = []
+    for link in GS.prs_of(conn, task_id):
+        meta: Row = link.get("metadata") or {}
+        if meta.get("state") != "merged" or not meta.get("merged_sha"):
+            continue
+        if repo and str(link["repo"]).lower() != repo.lower():
+            continue  # another product's code: this server's release never holds it
+        release: Row | None = GS.release_of(conn, str(link["repo"]), str(meta["merged_sha"]), prereleases=True)
+        tag = RL.parse(release["tag"]) if release else None
+        if not (have and tag and tag <= have):
+            return None
+        held.append(str(release["tag"]) if release else "")
+    return version if held else ""
+
+
+def on_release(conn: "sqlite3.Connection", version: str, repo: str) -> list[str]:
+    """Start-up: record the release this server runs (`version`, of `repo`, from releases.version and the release
+    manifest), then take off each dependency until released whose task is Done and whose merged PRs that release holds
+    (`in_production`), and release each task that waited on it (`release_one`: it moves on, or its owner is woken once,
+    "#304 is in production: it runs 0.6.0-rc.10"). Every start-up checks, so a release read after one start is found at
+    the next; a dependency that came off is not there to wake anyone twice. Returns the tasks released."""
+    import json
+
+    conn.execute(
+        "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+        (RUNNING, json.dumps({"version": version, "repo": repo})),
     )
-    return sum(release_one(conn, task_id, ended_id, said) for task_id in waiting)
+    found = conn.execute(
+        "SELECT d.from_task, d.to_task, b.number FROM task_relations d JOIN tasks b ON b.id = d.to_task "
+        "WHERE d.kind = ? AND d.until = ? AND b.status = 'done' ORDER BY d.created_at, d.rowid",
+        (RELATION, UNTIL),
+    ).fetchall()
+    shipped: dict[str, str | None] = {}
+    out: list[str] = []
+    for task_id, blocker_id, number in found:
+        blocker_id = str(blocker_id)
+        if blocker_id not in shipped:
+            shipped[blocker_id] = in_production(conn, blocker_id)
+        if shipped[blocker_id] is None:
+            continue
+        _off(conn, [str(task_id)], blocker_id, str(_engine().SYSTEM), "its release runs in production")
+        said = IN_PRODUCTION.format(ref=ref({"id": blocker_id, "number": number}), version=version)
+        if release_one(conn, str(task_id), blocker_id, said):
+            out.append(str(task_id))
+    return out
 
 
 def deleted(conn: "sqlite3.Connection", task_id: str, number: object, by: str) -> int:

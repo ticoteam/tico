@@ -17,6 +17,8 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 
 B = "bot:builder"
+# The column the until-released migration (20261113070000) adds: a table from before it has no such line.
+UNTIL_COLUMN = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
 
 
 @pytest.fixture
@@ -198,7 +200,7 @@ def test_the_migration_lets_an_old_table_take_depends_on_and_keeps_its_rows():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
     conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    conn.executescript(TR.SCHEMA.replace("'after','depends_on'", "'after','blocks'"))
+    conn.executescript(TR.SCHEMA.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
     conn.execute("INSERT INTO task_relations VALUES('a','b','after','human:ana','2026-11-12T00:00:00Z')")
     conn.execute("INSERT INTO task_relations VALUES('b','a','blocks','human:ana','2026-11-12T00:00:01Z')")
     with pytest.raises(sqlite3.IntegrityError):
@@ -321,3 +323,170 @@ def test_a_blocker_restored_from_the_trash_does_not_block_again(c):
     task_delete.restore_tasks(c, [blocker], actor=X.ANA)
     assert E.task(c, blocker) and not D.blocked(c, blocked)
     assert bodies(c, blocked) == told
+
+
+# ----------------------------------------------------------------------------- until released
+APP = "acme/app"
+
+
+def merged_pr(c, task_id, number, sha, repo=APP):
+    """A PR of the task, merged as `sha`."""
+    from backend import item_metadata as IM
+
+    c.execute(
+        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+        "VALUES (?,?,?,?,?,?,'github','pr',?,?)",
+        (
+            H.new_id(),
+            task_id,
+            "pr",
+            f"https://github.com/{repo}/pull/{number}",
+            repo,
+            number,
+            f"{repo}#{number}",
+            H.now(),
+        ),
+    )
+    IM.save(c, "github", "pr", f"{repo}#{number}", {"state": "merged", "head_sha": sha, "merged_sha": sha}, 1)
+
+
+def published(c, tag, *holding, repo=APP):
+    """A release Tico has saved, whose history holds the commits `holding`."""
+    rid, at = H.new_id(), H.now()
+    c.execute(
+        "INSERT INTO github_releases (id, repo, tag, commit_sha, published_at, metadata_version, read_at, created_at) "
+        "VALUES (?,?,?,?,?,1,?,?)",
+        (rid, repo, tag, "x" + tag, at, at, at),
+    )
+    for sha in holding:
+        c.execute(
+            "INSERT INTO github_release_commits (release_id, commit_sha, included, checked_at) VALUES (?,?,1,?)",
+            (rid, sha, at),
+        )
+
+
+def test_until_released_stays_blocked_after_done_and_wakes_once_when_production_runs_its_release(c):
+    """The spec's acceptance: a Validate task that depends on its Engineering task until released stays blocked when
+    that task is Done; when production runs a release holding its merged PRs, its owner is woken once. Nov 13: 45 tasks
+    were snoozed to a guessed release date instead."""
+    build(c)
+    work, check = task(c, "Growth synced sources"), task(c, "Validate growth synced sources")
+    merged_pr(c, work, 7, "m7")
+    D.on_release(c, "0.6.0-rc.8", APP)  # production runs rc.8
+    assert TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    assert TR.grouped(c, [check])[check]["depends_on"][0]["until"] == "released"
+    assert TR.readback(c, check, work, "depends_on")[0].endswith("until it is released")
+    ended(c, work)
+    assert D.blocked(c, check) and bodies(c, check) == []
+    (wait,) = W.waiting_on(c, check)
+    assert (wait.state, wait.line) == (
+        W.TASKS,
+        f"Blocked by {ref(c, work)} Growth synced sources, done, until production runs its release",
+    )
+    assert W.turn(c, E.task(c, check)) is None
+    # rc.9 is cut with the merge, but production still runs rc.8: nothing.
+    published(c, "v0.6.0-rc.9", "m7")
+    assert D.on_release(c, "0.6.0-rc.8", APP) == [] and D.blocked(c, check)
+    # Production runs rc.10 (after rc.9, not before it as text would sort): it holds the merge. Woken once.
+    assert D.on_release(c, "0.6.0-rc.10", "Acme/App") == [check]
+    assert not D.blocked(c, check)
+    (body,) = bodies(c, check)
+    assert f"{ref(c, work)} is in production: it runs 0.6.0-rc.10" in body
+    assert D.on_release(c, "0.6.0-rc.11", APP) == [] and len(bodies(c, check)) == 1
+
+
+def test_until_released_waits_for_every_merged_pr_of_the_task(c):
+    build(c)
+    work, check = task(c, "Part 1"), task(c, "Validate part 1")
+    merged_pr(c, work, 7, "m7")
+    merged_pr(c, work, 8, "m8")
+    merged_pr(c, work, 9, "o9", repo="acme/other")  # another product's code: this server never runs it
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work)
+    published(c, "v1.2.0", "m7")
+    assert D.on_release(c, "1.2.0", APP) == []
+    published(c, "v1.3.0", "m8")
+    assert D.on_release(c, "1.3.0", APP) == [check]
+
+
+def test_until_released_on_a_task_production_already_runs_comes_off_when_it_is_done(c):
+    """Production may run the release before the Engineering task reaches Done: Done then releases at once."""
+    build(c)
+    work, check = task(c, "Part 1"), task(c, "Validate part 1")
+    merged_pr(c, work, 7, "m7")
+    published(c, "v1.2.0", "m7")
+    D.on_release(c, "1.2.0", APP)
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work)
+    assert not D.blocked(c, check)
+    (body,) = bodies(c, check)
+    assert f"{ref(c, work)} is in production: it runs 1.2.0" in body
+
+
+@pytest.mark.parametrize("how", ["closed", "nothing merged"])
+def test_until_released_ends_with_the_task_when_there_is_no_release_to_wait_for(c, how):
+    build(c)
+    work, check = task(c, "Part 1"), task(c, "Validate part 1")
+    D.on_release(c, "1.2.0", APP)
+    TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    ended(c, work, E.CLOSED if how == "closed" else E.DONE)
+    assert not D.blocked(c, check)
+    (body,) = bodies(c, check)
+    assert (f"{ref(c, work)} was closed without doing it" if how == "closed" else f"{ref(c, work)} is done") in body
+
+
+def test_a_validate_task_may_depend_on_a_done_task_until_released_but_not_on_one_in_production(c):
+    """A Validate task reaches Validate when its Engineering task is Done, so that is when it is related."""
+    build(c)
+    work, check, late = task(c, "Part 1"), task(c, "Validate part 1"), task(c, "Validate again")
+    merged_pr(c, work, 7, "m7")
+    D.on_release(c, "1.1.0", APP)
+    ended(c, work)
+    with pytest.raises(H.Refused, match="has ended"):
+        TR.relate(c, X.ANA, check, work, "depends_on")
+    assert TR.relate(c, X.ANA, check, work, "depends_on", until="released")
+    assert D.blocked(c, check)
+    published(c, "v1.2.0", "m7")
+    assert D.on_release(c, "1.2.0", APP) == [check]
+    with pytest.raises(H.Refused, match="in production already"):
+        TR.relate(c, X.ANA, late, work, "depends_on", until="released")
+
+
+def test_until_is_only_released_and_only_on_a_dependency(c):
+    build(c)
+    one, two = task(c, "Part 1"), task(c, "Part 2")
+    with pytest.raises(H.Refused, match="Only a depends_on"):
+        TR.relate(c, X.ANA, two, one, "follow_up", until="released")
+    with pytest.raises(H.Refused, match="Only a depends_on"):
+        TR.relate(c, X.ANA, two, one, "depends_on", until="merged")
+    # A plain dependency written again until released holds until released; written plain again, it no longer does.
+    TR.relate(c, X.ANA, two, one, "depends_on")
+    assert TR.relate(c, X.ANA, two, one, "depends_on", until="released")
+    assert TR.until_of(c, two, one, "depends_on") == "released"
+    assert not TR.relate(c, X.ANA, two, one, "depends_on", until="released")
+    assert TR.relate(c, X.ANA, two, one, "depends_on")
+    assert TR.until_of(c, two, one, "depends_on") is None
+
+
+def test_the_until_migration_adds_the_column_and_keeps_every_row():
+    migration = import_module("backend.migrations.20261113070000_task_relations_until")
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
+    conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
+    conn.executescript(TR.SCHEMA.replace(UNTIL_COLUMN, ""))
+    conn.execute(
+        "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES('a','b','depends_on','2026-11-13T00:00:00Z')"
+    )
+    migration.up(conn)
+    migration.up(conn)  # once only
+    assert conn.execute("SELECT from_task, to_task, kind, until FROM task_relations").fetchall() == [
+        ("a", "b", "depends_on", None)
+    ]
+    conn.execute("UPDATE task_relations SET until='released'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE task_relations SET until='merged'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_at,until) "
+            "VALUES('b','a','follow_up','2026-11-13T00:00:00Z','released')"
+        )
