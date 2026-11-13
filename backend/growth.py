@@ -1163,8 +1163,8 @@ def install(app, store, auth, mutate):
                 return _start_db_run(c, who, row)
             if row["sync_kind"] == GF.KIND:
                 return GF.sync(c, who.actor, row)
-            elif row["sync_kind"] == "bot_cost":
-                rows, notes = GS.bot_cost_rows(c)
+            if row["sync_kind"] == "bot_cost":
+                rows, notes = GS.bot_cost_rows(c, first=not row.get("last_good_run_at"))
                 return GS.run(c, who.actor, row, rows=rows, notes=notes)
             raise Problem("conflict", f"{row['system']} cannot be run from here yet", 409)
 

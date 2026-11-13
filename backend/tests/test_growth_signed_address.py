@@ -99,3 +99,30 @@ def test_bot_cost_is_a_bots_run_cost_on_its_one_channel_and_unknown_when_it_owns
     assert cohorts(api, "search-ads") == [] and cohorts(api, "podcast") == []
     assert cohorts(api, "unknown")[0]["bot_cost"] == 4.0
     assert "cpo owns 2 channels" in result["notes"][0]
+
+
+def test_the_first_bot_cost_run_reaches_back_a_year_and_later_runs_only_three_months(api):
+    bot(api, "ops")
+    post(api, "growth/channels", {"slug": "referrals", "name": "Referrals", "owner_ref": "bot:ops"})
+    src = post(
+        api,
+        "growth/sources",
+        {"truth_for": "bot cost", "system": "Bot run cost", "sync_kind": "bot_cost", "sync_map": {"fields": {}}},
+        token="ana-test",
+    )
+    old, edge = GS._month(GS._index(NOW) - 4), GS._month(GS._index(NOW) - 2)
+    with api.app.state.store.transaction() as c:
+        for m in (old, edge):
+            at = f"{m}-10T12:00:00Z"
+            usage_facts.record_run(
+                c, {"id": H.new_id(), "bot": "ops", "task_id": None, "started_at": at}, {"est_cost_usd": 1.5}, at
+            )
+    first = post(api, f"growth/sources/{src['id']}/sync", {}, token="ana-test")
+    assert first["written"] == 2
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE growth_cohorts SET bot_cost=NULL")
+        c.execute("DELETE FROM growth_origins")
+    later = post(api, f"growth/sources/{src['id']}/sync", {}, token="ana-test")
+    assert later["written"] == 1
+    rows = {r["month"]: r["bot_cost"] for r in get(api, "growth/cohorts?channel=referrals")["cohorts"]}
+    assert rows.get(edge) == 1.5 and rows.get(old) is None

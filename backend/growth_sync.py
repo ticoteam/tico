@@ -603,14 +603,14 @@ def run(
 
 
 # ----------------------------------------------------------------------------- bot cost
-def bot_cost_rows(c: Any, at: datetime | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+def bot_cost_rows(c: Any, first: bool = False, at: datetime | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     """The rows a bot cost run posts: each month's run cost (USD, two places) of the bot that owns a channel, on that
     channel. A bot owning several channels cannot be split between them, so its cost goes to Unknown, and a note says
     so. A bot that owns no channel is not a Growth cost."""
     from .usage_records import RUNS
 
-    oldest, newest = window(False, at)
-    first = f"{oldest}-01"
+    oldest, newest = window(first, at)
+    start = f"{oldest}-01"
     last = f"{_month(_index(newest) + 1)}-01"
     owned: dict[str, list[str]] = {}
     for r in c.execute(
@@ -622,7 +622,7 @@ def bot_cost_rows(c: Any, at: datetime | None = None) -> tuple[list[dict[str, An
     for bot, month, total in c.execute(
         f"SELECT bot, substr(started_at,1,7), coalesce(sum(est_cost_usd),0) FROM {RUNS} "
         "WHERE started_at >= ? AND started_at < ? GROUP BY bot, substr(started_at,1,7)",
-        (first, last),
+        (start, last),
     ).fetchall():
         slugs = owned.get(str(bot))
         if not slugs or not total:
