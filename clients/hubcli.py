@@ -1219,6 +1219,19 @@ def parser():
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
+    s.add_argument(
+        "--changed",
+        action="append",
+        metavar="LINE",
+        help="with --req: one line on what changed in this version (up to 5, 120 characters each)",
+    )
+    s.add_argument(
+        "--answered",
+        action="append",
+        metavar="ENTRY",
+        help='with --req: "<point>: done|not done, <why>" for each point of the last send back (up to 12). '
+        "Never quote their note back to them",
+    )
     s.set_defaults(fn="task attach")
     s = task.add_parser("context", help="readable page and meeting references for a task")
     s.add_argument("id")

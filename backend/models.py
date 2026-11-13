@@ -409,10 +409,14 @@ class TaskAskAnswer(Contract):
 class TaskPageAttach(Contract):
     """Attach a page to a page requirement of the task's stage (task_pages.attach). `requirement` is its id or name;
     `page` is page:<file id> (its newest version) or page:<file id>@<version>. `version` is the task's, as on every
-    task write."""
+    task write. `note`, `changed` (up to 5 one-line bullets) and `answered` (up to 12 "<point>: done|not done, <why>")
+    are what the bot says with this version (backend/page_rounds.py); all optional."""
 
     requirement: Annotated[str, Field(min_length=1, max_length=500)]
     page: Annotated[str, Field(min_length=1, max_length=200)]
+    note: str | None = Field(default=None, max_length=2000)
+    changed: list[Annotated[str, Field(max_length=2000)]] | None = Field(default=None, max_length=50)
+    answered: list[Annotated[str, Field(max_length=2000)]] | None = Field(default=None, max_length=50)
     version: Version | None = None
     on_behalf_of: ID | None = None
 

@@ -62,6 +62,45 @@
 .dc-bar[hidden]{display:none}
 .dc-bar button{padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
 .dc-bar button[hidden]{display:none}
+/* a page that comes back (decideRoundsHTML): Version N · date with Jev's chip, the review history, then its parts */
+.dc-ver{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.dc-jev{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
+button.dc-jev{cursor:pointer}
+.dc-jev[data-v="met"]{border-color:color-mix(in srgb,var(--ok) 40%,var(--line));background:var(--ok-bg);color:var(--ok)}
+.dc-jev[data-v="unsure"],.dc-jev[data-v="failed"]{border-color:color-mix(in srgb,var(--wait) 40%,var(--line));background:var(--wait-bg);color:var(--wait-ink,var(--ink))}
+.dc-jev[data-v="not_met"]{border-color:color-mix(in srgb,var(--fail) 40%,var(--line));background:var(--fail-bg);color:var(--fail)}
+.dc-jev-wait{border-style:dashed;color:var(--muted);font-weight:400}
+.dc-notice{margin:0;padding:6px 10px;border-left:3px solid var(--wait,var(--line));border-radius:4px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-jev-why{margin:-4px 0 0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-hist{margin:0 -4px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
+.dc-hist ol{display:flex;gap:6px;margin:0;padding:2px 4px 6px;list-style:none}
+.dc-hist li{flex:0 0 calc((100% - 24px) / 5);min-width:72px}
+.dc-step{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;height:100%;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.dc-step:hover{background:var(--surface2)}
+.dc-step.now{border-color:var(--ink)}
+.dc-step .dc-jev{min-height:20px;min-width:20px;justify-content:center;padding:0 6px;font-size:var(--t-xs,var(--t-sm))}
+.dc-step-date,.dc-step-ans{color:var(--muted);white-space:nowrap}
+.dc-step-ans[data-a="Sent back"]{color:var(--fail)}
+.dc-step-ans[data-a="OK'd"]{color:var(--ok)}
+.dc-part{display:flex;flex-direction:column;gap:4px}
+.dc-part h4{margin:0;font-size:var(--t-sm);font-weight:600}
+.dc-when{color:var(--muted);font-weight:400}
+.dc-part ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.dc-changed-list li{position:relative;padding-left:14px;overflow-wrap:anywhere}
+.dc-changed-list li::before{content:"•";position:absolute;left:2px;color:var(--muted)}
+.dc-points li{display:flex;gap:8px;align-items:baseline;overflow-wrap:anywhere}
+.dc-mark{flex:none;width:16px;font-weight:700;color:var(--ok)}
+.dc-points li[data-done="false"] .dc-mark{color:var(--fail)}
+.dc-clamp{margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;white-space:pre-line}
+.dc-clamp.open{display:block;-webkit-line-clamp:unset;line-clamp:none}
+.dc-more-btn{align-self:flex-start;padding:0;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--t-sm);text-decoration:underline;cursor:pointer}
+.dc-more-btn[hidden]{display:none}
+/* Changes since vK, over the page */
+.dc-since{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 10px;font-size:var(--t-sm)}
+.dc-switch{display:inline-flex;align-items:center;gap:8px;min-height:32px;font-weight:600;cursor:pointer}
+.dc-switch input{width:18px;height:18px;margin:0;accent-color:var(--wait,var(--ink))}
+.dc-since-none{color:var(--muted)}
+.dc-diff .tf-diff-lines{max-height:none}
 .decide.dc-empty .dc-main{grid-template-columns:1fr}
 .decide.dc-empty .dc-thing{display:none}
 .decide.dc-empty .dc-side{border:0}
@@ -82,6 +121,9 @@
   .dc-side{scroll-padding-bottom:72px;max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
   .dc-q{font-size:var(--t-lg)}
   .dc-file-x,.dc-attach,.dc-open-task{min-height:44px}
+  .dc-jev,.dc-more-btn{min-height:44px}
+  .dc-step .dc-jev{min-height:20px}
+  .dc-switch{min-height:44px}
   .dc-open-task{margin:-12px 0 -8px;display:inline-flex;align-items:center}
   .dc-file-x{width:44px}
   .dc-attach{display:inline-flex;align-items:center}
