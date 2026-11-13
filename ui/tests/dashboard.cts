@@ -435,6 +435,7 @@ async function shot(page: Page, name: string) {
       const pin = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Needs attention'})});
       await pin.locator('.dash-none').waitFor();
       assert.equal(await pin.locator('.dash-none').innerText(), 'Nothing waiting on you');
+      assert.equal(await pin.locator('.dash-none a').getAttribute('href'), '#/tasks?view=foryou', 'the empty card still leads to Tasks > You');
       assert.equal(await pin.locator('h2 .dash-head-n').isVisible(), false, 'no count at 0');
       assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention');
       // A team's Needs you card on another page: the count, then the team.

@@ -150,7 +150,7 @@ const dashThreadHref = (id: string) => typeof window.threadHref === 'function' ?
 const DASH_COUNTED = new Set(['needs_you', 'needs_attention']);
 const DASH_ACT: Record<string, string> = {done: 'Done', ok: 'OK', answer: 'Answer', reply: 'Reply', fix: 'Fix'};
 function dashNeeds(d: DashCardData) {
-  return d.items.length ? `<ul class="dash-list dash-needs">${d.items.map(it => `<li><a href="${it.task_id ? '#/task/' + encodeURIComponent(it.task_id) : NEEDS_YOU}"${it.line && it.line !== it.title ? ` title="${esc(it.line)}"` : ''}><span class="dash-needs-t">${esc(it.title || 'Untitled')}</span>${it.act && DASH_ACT[it.act] ? `<span class="muted">${DASH_ACT[it.act]}</span>` : ''}</a></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing waiting on you</p>';
+  return d.items.length ? `<ul class="dash-list dash-needs">${d.items.map(it => `<li><a href="${it.task_id ? '#/task/' + encodeURIComponent(it.task_id) : NEEDS_YOU}"${it.line && it.line !== it.title ? ` title="${esc(it.line)}"` : ''}><span class="dash-needs-t">${esc(it.title || 'Untitled')}</span>${it.act && DASH_ACT[it.act] ? `<span class="muted">${DASH_ACT[it.act]}</span>` : ''}</a></li>`).join('')}</ul>` : `<p class="muted dash-none"><a href="${NEEDS_YOU}">Nothing waiting on you</a></p>`;
 }
 const dashDue = (due: string | null | undefined) => {
   if (!due) return '';
