@@ -17,7 +17,6 @@ hubdb.check_message_refs), so a message from any client that carries `key_grant`
 """
 
 import contextvars
-import importlib
 import json
 from typing import Any, cast
 
@@ -30,9 +29,23 @@ H: Any = _H
 Row = dict[str, Any]
 
 
-def _mod(name: str) -> Any:
-    """A sibling module, imported when used (threads, api_tools and credentials import much of the backend)."""
-    return importlib.import_module("." + name, __package__)
+def _threads() -> Any:
+    """Imported when used: threads, api_tools and credentials import much of the backend (and hubdb imports this)."""
+    from . import threads
+
+    return threads
+
+
+def _api_tools() -> Any:
+    from . import api_tools
+
+    return api_tools
+
+
+def _credentials() -> Any:
+    from . import credentials
+
+    return credentials
 
 
 CARD = "key_grant"
@@ -51,11 +64,11 @@ def _owner(c: Any) -> str | None:
 
 
 def _members(c: Any, thread: Row) -> list[str]:
-    return [str(m) for m in _mod("threads")._dm_members(c, thread)]
+    return [str(m) for m in _threads()._dm_members(c, thread)]
 
 
 def _thread(c: Any, thread_id: str, owner: str) -> Row:
-    thread: Row | None = _mod("threads").thread_row(c, thread_id)
+    thread: Row | None = _threads().thread_row(c, thread_id)
     if not thread or not secret_drop.guarded(c, thread) or owner not in _members(c, thread):
         raise Problem("not_found", "No chat with the Tools owner here", 404)
     return thread
@@ -169,7 +182,7 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
     token = MINTING.set(True)
     try:
         # Written as the owner by the server itself: the rows are the server's, checked above.
-        return _mod("threads").post(c, owner, thread["id"], text, kind="notice", refs={"card": CARD, CARD: card})
+        return _threads().post(c, owner, thread["id"], text, kind="notice", refs={"card": CARD, CARD: card})
     finally:
         MINTING.reset(token)
 
@@ -177,7 +190,7 @@ def propose(c: Any, who: Any, thread_id: str, rows: list[Row], note: str = "") -
 def _attach(c: Any, who: Any, vault: Any, row: Row) -> None:
     """The key becomes its tool's key at the row's level (a password kind counts as the tool's key from now on); a key
     the tool held at that level moves off it, its grants with it."""
-    api_tools = _mod("api_tools")
+    api_tools = _api_tools()
     old = c.execute(
         "SELECT id FROM credentials WHERE tool_id=? AND access_level=? AND id<>?",
         (row["tool_id"], row["level"], row["credential_id"]),
@@ -214,7 +227,7 @@ def _save(c: Any, message_id: str, card: Row) -> None:
 def grant(store: Any, vault: Any, who: Any, message_id: str, keep: list[int] | None = None) -> Row:
     """The person's Grant: exactly the rows kept (`keep`: their positions; None keeps all), then each tool's check.
     The card after it, with a result per row: Connected to <tool>, or Didn't work: <reason>."""
-    api_tools, credentials = _mod("api_tools"), _mod("credentials")
+    api_tools, credentials = _api_tools(), _credentials()
     with store.transaction() as c:
         credentials.require_admin(c, who, vault.admins)
         message: Row | None = H.message(c, message_id)
