@@ -124,9 +124,10 @@ function server(me: Person) {
   }};
 }
 
-async function open(browser: Browser, {viewport = DESKTOP, hash = '#/overview', me = OWNER} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/overview', me = OWNER, dashboard = undefined as Pin[] | undefined} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors: string[] = [], fake = server(me);
+  if (dashboard) fake.places.dashboard!.pins = dashboard;
   page.on('pageerror', (e: Error) => errors.push(e.message));
   const config = {company_name: 'Acme'};
   await page.route('**/*', async (route: Route) => {
@@ -422,8 +423,9 @@ async function shot(page: Page, name: string) {
         const firsts = await pin.locator('.dash-needs-t').allInnerTexts(), byTitle = rows.map(r => r.title);
         assert.equal(firsts.filter((t, i) => firsts.indexOf(t) !== i && byTitle.indexOf(byTitle[i]!) === i).length, 0, 'no repeated first line unless the titles repeat');
         assert.equal(await pin.locator('.dash-big').count(), 0, 'no big figure');
-        assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention 13', 'the count on the header line');
-        const n = pin.locator('h2 .dash-head-n');
+        assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention', 'the heading keeps its own text');
+        const n = pin.locator('.dash-pin-head > .dash-head-n');
+        assert.equal(await n.innerText(), '13', 'the count on the header line');
         assert.equal(await n.getAttribute('href'), '#/tasks?view=foryou', 'the count opens Tasks > You');
         assert.equal(await n.evaluate(el => getComputedStyle(el).fontSize), '13px', 'the count at 13px');
         assert.equal(await n.evaluate(el => getComputedStyle(el).color), await pin.locator('.dash-needs li > a > .muted').first().evaluate(el => getComputedStyle(el).color), 'the count muted');
@@ -441,17 +443,83 @@ async function shot(page: Page, name: string) {
       await pin.locator('.dash-none').waitFor();
       assert.equal(await pin.locator('.dash-none').innerText(), 'Nothing waiting on you');
       assert.equal(await pin.locator('.dash-none a').getAttribute('href'), '#/tasks?view=foryou', 'the empty card still leads to Tasks > You');
-      assert.equal(await pin.locator('h2 .dash-head-n').isVisible(), false, 'no count at 0');
+      assert.equal(await pin.locator('.dash-pin-head > .dash-head-n').isVisible(), false, 'no count at 0');
       assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention');
-      // A team's Needs you card on another page: the count, then the team.
+      // A team's Needs you card on another page: the team in the heading, the count beside it.
       fake.places.dashboard!.pins = defaults(['needs_you'], 'eng');
       await page.evaluate(() => { location.hash = '#/overview'; });
       await page.waitForFunction(() => document.querySelector('#dash-grid .dash-pin-head h2')?.textContent.includes('Engineering'));
-      assert.equal((await page.locator('#dash-grid .dash-pin-head h2').innerText()).replace(/\s+/g, ' ').trim(), 'Needs you 2 · Engineering');
+      assert.equal((await page.locator('#dash-grid .dash-pin-head h2').innerText()).replace(/\s+/g, ' ').trim(), 'Needs you · Engineering');
+      assert.equal(await page.locator('#dash-grid .dash-pin-head > .dash-head-n').innerText(), '2');
       assert.deepEqual(errors, []);
       await page.close();
       DATA.needs_attention = was;
     }
-    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns, Needs attention rows by title with the count on the header line');
+    // Count cards carry their count on the header line, 13px and muted, beside (not in) the heading; no card shows a
+    // figure above 16px (#355). Hidden at 0, with the empty card saying so.
+    {
+      const LONG = 'Tasks for the Acme renewal and the onboarding checklist review';
+      const pin = (template: string, data: unknown, title = '', size = 'medium', team = ''): Pin => ({id: null, item: null, position: 0, size, made_by: null,
+        card: {...card(null, 'tasks_by_status', {team}, title), template, name: NAMES[template]!, heading: title || NAMES[template]!, data: data as CardView['data']}});
+      const tasks = (n: number) => Array.from({length: n}, (_, i) => ({id: 'm' + i, title: 'Task ' + i, status: 'open', due_at: null, updated_at: ago(i)}));
+      const dashboard = [
+        pin('my_tasks', {count: 8, tasks: tasks(3)}),
+        pin('updates', {unread: 56, updates: (DATA.updates!() as {updates: unknown[]}).updates}),
+        pin('automation_runs', {total: 42, failed: 3, running: 1, runs: [{name: 'Nightly digest', status: 'failed', started_at: ago(30)}]}),
+        pin('automation_runs', {total: 9, failed: 0, running: 0, runs: [{name: 'Weekly report', status: 'succeeded', started_at: ago(90)}]}, 'Quiet runs'),
+        pin('updates', {unread: 0, updates: []}, 'Team updates'),
+        pin('needs_attention', {count: 0, items: []}),
+        pin('spend', {spent: 1240, budget: 2000, month: 'Nov'}),
+        pin('kpi', {value: 210, unit: 'users', name: 'Active users', at: '2026-11-12', spark: [1, 3, 2, 5]}),
+        pin('tasks_by_status', {counts: {open: 4, done: 7}}),
+        pin('done_per_week', {weeks: weeks(8)}),
+        pin('my_tasks', {count: 8, tasks: tasks(1)}, LONG, 'small', 'eng'),
+      ];
+      for (const viewport of [DESKTOP, PHONE]) {
+        const {page, errors} = await open(browser, {viewport, dashboard});
+        const where = `at ${viewport.width}`;
+        await page.locator('#dash-grid .dash-pin').nth(dashboard.length - 1).waitFor();
+        const card = (name: string) => page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: new RegExp('^' + name)})}).first();
+        const count = (name: string) => card(name).locator('.dash-pin-head > .dash-head-n');
+        for (const [name, n, href, label] of [['My tasks', '8', '#/tasks?view=list', '8 open'], ['Updates', '56', '#/updates', '56 unread'],
+          ['Automation runs', '42', '#/automations', '42 runs in 24 hours']] as const) {
+          assert.equal(await card(name).locator('h2').innerText(), name, `the heading keeps its own text, ${name} ${where}`);
+          assert.equal(await count(name).innerText(), n, `${name}'s count is on its header line ${where}`);
+          assert.equal(await count(name).getAttribute('href'), href, `${name}'s count opens where its figure did ${where}`);
+          assert.equal(await count(name).getAttribute('aria-label'), label);
+          assert.equal(await count(name).getAttribute('title'), label);
+          assert.equal(await count(name).evaluate(el => getComputedStyle(el).fontSize), '13px');
+          assert.equal(await card(name).locator('.dash-big').count(), 0, `${name} has no big figure ${where}`);
+        }
+        assert.equal(await card('Automation runs').locator('.dash-sub').innerText(), '3 failed · 1 running');
+        assert.equal(await card('Automation runs').locator('.dash-sub .dash-bad').innerText(), '3 failed');
+        assert.equal(await card('Quiet runs').locator('.dash-sub').count(), 0, 'no line with nothing failed or running');
+        assert.equal(await count('Team updates').isVisible(), false, 'a count of 0 is hidden');
+        assert.equal(await card('Team updates').locator('.dash-pin-body').innerText(), 'No updates');
+        assert.equal(await count('Needs attention').isVisible(), false);
+        assert.equal(await card('Needs attention').locator('.dash-pin-body').innerText(), 'Nothing waiting on you');
+        // Totals are 16px/600 beside their label; Tasks by status has no filled boxes.
+        for (const name of ['Spend', 'KPI', 'Done per week']) {
+          assert.deepEqual(await card(name).locator('.dash-big strong').evaluate(el => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight]), ['16px', '600'], `${name} ${where}`);
+        }
+        const stat = card('Tasks by status').locator('.dash-stat').first();
+        assert.deepEqual(await stat.locator('strong').evaluate(el => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight]), ['16px', '600']);
+        assert.equal(await stat.evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)', 'no grey box');
+        // A long name in a small pin, with its team, never cuts the count.
+        const longCount = count(LONG);
+        const [head, n] = await Promise.all([card(LONG).locator('.dash-pin-head').boundingBox(), longCount.boundingBox()]);
+        assert.ok(n && head && n.x + n.width <= head.x + head.width + 0.5, `the count is inside the header ${where}`);
+        assert.equal(await longCount.evaluate(el => el.scrollWidth <= el.clientWidth), true, `the count is shown whole ${where}`);
+        if (viewport === PHONE) assert.ok(n!.height >= 40, `the count is a finger-sized target on a phone: ${n!.height}px`);
+        // Nothing in the main area above 16px, icon glyphs aside.
+        assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => el instanceof HTMLElement && el.checkVisibility()
+          && [...el.childNodes].some(c => c.nodeType === 3 && c.textContent!.trim()) && parseFloat(getComputedStyle(el).fontSize) > 16
+          && !/Material Symbols/i.test(getComputedStyle(el).fontFamily)).map(el => el.className + ': ' + el.textContent!.trim().slice(0, 30))), [], where);
+        await shot(page, `counts-${viewport.width}`);
+        assert.deepEqual(errors, []);
+        await page.close();
+      }
+    }
+    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns, Needs attention rows by title with the count on the header line, header counts and no billboard figures');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

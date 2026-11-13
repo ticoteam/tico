@@ -216,7 +216,7 @@ const holdNext = (match: Held['match']): Held => {
     event(task('t13', 'Pack the boxes', 'spec', {owner_id: 'human:sam'}), 'insert'));
   await pin('My tasks').locator('li', {hasText: 'Renew the domain'}).waitFor();
   assert.deepEqual(await pin('My tasks').locator('li a').allTextContents(), ['Renew the domain', 'Sign the lease 20']);
-  assert.equal((await pin('My tasks').locator('.dash-big strong').textContent())?.trim(), '2');
+  assert.equal((await pin('My tasks').locator('.dash-head-n').textContent())?.trim(), '2', 'the header count follows a live task change');
   // Needs you as the app holds it, drawn by the server's rule (backend/cards.py needs_brief): the task's title, the word
   // for what it needs, the ask as the tooltip; the count on the header line.
   await page.evaluate(() => {
@@ -229,7 +229,7 @@ const holdNext = (match: Held['match']): Held => {
   assert.deepEqual(await pin('Needs attention').locator('.dash-needs-t').allTextContents(), ['Approve the budget', 'Print the flyers', 'Connect Google']);
   assert.deepEqual(await pin('Needs attention').locator('.dash-needs li > a > .muted').allTextContents(), ['Done', 'OK', 'Fix']);
   assert.equal(await pin('Needs attention').locator('.dash-needs li > a').first().getAttribute('title'), 'Say when the work is done');
-  assert.equal((await pin('Needs attention').locator('.dash-head-n').textContent())?.trim(), '3');
+  assert.equal((await pin('Needs attention').locator('.dash-head-n').textContent())?.trim(), '3', 'the header count follows the needs list');
   assert.equal(await pin('Needs attention').locator('.dash-big').count(), 0);
   // Threads holds Launch: unread to 7, read to 5.
   await page.evaluate(() => {
