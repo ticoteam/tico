@@ -805,6 +805,8 @@ def run(args, who=None):
                 "visibility",
                 "public_title",
                 "public_summary",
+                "for_actor",
+                "from_message",
                 "after",
             ):
                 fields[field] = getattr(args, field, None)

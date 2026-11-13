@@ -22,7 +22,8 @@ FIELD = {
     "tico_login_fill",
     "Type the account's username, password or current 2FA code into a box on the site's page: the box `ref` from "
     "tico_browser_read, else the focused one. Only on the tool's own sites, and a password only into a password box. "
-    "You never see the value.",
+    "You never see the value. An account with no password is refused (no_password): a person signs in to it by hand, "
+    "so ask one with tico_browser_needs_you.",
     {"site": SITE, "field": FIELD, "ref": _s("The box's ref from tico browser read; default the focused box")},
     required=("site", "field"),
     writes=True,

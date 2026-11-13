@@ -1222,7 +1222,7 @@ function thvComposerDraw(view: ThvView) {
     mode: () => C.ways ? thvWayMode(view) : '', text: () => (C.el.querySelector('.p-text') as HTMLTextAreaElement).value, reply: () => view.replyTo});
   (host.querySelector('.thv-replying') as HTMLElement).onclick = ev => { if (eventElement(ev)?.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text') as HTMLTextAreaElement, file = C.el.querySelector('.p-file') as HTMLInputElement, menu = C.el.querySelector('.thv-attach-menu') as HTMLElement;
-  const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
+  const grow = () => pillGrow(box);
   box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); thvDraftTextKeep(view, box.value); });
   // A pasted screenshot (or file) is a chip; pasted words go in at the cursor (pill.ts pillPasteWire).
   pillPasteWire(box, files => { C.files.push(...files); thvChips(view); });

@@ -567,6 +567,7 @@ def test_runner_restart_without_a_report_times_out_and_cannot_report_late(websit
         "central_only",
         "not_on_site",
         "no_2fa",
+        "no_password",
         "busy",
         "person_in_control",
         "invalid_request",
@@ -596,6 +597,10 @@ def test_http_cli_and_mcp_keep_the_same_refusal_sentence_and_code(computers, cod
         verb, args = "open", {"url": "https://other.example/"}
     elif code == "no_2fa":
         verb = "code"
+    elif code == "no_password":
+        with s.store.transaction() as c:
+            c.execute("UPDATE credentials SET has_password=0 WHERE id=?", (s.aid,))
+        verb, args = "fill", {"field": "password"}
     elif code in ("busy", "person_in_control"):
         with s.store.read() as c:
             who = B.who_of(c, "human:ana" if code == "person_in_control" else "bot:finance")

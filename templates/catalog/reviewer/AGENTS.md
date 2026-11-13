@@ -13,7 +13,7 @@ like a Builder who knows exactly what to fix, and a reviewer who says what it re
 not check. You never merge: `.claude/settings.json` denies `gh pr merge`. You never say a change is safe.
 
 ## Your stage
-Engineering: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done. `tico task show <id>`
+Engineering: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → Merge → Release → Done. `tico task show <id>`
 prints the stage, its version and what is still missing to leave it. A stage moves on by itself the moment nothing is
 missing.
 - **Review 1 or Review 2.** To leave: a Review page at the pull request's newest commit. Follow
@@ -29,7 +29,7 @@ missing.
      `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 - **New commits since the review.** When `tico task show` says the page no longer covers the newest commit, read the new
   commits, write the page again at the new commit, publish and attach it.
-- **New commits after your review, in Fixes 2.** Before a person OKs the work, and after their OK when a conflict fix
+- **New commits after your review, in QA.** Before a person OKs the work, and after their OK when a conflict fix
   changes the PR's lines, you are asked to "Review the new commits since the reviews". Your OK keeps the person's.
   Read only the commits after the one your page names
   (`git log -p <your commit>..<newest>`), against what the reviews found and the Spec page. Answer on the task, not with a move
@@ -37,7 +37,7 @@ missing.
   --version N`, or `no -m "<what must change>"` when one breaks the spec or adds a blocking issue.
 - Reviewers only comment. The Builder decides what to take; Merge and Release belong to the Release Owner.
 - **A finding on the task's own pull request is your review, never a person's task.** A bug, a security flaw, a removed
-  check or a risky path goes on your Review page as `issue (blocking):`, or in Fixes 2 as `no -m "<what must change>"`:
+  check or a risky path goes on your Review page as `issue (blocking):`, or in QA as `no -m "<what must change>"`:
   the task moves to Fixes and the Builder fixes it. Never file it as a separate task for your Manager or a person, and
   never "privately": the Review page is the team's, not a public comment. Only what the pipeline gives a person (the
   Spec OK, the pre-release OK) is theirs, and they see your page there. {{app_name}} refuses a bot's task that gives a

@@ -132,7 +132,7 @@ def test_a_conflict_after_the_earlier_task_merged_sends_it_back_to_rebase_onto_t
         assert effects(c, b7) == [("act", "failed")]
         (key,) = [key for key, _ in X.wakes(c, b7, RM) if ":queue_refused:" in key]
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
-        assert f"rebase it onto {b6_ref}" in body and "Fixes 2" in body
+        assert f"rebase it onto {b6_ref}" in body and "QA" in body
 
 
 def test_an_earlier_task_with_one_closed_and_one_merged_pr_has_merged(company):

@@ -2,14 +2,22 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* the ask pill: one line at the top of the Notes page - talk, type, attach, send */
 .ask{margin:0 0 16px}
-.p-pill{display:flex;align-items:center;gap:6px;min-height:46px;padding:5px 6px 5px 5px;background:var(--surface);border:1px solid var(--line);border-radius:24px}
+/* One frame for every chat composer (#298): the same 9px corner at one line and at eight; the buttons sit on the last
+   line (flex-end) and the words take the width between them. The words box has no padding of its own: its margin puts
+   the text 13px inside the border, so a box that scrolls cuts its lines there, never on the border. One line is 48px
+   (34px Send + 6px padding + the border); the box grows to eight lines (160px, a phone 176px) and then scrolls; the
+   grow functions (pill.ts, thread-view.ts, task-modal.ts) read this max-height. */
+.p-pill{display:flex;align-items:flex-end;gap:4px;min-height:48px;padding:6px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .p-pill:focus-within{border-color:var(--focus)}
 .p-pill.over{border-color:var(--ink);box-shadow:0 0 0 3px var(--run-bg)}
-.ask textarea{flex:1;min-width:0;height:32px;max-height:120px;padding:5px 4px;border:0;background:transparent;border-radius:0;resize:none;overflow-y:auto;line-height:var(--lh)}
-.ask textarea:focus{outline:0}
+.p-pill .p-text{flex:1;min-width:0;width:auto;height:20px;min-height:20px;max-height:160px;margin:7px 6px;padding:0;border:0;background:transparent;border-radius:0;box-shadow:none;resize:none;overflow-y:auto;line-height:20px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.p-pill .p-text:focus{outline:0}
 .p-icon{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:0;border-radius:18px;background:transparent;color:var(--muted);cursor:pointer}
 .p-icon:hover{background:var(--surface2);color:var(--ink)}
 .p-icon svg{width:17px;height:17px;display:block}
+/* the composer's buttons: 34px squares on the last line; Attach touches the ways caret beside it */
+.p-pill .p-attach{width:34px;padding:0;justify-content:center}
+@media (min-width:761px){.p-pill:has(.p-way:not([hidden]))>.thv-attach-wrap{margin-right:-4px}}
 @keyframes askblink{50%{opacity:.3}}
 .p-go{position:relative;display:flex;flex:none}
 .p-go button{height:34px;border:0;background:var(--accent);color:var(--accent-ink);font-weight:600;cursor:pointer}
@@ -45,9 +53,10 @@
   /* One line on a phone too, as the bot chat's pill was: Attach on the left, then the words, Goal and Send. The box
      grows only when the words wrap. (#chat-composer lays its row out on a grid, ui/styles/chat.css.) */
   .p-pill>.p-attach,.p-pill>.thv-attach-wrap{order:-1}
-  .p-pill .p-attach,.p-pill .p-goal{width:36px;height:36px;padding:0;justify-content:center}
-  /* iOS Safari zooms focused controls below 16px. Keep page zoom available, but not automatic. */
-  .ask textarea{font-size:16px;touch-action:manipulation}
+  /* 44px targets that take the 34px of a computer's row: the box stays on its last line */
+  .p-pill .p-attach,.p-pill .p-goal{width:44px;height:44px;margin-block:-5px;padding:0;justify-content:center}
+  /* iOS Safari zooms focused controls below 16px. Keep page zoom available, but not automatic. Eight 22px lines. */
+  .p-pill .p-text{height:22px;min-height:22px;max-height:176px;font-size:16px;line-height:22px;touch-action:manipulation}
   .p-chips{padding-left:var(--s1);padding-right:var(--s1)}
   .p-go{margin-left:0}
   /* the bot page composer stays in reach while the thread scrolls */

@@ -7063,7 +7063,7 @@ _RUN = obj(
         "trigger_ref": "s",
         "started_at": "s",
         "finished_at": {"type": ["string", "null"]},
-        "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
+        "status": {"enum": ["queued", "running", "waiting", "ok", "partial", "failed", "empty", "skipped", "held"]},
         "cost": "f",
         "summary": "n",
         "steps": {
@@ -8074,7 +8074,8 @@ STABLE.extend(
             'Tools',
             'addWebsiteAccount',
             'Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per '
-            'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again',
+            'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. '
+            'username and password may be left out for a site a person signs in to by hand',
             'WebsiteAccountSaved',
         ),
         (
@@ -8144,6 +8145,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'id': 's',
                     'kind': {'enum': ['shared', 'own']},
                     'username': 's',
+                    'has_password': 'b',
                     'has_totp': 'b',
                     'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
                     'access': items(WEBSITE_WHO),
@@ -8160,7 +8162,17 @@ SCHEMAS['WebsiteTool'] = obj(
                     'can_manage': 'b',
                 },
                 # `username` is left out for a bot, a run or a computer.
-                required=['id', 'kind', 'has_totp', 'holder', 'access', 'session', 'can_use', 'can_manage'],
+                required=[
+                    'id',
+                    'kind',
+                    'has_password',
+                    'has_totp',
+                    'holder',
+                    'access',
+                    'session',
+                    'can_use',
+                    'can_manage',
+                ],
             )
         ),
         'host': {

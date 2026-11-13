@@ -69,7 +69,7 @@ def test_a_push_after_sign_off_has_no_check_until_a_person_queues_it_again(compa
     with company.transaction() as c:
         assert stage(c, task_id) == "Merge"
         version = E.task(c, task_id)["version"]
-        with pytest.raises(Refused, match="Move the task back to Fixes 2"):  # C22: a bot may not queue a moved head
+        with pytest.raises(Refused, match="Move the task back to QA"):  # C22: a bot may not queue a moved head
             MQ.requeue(c, task_id, RM, seen_version=version)
     with company.transaction() as c:
         MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])  # a person may

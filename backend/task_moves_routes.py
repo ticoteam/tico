@@ -369,7 +369,7 @@ def register(
 
     @app.post("/api/v2/tasks/{tid}/snooze")
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
-        """Set a task aside in its stage until a date, or with none (On ice)."""
+        """Set a task aside in its stage until a date, or with none."""
         until = parse_until(body.until)  # a bad date is refused before anything is checked
         snooze_rules(request, tid, body, until)
         return checked(request, tid, body, "task_snooze")

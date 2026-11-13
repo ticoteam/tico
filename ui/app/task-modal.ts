@@ -978,7 +978,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
     });
     const box = $('textarea', host);
     box.value = TASK_DRAFTS.get(String(state.id)) || '';
-    const grow = () => { box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; };
+    const grow = () => pillGrow(box);
     box.oninput = () => {
       grow(); taskComposerToPaint(state);
       if (box.value) TASK_DRAFTS.set(String(state.id), box.value); else TASK_DRAFTS.delete(String(state.id));

@@ -61,7 +61,7 @@ PR_OPEN = f"PR {REPO}#12 https://github.com/{REPO}/pull/12: open, newest commit 
 REVIEW_1 = "Review page from Review 1: page:f-rev1@1, read it with `tico file read f-rev1`"
 REVIEW_2 = "Review page from Review 2: page:f-rev2@1, read it with `tico file read f-rev2`"
 FIXES_1 = "Fixes 1 was said done: bbb: fixed the empty cart; declined the rename (out of scope)"
-BUILT = "Review page from Fixes 2: page:f-built@2, read it with `tico file read f-built`"
+BUILT = "QA page from QA: page:f-built@2, read it with `tico file read f-built`"
 
 
 def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
@@ -99,6 +99,11 @@ def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
     assert _handed(c, eng) == [SPEC, PR_OPEN + "bbb", REVIEW_1, FIXES_1, REVIEW_2]
     wake = _wake(c, eng, "bot:builder")
     assert REVIEW_1 in wake and REVIEW_2 in wake
+    _done(c, eng, "bbb: nothing to fix")
+
+    # QA: the same, with what was said at Fixes 2's done, for the QA page.
+    _move(c, eng, "engineering-qa")
+    assert _handed(c, eng)[-2:] == [REVIEW_2, "Fixes 2 was said done: bbb: nothing to fix"]
     _attach(c, eng, "f-built", "bot:builder", version=1)
     _attach(c, eng, "f-built", "bot:builder", version=2)  # sent back once: only the newest counts
 
@@ -226,20 +231,18 @@ def _sign_off(c, task_id, answer, by, version, notes):
 
 
 SENT_BACK = (
-    "Review page from Fixes 2 (Saved carts, work this task filed): sent back at page:f-built@1: "
+    "QA page from QA (Saved carts, work this task filed): sent back at page:f-built@1: "
     "the empty cart still shows a total"
 )
-SIGNED = (
-    "Review page from Fixes 2 (Saved carts, work this task filed): OK'd at page:f-built@2: ship it; watch the totals"
-)
+SIGNED = "QA page from QA (Saved carts, work this task filed): OK'd at page:f-built@2: ship it; watch the totals"
 
 
 def test_the_product_task_is_handed_the_pre_release_sign_offs_of_the_work_it_filed(c):
-    """Acme rc.3: a person's notes when they sent back and then OK'd Fixes 2 never reached Product · Validate."""
+    """Acme rc.3: a person's notes when they sent back and then OK'd the pre-release page never reached Product · Validate."""
     product, eng = _filed_engineering(c)
     _move(c, eng, "engineering-build")
     _link_pr(c, eng, 12, "aaa")
-    _move(c, eng, "engineering-fixes-2")
+    _move(c, eng, "engineering-qa")
     _attach(c, eng, "f-built", "bot:builder", version=1)
     _sign_off(c, eng, "no", ANA, 1, "the empty cart\n still shows a total")
     _attach(c, eng, "f-built", "bot:builder", version=2)

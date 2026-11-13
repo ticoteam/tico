@@ -28,7 +28,10 @@ sent to whoever handles that kind. Legal papers reach the owner at once, includi
    limited time.
 2. It is read through Tico Gateway (Low tier, which reads PDFs and images): sender, a one-line summary, the response
    deadline, if any.
-3. One Decide call ([question set](../questions/README.md) `physical-mail`) says its kind.
+3. A Decide call ([question set](../questions/README.md) `physical-mail`) says its kind. Letters read in the same drain
+   can share one call, each judged from its own answer only (`GROUP` in `backend/postal_mail.py`, today one letter a
+   call); a letter whose answer is missing is asked again alone, and a failed call leaves each letter to the reader's
+   word.
 
 At most 100 letters are read in any 24 hours; past that a letter waits an hour and tries again, without using up one
 of its tries.

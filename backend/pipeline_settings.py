@@ -12,7 +12,8 @@ writer of `pipelines`, `stages` and of the requirements set on a stage (`require
   history and answers stay readable. Each save raises `settings_version` by one and logs who changed what.
 - `retire` takes a pipeline out of use once it holds no open task.
 - `ensure_presets` makes each preset an org does not have yet. Of one the org has, it changes only what nobody set: an
-  empty role, and wording that still reads a text the preset shipped with before (EARLIER).
+  empty role, and wording that still reads a text the preset shipped with before (EARLIER); and it adds Engineering's
+  QA stage once to a pipeline made before QA had one (`_add_qa`).
 
 Every function takes the caller's open write transaction and never commits. Names and signatures are in
 docs/dev/pipelines-v3-build.md.
@@ -148,7 +149,11 @@ REVIEW_RUBRIC = (
     "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what "
     "to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
 )
-# The pre-release page a person OKs. The checks themselves are the stage's `checks_pass`; the page shows them. "With
+# The QA page a person OKs before the change ships. Until QA had a stage of its own this was Fixes 2's Review page,
+# and the numbers below are of that line (evals/pipeline_judge). "A QA page a person approves" and "proof it works:
+# screenshots of the running app, or output" widen "output from how it was checked" so a page that proves a visible
+# change with screenshots meets it as well; the rest is the calibrated line. The checks themselves are the stage's
+# `checks_pass`; the page shows them. "With
 # screenshots or output, and how it was checked" read as two things to show, and a clean pair of reviews as nothing found
 # (Acme, Nov 11: a good page unsure, p 0.34); pages missing the reviews or the checks stay not met (p under 0.1).
 # "On the commit they reviewed" (and the newest commits, now in the context) let a page that says the reviews were of an
@@ -163,17 +168,18 @@ REVIEW_RUBRIC = (
 # is fine but "not failed", said both in the checks part and in the does-not-meet sentence: with the running clause
 # alone a page reporting a red check scored 0.85 to 0.88; said once, either the red pages stayed unsure (about 0.55) or
 # a good page with CI running fell to 0.55 to 0.75. Said twice, red pages 0.03 to 0.13, good pages 0.73 to 0.93.
-FIXES_2_RUBRIC = (
-    "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR "
-    "is enough); output from how it was checked (test counts or command output; a line that only says it passed is "
-    "not output); the checks at the newest commit: passing, or still running or re-running when the page was written "
-    "(fine, Tico waits for them), but not failed; and what Reviewer 1 and Reviewer 2 each found on the commit they "
-    "reviewed, or that they found nothing to fix. Only these four count. A page that leaves any of them out, such as "
-    "one reviewer's findings, or that reports a check failed at the newest commit, does not meet it. A page with all "
-    "four meets it even when it reports a target missed, asks the person to decide something (whether to keep the "
-    "change, a spec question), lists what was not checked, or says commits were made after the reviews and a "
-    "reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since the "
-    "reviews when it names the work or its PR."
+QA_RUBRIC = (
+    "A QA page a person approves before the change ships. Shows four things: what changed (the work's title and spec "
+    "say what was asked, so naming the work or its PR is enough); proof it works: screenshots of the running app, or "
+    "output from how it was checked (test counts, command output, a log line, numbers before and after; a line that "
+    "only says it passed is not proof); the checks at the newest commit: passing, or still running or re-running when "
+    "the page was written (fine, Tico waits for them), but not failed; and what Reviewer 1 and Reviewer 2 each found on "
+    "the commit they reviewed, or that they found nothing to fix. Only these four count. A page that leaves any of them "
+    "out, such as one reviewer's findings, or that reports a check failed at the newest commit, does not meet it. A "
+    "page with all four meets it even when it reports a target missed, asks the person to decide something (whether "
+    "to keep the change, a spec question), lists what was not checked, or says commits were made after the reviews "
+    "and a reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since "
+    "the reviews when it names the work or its PR."
 )
 # A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
 # and checkable criteria are what a builder builds from. "Only these three count" (rc.5, Nov 11): good specs of the
@@ -189,6 +195,7 @@ VALIDATE_RUBRIC = (
     "Names the version production runs and shows the change working in that version: what was run or looked at there, "
     "and what it gave. If that version is older than the release that holds this work, it is not yet."
 )
+QA_STAGE = "engineering-qa"  # where a person approves the change before it ships (`_add_qa` brings it to a company)
 # The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
 PRESETS["engineering"] = {
@@ -235,20 +242,29 @@ PRESETS["engineering"] = {
         _stage(
             "engineering-fixes-2",
             "Fixes 2",
-            "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
-            "newest commit and what both reviewers found. A person OKs that page: to change it, attach the new "
-            "version; Tico asks the person. Never ask your own OK of it.",
+            "Fix what the second review found, push, and say done once the checks are green. When it found nothing, "
+            "say done at once.",
+            240,
+            [{"kind": "owner_done"}, github("checks_pass")],
+        ),
+        _stage(
+            QA_STAGE,
+            "QA",
+            "Build the QA page: what changed, before and after screenshots of the running app (or the output that "
+            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
+            "person approves it to ship. To change it, attach the new version; Tico asks the person. Never ask your "
+            "own OK of it.",
             240,
             [
                 github("checks_pass"),
-                _people_only(_page("Review page", FIXES_2_RUBRIC)),
+                _people_only(_page("QA page", QA_RUBRIC)),
             ],
         ),
         _stage(
             "engineering-merge",
             "Merge",
             "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send "
-            "the task back to Fixes 2.",
+            "the task back to QA.",
             120,
             [github("pr_merged")],
             on_enter={"act": "github.queue"},
@@ -264,6 +280,10 @@ PRESETS["engineering"] = {
     "done": {"id": "engineering-done"},
     "closed": {"id": "engineering-closed"},
 }
+IDEAS_PURPOSE = (
+    "Ideas move on to Spec by themselves when Spec has room, oldest first. Snooze one to park it; a bot's own idea "
+    "starts snoozed."
+)
 PRESETS["product"] = {
     "id": "product",
     "name": "Product",
@@ -278,11 +298,9 @@ PRESETS["product"] = {
         _stage(
             "product-ideas",
             "Ideas",
-            "Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",
+            IDEAS_PURPOSE,
             None,
-            [],
-            by_hand=True,
-            requests_move_on=True,  # a person who files a request already picked it (never_stuck._requests)
+            [],  # nothing to approve: an idea moves on when Spec has room, unless snoozed (backend/idea_checks.py)
         ),
         _stage(
             "product-spec",
@@ -318,25 +336,54 @@ _REVIEW_RC3 = (
     "A real review of the newest commit of every linked PR: what was read and run, what is wrong, and what to fix. Not a "
     "summary of the change."
 )
+# What Fixes 2 said and checked while the page a person OKs was on it, before QA had a stage of its own.
+_FIXES_2_PURPOSE_QA = (
+    "Fix what the second review found and attach a Review page that shows what was built, the checks at the newest "
+    "commit and what both reviewers found. A person OKs that page: to change it, attach the new version; Tico asks the "
+    "person. Never ask your own OK of it."
+)
+_FIXES_2_RUBRIC_QA = (
+    "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR "
+    "is enough); output from how it was checked (test counts or command output; a line that only says it passed is "
+    "not output); the checks at the newest commit: passing, or still running or re-running when the page was written "
+    "(fine, Tico waits for them), but not failed; and what Reviewer 1 and Reviewer 2 each found on the commit they "
+    "reviewed, or that they found nothing to fix. Only these four count. A page that leaves any of them out, such as "
+    "one reviewer's findings, or that reports a check failed at the newest commit, does not meet it. A page with all "
+    "four meets it even when it reports a target missed, asks the person to decide something (whether to keep the "
+    "change, a spec question), lists what was not checked, or says commits were made after the reviews and a "
+    "reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since the "
+    "reviews when it names the work or its PR."
+)
+_FIXES_2_RUBRICS = (
+    "Shows what was built, with screenshots or output, and how it was checked. Enough for a person to OK it "
+    "without opening the code.",
+    "Shows what was built, with screenshots or output, and how it was checked; that the checks pass at the newest "
+    "commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person to OK it without opening the code.",
+    "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
+    "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
+    "the code.",
+    "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
+    "Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person "
+    "to OK it without opening the code.",
+    _FIXES_2_RUBRIC_QA,
+)
 EARLIER: dict[str, tuple[str, ...]] = {
+    "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
     "engineering-review-1/page/rubric": (_REVIEW_RC3,),
     "engineering-review-2/page/rubric": (_REVIEW_RC3,),
     "engineering-fixes-2/purpose": (
         "Fix what the second review found and attach a Review page that shows what was built.",
         "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
         "newest commit and what both reviewers found.",
+        _FIXES_2_PURPOSE_QA,
     ),
-    "engineering-fixes-2/page/rubric": (
-        "Shows what was built, with screenshots or output, and how it was checked. Enough for a person to OK it "
-        "without opening the code.",
-        "Shows what was built, with screenshots or output, and how it was checked; that the checks pass at the newest "
-        "commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person to OK it without opening the code.",
-        "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
-        "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
-        "the code.",
-        "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
-        "Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person "
-        "to OK it without opening the code.",
+    # The page a person OKs was Fixes 2's until QA had a stage of its own: `_add_qa` moves it there as it was, and
+    # `_follow` then moves an unedited line and check to QA's.
+    "engineering-qa/page/line": ("Review page",),
+    "engineering-qa/page/rubric": _FIXES_2_RUBRICS,
+    "engineering-merge/purpose": (
+        "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the "
+        "task back to Fixes 2.",
     ),
     "product-spec/page/rubric": (
         "Covers goal, scope, what done looks like",
@@ -361,10 +408,11 @@ ROLES: dict[str, Row] = {
             "engineering-fixes-1": S.BUILDER,
             "engineering-review-2": S.REVIEWER_2,
             "engineering-fixes-2": S.BUILDER,
+            QA_STAGE: S.BUILDER,
             "engineering-merge": S.RELEASE_MANAGER,
             "engineering-release": S.RELEASE_MANAGER,
         },
-        "ok": ("engineering-fixes-2",),
+        "ok": (QA_STAGE,),
     },
     "product": {
         "manager": S.PRODUCT_MANAGER,
@@ -1532,6 +1580,55 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
     return paths
 
 
+def _add_qa(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    """An Engineering pipeline made before QA had a stage of its own gets it, once: QA goes in after Fixes 2, owned by
+    Fixes 2's owner, with Checks pass and the page a person OKs, which leaves Fixes 2 as it was set (its person, its
+    switches, its line and check: `_follow` then moves an unedited line and check to QA's). Fixes 2 gets Owner says done,
+    as Fixes 1 has. A task in Fixes 2 now waits on its owner's done, so the never-stuck check wakes the Builder, which
+    says done and the task moves on to QA. Passed over when the company ever had a QA stage (one it removed stays
+    removed), has no Fixes 2 or no page a person OKs on it, or already has a live stage named QA. The settings version
+    goes up as a save's does, except on a preset still at version 1 (`_follow`). Returns whether it added QA."""
+    row = task_engine.pipeline(conn, pipeline_id)
+    if not row or row.get("retired_at") or conn.execute("SELECT 1 FROM stages WHERE id=?", (QA_STAGE,)).fetchone():
+        return False
+    record = read(conn, pipeline_id)
+    assert record is not None
+    stages: list[Row] = record["stages"]
+    at = next((i for i, s in enumerate(stages) if s["id"] == "engineering-fixes-2"), None)
+    if at is None or any(str(s["name"]).strip().lower() == "qa" for s in stages):
+        return False
+    fixes = stages[at]
+    page = next((r for r in fixes["requirements"] if r["kind"] == "page" and R.people_only(r)), None)
+    if page is None:
+        return False
+    fixes["requirements"] = [r for r in fixes["requirements"] if r is not page]
+    if not any(r["kind"] == "owner_done" for r in fixes["requirements"]):
+        fixes["requirements"].insert(0, _requirement_in({"kind": "owner_done"}, "Fixes 2", []))
+    shipped = next(s for s in PRESETS["engineering"]["stages"] if s["id"] == QA_STAGE)
+    stages.insert(
+        at + 1,
+        {
+            **{key: shipped.get(key) for key in STAGE_FIELDS},
+            "id": QA_STAGE,
+            "owner": fixes["owner"],
+            "pick": None,  # Fixes 2's owner, as one bot; a person can make it One of several afterwards
+            "requirements": [_requirement_in(github("checks_pass"), "QA", []), {**page, "id": None}],
+        },
+    )
+    before = read(conn, pipeline_id)
+    ts = _h().now()
+    _write_stages(conn, SYSTEM, pipeline_id, record, ts)
+    bump = 1 if int(row.get("settings_version") or 1) > 1 else 0
+    conn.execute(
+        "UPDATE pipelines SET settings_version = settings_version + ?, updated_at=? WHERE id=?", (bump, ts, pipeline_id)
+    )
+    after = read(conn, pipeline_id)
+    assert after is not None
+    detail = {"version": after["settings_version"], "made": False, "changes": _changes(before, after)}
+    _h().event(conn, SYSTEM, "pipeline.save", pipeline_id, {**detail, "added_stage": QA_STAGE})
+    return True
+
+
 def _ensure_factory(conn: "sqlite3.Connection") -> None:
     """The Product factory that holds Product and Engineering (S12), made when missing."""
     if conn.execute("SELECT 1 FROM factories WHERE id=?", (FACTORY["id"],)).fetchone():
@@ -1606,7 +1703,8 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with two exceptions:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
       filled in once the bot or person for it exists (`_fill`); and a line of its wording nobody edited, one that still
-      reads a text the preset shipped with before, moves to the preset's current text (`_follow`).
+      reads a text the preset shipped with before, moves to the preset's current text (`_follow`). An Engineering
+      pipeline made before QA had a stage of its own gets it once, edited or not (`_add_qa`).
     - A preset whose name or prefix another pipeline already uses is left out, so a start never fails on it."""
     made: list[str] = []
     software = makes_software(conn)
@@ -1619,6 +1717,8 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
         if have:
             if key in SOFTWARE:
                 _bring_back(conn, str(have[0]))
+            if key == "engineering":
+                _add_qa(conn, str(have[0]))
             if _untouched(conn, str(have[0])):
                 _fill(conn, key, str(have[0]))
             _follow(conn, key, str(have[0]))

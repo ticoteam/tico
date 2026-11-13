@@ -145,6 +145,23 @@ STABLE_PATH = re.compile(
 GATEWAY_IMAGE_SLOTS = 4
 
 
+def filed_for(c, who, person, message_id):
+    """`--for human:X --from-message M` (Ideas: say it once, #227): a bot files a person's own ask, and the task is the
+    person's. Only when X sent M and the bot reads M; anything else is refused, and nothing is filed."""
+    if who.role != "bot":
+        raise Problem("for", "Only a bot files a task for a person; a person files their own", 422)
+    if not H.is_human(person) or not H.human(c, person):
+        raise Problem("for", f"{person} is not a person on this team", 422)
+    message = H.message(c, message_id)
+    from . import threads
+
+    if not message or not threads.readable(c, who, message):  # its conversation, and the message in it
+        raise Problem("from_message", "No message you can read has that id", 403)
+    if message.get("sender_id") != person:
+        raise Problem("from_message", f"That message was not sent by {person}", 403)
+    return person
+
+
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     SRC.set_assistant_name(settings.assistant_name)  # the labels of keeper lines (backend/sources.py)
@@ -3477,6 +3494,9 @@ def create_app(settings=None):
                 raise Problem(
                     "privacy", "The verified requester cannot receive this private execution's other context", 403
                 )
+        if body.for_actor:
+            # A bot files a person's own ask: the person asked for it, so it is theirs (Ideas: say it once, #227).
+            requester_actor = filed_for(c, who, body.for_actor, body.from_message)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if reach_to:
@@ -3490,6 +3510,7 @@ def create_app(settings=None):
             body.due,
             parent_id,
             requester_actor=requester_actor,
+            requester_said=bool(body.for_actor),
             visibility=body.visibility,
             public_title=body.public_title,
             public_summary=body.public_summary,
@@ -3515,6 +3536,16 @@ def create_app(settings=None):
             unassigned=unassigned,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if body.for_actor:
+            H._task_event(
+                c,
+                row["id"],
+                who.actor,
+                "filed_for",
+                None,
+                body.for_actor,
+                f"Filed for {H.actor_name(c, body.for_actor)}, from their message",
+            )
         if run_model:
             task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
         # A send, counted against the sender's cap for this owner, at the moment the task was made.

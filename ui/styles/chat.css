@@ -21,7 +21,7 @@
 /* the composer: a small arrow for Send */
 .p-send-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);background-clip:padding-box;color:var(--accent-ink);cursor:pointer;touch-action:manipulation}
 /* Pill composers reserve the hit area in layout; task comment forms retain their compact button. */
-.ask .p-send-icon{width:44px;height:44px;border:5px solid transparent}
+.ask .p-send-icon{width:44px;height:44px;margin:-5px -5px -5px 0;border:5px solid transparent}   /* a 34px circle 6px from the box's bottom and right edge; its target never covers the button before it */
 .p-send-icon svg{width:18px;height:18px}
 /* The button, never its replaceable icon, is what a press lands on: a redraw mid-press would otherwise drop the click. */
 .p-send-icon>*{pointer-events:none}
@@ -227,8 +227,6 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 /* Files dragged anywhere over the chat: the composer says where they will land. */
 #chat-composer .p-pill{position:relative}
 #chat-composer .p-pill.over::after{content:'Drop to attach';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:inherit;background:color-mix(in srgb,var(--surface) 90%,transparent);color:var(--ink);font-size:var(--t-base);font-weight:600;pointer-events:none}
-/* A desktop composer has room for a long message; a phone keeps its short cap. */
-@media (min-width:761px){#chat-composer .ask textarea{max-height:min(300px,100vh / 3)}}
 .conv-paused{flex:none;margin:var(--s2) 0 0;padding:6px 10px;border-radius:var(--radius);background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm)}
 .conv-paused.agent{background:var(--idle-bg);color:var(--muted)}
 .settings-agent-cell{display:flex;flex-direction:column;gap:2px}.settings-agent-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
@@ -274,7 +272,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 #chat-composer .p-menu{top:auto;bottom:calc(100% + 6px)}
 /* Send and its caret: how the next message reaches the bot. The menu (shared with a task's send) opens upward, one row
    per way, Defer's durations as small chips under it, Set as goal apart. */
-.p-sendbox{position:relative;flex:none;display:inline-flex;align-items:center}
+.p-sendbox{position:relative;flex:none;display:inline-flex;align-items:flex-end}
 .p-way{width:34px;padding:0;justify-content:center;touch-action:manipulation}
 .p-way[hidden]{display:none}
 .p-way:disabled{opacity:.45;cursor:default}
@@ -337,15 +335,15 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 
   #main.chat-layout .conv-top{margin-bottom:4px}
   #conv-access .muted{display:none}
-  #chat-composer .p-pill{display:grid;grid-template-columns:36px minmax(0,1fr) auto auto;gap:2px;padding:4px;border-radius:24px;align-items:center}
-  #chat-composer .p-pill:has(.p-bot){grid-template-columns:36px 36px minmax(0,1fr) auto auto}
-  #chat-composer .p-pill:has(.p-bot):not(:has(.p-attach)){grid-template-columns:36px minmax(0,1fr) auto auto}   /* a chat with no attaching */
-  #chat-composer .p-text{grid-column:-4;grid-row:1;order:0;flex:none;width:100%;height:36px;padding:6px 4px}
-  #chat-composer .p-attach{grid-column:-5;grid-row:1;width:36px;height:36px;padding:0;justify-content:center}
+  #chat-composer .p-pill{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:2px;align-items:end}
+  #chat-composer .p-pill:has(.p-bot){grid-template-columns:44px 44px minmax(0,1fr) auto auto}
+  #chat-composer .p-pill:has(.p-bot):not(:has(.p-attach)){grid-template-columns:44px minmax(0,1fr) auto auto}   /* a chat with no attaching */
+  #chat-composer .p-text{grid-column:-4;grid-row:1;order:0;flex:none;width:auto}
+  #chat-composer .p-attach{grid-column:-5;grid-row:1}
   #chat-composer .p-go{grid-column:-2;grid-row:1;margin:0}
   #chat-composer .p-send-icon,#chat-composer .p-sendbox{grid-column:-2;grid-row:1}
   /* The bot you're chatting with, left of the chat bar; a tap opens the switcher */
-  #chat-composer .p-bot{display:inline-flex;grid-column:1;grid-row:1;width:36px;height:36px;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  #chat-composer .p-bot{display:inline-flex;grid-column:1;grid-row:1;width:44px;height:44px;margin-block:-5px;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
   #chat-composer .p-go button{height:36px}
   #chat-composer .p-go .go{max-width:118px;padding:0 12px}
   #chat-composer .p-go .caret{padding:0 7px}

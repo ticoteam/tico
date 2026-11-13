@@ -59,7 +59,7 @@ The words Tico uses, and what each replaces.
 - **OK**: a person's yes on an ask. An OK for something that leaves the team or spends is bound to exactly what they
   were
   shown.
-- **Snooze**: the one way to set a task aside, until a date or with no end ("On ice").
+- **Snooze**: the one way to set a task aside, until a date or with no end.
 - **Routine**: a task that repeats on a schedule.
 - **Needs you**: only when it needs the viewer. Otherwise **Needs <Name>**, as in "Needs Sam".
 - **Proposal**: a suggested change to a goal, a KPI or the strategy draft, for its owner to confirm. A `strategy_draft` proposal is how the Strategy Owner puts a draft or a bet change in front of the owner.

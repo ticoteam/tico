@@ -375,7 +375,9 @@ threshold, because a wrong needs-owner costs one look; money protects only when 
 also asking, because payroll runs and receipts score money high with nobody asking anything;
 filings need high confidence, because a wrong archive costs a missed email. `read` means the model was not sure enough: open the thread
 and decide the way you always did. It changes nothing in Gmail; the JSON carries the same under
-`judgment`, and one `judge` audit line (the audit name is unchanged) keeps the counts and the suggestion per id. Inside a bot
+`judgment`, and one `judge` audit line (the audit name is unchanged) keeps the counts and the suggestion per id. Several
+messages can share one call, each judged from its own answers only (`GROUP` in `connectors/mail/judge.py`, today one
+message a call). Inside a bot
 run the call goes through Tico with your credential; outside one it needs
 the decision model API key (`skills/decisions/SKILL.md`), and `MAIL_DECISIONS=none` switches it off (`MAIL_JUDGE` and `--judge` are the deprecated old names and still work).
 

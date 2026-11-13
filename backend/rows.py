@@ -1594,6 +1594,20 @@ class SnoozeRow(TypedDict):
     created_at: str
     ended_at: str | None
     ended_by_id: str | None
+    filed: int  # 1: written as a bot filed its own idea into Product's Ideas; only a person ends it (idea_checks)
+
+
+class IdeaCheckRow(TypedDict):
+    """Jev's duplicate check on an idea filed into Product's Ideas (backend/idea_checks.py), owed until checked_at."""
+
+    task_id: str
+    visit_id: str | None
+    owed_at: str
+    checked_at: str | None
+    outcome: str | None
+    same_id: str | None
+    confidence: float | None
+    call_id: str | None
 
 
 class OkGrantRow(TypedDict):
@@ -1817,6 +1831,7 @@ class ListeningItemRow(TypedDict):
     scored_at: str | None
     run_id: str | None
     sent_at: str | None
+    delivered: str | None  # JSON list of the step ids that delivered it, for an item not all steps took
     cost: float
     created_at: str
     updated_at: str

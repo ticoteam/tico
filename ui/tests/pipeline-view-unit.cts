@@ -30,6 +30,7 @@ const ctx = vm.createContext({
   botDisplayName: (id: string) => id,
   localStorage: {getItem: () => null, setItem() {}},
   actorFace: (who: string) => `<i data-face="${who}"></i>`,
+  actorAvatar: (who: string) => `<i data-avatar="${who}"></i>`,
   actorLabel: (who: string) => who.replace(/^(bot|human):/, ''),
   // hub-v2.ts's asker, as the task page names it (the browser check pipeline-cards.cts runs the real one).
   taskAsker: (t: {filer?: string | null; requester_id?: string | null}) => t.filer || t.requester_id,
@@ -266,7 +267,7 @@ const factories = (async () => {
   assert.doesNotMatch(ctx.peStageHTML(state, state.draft.stages[1]!, 1, 3), /requests_move_on/);
   ctx.peInput(state, Object.assign(field('HTMLInputElement', {peSi: '0', peSf: 'requests_move_on'}, 'on', true), {type: 'checkbox'}));
   assert.equal(state.draft.stages[0]!['requests_move_on'], true);
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'by_hand'}, '0'));
+  ctx.peClick(state, {closest: () => ({dataset: {peSi: '0', peSeg: 'by_hand', v: '0'}, hasAttribute: (at: string) => at === 'data-pe-seg'})});
   assert.equal(state.draft.stages[0]!['requests_move_on'], false, 'only a by-hand stage keeps it');
 }
 // ---- the editor: a stage's answer
@@ -299,6 +300,89 @@ const factories = (async () => {
   assert.match(html(), /data-pe-yes-no/);
   ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'text'));
   assert.equal(r()['choices'], null, 'text has no choices');
+}
+// ---- the editor: the stage window in task order, and an Owner that is "One of several"
+{
+  const bots = [{id: 'b1', name: 'Builder'}, {id: 'b2', name: 'Builder 2'}, {id: 'r1', name: 'Reviewer 1'}];
+  ctx.S.emps = bots.map(b => ({id: b.id, state: 'active'}));
+  ctx.botDisplayName = (id: string) => bots.find(b => b.id === id)?.name ?? id;
+  const pick = {bots: ['bot:b1', 'bot:b2'], how: 'turns', limit_each: null, prefer: 'anyone', owns_task: true,
+    families: {'bot:b1': 'Claude', 'bot:b2': 'Claude'}};
+  const build = stage('build', 'Build', {owner: 'pick', pick, pick_next: 'The next task goes to Builder 2, after Builder had the last one.', task_limit: 3});
+  const review = stage('review', 'Review', {owner: 'bot:r1'});
+  const base = rec({stages: [stage('deck', 'On deck'), build, review]});
+  const state = {id: 'product', pipelines: [], open: new WeakSet(), reqOpen: new WeakSet(), base, draft: JSON.parse(JSON.stringify(base))};
+  const html = (si: number) => ctx.peStageHTML(state, state.draft.stages[si]!, si, 3) as string;
+
+  // Three groups in the order a task moves, with every field the window had before (AC-11).
+  const body = html(1);
+  const groups = [...body.matchAll(/<h4 class="pe-h">([^<]+)<\/h4>/g)].map(m => m[1]);
+  assert.deepEqual(groups, ['When a task arrives', 'Who works on it', 'To leave']);
+  const at = (needle: string) => { const i = body.indexOf(needle); assert.ok(i >= 0, needle); return i; };
+  const [arrives, works, leave] = groups.map(g => at(`>${g}<`)) as [number, number, number];
+  for (const f of ['data-pe-sf="on_enter"', 'data-pe-sf="task_limit"']) assert.ok(at(f) > arrives && at(f) < works, `${f} is under When a task arrives`);
+  for (const f of ['data-pe-sf="owner"', 'data-pe-sf="expected_n"']) assert.ok(at(f) > works && at(f) < leave, `${f} is under Who works on it`);
+  for (const f of ['data-pe-seg="by_hand"', 'data-pe-req-add']) assert.ok(at(f) > leave, `${f} is under To leave`);
+  for (const f of ['data-pe-sf="name"', 'data-pe-sf="purpose"', 'data-pe-sf="expected_unit"']) at(f);
+  // Tasks leave is a two-way switch now, not a list.
+  assert.match(body, /role="radiogroup" aria-label="Tasks leave"[^>]*><button type="button" role="radio" data-v="0" aria-checked="true"[^>]*>When requirements are met<\/button><button type="button" role="radio" data-v="1" aria-checked="false"[^>]*>By hand<\/button>/);
+  assert.doesNotMatch(body, /<select data-pe-sf="by_hand"/);
+
+  // One of several: the bots with their model family, Pick, Limit each, Prefer, the owner switch and the sentence.
+  assert.match(body, /<option value="pick" selected>One of several<\/option>/);
+  assert.match(body, /<input type="checkbox" data-pe-pick-bot="bot:b1"[^>]* checked> Builder <span class="pe-family muted">Claude<\/span>/);
+  assert.match(body, /<input type="checkbox" data-pe-pick-bot="bot:r1"[^>]*> Reviewer 1 <\/label>/, 'a bot not on the list, its family not read yet');
+  state.draft.bot_families = {'bot:b1': 'Claude', 'bot:b2': 'Claude', 'bot:r1': 'GPT'};
+  assert.match(html(1), /data-pe-pick-bot="bot:r1"[^>]*> Reviewer 1 <span class="pe-family muted">GPT<\/span>/, 'a bot not ticked yet shows its family when the record has them all');
+  assert.equal('bot_families' in plain(ctx.peOut(state.draft)), false, 'the families are the server\'s');
+  delete state.draft.bot_families;
+  assert.match(body, /aria-label="Pick"[^>]*><button[^>]*data-v="turns" aria-checked="true"[^>]*>Take turns<\/button><button[^>]*data-v="random" aria-checked="false"[^>]*>Random<\/button>/);
+  assert.match(body, /aria-label="Prefer"[^>]*><button[^>]*data-v="anyone" aria-checked="true"[^>]*>Anyone<\/button><button[^>]*data-v="new"[^>]*>New to the task<\/button><button[^>]*data-v="family"[^>]*>A different model family<\/button>/);
+  assert.match(body, /<span>Limit each<\/span><input type="number"[^>]*data-pe-pick="limit_each"[^>]*value="" placeholder="None">/);
+  assert.match(body, /data-pe-pick="owns_task"[^>]* checked> The pick becomes the task's owner/);
+  assert.match(body, /<p class="pe-pick-next">The next task goes to Builder 2, after Builder had the last one\.<\/p>/);
+  // A single owner shows none of it.
+  assert.doesNotMatch(html(2), /data-pe-pick|pe-pick-next/);
+
+  // The closed row: "One of 2" where its owner's name was, the bots named when pointed at.
+  assert.match(body, /<span class="pe-stage-owner pe-stage-pool" title="b1, b2"><span>One of 2<\/span><\/span>/);
+
+  // Editing it: the draft follows, the sentence waits for a save, and the save leaves out what the server writes.
+  const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false, type = 'text') =>
+    Object.assign(Object.create(ctx[kind].prototype), {dataset: {peSi: '1', ...data}, value, checked, type});
+  const button = (data: Record<string, string>) => ({closest: () => ({dataset: {peSi: '1', ...data}, hasAttribute: (a: string) => a === 'data-pe-seg'})});
+  ctx.peInput(state, field('HTMLInputElement', {pePickBot: 'bot:r1'}, 'on', true, 'checkbox'));
+  ctx.peInput(state, field('HTMLInputElement', {pePickBot: 'bot:b1'}, 'on', false, 'checkbox'));
+  ctx.peInput(state, field('HTMLInputElement', {pePick: 'limit_each'}, '2'));
+  ctx.peInput(state, field('HTMLInputElement', {pePick: 'owns_task'}, 'on', false, 'checkbox'));
+  ctx.peClick(state, button({peSeg: 'pick_how', v: 'random'}));
+  ctx.peClick(state, button({peSeg: 'pick_prefer', v: 'family'}));
+  ctx.peClick(state, button({peSeg: 'by_hand', v: '1'}));
+  const sent = plain(ctx.peOut(state.draft)).stages[1] as Record<string, unknown>;
+  assert.deepEqual(sent['pick'], {bots: ['bot:b2', 'bot:r1'], how: 'random', limit_each: 2, prefer: 'family', owns_task: false});
+  assert.equal('pick_next' in sent, false, 'the sentence is the server\'s');
+  assert.equal(sent['by_hand'], true);
+  assert.match(html(1), /<p class="pe-pick-next muted">Save to see who gets the next task\.<\/p>/);
+  assert.deepEqual(plain(ctx.peChanged(base, {...base, stages: base.stages.map((s: Record<string, unknown>) => s['id'] === 'build' ? {...s, pick_next: 'The next task goes to Builder.'} : s)})), [],
+    'a sentence that moved on is not someone else\'s change');
+  ctx.peInput(state, field('HTMLInputElement', {pePick: 'limit_each'}, ''));
+  assert.equal(state.draft.stages[1]!.pick!.limit_each, null, 'Limit each is optional');
+
+  // Choosing it on a stage starts an empty list that takes turns; leaving it drops the list.
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '2', peSf: 'owner'}, 'pick'));
+  assert.deepEqual(plain(state.draft.stages[2]!.pick), {bots: [], how: 'turns', limit_each: null, prefer: 'anyone', owns_task: false});
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'owner'}, 'bot:b2'));
+  const one = plain(ctx.peOut(state.draft)).stages[1] as Record<string, unknown>;
+  assert.equal(one['owner'], 'bot:b2');
+  assert.equal('pick' in one, false, 'a single owner sends no list');
+}
+// ---- a task waiting for a free bot: its card's mark, and its line in the task window
+{
+  const waiting = task('t9', 'Refund flow', 'spec', {owner_id: null, turn: {state: 'pick', who: 'review', line: 'Waiting for a free Reviewer', since: null}});
+  const card = ctx.taskCardHTML(waiting) as string;
+  assert.match(card, /<span class="tk-mark tk-mark-pick" role="img" aria-label="Waiting for a free Reviewer"><\/span>/);
+  assert.match(card, /Waiting for a free Reviewer"/, 'pointing at the card shows the line');
+  assert.equal(ctx.taskLine(waiting), 'Waiting for a free Reviewer');
 }
 // ---- a task's row for a stage's answer
 {

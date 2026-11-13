@@ -267,6 +267,18 @@ def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
     return f"Jev gave {given} verdicts", False
 
 
+def idea_checks(ctx: Context) -> tuple[str | None, bool]:
+    # Jev's duplicate check on ideas filed into Product's Ideas (backend/idea_checks.py): one call for up to 20 owed
+    # ideas, made with no transaction held, the outcomes recorded in one short write.
+    from . import idea_checks as IC
+
+    at = ctx.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    checked = IC.run(ctx.store, at)
+    if not checked:
+        return None, True
+    return f"Jev checked {checked} ideas", False
+
+
 # ----------------------------------------------------------------------------- the steps, in the order they run
 MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
     timedelta(minutes=1),
@@ -356,6 +368,7 @@ STEPS = [
     ),
     Step("source_actions", "Merge queue", "due", None, source_actions, failure="source_actions", capture="scheduler"),
     Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
+    Step("idea_checks", "Jev's idea check", "due", None, idea_checks, failure="idea_checks", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}

@@ -230,6 +230,18 @@ class TaskCreate(Contract):
     compact_at: CompactAt | None = None
     # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
     from_private: StrictBool = False
+    # A bot files a person's own ask (Ideas: say it once, #227): `for_actor` (`--for human:X`) is the requester, and
+    # `from_message` the message the person sent it in, which the bot must read. Both or neither.
+    for_actor: ID | None = None
+    from_message: ID | None = None
+
+    @model_validator(mode="after")
+    def for_a_person(self):
+        if (self.for_actor is None) != (self.from_message is None):
+            raise ValueError(
+                "Name the person with for_actor and the message they asked in with from_message: both or neither"
+            )
+        return self
 
     @model_validator(mode="after")
     def review_child(self):

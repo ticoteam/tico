@@ -584,7 +584,7 @@ def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row)
         if task_wakes.add(conn, row, str(owner), visit, body, wake_key=key):
             added += 1
     for task_id in task_ids:
-        # Before a person OKs a page that is not a review (Fixes 2): the new commit is the last reviewer's to read.
+        # Before a person OKs a page that is not a review (QA): the new commit is the last reviewer's to read.
         if task_wakes.review_new(conn, task_id):
             added += 1
     return added
@@ -1110,17 +1110,17 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
 #   visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
 #   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person. A second removal for failed
-#   checks at the same head is not queued again: its wake says to send the task back to Fixes 2, and `requeue` refuses it.
+#   checks at the same head is not queued again: its wake says to send the task back to QA, and `requeue` refuses it.
 # - A PR that conflicts with its base branch is never queued: `enqueue` reads GitHub's `mergeable` first and answers
-#   CONFLICTS (the action fails at once; the owner is told to send it back to Fixes 2, where the Builder rebases), or
+#   CONFLICTS (the action fails at once; the owner is told to send it back to QA, where the Builder rebases), or
 #   raises while GitHub still works it out (UNKNOWN: read again after RETRY_S). `requeue` refuses while the PR's link
 #   says it conflicts, and a removal for a conflict wakes the owner with the same send-back (SENT_BACK_FOR_CONFLICT).
 # - The owner (Release Owner, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
-#   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
-#   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
+#   the PR branch and then queues again; or sends the task back to QA with the ordinary move
+#   (`tico task move <task> --to "QA"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
 #   Merge. When it changes the same lines as the commit the task came in with (a rebase, `same_changes`), the owner
-#   queues it again; when it changes others, a bot sends the task back to Fixes 2, where Reviewer 2 reads the new
+#   queues it again; when it changes others, a bot sends the task back to QA, where Reviewer 2 reads the new
 #   commits and the person's OK stands on its OK (`SENT_BACK_FOR_NEW`, task_requirements._after_ok). A person may queue
 #   it as it is. The manager hears of the new commit once (`changed_after_ok`).
 # - A task that goes after another one (backend/merge_order.py) is not queued while that one is open and has not
@@ -1159,24 +1159,24 @@ PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
 # Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
 SENT_BACK_FOR_NEW = (
-    "{ref} has new changes since the person's OK. Move the task back to Fixes 2, where Reviewer 2 reads them."
+    "{ref} has new changes since the person's OK. Move the task back to QA, where Reviewer 2 reads them."
 )
 # Why nobody queues a PR GitHub says conflicts with its base branch (`requeue`, a refused queue, a removal): the queue
-# would only take it out again. The Builder rebases it in Fixes 2.
+# would only take it out again. The Builder rebases it in QA.
 SENT_BACK_FOR_CONFLICT = (
     "{ref} conflicts with its base branch, so it is not queued: the merge queue would only take it out again. Move the "
-    'task back to Fixes 2 for the Builder to rebase it: `tico task move {task} "Fixes 2" -m "{ref} conflicts with its '
+    'task back to QA for the Builder to rebase it: `tico task move {task} "QA" -m "{ref} conflicts with its '
     'base branch: rebase it" --version N`.'
 )
 # GitHub's removal reasons for a check that failed in the queue's run, as `removal_words` words them. Taken out this way
-# twice at one head in one visit, that head is not queued again: the task goes back to Fixes 2.
+# twice at one head in one visit, that head is not queued again: the task goes back to QA.
 FAILED_CHECKS = frozenset(removal_words(reason) for reason in ("failed_checks", "checks_failed"))
 COMPARING = "Tico is still reading what {ref}'s new commits change. Try again in a minute."
 # The same send-back for a task that goes after another one (backend/merge_order.py), once that one merged: the Builder
 # rebases onto it.
 SENT_BACK_AFTER = (
     "{ref} conflicts with its base branch now that {earlier}, which it goes after, has merged, so it is not queued. "
-    'Move the task back to Fixes 2 for the Builder to rebase it onto {earlier}: `tico task move {task} "Fixes 2" -m '
+    'Move the task back to QA for the Builder to rebase it onto {earlier}: `tico task move {task} "QA" -m '
     '"{ref} conflicts now that {earlier} merged: rebase it onto {earlier}" --version N`.'
 )
 # Why a bot may not queue a task that goes after another one still open (merge_order.held). A person may.
@@ -1282,7 +1282,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
     running") or failing ("Checks failed on <ref>: <names>"), while GitHub says it conflicts with its base branch
     (`SENT_BACK_FOR_CONFLICT`), and when the caller may not; `task_changed` (a bot's stale `seen_version`),
-    `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it back to Fixes 2). Who
+    `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it back to QA). Who
     may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest commit changes other
     lines than the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was for that one. A rebase
     that changes the same lines (`same_changes`) it may; while Tico has not read what the new commit changes yet, it is
@@ -1334,7 +1334,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         if not E.is_human(by) and pinned not in (None, metadata["head_sha"]):
             # The person OK'd the commit the task came into Merge with. A newer one that changes the same lines (a
             # rebase, a conflict fixed without changing the PR's own lines) keeps the OK; one that changes others is
-            # Reviewer 2's to read in Fixes 2 first. A person may queue it as it is.
+            # Reviewer 2's to read in QA first. A person may queue it as it is.
             same = same_changes(conn, {ref: pinned}, {ref: metadata["head_sha"]})
             if same is None:
                 refuse("task_requirement", COMPARING.format(ref=ref))
@@ -1354,13 +1354,13 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
             refuse(
                 "task_requirement",
                 f"GitHub took {ref} out of the merge queue for failed checks ({named[0].get('check')}). Send the task back "
-                "to Fixes 2 instead.",
+                "to QA instead.",
             )
         if len(removals) >= 2:
             refuse(
                 "task_requirement",
                 f"GitHub took {ref} out of the merge queue for failed checks twice at this commit. Send the task back "
-                "to Fixes 2 instead.",
+                "to QA instead.",
             )
     ts = _h().now()
     owed: list[Row] = []
@@ -1453,12 +1453,12 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
         if failed and real:
             lead = (
                 f"GitHub took {ref} out of the merge queue for failed checks. {removed_line(metadata)}.{link} It is not "
-                "queued again as it is: send the task back to Fixes 2 with the failing step and the run link."
+                "queued again as it is: send the task back to QA with the failing step and the run link."
             )
         elif failed and len(failed_checks_removals(conn, task_id, str(visit["id"]), head)) >= 2:
             lead = (
                 f"GitHub took {ref} out of the merge queue for failed checks again at the same commit. It is not queued "
-                f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
+                f"again as it is: send the task back to QA with the failing step and the run link.{link}"
             )
         elif metadata.get("removed_reason") == CONFLICTS:
             lead = f"GitHub took {ref} out of the merge queue. {MO.conflict_line(conn, row, ref)}"

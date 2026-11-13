@@ -16,7 +16,7 @@ queues PRs (Merge): both tasks build and are reviewed side by side.
   nobody is woken, and it is not Late (never_stuck). A reader who may not open #40 reads "After a task you can't open".
 - `release`: when a task ends or its PR merges, every task held on it is read again. One no longer held is queued now
   (its `queue` actions owed, as on entering Merge; GitHub's `mergeable` is read when they are carried out, and a PR that
-  now conflicts goes to the owner with the send-back to Fixes 2 naming the task it is to be rebased on,
+  now conflicts goes to the owner with the send-back to QA naming the task it is to be rebased on,
   `conflict_line`). A task before it that was closed without merging ends the order: the later task's owner is told
   once, "#40 closed without merging. Queue it, or send it back.", and it is their turn (`closed_line`); Tico does not
   queue it by itself.
@@ -212,7 +212,7 @@ def just_merged(conn: "sqlite3.Connection", row: Row) -> Row | None:
 
 
 def conflict_line(conn: "sqlite3.Connection", row: Row, ref_: str) -> str:
-    """The send-back to Fixes 2 for a PR that conflicts with its base branch (item_sources.github
+    """The send-back to QA for a PR that conflicts with its base branch (item_sources.github
     SENT_BACK_FOR_CONFLICT), naming the task it goes after that merged, for the Builder to rebase onto."""
     GS = _github()
     earlier = just_merged(conn, row)

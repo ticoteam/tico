@@ -4,7 +4,7 @@ description: When a check fails on a task's pull request, or before you hand a c
 ---
 # Get the checks green at the head
 
-When to use: whenever `tico task show` says "Checks failed", and before you say done or attach a page in Fixes 2.
+When to use: whenever `tico task show` says "Checks failed", and before you say done or attach the QA page.
 
 Steps:
 1. Confirm the head commit: `gh pr view <n> -R <repo> --json headRefOid`. Only checks on this commit count. Earlier

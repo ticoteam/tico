@@ -6242,7 +6242,7 @@
    ],
    "bot:release": [
     "task_requirement",
-    "acme/app#1 has new changes since the person's OK. Move the task back to Fixes 2, where Reviewer 2 reads them."
+    "acme/app#1 has new changes since the person's OK. Move the task back to QA, where Reviewer 2 reads them."
    ],
    "bot:builder": [
     "task_requirement",
