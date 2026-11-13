@@ -294,6 +294,116 @@ def test_a_bot_create_never_turns_into_an_overwrite_of_a_doc_made_meanwhile(api)
     assert actor == "bot:ops" and detail["code"] == "path_taken" and detail["path"] == "ops/runbook.md"
 
 
+GUIDE = "# Guide\n\nIntro.\n\n## Setup\n\nInstall it.\n\n## Usage\n\nRun it.\n\n### Flags\n\nUse -v.\n\n## FAQ\n\nAsk Ben.\n"
+
+
+def test_a_bot_replaces_one_section_or_appends_and_the_rest_stays_byte_for_byte(api):
+    from backend.tests.helpers.mcp import call as tool
+
+    token = bot_token(api)
+    make(api, "Guide", GUIDE, who=CARA, path="ops/guide.md")
+    before, after = GUIDE.split("## Usage")[0], "## FAQ" + GUIDE.split("## FAQ")[1]
+    # AC-7: only the text under "Usage" (with its "Flags" subsection) changes; matched without case or spaces.
+    write = {"path": "ops/guide.md", "section": "  usage ", "body": "Run it twice.", "base_version": 1}
+    err, landed = tool(api, "tico_doc_write", {**write, "note": "new usage"}, token=token)
+    assert not err and landed["doc"]["version"] == 2
+    assert landed["doc"]["body"] == before + "## Usage\n\nRun it twice.\n\n" + after
+    assert landed["doc"]["title"] == "Guide"
+    # AC-9: appended at the end after a blank line; nothing before it changes.
+    err, appended = tool(
+        api,
+        "tico_doc_write",
+        {"path": "ops/guide.md", "append": True, "body": "Added.", "base_version": 2},
+        token=token,
+    )
+    assert not err and appended["doc"]["body"] == landed["doc"]["body"] + "\nAdded.\n"
+    # With a section: at the end of that section.
+    err, inside = tool(
+        api,
+        "tico_doc_write",
+        {"path": "ops/guide.md", "append": True, "section": "Setup", "body": "Then restart.\n", "base_version": 3},
+        token=token,
+    )
+    assert not err
+    assert inside["doc"]["body"] == appended["doc"]["body"].replace(
+        "Install it.\n\n", "Install it.\n\nThen restart.\n\n"
+    )
+    accepted = [(d["mode"], d["base_version"]) for a, t, d in doc_events(api, "docs.updated") if a == "bot:ops"]
+    assert accepted == [("section", True), ("append", True), ("append", True)]
+
+
+def test_a_section_write_refuses_a_missing_or_repeated_heading_and_ignores_code_blocks(api):
+    from backend.tests.helpers.mcp import call as tool
+
+    token = bot_token(api)
+    text = "# Notes doc\n\n## Notes\n\none\n\n```sh\n# Pricing\necho hi\n```\n\n## Notes\n\ntwo\n\n~~~\n## FAQ\n~~~\n"
+    doc = make(api, "Notes doc", text, who=CARA, path="ops/notes.md")
+    edits = counting(api, "edit")
+    for name, code in (("Pricing", "section_not_found"), ("FAQ", "section_not_found"), ("notes", "section_ambiguous")):
+        err, refused = tool(
+            api,
+            "tico_doc_write",
+            {"path": "ops/notes.md", "section": name, "body": "x", "base_version": 1},
+            token=token,
+        )
+        assert err and refused["error"] == code, refused  # AC-8, AC-11: a # line in a fenced block is no heading
+        assert "Headings: Notes doc, Notes, Notes" in refused["detail"]
+    assert len(edits) == 3
+    unchanged = call(api, "GET", "docs/" + doc["id"])["doc"]
+    assert unchanged["body"] == text and unchanged["version"] == 1
+    refusals = [(d["code"], d["mode"]) for a, t, d in doc_events(api, "docs.write_refused")]
+    assert refusals == [("section_not_found", "section")] * 2 + [("section_ambiguous", "section")]
+    err, missing = tool(api, "tico_doc_write", {"path": "ops/none.md", "append": True, "body": "x"}, token=token)
+    assert err and missing["error"] == "not_found"
+
+
+def test_a_section_write_lands_on_a_newer_version_only_if_its_section_is_unchanged(api):
+    from backend.tests.helpers.mcp import call as tool
+
+    token = bot_token(api)
+    doc = make(api, "Guide", GUIDE, who=CARA, path="ops/guide.md")
+    # AC-10: Cara changes only FAQ after the bot read version 1: the bot's Usage lands on top, both changes kept.
+    faq = edit(api, doc, who=CARA, body=GUIDE.replace("Ask Ben.", "Ask Cara."))["doc"]
+    write = {"path": "ops/guide.md", "section": "Usage", "body": "Run it twice.", "base_version": 1}
+    err, landed = tool(api, "tico_doc_write", write, token=token)
+    assert not err and landed["doc"]["version"] == 3
+    assert "Ask Cara." in landed["doc"]["body"] and "Run it twice." in landed["doc"]["body"]
+    assert "Run it.\n" not in landed["doc"]["body"] and faq["version"] == 2
+    # Cara changes Usage after the bot read version 3: refused, her text stays.
+    usage = edit(api, landed["doc"], who=CARA, body=landed["doc"]["body"].replace("twice", "three times"))["doc"]
+    err, refused = tool(api, "tico_doc_write", {**write, "body": "Run it once.", "base_version": 3}, token=token)
+    assert err and refused["error"] == "version_conflict" and refused["version"] == 4
+    assert f"{usage['updated_by_name']} saved version 4 after you read version 3" in refused["detail"]
+    assert call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == usage["body"]
+    # A stale section write whose heading is gone or repeated now keeps its own refusal and the heading list.
+    gone = {"path": "ops/guide.md", "section": "Nowhere", "body": "x", "base_version": 3}
+    err, missing = tool(api, "tico_doc_write", gone, token=token)
+    assert err and missing["error"] == "section_not_found" and "Usage" in missing["detail"]
+    twice = edit(api, usage, who=CARA, body=usage["body"] + "\n# Usage\nagain\n")["doc"]
+    err, dup = tool(api, "tico_doc_write", {**write, "body": "x", "base_version": 4}, token=token)
+    assert err and dup["error"] == "section_ambiguous"
+    usage = edit(api, twice, who=CARA, body=usage["body"])["doc"]
+    # A section append lands on the newer version even though that section changed.
+    err, inside = tool(
+        api,
+        "tico_doc_write",
+        {"path": "ops/guide.md", "append": True, "section": "Usage", "body": "Also this.", "base_version": 3},
+        token=token,
+    )
+    assert not err and inside["doc"]["version"] == 7
+    assert "three times" in inside["doc"]["body"] and "Also this." in inside["doc"]["body"]
+    usage = inside["doc"]
+    # Append always lands on the newer version.
+    err, appended = tool(
+        api, "tico_doc_write", {"path": "ops/guide.md", "append": True, "body": "More.", "base_version": 3}, token=token
+    )
+    assert not err and appended["doc"]["body"] == usage["body"] + "\nMore.\n"
+    # Without a base version the rule is the whole-doc one: a person saved last, so refused.
+    edit(api, appended["doc"], who=CARA, body=appended["doc"]["body"] + "Cara.\n")
+    err, refused = tool(api, "tico_doc_write", {"path": "ops/guide.md", "append": True, "body": "x"}, token=token)
+    assert err and refused["error"] == "base_version_required"
+
+
 def test_upgrade_repairs_generated_docs_once_and_queues_a_map_refresh(api):
     from backend.store import H
 

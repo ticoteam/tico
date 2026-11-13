@@ -15,6 +15,10 @@ const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
 const {html} = require('./support/page.cts');
 const {open, task} = require('./tasks-page.cts') as Tasks.Api;
+const openDetails = async (page: import('playwright').Page, id: string) => {
+  const sum = page.locator(`#task-modal[open][data-task="${id}"] details.task-details:not([open]) > summary`);
+  if (await sum.count()) await sum.click();
+};
 declare function openTaskCreate(owner: string, opts?: {parent: {id: string; title: string; private: boolean}}): void;
 declare function loadSettings(): Promise<void>;
 declare function settingsEditBot(name: string): void;
@@ -77,6 +81,8 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     const win = page.locator('#task-modal[open]');
 
     // Visible to: Private. Ana asked for it, so she may make it the team's.
+    await win.locator('details.task-details').waitFor();
+    await openDetails(page, 't-11');
     const seen = win.locator('[data-prop-row="visible"]');
     await seen.locator('[data-prop="visible"]').waitFor();
     assert.equal(await seen.getAttribute('data-visible'), 'private');
@@ -123,15 +129,18 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
 
     // A company task: Team, no people to add.
     await page.evaluate(() => { location.hash = '#/task/t-12'; });
+    await page.locator('#task-modal[open][data-task="t-12"] details.task-details').waitFor();
+    await openDetails(page, 't-12');
     await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="visible"]', {hasText: 'Team'}).waitFor();
     assert.equal(await win.locator('[data-prop-row="visible"] [data-prop="readers"]').count(), 0);
     // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
-    assert.equal(await win.locator('[data-prop-row="parent"] [data-prop="parent"]').count(), 0, 'no Add parent');
-    assert.match(await win.locator('[data-prop-row="parent"]').innerText(), /None/);
+    assert.equal(await win.locator('[data-prop-row="parent"]').count(), 0, 'no parent: no Part of row, nothing to add');
 
     // Filed by Postal mail on Ana's rights: Asked by names Postal mail; Who can see still lists Ana, not Postal mail.
     await page.evaluate(() => { location.hash = '#/task/t-15'; });
     const filed = page.locator('#task-modal[open][data-task="t-15"]');
+    await filed.locator('details.task-details').waitFor();
+    await openDetails(page, 't-15');
     await filed.locator('[data-prop-row="asker"]').waitFor();
     assert.match(await filed.locator('[data-prop-row="asker"]').innerText(), /Postal mail/);
     const filedSeen = await filed.locator('[data-prop-row="visible"]').innerText();
@@ -140,6 +149,8 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
 
     // A parent the reader can open: a link to it, nothing to change or take off.
     await page.evaluate(() => { location.hash = '#/task/t-14'; });
+    await page.locator('#task-modal[open][data-task="t-14"] details.task-details').waitFor();
+    await openDetails(page, 't-14');
     const up = page.locator('#task-modal[open][data-task="t-14"] [data-prop-row="parent"]');
     await up.waitFor();
     assert.equal(await up.locator('[data-open-task="t-12"]').count(), 1, 'links to the parent');
@@ -155,6 +166,8 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
 
     // A parent the reader cannot open: "a private task", no link, nothing of it in the window.
     await page.evaluate(() => { location.hash = '#/task/t-13'; });
+    await page.locator('#task-modal[open][data-task="t-13"] details.task-details').waitFor();
+    await openDetails(page, 't-13');
     const parent = page.locator('#task-modal[open][data-task="t-13"] [data-prop-row="parent"]');
     await parent.waitFor();
     assert.match(await parent.innerText(), /a private task/);

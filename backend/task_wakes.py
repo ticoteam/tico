@@ -239,6 +239,10 @@ def add(
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
     if not theirs.get("wake_batch"):
         carried.pop("wake_batch", None)  # a wake that is not batchable is not held for what it folded (wake_presets)
+    if not theirs.get("release"):
+        # Nor is a task's turn held by a routine run's release policy it folded: a turn in a pipeline is never held.
+        carried.pop("release", None)
+        carried.pop("release_kind", None)
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,

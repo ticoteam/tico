@@ -261,7 +261,7 @@ def run_view(c, auth, who, tid):
     turns = []
     for row in c.execute(
         "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
-        "a.result,a.stop_requested_at,a.wake,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "a.result,a.stop_requested_at,a.wake,a.cached_tokens,a.cache_write_tokens,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
         (tid, SCAN_LIMIT),
@@ -369,8 +369,12 @@ def run_view(c, auth, who, tid):
                 else None,
                 "subagents": subagents,
                 "background": background,
-                # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
+                # What woke the turn, and for a job the release policy let go, warm or cold, fork or fresh and its wait
+                # (backend/wake_presets.py record); runs from before presets have none, older runs keep their preset.
                 "wake": H._json(r["wake"]),
+                # The run's cache read and cache write tokens (#251), for its run record.
+                "cache_read_tokens": r["cached_tokens"],
+                "cache_write_tokens": r["cache_write_tokens"],
             }
         )
     return {"task_id": tid, "checkpoint": checkpoint, "runs": out}

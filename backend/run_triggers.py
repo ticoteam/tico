@@ -262,7 +262,17 @@ def session(conn, turn_id, session):
         "UPDATE attempts SET session_kind=?, session_why=? WHERE id=? AND settled_at IS NULL",
         (session.kind, why, turn_id),
     ).rowcount
-    if done and session.kind == "new" and why != "none_saved":
+    # A fork the release policy asked for (backend/wake_presets.py, session `fork`) is a new session on purpose.
+    if done:
+        # A job the release policy let go records what the runner did, not what was asked (backend/wake_presets.py).
+        from .wake_presets import reported_session
+
+        conn.execute(
+            "UPDATE attempts SET wake=json_set(wake,'$.release.session',?) WHERE id=? "
+            "AND json_type(wake,'$.release')='object'",
+            (reported_session(session.kind, why), turn_id),
+        )
+    if done and session.kind == "new" and why not in ("none_saved", "forked", "fresh"):
         row = conn.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
         new_session(conn, row[0] if row else None, why)
     return done

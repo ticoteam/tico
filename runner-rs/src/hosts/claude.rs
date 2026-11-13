@@ -652,13 +652,23 @@ impl ClaudeHost {
     }
 
     pub fn start_thread(&self, settings: &Settings) -> String {
+        self.new_thread(settings, None)
+    }
+
+    /// A new thread whose first turn reads session `from` and leaves it as it is (`--resume <from> --fork-session`
+    /// under the new id). A `from` not on this computer restarts it as a plain new session (`restored`).
+    pub fn start_thread_forked(&self, settings: &Settings, from: &str) -> String {
+        self.new_thread(settings, Some(from.to_string()))
+    }
+
+    fn new_thread(&self, settings: &Settings, fork_from: Option<String>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.inner().threads.insert(
             id.clone(),
             Thread {
                 settings: settings.clone(),
                 started: false,
-                fork_from: None,
+                fork_from,
                 session_id: None,
                 restored: false,
             },
@@ -2210,6 +2220,33 @@ mod tests {
             !argv.contains(&"--bare".into()),
             "subscription login must remain available"
         );
+    }
+
+    #[test]
+    fn a_thread_started_forked_reads_the_old_session_and_keeps_its_own_id() {
+        let host = ClaudeHost::new(
+            "synthetic",
+            vec!["claude".into()],
+            tokio::sync::mpsc::unbounded_channel().0,
+        );
+        let settings = Settings::default();
+        let thread = host.start_thread_forked(&settings, "old-session");
+        assert_ne!(thread, "old-session");
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        assert_eq!(
+            &argv[argv.len() - 5..],
+            &[
+                "--resume".to_string(),
+                "old-session".into(),
+                "--fork-session".into(),
+                "--session-id".into(),
+                thread.clone(),
+            ]
+        );
+        // A fresh thread is not a fork.
+        let fresh = host.start_thread(&settings);
+        let argv = host.argv(&fresh, &host.inner().threads[&fresh].clone(), None);
+        assert!(!argv.contains(&"--fork-session".to_string()), "{argv:?}");
     }
 
     #[tokio::test]

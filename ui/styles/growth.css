@@ -398,3 +398,18 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
   .grs-bar{width:100%}
   .grs-step:not(.grs-done):not(.grs-next) .grs-l{display:none}
 }
+/* Where each number came from (ui/app/growth-page.ts grOriginLine, spec AC-9/AC-10/AC-12): one quiet line under a Number,
+   a source that disagrees with a typed number and its Keep / Use, and the banner over the cards for a stale or failing source. */
+.gr-health{margin:0 28px 12px}
+.gr-health>span:first-child{flex:1 1 24em;min-width:0}
+@media(max-width:760px){.gr-health{margin:0 12px 10px}}
+.gr-origin{margin-top:6px;font-size:var(--t-xs);line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gr-origin .pill{font-size:var(--t-2xs);padding:0 6px;vertical-align:1px}
+.gr-conflict{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:6px;font-size:var(--t-xs);line-height:16px}
+.gr-c-acts{display:inline-flex;gap:4px}
+.gr-conflicts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.gc-origin{font-size:var(--t-xs)}
+.gc-synced{font-size:var(--t-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:14em}
+.gsrc-sync{grid-column:1/-1;font-size:var(--t-xs);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.gsrc-map{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.gsrc-skip{margin:0;padding-left:18px;font-size:var(--t-sm)}

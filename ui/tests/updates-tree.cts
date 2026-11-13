@@ -108,18 +108,17 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     assert.equal(await page.locator('#upd-feed [data-upd="u-seo"]').count(), 0, 'deeper cards start closed');
     const kids = page.locator('#upd-feed [data-upd-kids="b:cmo"]');
     assert.equal(await kids.getAttribute('aria-label'), 'Show 1 report');
-    // The toggle sits right of Archive on the name's line (no row under the update for it), and never fades with the corner.
+    // The toggle sits right of ⋯ on the name's line (no row under the update for it), and never fades.
     assert.equal(await cmo.locator('.upd-meta > .upd-corner + [data-upd-kids]').count(), 1, 'the toggle follows the corner on the name line');
-    assert.equal(await cmo.locator('.upd-actions').evaluate(r => getComputedStyle(r).display), 'none', 'no row under the update for the toggle');
+    assert.equal(await cmo.locator('.upd-actions').count(), 0, 'no row under the update for the toggle');
     assert.equal(await kids.evaluate(b => { let o = 1; for (let e: Element | null = b; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; }), 1, 'the toggle is fully visible');
     await kids.click();
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
     await seo.waitFor();
     assert.equal(await seo.locator('[data-upd-kids]').count(), 0, 'a card with no reports has no count');
-    assert.equal(await seo.locator('.upd-actions').evaluate(r => r.children.length === 0 && getComputedStyle(r).display), 'none',
-      'no row under the update: nothing is left in it');
-    assert.deepEqual(await seo.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))), ['Reply', 'Mark read', 'Archive'],
-      'Reply, Mark read and Archive at the top right');
+    assert.equal(await seo.locator('.upd-actions').count(), 0, 'no row under the update');
+    assert.deepEqual(await seo.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))), ['Reply', 'More'],
+      'Reply and ⋯ at the top right');
     assert.equal(await seo.locator('.upd-dot').count(), 0, 'one level down only: no dot two levels down');
     // Seen, the deeper card is marked read, and the badge (direct reports only) does not move.
     const read = (id: string) => posted.some(x => x.path === '/api/v2/updates/read' && x.body.ids?.includes(id));
@@ -141,6 +140,11 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await page.locator('#upd-feed [data-upd="u-ana"]').waitFor();
     assert.deepEqual(posted.find(x => x.path === '/api/v2/updates')!.body, {body: '- Signed the Northwind lease', kind: 'daily', replace_draft: false});
     assert.equal(await page.locator('#upd-feed [data-upd="u-ana"] [data-upd-write]').count(), 1, 'your card can be edited all day');
+    // Your own card: "Edit" on the name line (no pencil under the text), then ⋯; no Reply.
+    assert.deepEqual(await page.locator('#upd-feed [data-upd="u-ana"] .upd-meta .upd-corner .upd-act').evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.textContent!.trim()])),
+      [['Edit your update', 'Edit'], ['More', '']], 'Edit as a word on the name line, then ⋯');
+    assert.equal(await page.locator('#upd-feed [data-upd="u-ana"] .upd-actions').count(), 0, 'no row under the text');
+    assert.equal(await page.locator('#upd-feed [data-upd="u-ana"] .nav-icon', {hasText: /^edit$/}).count(), 0, 'no pencil');
     assert.deepEqual(errors, []);
     await page.close();
     // Today's cards all read, but a direct report's update from another day still counts: Mark all read clears it.
@@ -159,6 +163,8 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await week.page.goto('http://tico-ui.test/#/updates');
     await week.page.locator('#upd-feed [data-upd="u-cmo"]').waitFor();
     assert.equal(await week.page.locator('#upd-feed [data-upd-write]').count(), 1, 'the daily any day');
+    assert.deepEqual(await week.page.locator('#upd-feed [data-upd="u-ana"] [data-upd-write]').evaluate(b => [b.getAttribute('aria-label'), b.textContent!.trim()]),
+      ['Write today\'s update', 'New update'], 'an older update of yours offers New update');
     await week.page.locator('[data-upd-kind="weekly"]').click();
     const ownNone = week.page.locator('#upd-feed .upd-none', {hasText: 'Ana'});
     await ownNone.waitFor();
@@ -194,7 +200,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       slides: {...drafted, blockers: ['Waiting on the landlord for keys']}}, 'an unchanged KPI line keeps its unit and note');
     assert.deepEqual(week.errors, []);
     await week.page.close();
-    // Eight reports: icons and "8" with a chevron at the right of the card, no "8 reports" row and no broken glyph.
+    // Eight reports: "8 reports" (a phone: "8") with a chevron at the right of the card, no "8 reports" row and no broken glyph.
     eight = true;
     const posted1 = mine; mine = null;   // your own card as "No update yet", with Write your update and its count
     const icons = new Set(fs.readFileSync(uiFile('vendor/fonts/icons.txt'), 'utf8').split('\n').filter(Boolean));
@@ -237,7 +243,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         assert.ok(c.bodyL <= 1 && c.bodyR <= 1 && c.bodyBelow, `${label}: ${c.id}'s update runs the card's full width under the avatar (${c.bodyL}, ${c.bodyR})`);
         if (c.none) continue;
         assert.ok(c.reply, `${label}: ${c.id} has Reply on its name line`);
-        assert.deepEqual(c.reply!.next.length, 2, `${label}: ${c.id}'s Reply comes just before Mark read and Archive (${c.reply!.next})`);
+        assert.deepEqual(c.reply!.next, ['More'], `${label}: ${c.id}'s Reply comes just before ⋯ (${c.reply!.next})`);
         assert.ok(c.reply!.onLine && c.reply!.leftOf, `${label}: ${c.id}'s Reply sits on the name line, left of the others`);
       }
     };
@@ -247,18 +253,19 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       const boss = p.locator('#upd-feed [data-upd="u-cmo"]');
       await boss.waitFor();
       const toggle = boss.locator('[data-upd-kids="b:cmo"]');
-      assert.equal(await boss.locator('.upd-actions').evaluate(r => getComputedStyle(r).display), 'none', `${label}: no row under the update`);
+      assert.equal(await boss.locator('.upd-actions').count(), 0, `${label}: no row under the update`);
       assert.deepEqual(await boss.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
-        ['Reply', 'Mark unread', 'Archive'], `${label}: comment, unread and archive at the top right`);
-      assert.equal(await toggle.evaluate(b => [...(b.childNodes as NodeListOf<ChildNode> & Iterable<ChildNode>)].filter(n => !(n as Element).classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
+        ['Reply', 'More'], `${label}: Reply and ⋯ at the top right`);
+      // "8 reports" and a chevron; a phone keeps only "8" so the name and time keep their room.
+      assert.equal(await toggle.locator('.upd-n').innerText(), viewport.width > 760 ? '8 reports' : '8');
       assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
-      const [archive, main, meta] = [(await boss.locator('[data-upd-archive]').boundingBox())!, (await toggle.boundingBox())!, (await boss.locator('.upd-meta').boundingBox())!];
-      assert.ok(main.x >= archive.x + archive.width - 0.5 && Math.abs(main.y + main.height / 2 - (archive.y + archive.height / 2)) <= 1,
-        `${label}: the count sits right of Archive, on its line`);
+      const [more, main, meta] = [(await boss.locator('[data-upd-menu]').boundingBox())!, (await toggle.boundingBox())!, (await boss.locator('.upd-meta').boundingBox())!];
+      assert.ok(main.x >= more.x + more.width - 0.5 && Math.abs(main.y + main.height / 2 - (more.y + more.height / 2)) <= 1,
+        `${label}: the count sits right of ⋯, on its line`);
       assert.ok(Math.abs(main.x + main.width - (meta.x + meta.width + 8)) <= 1, `${label}: the count ends the top line`);
-      const words = async () => p.locator('#upd-feed').evaluate(f => [...(f.querySelectorAll('*') as NodeListOf<Element> & Iterable<Element>)].filter(e => !e.closest('.nav-icon') && e.childNodes.length)
+      const words = async () => p.locator('#upd-feed').evaluate(f => [...(f.querySelectorAll('*') as NodeListOf<Element> & Iterable<Element>)].filter(e => !e.closest('.nav-icon, [data-upd-kids]') && e.childNodes.length)
         .flatMap(e => [...(e.childNodes as NodeListOf<ChildNode> & Iterable<ChildNode>)].filter(n => n.nodeType === 3).map(n => n.textContent)).join(' '));
-      assert.doesNotMatch(await words(), /\breports?\b/, `${label}: no "8 reports" row`);
+      assert.doesNotMatch(await words(), /\breports?\b/, `${label}: no "8 reports" row (only the toggle names them)`);
       const glyphs = async () => p.locator('#upd-feed .nav-icon').evaluateAll(els => els.map(e => e.textContent!.trim()));
       // With the shipped font loaded, every icon is one glyph that fits its box (a missing name overflows as letters).
       const drawn = async () => {

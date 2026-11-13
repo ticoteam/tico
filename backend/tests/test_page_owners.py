@@ -28,6 +28,7 @@ def test_listening_is_owned_by_the_automations_owner_until_an_admin_changes_it(a
     automations_owner(api)
     pages = get(api, 'page-owners', 'cara-test')['pages']
     assert pages['listening'] == {'bot': 'bot:automations-owner', 'name': 'Listening'}
+    assert pages['tools'] == {'bot': None, 'name': 'Tools'}  # no Tools Product Owner in the base fixture: no chat
     setup(api)
     assert put(api, 'page-owners/listening', {'bot': 'ops'}, 'ben-test')['bot'] == 'bot:ops'
     assert get(api, 'page-owners', 'cara-test')['pages']['listening']['bot'] == 'bot:ops'

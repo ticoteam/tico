@@ -336,3 +336,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 #bot-paused:empty{display:none}#bot-paused .bot-paused-badge{margin-left:8px}
 @media(max-width:600px){.bot-pause-row{align-items:stretch;flex-direction:column;gap:12px}.bot-pause-row>button{width:100%}}
 .bot-task-list .trow .ttl{padding-block:3px;margin-block:-3px}   /* a 24 px tap on the task title */
+
+/* #282: the tabs are icons (chat, Tasks, ⋯) */
+.bot-switch button{display:inline-grid;place-items:center}
+.bot-switch button .nav-icon{font-size:20px;width:20px;height:20px}

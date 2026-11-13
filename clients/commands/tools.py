@@ -665,6 +665,36 @@ def tool_check(api, args):
 
 
 @tool(
+    'tico_tools_propose_grant',
+    'Tools owner only: propose which tool and bots each key a person dropped in your Tools chat goes to. The server '
+    'builds a card of rows (key, tool, level, bots) in that chat; only the person\'s Grant on it grants, then the tool '
+    'check runs. Keys are named as the message showed them ([saved NAME]); never the owner, every bot or every computer.',
+    {
+        'thread_id': _s('Your chat with the person (the thread the [saved NAME] message is in)'),
+        'rows': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'key': _s('The key\'s name, e.g. JIRA_LOGIN'),
+                    'tool': _s('The tool\'s id or name, as tico_tool_index shows it'),
+                    'level': {'type': 'string', 'enum': ['read', 'read_write']},
+                    'bots': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Bot slugs'},
+                },
+                'required': ['key', 'tool', 'level', 'bots'],
+            },
+        },
+        'note': _s('One line above the card (optional)'),
+    },
+    required=('thread_id', 'rows'),
+)
+def tools_propose_grant(api, args):
+    return api.post(
+        'tools-chat/proposals', {'thread_id': args['thread_id'], 'rows': args['rows'], 'note': args.get('note') or ''}
+    )
+
+
+@tool(
     'tico_tool_call',
     'Call a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key '
     'and logs the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',

@@ -45,11 +45,9 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         assert got["grok-designer"]["profile"] == P.RESPONDER and got["cpo"]["profile"] == "doer"
         assert got["reviewer"]["profile"] == P.REVIEWER
         assert profile_of(c, "builder")["profile"] == P.DOER
-        # A former Token saver bot keeps its 30-minute window as a value of its own; Performance is the Doer's.
-        assert got["saver"]["profile"] == P.DOER and got["saver"]["wake_preset"] == "token_saver"
-        assert (
-            got["saver"]["profile_options"]["batch_seconds"] == 1800 and got["writer"]["wake_preset"] == "performance"
-        )
+        # A former Token saver bot is a Doer like any other: no window of its own, no preset (spec v4).
+        assert got["saver"]["profile"] == P.DOER and "wake_preset" not in got["saver"]
+        assert "profile_options" not in got["saver"] and "wake_preset" not in got["writer"]
         assert told > 12
         notes = [m for m in H.notices(c, "human:ana") if "gave each of your bots a profile" in m["body"]]
         assert len(notes) == 1 and "engineering-manager" in notes[0]["body"] and "Lead" in notes[0]["body"]
@@ -269,13 +267,8 @@ def test_setting_a_profile_needs_the_bots_manager_and_the_current_revision(api):
     set_profile(api, "ops", "doer", pulls="none", expected=422)
     set_profile(api, "ops", "doer", digest_hour=7, expected=422)
     assert set_profile(api, "ops", "lead", digest_hour=7)["profile"]["digest_hour"] == 7
-    # The old wake-preset route still works and leaves the profile where it is.
-    post(
-        api,
-        "bots/ops/wake-preset",
-        {"wake_preset": "token_saver", "expected_revision": get(api, "bots/ops")["revision"]},
-    )
-    assert get(api, "bots/ops")["profile"]["name"] == "lead"
+    # A profile has no wake numbers to set any more.
+    set_profile(api, "ops", "doer", batch_seconds=1800, expected=422)
 
 
 def test_custom_copies_the_rows_and_leaving_it_needs_a_confirm(api):
@@ -343,17 +336,11 @@ def test_the_profiles_catch_all_never_beats_a_team_or_type_rule_and_a_leads_own_
         assert "wake_batch" not in mine["refs"] and jobs(c, "boss") == 0
 
 
-def test_the_old_wake_preset_route_moves_only_the_window_and_the_label_the_hold_reads(api):
+def test_setting_a_profile_writes_no_wake_preset(api):
     set_profile(api, "ops", "doer")
-    revision = lambda: get(api, "bots/ops")["revision"]  # noqa: E731
-    saver = post(api, "bots/ops/wake-preset", {"wake_preset": "token_saver", "expected_revision": revision()})
-    assert saver["wake"]["batch_seconds"] == 1800 and saver["wake"]["profile"] == "doer"
     with api.app.state.store.read() as c:
-        assert profile_of(c, "ops")["wake_preset"] == "token_saver"
-    back = post(api, "bots/ops/wake-preset", {"wake_preset": "performance", "expected_revision": revision()})
-    assert back["wake"]["batch_seconds"] == 900 and get(api, "bots/ops")["profile"]["options"] == {}
-    with api.app.state.store.read() as c:
-        assert profile_of(c, "ops")["wake_preset"] == "performance"
+        assert "wake_preset" not in profile_of(c, "ops")
+    assert get(api, "bots/ops")["wake"]["notice_seconds"] == 300
 
 
 def test_a_reviewer_may_be_handed_a_review_child_but_not_an_ordinary_task_and_still_runs_routines(api):

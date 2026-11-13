@@ -118,6 +118,8 @@ section.card.tt-soon>header .pill{margin-left:auto}
 @media (max-width:760px){
   .tt-head{min-height:0}
   .tt-q{flex:1 1 100%;margin-left:0}
+  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. */
+  .tt-filters button{min-height:40px}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */
   .tt-list thead,.tt-log thead,.tt-limits thead{display:none}
@@ -128,6 +130,8 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tt-list .tt-way{grid-column:1;padding-left:42px}
   .tt-list .tt-st{grid-column:2;grid-row:2;text-align:right}
   .tt-list .tt-who{grid-column:1 / -1;padding-left:42px;white-space:normal}
+  /* Nobody can use it yet: the words are for screen readers only, so the cell leaves no empty line. */
+  .tt-list .tt-who:not(:has(.tt-faces)){position:absolute}
   .tt-list .tt-chev{display:none}
   .tt-log tr,.tt-limits tr{display:flex;flex-wrap:wrap;gap:4px 10px;padding:8px 0;border-bottom:1px solid var(--line)}
   .tt-log td,.tt-limits td{display:block;padding:0;border:0;min-width:0}
@@ -207,3 +211,37 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tw-acct .tw-acct-who:not(:has(*)){display:none}
   .tw-acct-user{max-width:100%}
 }
+.tt-chat{display:inline-flex}
+.tt-chat:empty{display:none}
+/* Keys dropped in that chat (ui/app/tools-key-drop.ts): items show what they are, never a value. */
+.kd-tray{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0;max-height:40vh;max-height:40dvh;overflow-y:auto;overscroll-behavior:contain}
+.kd-tray[hidden]{display:none}
+.kd-head{font-weight:600;font-size:var(--t-sm)}
+.kd-item{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-xs);min-width:0}
+.kd-suspect{border-style:dashed}
+.kd-kind{font-weight:600;min-width:0;overflow-wrap:anywhere}
+.kd-name{width:21ch;max-width:100%;min-width:0;font:inherit;font-family:var(--mono,monospace);padding:2px 4px}
+.kd-preview{color:var(--muted);font-family:var(--mono,monospace)}
+.kd-state{color:var(--muted)}
+.kd-ok{color:var(--ok,inherit)}
+.kd-bad{color:var(--fail,inherit)}
+.kd-x{margin-left:auto}
+.kd-replace{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.kd-denied{margin:0;font-size:var(--t-xs)}
+.kd-proof{margin:4px 2px 0;font-size:var(--t-xs)}
+.kd-proof:empty{display:none}
+.kd-mark{flex:none;white-space:nowrap}
+@media (max-width:760px){
+  .kd-item{flex-direction:column;align-items:stretch}
+  .kd-x{margin-left:0}
+  .kd-name{width:100%}
+}
+/* The Tools owner's proposal card in its chat: rows the server built, Grant, then each key's check. */
+.kg-card{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm)}
+.kg-title{font-weight:600}
+.kg-row,.kg-result{display:flex;flex-wrap:wrap;align-items:center;gap:6px;overflow-wrap:anywhere}
+.kg-acts{display:flex;gap:6px}
+.kg-fix{display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%}
+.kg-err{margin:0;color:var(--fail,inherit)}
+.kg-err[hidden]{display:none}
+.kg-replaces{flex-basis:100%;color:var(--muted);font-size:var(--t-xs)}

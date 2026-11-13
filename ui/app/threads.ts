@@ -412,12 +412,14 @@ function threadsArchivedGone(id: string, dm?: string | null) {
   if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
   threadsSideRender();
 }
-async function threadsArchive(id: string): Promise<void> {
+// onUndo lets a caller that shows the thread's state (a bot's More row) redraw it after the toast's Undo.
+async function threadsArchive(id: string, onUndo?: () => void): Promise<void> {
   const view: ThreadRow = await patch(thvPath(id), {archived: true});
   threadsPut(view);
   threadsArchivedGone(id, threadsRootLearn(view)?.dm);
   toast('Archived', false, {label: 'Undo', run: async () => {
     threadsUnarchived(await patch(thvPath(id), {archived: false}));
+    onUndo?.();
   }});
   threadsRecount();
 }

@@ -984,5 +984,89 @@
   "stdout": "{\n  \"by\": \"plan\",\n  \"grain\": \"month\",\n  \"min_cohort\": 30,\n  \"cac_note\": \"spend is not split by plan\",\n  \"keys_visible\": false,\n  \"cohorts\": [\n    {\n      \"period\": \"2026-09\",\n      \"value\": \"pro\",\n      \"too_few\": false,\n      \"new_customers\": {\n        \"value\": 71,\n        \"status\": \"ok\"\n      },\n      \"kept_d30\": {\n        \"value\": 78.9,\n        \"status\": \"ok\",\n        \"count\": 56,\n        \"denominator\": 71\n      },\n      \"kept_d90\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2026-12-29\"\n      },\n      \"kept_d180\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2027-03-29\"\n      },\n      \"ltv\": {\n        \"value\": 640,\n        \"status\": \"ok\"\n      },\n      \"cac\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      },\n      \"payback_months\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      }\n    },\n    {\n      \"period\": \"2026-09\",\n      \"value\": \"solo\",\n      \"too_few\": true,\n      \"new_customers\": {\n        \"value\": 19,\n        \"status\": \"ok\"\n      },\n      \"kept_d30\": {\n        \"value\": null,\n        \"status\": \"too_few\",\n        \"count\": 12,\n        \"denominator\": 19\n      },\n      \"kept_d90\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2026-12-29\"\n      },\n      \"kept_d180\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2027-03-29\"\n      },\n      \"ltv\": {\n        \"value\": null,\n        \"status\": \"too_few\"\n      },\n      \"cac\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      },\n      \"payback_months\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      }\n    }\n  ]\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "campaigns",
+   "--months",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_campaigns",
+    {
+     "months": 3,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/finance-campaigns?months=3",
+    null
+   ]
+  ],
+  "stdout": "From Finance: Meta Ads act_111. Unmapped spend counts on Unknown.\nkey                 campaign      month    spend\nmeta_ads:111:brand  Brand search  2026-10  4210.5\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "s1",
+   "--sync",
+   "finance_ad_spend",
+   "--campaign",
+   "meta_ads:111:brand=search-ads",
+   "--campaign",
+   "meta_ads:111:promo=unknown"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "campaign": [
+      "meta_ads:111:brand=search-ads",
+      "meta_ads:111:promo=unknown"
+     ],
+     "id": "s1",
+     "operation_id": null,
+     "sync_kind": "finance_ad_spend"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/s1",
+    {
+     "sync_kind": "finance_ad_spend",
+     "sync_map": {
+      "campaigns": {
+       "meta_ads:111:brand": "search-ads",
+       "meta_ads:111:promo": "unknown"
+      }
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

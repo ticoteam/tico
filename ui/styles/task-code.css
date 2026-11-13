@@ -157,3 +157,17 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 
 .prop[data-prop-row="owner"] .prop-vwrap{flex-wrap:wrap;gap:4px 8px}
 .prop-vwrap>small{flex-basis:100%;font-size:var(--t-xs);color:var(--muted);line-height:var(--lh)}
+/* Details: one line until opened (task #419); the rows open in place under it. */
+.task-details{border-top:1px solid var(--line);margin-top:2px}
+.task-details>summary{display:flex;align-items:center;gap:8px;min-height:30px;cursor:pointer;list-style:none;font-size:var(--t-sm)}
+.task-details>summary::-webkit-details-marker{display:none}
+.task-details-k{color:var(--muted);flex:none}
+.task-details-line{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.task-details-chev{flex:none;color:var(--muted);transition:transform .12s}
+.task-details[open]>summary .task-details-chev{transform:rotate(90deg)}
+.task-details[open]>summary .task-details-line{visibility:hidden}
+@media (max-width:760px){.task-details>summary{display:none}}
+/* A task waiting on the reader's own answer: a banner above the chat (task #419). */
+.task-need{display:flex;align-items:center;gap:10px;margin:0 16px 8px;padding:8px 12px;border:1px solid var(--wait);border-radius:var(--radius);background:var(--wait-bg);color:var(--ink);font-size:var(--t-sm)}
+.task-need-line{flex:1;min-width:0}
+.task-need .tmodal-act{flex:none}

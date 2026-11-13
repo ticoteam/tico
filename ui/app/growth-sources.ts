@@ -1,7 +1,9 @@
 /* ui/app/growth-sources.ts — Sources (#/growth/sources, behind a link on the Growth page, which its head links back to): one source of truth per kind
    of number (GET /api/v2/growth/sources), one row each: what it is the truth for, the system, how bots reach it, what
-   they may do and who owns it. Two sources for one truth are flagged, and "Use X" keeps X and retires the others. The
-   owner or an admin adds, edits and retires one; they change without a publish.
+   they may do and who owns it. A synced source (backend/growth_sync.py) also says what it fills and its health: Fresh,
+   Stale or Failing, and since when. Two sources for one truth are flagged, and "Use X" keeps X and retires the others.
+   The owner or an admin adds, edits and retires one, and connects a synced one: Connect a source maps a file's columns
+   to Growth's numbers once, and its first file fills up to 12 months. They change without a publish.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -28,7 +30,7 @@ function gsrcDraw(state: GrState) {
   const body = $('#gr-body'), d = state.data;
   if (!body || !d) return;
   const may = d.may, list = d.src.filter(s => !s.retired_at).sort((a, b) => String(a.truth_for).localeCompare(String(b.truth_for)));
-  patchHTML($('#strat-actions'), may ? '<button class="primary" type="button" data-src-add>+ Source</button>' : '');
+  patchHTML($('#strat-actions'), may ? '<button class="ghost" type="button" data-src-add>+ Source</button><button class="primary" type="button" data-src-connect>Connect a source</button>' : '');
   const banners = d.conflicts.map(t => {
     const rows = list.filter(s => String(s.truth_for).toLowerCase() === String(t).toLowerCase());
     return `<div class="gr-banner gr-amber" data-clash="${esc(t)}"><span><b>${esc(t)}</b> · ${esc(rows.map(s => s.system).join(', '))}</span><span class="spacer"></span>
@@ -37,14 +39,18 @@ function gsrcDraw(state: GrState) {
   const reach = (s: GrSource) => `${esc(GT_REACH.find(r => r[0] === s.reach_kind)?.[1] || s.reach_kind || '')}${s.reach_ref ? ` <code>${esc(s.reach_ref)}</code>` : ''}`;
   const row = (s: GrSource) => {
     const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s">${esc(s.system)}</span><span class="muted gsrc-r">${reach(s)}</span>
-      <span class="muted gsrc-m">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o">${esc(grWho(s.owner_ref))}</span>`;
-    return `<li>${may
+      <span class="muted gsrc-m">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o">${esc(grWho(s.owner_ref))}</span>${gsrcSync(s)}`;
+    return `<li data-src="${esc(s.id)}" data-health="${esc(s.health || 'not_synced')}">${may
       ? `<button type="button" class="gsrc-row" data-src-edit="${esc(s.id)}">${inner}</button>` : `<div class="gsrc-row">${inner}</div>`}</li>`;
   };
   body.innerHTML = banners + (list.length ? `<section class="card gsrc-list" aria-label="Sources"><ul class="gsrc-ul">${list.map(row).join('')}</ul></section>` : '');
   const add = $('#strat-actions [data-src-add]');
   if (add) add.onclick = () => void gsrcDialog(state);
-  body.querySelectorAll('[data-src-edit]').forEach((b: HTMLElement) => { b.onclick = () => void gsrcDialog(state, d.src.find(s => s.id === b.dataset.srcEdit)); });
+  const connect = $('#strat-actions [data-src-connect]');
+  if (connect) connect.onclick = () => gsrcConnect(state);
+  body.querySelectorAll('[data-src-edit]').forEach((b: HTMLElement) => {
+    b.onclick = () => { const s = d.src.find(x => x.id === b.dataset.srcEdit); if (s?.kind) gsrcConnect(state, s); else void gsrcDialog(state, s); };
+  });
   // "Use X" keeps X and retires the other sources for that truth.
   body.querySelectorAll('[data-use]').forEach((b: HTMLElement) => {
     b.onclick = async () => {
@@ -85,4 +91,105 @@ async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null)
   });
   const retire = dlg.querySelector<HTMLButtonElement>('[data-retire]');
   if (retire && s) grRetireButton(retire, dlg, `/v2/growth/sources/${encodeURIComponent(s.id)}/retire`, () => void gsrcRead(state));
+}
+
+// ----------------------------------------------------------------- synced sources (backend/growth_sync.py)
+// What a source's row says about syncing: what it fills and its health, or that it is typed by hand.
+const GSRC_HEALTH: Record<string, string> = {fresh: 'Fresh', stale: 'Stale', failing: 'Failing', waiting: 'Waiting'};
+function gsrcSync(s: GrSource) {
+  if (!s.kind) return '<span class="muted gsrc-sync">Typed by hand · not synced</span>';
+  const h = s.health || 'waiting', fills = grList((s.fills || []).map(grFieldWord));
+  const when = h === 'failing' ? `since ${fmt(s.health_since)}${s.last_error ? ` · ${s.last_error}` : ''}`
+    : h === 'stale' ? (s.last_good_run ? `last good run ${grDay(s.last_good_run)}` : '')
+    : h === 'fresh' ? `synced ${ago(s.last_good_run)}` : (s.has_file ? 'its file did not run yet' : 'waiting for its first file');
+  return `<span class="gsrc-sync"><span class="muted">${esc(fills)}</span> <span class="pill ${h === 'fresh' ? 'ok' : h === 'failing' ? 'fail' : 'waiting'}">${esc(GSRC_HEALTH[h] || h)}</span> <span class="muted">${esc(when)}</span></span>`;
+}
+// The numbers a synced source can fill, in the order Growth shows them.
+const GSRC_FIELDS = ['spend', 'bot_cost', 'new_customers', 'revenue_month', 'margin_pct', 'kept_d30', 'kept_d90', 'kept_d180'];
+const GSRC_FILE_MAX = 1_000_000;   // characters of CSV one run takes (backend/growth_sync.py PAYLOAD_MAX)
+interface GsrcRun { ok?: boolean; error?: string | null; written?: number; held?: number; not_written?: Array<{row?: number; channel?: string; month?: string; reason?: string}>; not_written_count?: number }
+// A CSV's first line, as column names (quotes taken off).
+const gsrcHeader = (text: string) => (text.split(/\r?\n/, 1)[0] || '').split(',').map(c => c.trim().replace(/^"(.*)"$/, '$1').trim()).filter(Boolean);
+// Connect a source, or change a connected one: its name and owner, the file's month and channel columns, and the column
+// for each number it fills (blank: not filled). Picking a file reads its columns and matches them by name; saving with
+// a file runs it at once (the first run fills up to 12 months back) and says what it wrote, held and could not write.
+function gsrcConnect(state: GrState, s: GrSource | null = null) {
+  const map = s?.map || {}, fields = map.fields || {};
+  const col = (name: string, value: string) => `<input name="${esc(name)}" maxlength="80" list="gsrc-cols" autocapitalize="off" value="${esc(value)}">`;
+  const body = `<p class="muted gr-note">${s ? `${esc(GSRC_HEALTH[s.health || 'waiting'] || '')}${s.last_error ? `: ${esc(s.last_error)}` : ''}` : 'From a file: upload a CSV (a sheet’s export works), or a script or bot posts the same rows. One row per channel per month.'}</p>
+    ${grField('Name', `<input name="system" maxlength="80" required value="${esc(s?.system || '')}" placeholder="Signups sheet">`)}
+    ${grField(s ? 'New file (CSV)' : 'File (CSV)', '<input name="file" type="file" accept=".csv,text/csv">')}
+    <datalist id="gsrc-cols"></datalist>
+    <fieldset class="gr-fs"><legend class="gr-k">Columns in the file</legend>
+      <div class="gr-pair">${grField('Month (YYYY-MM)', col('col_month', map.month || 'month'))}${grField('Channel', col('col_channel', map.channel || 'channel'))}</div>
+      <p class="muted gr-note">Which column holds each number. Leave it blank when the file does not have it.</p>
+      <div class="gsrc-map">${GSRC_FIELDS.map(f => grField(GR_METRIC[f] || f, col('f_' + f, fields[f] || ''))).join('')}</div>
+    </fieldset>
+    ${grField('Owner', `<select name="owner_ref">${grOwnerOpts(s?.owner_ref)}</select>`)}
+    <p class="muted gr-note">Rows for a channel Growth does not have are not written; the result lists them. A number someone typed as actual is never written over: both are kept, and the owner chooses on Growth.</p>
+    ${s?.has_file ? '<button type="button" class="ghost small" data-src-run>Run its last file again</button>' : ''}
+    ${s ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
+  const label = s ? 'Save' : 'Connect and fill 12 months';
+  // Once Connect has made the source, a retry (its file refused, say) changes that source rather than making another.
+  let made: GrSource | null = s;
+  const dlg = grDialog(s ? s.system : 'Connect a source', body, label, async form => {
+    const el = form.elements as HTMLFormControlsCollection & Record<string, HTMLInputElement>;
+    const v = (n: string) => String(el[n]?.value || '').trim();
+    const mapped: Record<string, string> = {};
+    for (const f of GSRC_FIELDS) if (v('f_' + f)) mapped[f] = v('f_' + f);
+    if (!v('system')) throw new Error('A name');
+    if (!Object.keys(mapped).length) throw new Error('Name the column for at least one number');
+    const file = el.file?.files?.[0];
+    if (!made && !file) throw new Error('A CSV file to fill from');
+    const text = file ? await file.text() : null;
+    if (text != null && text.length > GSRC_FILE_MAX) throw new Error('That file is over 1 MB: send at most 1,000,000 characters, or split it by months');
+    const out = {system: v('system'), truth_for: grList(Object.keys(mapped).map(grFieldWord)).slice(0, 80), owner_ref: v('owner_ref') || null,
+      sync_map: {month: v('col_month') || 'month', channel: v('col_channel') || 'channel', fields: mapped}};
+    const saved = made ? await patch(`/v2/growth/sources/${encodeURIComponent(made.id)}`, out) as GrSource
+      : await post('/v2/growth/sources', {...out, sync_kind: 'file'}) as GrSource;
+    made = saved;
+    void gsrcRead(state);
+    if (text == null) { toast('Saved'); return; }
+    let run: GsrcRun;
+    try { run = await post(`/v2/growth/sources/${encodeURIComponent(saved.id)}/rows`, {csv: text}) as GsrcRun; }
+    catch (e) {
+      const save = dlg.querySelector<HTMLButtonElement>('[type=submit]');
+      if (save) save.textContent = 'Save and run';
+      throw new Error(`${saved.system || out.system} is connected, but its file was not taken: ${errorMessage(e, 'refused')}. Pick another file and save again.`);
+    }
+    gsrcResult(saved.system || out.system, run);
+    void gsrcRead(state);
+  });
+  // A picked file offers its columns and fills each blank one whose name matches.
+  const pick = dlg.querySelector<HTMLInputElement>('[name=file]');
+  if (pick) pick.onchange = async () => {
+    const f = pick.files?.[0];
+    if (!f) return;
+    const cols = gsrcHeader(await f.slice(0, 65536).text());
+    patchHTML(dlg.querySelector<HTMLElement>('#gsrc-cols')!, cols.map(c => `<option value="${esc(c)}">`).join(''));
+    const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    for (const f2 of GSRC_FIELDS) {
+      const input = dlg.querySelector<HTMLInputElement>(`[name=f_${f2}]`), hit = cols.find(c => [norm(f2), norm(GR_METRIC[f2] || '')].includes(norm(c)));
+      if (input && !input.value && hit) input.value = hit;
+    }
+  };
+  const run = dlg.querySelector<HTMLButtonElement>('[data-src-run]');
+  if (run && s) run.onclick = async () => {
+    run.disabled = true;
+    try { gsrcResult(s.system, await post(`/v2/growth/sources/${encodeURIComponent(s.id)}/sync`, {}) as GsrcRun); }
+    catch (e) { toast(errorMessage(e, 'Did not run'), true); run.disabled = false; return; }
+    void gsrcRead(state);
+  };
+  const retire = dlg.querySelector<HTMLButtonElement>('[data-retire]');
+  if (retire && s) grRetireButton(retire, dlg, `/v2/growth/sources/${encodeURIComponent(s.id)}/retire`, () => void gsrcRead(state));
+}
+// A run's result: what it wrote, what it held beside a typed number, and the rows it could not write; or why it failed
+// (nothing it wrote before changed).
+function gsrcResult(name: string, r: GsrcRun) {
+  const rows = r.not_written || [], more = (r.not_written_count || 0) - rows.length;
+  const body = r.ok
+    ? `<p data-run-ok>Wrote ${esc(r.written ?? 0)} number${r.written === 1 ? '' : 's'}.${r.held ? ` ${esc(r.held)} differ${r.held === 1 ? 's' : ''} from a number someone typed as actual: both are kept, and the owner chooses on Growth.` : ''}</p>
+      ${rows.length ? `<p class="muted gr-note">Not written:</p><ul class="gsrc-skip">${rows.map(x => `<li>Row ${esc(x.row ?? '')}${x.channel ? ` · ${esc(x.channel)}` : ''}${x.month ? ` · ${esc(x.month)}` : ''}: ${esc(x.reason || '')}</li>`).join('')}${more > 0 ? `<li class="muted">and ${esc(more)} more</li>` : ''}</ul>` : ''}`
+    : `<p data-run-failed>Failing: ${esc(r.error || 'the run failed')}. Nothing changed.</p>`;
+  grDialog(`${name} · ${r.ok ? 'Synced' : 'Not synced'}`, body, '', null);
 }

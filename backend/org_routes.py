@@ -118,7 +118,7 @@ def register(app, auth, settings, settings_admin, store):
                     ),
                     # Whether it changes its direct reports (backend/report_managers.py): on unless turned off.
                     "manages_reports": report_managers.switch_on(declared),
-                    "wake": wake_presets.effective(declared),
+                    "wake": wake_presets.waits(declared),
                     "profile": profiles.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["id"], config),
                 }
