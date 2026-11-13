@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Real server + Rust runners + Google Chrome; no pytest, external sites, model calls or command retries."""
 
+# Named live_checks.py, not run.py or live.py: the PR check planner (scripts/pr_checks.py) maps `run.<name>` in any
+# file to every run.py and a path ending live.py to every live.py. This script runs scripts/heavy.sh, which reaches the
+# release scripts that list the repository, so either name made backend.app depend on everything; PRs ran the suite.
 import argparse
 import base64
 import contextlib
