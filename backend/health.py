@@ -3895,6 +3895,12 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open Computers", "#/settings", "devices")],
             )
         )
+    from . import browser_commands
+
+    if full and (browser := browser_commands.health_problem(c)):
+        checks.append(
+            _check("browser_host", "Browser host", "warn", browser, [_fix("Open Computers", "#/settings", "devices")])
+        )
     beside = _member_bots_beside_shared_keys(c) if full else []
     if beside:
         checks.append(

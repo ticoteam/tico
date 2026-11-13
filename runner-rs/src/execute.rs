@@ -2299,7 +2299,8 @@ impl Runner {
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            redactor = redact::for_turn(&pairs, &vault.values);
+            // Always a masker, even with no secrets yet: a website login typed mid-turn (browser/) is added to it.
+            redactor = Some(redact::for_turn(&pairs, &vault.values).unwrap_or_else(|| Arc::new(Redactor::new(&[]))));
             if let Some(s) = &self.socket {
                 let r = redactor.get_or_insert_with(|| Arc::new(Redactor::new(&[]))).clone();
                 s.set_redactor(&token, r);

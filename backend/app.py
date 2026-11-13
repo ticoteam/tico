@@ -1014,6 +1014,10 @@ def create_app(settings=None):
                     if captured
                     else 20_000_000
                     if docs_import or upload and request.state.identity.role in ("human", "owner")
+                    else 14_200_000  # a website tool's upload, 10 MB in base64 (backend/browser_commands.py)
+                    if request.url.path == "/api/v2/browser/commands"
+                    else 20_100_000  # a website tool's download, from the computer
+                    if re.fullmatch(r"/api/v2/runner-browser-commands/[^/]+/file", request.url.path)
                     else 2_000_000
                 )
                 if int(size) > limit:
@@ -5449,9 +5453,15 @@ def create_app(settings=None):
     from . import api_tools
 
     api_tools.install(app, store, auth, settings)  # Tools: API tools, their keys and levels, and the tool index
+    from . import website_tools
+
+    website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts
     from . import tool_proxy
 
     tool_proxy.install(app, store)
+    from . import browser_commands
+
+    browser_commands.install(app, store, auth, mutate)  # website tools' browser: bots' verbs, computers, live view
     from .finance import actions as finance_vault
 
     finance_vault.use_vault(app.state.vault)  # never one an earlier app left behind (the scheduler may be off)

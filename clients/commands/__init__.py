@@ -39,6 +39,8 @@ from clients.commands import (
     connections,
     computer_upkeep,
     pipelines,
+    browser,
+    logins,
     _access,
     _mcp,
 )
@@ -74,6 +76,8 @@ MODULES = (
     connections,
     computer_upkeep,
     pipelines,
+    browser,
+    logins,
     _access,
     _mcp,
 )

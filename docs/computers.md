@@ -449,6 +449,34 @@ API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}
 `GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](api.md#the-contract)). Hub: `tico computer browser-exit` and
 `tico bot browser-exit`.
 
+## Browser host
+
+The browser host is the one computer that runs the company's website tools ([Website
+logins](credential-vault.md#website-logins)): a Chrome profile per account, kept signed in, which bots drive by verbs
+and people watch or take control of from the tool's page. An admin picks it with the **Browser host** switch in that
+computer's pop-up; one per company.
+
+- It needs Chrome: Google Chrome on a Mac; on Linux `google-chrome`, else `chromium`, on its PATH. The runner image
+  (Docker, amd64 and arm64) ships Debian's Chromium, since Google publishes no Linux arm64 Chrome; elsewhere Tico does
+  not install it. On Linux without a display it runs headless. In the runner container Chromium starts without its own
+  sandbox, which needs a user namespace that Docker's default seccomp profile refuses; it runs there as the runner's
+  user with no capabilities, and bot code, which runs as another user, cannot read its profiles.
+- It runs no bots of its own: placing a bot there is refused while it is the browser host.
+- It is online when it asked for website commands within the last 40 seconds; a running computer asks continuously.
+  Health shows "Browser host offline" or "Chrome missing on <computer>" when it is not ready.
+- Each account's browser starts on its first command, closes after 15 minutes idle (the sign-in is kept) and at most 8
+  are open at once.
+
+Where a website runs is chosen when it is opened:
+
+1. On the browser host, when one is set, online and has Chrome.
+2. Otherwise on the bot's own computer, if it has Chrome, unless the site is **central only**.
+3. Otherwise it is refused, naming the browser host when it is the one that is offline.
+
+Every later command stays on that computer. If it goes offline or is no longer allowed, the command is refused and the
+bot opens the website again, which chooses afresh. A person's view follows the session to its computer and keeps its
+page; a browser that restarted or left the site goes back to the site. With no session it opens on the browser host.
+
 ## Let a bot view the app (read only)
 
 A bot can open the app signed in as itself and take screenshots, so a Product Owner shows what it checked in

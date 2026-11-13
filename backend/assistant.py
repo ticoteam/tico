@@ -257,6 +257,11 @@ NEVER = [
         # HQ's cloud-machine support switch grants access just like the support_access team rule.
         ("PUT", r"/api/v2/cloud-machines/support"),
         (None, r"/api/v2/credential-imports(/.*)?"),
+        # A website tool's accounts are credentials and grants, its 2FA code a secret, and its sites decide where a
+        # password is typed (backend/website_tools.py): adding, changing or sharing one is the person's own tap.
+        (None, r"/api/v2/website-tools(/.*)?"),
+        # A website tool's live browser (backend/browser_commands.py): a person watches and drives it in Tico, never a chat.
+        (None, r"/api/v2/website-tools/[^/]+/accounts/[^/]+/browser(/.*)?"),
         (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),
         (None, r"/api/v2/credential-requests/[^/]+/save"),
         (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
@@ -648,7 +653,7 @@ _PROPOSABLE_BOTOPS = [
         ("PUT", r"/api/v2/usage/pools/(company|groups/[^/]+)"),
         ("DELETE", r"/api/v2/automations/[^/]+"),
         ("POST", r"/api/v2/automations/[^/]+/delete"),
-        ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart)"),
+        ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart|browser-host)"),
         ("POST", r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke"),
         ("POST", r"/api/v2/system/update"),
         ("POST", r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide"),
@@ -1031,7 +1036,7 @@ def describe(c, method, path, body, viewer=None, admins=()):
             ),
         ),
         (
-            r"/api/v2/(?:runners|computers)/([^/]+)/(member-bots|revoke|restart)",
+            r"/api/v2/(?:runners|computers)/([^/]+)/(member-bots|revoke|restart|browser-host)",
             lambda g: (
                 {
                     "member-bots": "Let a computer take members' bots"
@@ -1039,6 +1044,9 @@ def describe(c, method, path, body, viewer=None, admins=()):
                     else "Stop a computer taking members' bots",
                     "revoke": "Remove a computer",
                     "restart": "Restart a computer's runner",
+                    "browser-host": "Make a computer the browser host"
+                    if body.get("on")
+                    else "Stop a computer being the browser host",
                 }[g[1]]
                 + " ("
                 + ((c.execute("SELECT label FROM runners WHERE id=?", (g[0],)).fetchone() or {"label": g[0]})["label"])

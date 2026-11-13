@@ -8019,6 +8019,219 @@ SCHEMAS['ApiToolActivity'] = obj(
         'next': 'n',
     }
 )
+# Website tools (backend/website_tools.py): a site signed in to through a browser, and its accounts. No answer carries a
+# password or a 2FA key; the 2FA code goes only to a signed-in person who uses the account.
+STABLE.extend(
+    [
+        (
+            '/api/v2/website-tools',
+            'post',
+            'Tools',
+            'createWebsiteTool',
+            'Add a website tool (credential administrators): its sites (hostnames; a subdomain matches; http://host '
+            'allows plain http) and whether only the browser host opens it. The name defaults to the first site',
+            'WebsiteToolCreated',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}',
+            'get',
+            'Tools',
+            'getWebsiteTool',
+            'One website tool: its accounts the caller uses or manages (never a password or a 2FA key), each account\'s '
+            'browser session, the browser host, the newest Activity; to whoever may change it, who can see it. A tool '
+            'the caller may not see is a 404',
+            'WebsiteTool',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}',
+            'patch',
+            'Tools',
+            'updateWebsiteTool',
+            'Rename it, change its sites or Central only (credential administrators), or who can see it: audience '
+            'null for Everyone, or an audience for Only listed',
+            'WebsiteToolSettings',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}',
+            'delete',
+            'Tools',
+            'deleteWebsiteTool',
+            'Remove a website tool with its accounts, their grants and its Activity (credential administrators)',
+            'WebsiteDeleted',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/activity',
+            'get',
+            'Tools',
+            'listWebsiteToolActivity',
+            'Who opened, filled, copied or asked for a code, on which page (host and path), with which account and '
+            'where, newest first. Follow next with cursor',
+            'WebsiteToolActivity',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts',
+            'post',
+            'Tools',
+            'addWebsiteAccount',
+            'Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per '
+            'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again',
+            'WebsiteAccountSaved',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}',
+            'patch',
+            'Tools',
+            'updateWebsiteAccount',
+            'Replace login: the username, the password, or the 2FA key (totp null removes it)',
+            'WebsiteAccountSaved',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}',
+            'delete',
+            'Tools',
+            'deleteWebsiteAccount',
+            'Remove an account and its grants',
+            'WebsiteDeleted',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}/access/{subject}',
+            'put',
+            'Tools',
+            'setWebsiteAccountAccess',
+            'Give a shared account to a person or a bot, or take it away (on: false)',
+            'WebsiteAccountAccessSet',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}/code',
+            'get',
+            'Tools',
+            'getWebsiteAccountCode',
+            'The current 2FA code, to a signed-in person who uses the account (never a bot, a token or an assistant). '
+            'Logged, without the code',
+            'WebsiteCode',
+        ),
+    ]
+)
+WEBSITE_WHO = obj({'subject': 's', 'kind': {'enum': ['person', 'bot']}, 'id': 's', 'name': 's', 'initials': 's'})
+SCHEMAS['WebsiteToolCreated'] = obj({'id': 's'})
+SCHEMAS['WebsiteDeleted'] = obj({'deleted': 'b', 'id': 's'})
+SCHEMAS['WebsiteAccountSaved'] = obj({'id': 's'})
+SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b'})
+SCHEMAS['WebsiteCode'] = obj({'code': 's', 'expires_in': 'i'})
+SCHEMAS['WebsiteToolSettings'] = obj(
+    {'id': 's', 'name': 's', 'kind': {'enum': ['website']}, 'sites': items(_t('s')), 'central_only': 'b'}
+)
+WEBSITE_ACTIVITY_ROW = obj(
+    {
+        'id': 's',
+        'at': 's',
+        'who': WEBSITE_WHO,
+        'verb': {'enum': ['open', 'fill', 'copy', 'code', 'needs_you', 'control', 'sign_in', 'download', 'upload']},
+        'page': 's',
+        'account': {'enum': ['shared', 'own']},
+        'where': {'enum': ['central', 'own']},
+        'result': {'enum': ['sent', 'refused', 'failed', 'use']},
+    }
+)
+SCHEMAS['WebsiteToolActivity'] = obj({'rows': items(WEBSITE_ACTIVITY_ROW), 'next': 'n'})
+SCHEMAS['WebsiteTool'] = obj(
+    {
+        'tool': ref('WebsiteToolSettings'),
+        'status': obj({'label': 's', 'tone': {'enum': ['ok', 'waiting', 'fail', 'neutral']}}),
+        'accounts': items(
+            obj(
+                {
+                    'id': 's',
+                    'kind': {'enum': ['shared', 'own']},
+                    'username': 's',
+                    'has_totp': 'b',
+                    'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
+                    'access': items(WEBSITE_WHO),
+                    'session': obj(
+                        {
+                            'state': {'enum': ['needs_you', 'in_use', 'unknown']},
+                            'where': {'type': ['string', 'null'], 'enum': ['central', 'own', None]},
+                            'computer': 'n',
+                            'by': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
+                        },
+                        required=['state'],
+                    ),
+                    'can_use': 'b',
+                    'can_manage': 'b',
+                },
+                # `username` is left out for a bot, a run or a computer.
+                required=['id', 'kind', 'has_totp', 'holder', 'access', 'session', 'can_use', 'can_manage'],
+            )
+        ),
+        'host': {
+            'anyOf': [obj({'runner_id': 's', 'label': 's', 'online': 'b'}), {'type': 'null'}],
+            'description': 'The company browser host, null when none is set',
+        },
+        'recent': items(WEBSITE_ACTIVITY_ROW),
+        'can_manage': 'b',
+        'private': 'b',
+        'can_set_audience': 'b',
+        'audience': {
+            'anyOf': [ref('AccessAudience'), {'type': 'null'}],
+            'description': 'Only to whoever may change it; null is Everyone',
+        },
+        'seen_by': items(
+            obj(
+                {
+                    'subject': 's',
+                    'kind': {'enum': ['person', 'group', 'bot', 'finance']},
+                    'id': 's',
+                    'name': 's',
+                    'why': {'enum': ['Owner', 'Listed', 'Can use it']},
+                }
+            )
+        )
+        | {'description': 'Only to whoever may change it: who can see an Only listed tool, and why'},
+    },
+    required=['tool', 'status', 'accounts', 'host', 'recent', 'can_manage', 'private', 'can_set_audience'],
+)
+BROWSER = '/api/v2/website-tools/{tool_id}/accounts/{account_id}/browser'
+STABLE.extend(
+    [
+        (
+            BROWSER,
+            'post',
+            'Tools',
+            'openWebsiteBrowser',
+            'Open, or wake, the account\'s browser for your live view: on the computer its session runs on, else the browser '
+            'host. A live session is woken without changing its page',
+            'BrowserOpened',
+        ),
+        (
+            BROWSER + '/frame',
+            'get',
+            'Tools',
+            'getWebsiteBrowserFrame',
+            'The newest picture of the account\'s browser (JPEG; 204 before the first), with X-Page-Url, X-Page-Width and '
+            'X-Page-Height. From the computer the session runs on, at most one a second however many people watch',
+            None,
+        ),
+        (
+            BROWSER + '/control',
+            'post',
+            'Tools',
+            'setWebsiteBrowserControl',
+            'Take control (bots wait until you give it back, or 5 minutes idle), or give it back',
+            'BrowserControlState',
+        ),
+        (
+            BROWSER + '/input',
+            'post',
+            'Tools',
+            'sendWebsiteBrowserInput',
+            'A click (x, y in frame pixels), typed text, a key or a scroll from the person in control',
+            'BrowserInputDone',
+        ),
+    ]
+)
+SCHEMAS['BrowserOpened'] = obj({'ok': 'b', 'where': {'enum': ['central', 'own']}})
+SCHEMAS['BrowserControlState'] = obj({'ok': 'b', 'control': 'b'})
+SCHEMAS['BrowserInputDone'] = obj({'ok': 'b'})
 TAGS['Webhook relay'] = (
     'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 )

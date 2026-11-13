@@ -50,7 +50,9 @@ SLOW_WAIT = 45
 # A file streamed from disk (a video up to the server's limit): the server stores the bytes after the last one is sent.
 STREAM_WAIT = 600
 # An image takes an image model's time (the Gateway's own try is 120 s): its caller waits past that.
-LONG_POSTS = {"/api/v2/gateway/images": 150}
+LONG_POSTS = {"/api/v2/gateway/images": 150, "/api/v2/browser/commands": 40}
+# A browser verb acts on a live page: a second send could click twice, so it is sent once (also over MCP).
+ONCE_POSTS = {"/api/v2/browser/commands"}
 # A finished video's MP4, fetched through the server from the Gateway: the caller waits for the whole file.
 VIDEO_CONTENT = re.compile(r"/api/v2/gateway/videos/gv_[0-9a-f]{24}/content")
 VIDEO_CONTENT_WAIT = 150
@@ -187,7 +189,8 @@ class Client:
             timeout = max(timeout, LONG_POSTS[path])
         if method == "GET" and binary and VIDEO_CONTENT.fullmatch(path):
             timeout = max(timeout, VIDEO_CONTENT_WAIT)
-        for attempt in range(self.retries + 1):
+        retries = 0 if method == "POST" and path in ONCE_POSTS else self.retries
+        for attempt in range(retries + 1):
             if hasattr(data, "seek"):
                 data.seek(0)
             req = urllib.request.Request(self.url + path, data=data, headers=headers, method=method)
@@ -244,7 +247,7 @@ class Client:
                     "Tico returned an invalid API response; check the endpoint and sign-in configuration",
                     operation_id=key,
                 )
-            if not failure.retryable or attempt == self.retries:
+            if not failure.retryable or attempt == retries:
                 raise failure
             time.sleep(min(2**attempt, 5) + random.random() * 0.2)
 

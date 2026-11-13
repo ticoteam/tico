@@ -3961,6 +3961,9 @@ class Execution:
             from .views import roster
 
             inbox_isolation.check(c, bot, body.runner_id, roster(c))
+            from . import browser_commands
+
+            browser_commands.check_placement(c, bot, body.runner_id)  # the browser host takes no other bots
             if clash := H.folder_clash(c, bot, body.runner_id):
                 # Two bots in one folder would run in, and commit to, the same checkout.
                 raise Problem(

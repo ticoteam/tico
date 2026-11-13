@@ -442,6 +442,7 @@ def parser():
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
+    from clients.commands import browser as browser_commands, logins
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -1318,6 +1319,8 @@ def parser():
     cli_spec.add(sub, rule_commands.CLI)  # tico rules: clients/commands/rules.py
     cli_spec.add(sub, strategy_commands.STRATEGY)  # tico strategy and tico brand: clients/commands/strategy.py
     cli_spec.add(sub, strategy_commands.BRAND)
+    cli_spec.add(sub, browser_commands.CLI)  # tico browser: clients/commands/browser.py
+    cli_spec.add(sub, logins.CLI)  # tico login: clients/commands/logins.py
     cli_spec.add(sub, strategy_commands.CLI)  # tico growth: clients/commands/strategy.py
 
     cli_spec.add(sub, strategy_commands.LENS)  # tico lens: clients/commands/strategy.py

@@ -483,7 +483,7 @@ CONFIRM = _routes(
     ("PUT", r"access/allow"),
     ("DELETE", rf"automations/{_S}"),
     ("POST", rf"automations/{_S}/delete"),
-    ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke)"),
+    ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke|browser-host)"),
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
     ("PATCH", rf"files/{_S}"),
@@ -519,7 +519,7 @@ ADMIN_ONLY = _routes(
     ("PUT", r"access/(limits|allow)"),
     ("PUT", r"usage/limits"),
     ("PUT", rf"usage/pools/(company|groups/{_S})"),
-    ("POST", rf"(runners|computers)/{_S}/member-bots"),
+    ("POST", rf"(runners|computers)/{_S}/(member-bots|browser-host)"),
     ("POST", r"system/update"),
     ("PUT", r"directory"),
     ("POST", r"directory/(sync|preview)"),
@@ -562,6 +562,11 @@ PERSON_ONLY = [
         re.compile(API + rf"audiences/{_S}/invites"),
         "A person makes a reader's invite link in Company page > Readers",
     ),
+    (
+        "GET",
+        re.compile(API + rf"website-tools/{_S}/accounts/{_S}/code"),
+        "A website account's 2FA code is shown only to a person, in Tools",
+    ),
 ]
 DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do this for you."
 
@@ -569,13 +574,14 @@ DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do thi
 NO_READ = re.compile(
     API
     + r"(credential-runtime|runner-credential-(migration|grants)|me/tokens.*|mcp|agents/setup-script|jobs.*|attempts.*"
-    r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)"
+    r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token"
+    r"|runner-browser-commands.*|website-tools/[^/]+/accounts/[^/]+/(browser/frame|code))"
 )
 
 # Named like a secret: refused whatever route it is on.
 SECRET_KEYS = re.compile(
     r"^(secret|password|passwd|passphrase|token|access_token|refresh_token|api_key|apikey|"
-    r"private_key|client_secret|authorization|bearer|bot_token|app_token)$",
+    r"private_key|client_secret|authorization|bearer|bot_token|app_token|totp)$",
     re.I,
 )
 # Names that are a secret on one route only: elsewhere `key` names a setting, a field or an idempotency key.

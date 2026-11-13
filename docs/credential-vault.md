@@ -52,6 +52,39 @@ that variable when the optional variable field is blank. An explicit variable al
 **Manage access > Every computer** lets computers sign their models in. It gives no bot access: grant a bot separately.
 Older name-only model credentials also offer this choice; granting them fills the missing variable without changing the secret.
 
+## Website logins
+
+A **website tool** (Tools → Add → Website) is a site the company signs in to: its sites (a host such as
+`app.example.com`; its subdomains count; plain `http://` only when written so) and its accounts. Each account is a
+login Credential: a username, a password and, optionally, a **2FA key** (the setup key or `otpauth://` link the site
+shows when 2FA is turned on). The password and the 2FA key are sealed like every other value.
+
+- **Shared** account: used by the people and bots it is shared with (**Who can use it**, the same grants as any
+  Credential). Credential administrators add one.
+- **Own** account: one person's or one bot's, used by them alone (and by that person's Assistant). It is never shared.
+  A person adds one for themselves or for a bot they manage.
+- Which account a caller gets on a site: their own there, else the shared one shared with them (the oldest when there
+  are two), else "No account".
+- **Central only** (for banks): the site runs only in the browser host's browser (see
+  [Computers](computers.md#browser-host)), and its login is never copied to a clipboard or shown as a code.
+
+What leaves the vault, and to whom:
+
+- The password goes only to the computer whose browser types it, inside one `tico login fill` (or onto the caller's
+  own clipboard for 30 s with `tico login copy`). The computer types it only on the tool's own sites over https, and
+  only into a password box. It is masked in every run's output on that computer.
+- The 2FA key never leaves the server. The server works out the current code when a fill, copy or code is asked for and
+  sends only the 6 to 8 digits. At most 20 successful fills, copies and codes an hour per account; a refused fill does not count.
+- A bot never sees a password or a 2FA key: no environment variable, no file, no list, no event. Login Credentials
+  never go to `credential-runtime` or a computer's secrets.
+- A person who can use the account sees the current code (**Show code**) and may reveal the password (**Reveal
+  password**, logged). A bot, an agent token, BotOps and the Assistant cannot reveal it.
+- Every open, fill, copy, code, download, upload and ask is a row on the tool's Activity: who, the page (no query
+  string), own or central. Never a value.
+
+How a bot uses one is [integrations/website.md](../integrations/website.md); the commands are in
+[the CLI](cli.md#websites-tico-browser-and-tico-login).
+
 ## The key: nothing to set up
 
 During a server-first upgrade, the one-time import of legacy team `HUB_` variables waits for

@@ -278,6 +278,41 @@
    "title": "BotReadiness",
    "type": "object"
   },
+  "BrowserReadiness": {
+   "additionalProperties": false,
+   "description": "Google Chrome for website tools on this computer (runner-rs/src/browser/): found, its version, how many open.",
+   "properties": {
+    "chrome": {
+     "title": "Chrome",
+     "type": "boolean"
+    },
+    "open": {
+     "default": 0,
+     "maximum": 100,
+     "minimum": 0,
+     "title": "Open",
+     "type": "integer"
+    },
+    "version": {
+     "anyOf": [
+      {
+       "maxLength": 80,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Version"
+    }
+   },
+   "required": [
+    "chrome"
+   ],
+   "title": "BrowserReadiness",
+   "type": "object"
+  },
   "Checkout": {
    "additionalProperties": false,
    "properties": {
@@ -1014,7 +1049,9 @@
        "threads_v1",
        "memory_tidy_packets_v1",
        "harness_allocation_v1",
-       "make_page"
+       "make_page",
+       "memory_tidy_keep_v1",
+       "browser_v1"
       ],
       "type": "string"
      },
@@ -2414,6 +2451,17 @@
      },
      "title": "Bots",
      "type": "object"
+    },
+    "browser": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/BrowserReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "browser_launch": {
      "anyOf": [
