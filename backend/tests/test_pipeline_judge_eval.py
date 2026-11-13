@@ -343,3 +343,17 @@ def test_the_long_spec_cases_are_read_whole_with_the_shipped_spec_rubric():
         state = adapter.state_for(case)
         assert state["requirement"]["rubric"] == SPEC_RUBRIC
         assert state["attachment"]["truncated"] is False and state["attachment"]["text"] == case["attachment"]["text"]
+
+
+def test_the_eval_scores_each_case_on_its_checks_own_bar(monkeypatch):
+    """A case whose rubric is one of the four checks is scored on that check's bar in pipeline_judges.BARS, so moving a
+    check's bar moves the eval with it; a rubric of a company's own keeps the default (MET_AT, NOT_MET_AT)."""
+    from backend import pipeline_judges as P
+
+    monkeypatch.setitem(P.BARS, "qa", (0.6, 0.3))
+    qa = next(c for c in run.load() if P.check_of(c["requirement"]["rubric"]) == "qa")
+    own = next(c for c in run.load() if P.check_of(c["requirement"]["rubric"]) is None)
+    assert run.verdict(0.65, "qa") == "met" and run.verdict(0.25, "qa") == "not_met"
+    assert run.verdict(0.65, None) == "unsure" and run.verdict(0.25) == "unsure"
+    result = run.score("qa-bar", lambda case: (0.65, 0.0, 5), [qa, own])
+    assert [row["got"] for row in result["rows"]] == ["met", "unsure"]

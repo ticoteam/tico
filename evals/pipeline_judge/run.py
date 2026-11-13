@@ -19,7 +19,8 @@ unsure answer on it is left out of the bar's counts (live-c-fixes-2-v2, a pre-re
 earlier commit than its checks). No customer data belongs in cases.json.
 
 Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.75 or
-more, not_met at 0.2 or less (backend/pipeline_judges.py MET_AT, NOT_MET_AT), and unsure between (the engine's rule:
+more, not_met at 0.2 or less (backend/pipeline_judges.py MET_AT, NOT_MET_AT; a case whose rubric is one of the four
+checks is scored on that check's own bar in pipeline_judges.BARS), and unsure between (the engine's rule:
 unsure passes the call up to a person and never passes the work). A call that raises is retried once after RETRY_WAIT_S
 seconds; a call that fails twice is an error and fails the bar. Per model the report gives accuracy, false "met" count
 (a met verdict where the label says not_met or unsure: it must be 0 to pass), the unsure rate, the retries, cost, p50
@@ -38,6 +39,7 @@ import sys
 import time
 from pathlib import Path
 
+from backend import pipeline_judges as P
 from backend.pipeline_judges import MET_AT, NOT_MET_AT
 from clients import judge as J
 
@@ -99,8 +101,16 @@ def chosen(cases, only):
     return [c for c in cases if any(c["id"] == n or (n.endswith("*") and c["id"].startswith(n[:-1])) for n in names)]
 
 
-def verdict(p):
-    return "met" if p >= MET_AT else "not_met" if p <= NOT_MET_AT else "unsure"
+def check_of(case):
+    """Which of the four checks (pipeline_judges.CHECKS) a case's rubric is, or None for a rubric of a company's own."""
+    return P.check_of((case.get("requirement") or {}).get("rubric"))
+
+
+def verdict(p, check=None):
+    """met, not_met or unsure for p on `check`'s own bar in pipeline_judges.BARS (read at each call, so the eval always
+    scores on the bars the server uses); a rubric that is none of the four checks keeps the default MET_AT, NOT_MET_AT."""
+    met_at, not_met_at = P.BARS.get(check, (MET_AT, NOT_MET_AT)) if check else (MET_AT, NOT_MET_AT)
+    return "met" if p >= met_at else "not_met" if p <= not_met_at else "unsure"
 
 
 def percentile(values, q):
@@ -134,7 +144,7 @@ def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
                 # A failed call is unsure: it goes to a person and never passes the work. Its time is both calls and the
                 # pause, so a case that timed out twice still counts in the p95.
                 p, cost, ms = 0.5, 0.0, spent + round((clock() - retried) * 1000)
-        got = verdict(p)
+        got = verdict(p, check_of(case))
         rows.append(
             {
                 "id": case["id"],
