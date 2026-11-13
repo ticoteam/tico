@@ -17,9 +17,11 @@ declare function liveConnected(): boolean;
 // threadsRecount): 4 s after it connects shows any.
 const SETTLE = 4000;
 
+// The presence heartbeat is a timed POST (every 15 s, shared-edit.ts), not a read: a slow run sees it twice.
+const HEARTBEAT = 'POST /api/v2/presence';
 const repeated = (calls: string[]) => {
   const counts = new Map<string, number>();
-  for (const c of calls) counts.set(c, (counts.get(c) || 0) + 1);
+  for (const c of calls) if (c !== HEARTBEAT) counts.set(c, (counts.get(c) || 0) + 1);
   return [...counts].filter(([, n]) => n > 1).map(([c, n]) => `${n}x ${c}`);
 };
 
@@ -49,7 +51,8 @@ const repeated = (calls: string[]) => {
       assert.equal(calls.filter(c => c.startsWith('GET /api/v2/threads/rail')).length, 1, 'the rail is read once');
 
       calls.length = 0;
-      const link = page.locator('#main a[href^="#/task/"]', {hasText: 'Read once'});
+      // The task's own title link: Home may list the task again as a "say when done" item, also linking it.
+      const link = page.locator('#main').getByRole('link', {name: 'Read once', exact: true}).first();
       const id = decodeURIComponent((await link.getAttribute('href'))!.slice('#/task/'.length));
       await link.click();
       await page.locator('#task-modal[open] [data-task-presence]').waitFor({state: 'attached', timeout: t(20000)});
