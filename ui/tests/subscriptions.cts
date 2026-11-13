@@ -34,7 +34,7 @@ type Machine = {id: string; label: string; owner_id: string; last_seen_at: strin
   release?: string; cloud_machine?: {state: string};
   update?: {state: string; label: string; release: string; commit: string; outdated: boolean; server_release: string; error: string}};
 type Sub = {id: string; name: string; kind: string; runtime: string; label: string; status: string; status_detail: string; computers: string[];
-  usage: {window?: string | null; used_pct?: number | null; cost_usd_month?: number | null; resets_at?: string; reason?: string} | null;
+  usage: {window?: string | null; used_pct?: number | null; cost_usd_month?: number | null; resets_at?: string; reason?: string; weekly_resets_at?: string; weekly_used_pct?: number} | null;
   added_by: string; owner_id?: string; owner_name?: string; order?: number | null; in_use_on?: string[]};
 type Assignment = {runner_id: string; runtime: string; subscription_id: string; person?: string; set?: Record<string, unknown> | null};
 // A sign-in as the fake computer reports it; the test reads its id and state.
@@ -53,6 +53,7 @@ type Data = {machines: Machine[]; subs: Sub[]; assignments: Assignment[]; capabl
 declare var SETTINGS_TAB: string;
 declare function settingsShow(tab: string): void;
 declare function settingsEditBot(slug?: string, inline?: boolean): void;
+declare function subsUsageHTML(sub: {id: string; name: string; kind: string; usage?: {window?: string | null; used_pct?: number | null} | null}): string;
 
 const KINDS: Kind[] = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true, owned: true},
@@ -84,7 +85,7 @@ function fixtures(): Data {
       {id: 's1', name: 'Claude Max (Ana)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
         computers: ['r1', 'r2', 'r3'], usage: {window: '5h', used_pct: 62, cost_usd_month: null}, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana'},
       {id: 's2', name: 'ChatGPT Pro (Ana)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
-        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null, resets_at: new Date(Date.now() + ((4 * 24 + 15) * 60 + 30) * 60000).toISOString()}, added_by: 'ana'},
+        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null, resets_at: new Date(Date.now() + ((4 * 24 + 15) * 60 + 10) * 60000).toISOString()}, added_by: 'ana'},
       {id: 's3', name: 'OpenAI key (company)', kind: 'openai_key', runtime: 'codex', label: 'OpenAI API key', status: 'working', status_detail: '',
         computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana', owner_id: '', owner_name: ''},
       {id: 's4', name: 'Claude Max (Sam)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'needs_reconnect', status_detail: 'Token expired',
@@ -285,7 +286,8 @@ async function modelsTab(browser: Browser) {
   assert.deepEqual(await pane.locator(':scope > section.card > header h2').allInnerTexts(), ['Subscriptions', 'Tico Gateway', 'Defaults', 'Limits']);
   // No intro, no banner, no subtitles on the cards.
   assert.equal(await pane.locator('section.card > header .sub').count(), 0);
-  // Rows: name, kind, a computer count, usage (share used, or the month's cost), Reconnect when the login stopped working.
+  // Rows: name, kind (the tool for a plan), a computer count, usage (share left and the hours to its reset, or the month's
+  // cost), Reconnect when the login stopped working. No computer's state in the Usage column (#335).
   // Grouped by owner: the viewer's group first, then the others by name, then No owner; no Owner column.
   assert.deepEqual(await groupHeads(pane), [['Ana', '· 1 plan', true], ['Sam', '· 1 plan', false], ['No owner', '· 4 subscriptions', false]]);
   assert.equal(await pane.locator('.subs-owner').count(), 0);
@@ -294,24 +296,27 @@ async function modelsTab(browser: Browser) {
     r.querySelector('.subs-count .tnum')!.textContent,
     [...(r.querySelector('.subs-use')!.querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill') as unknown as Element[])].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
-    ['Claude Max (Ana)', 'Claude plan', '3', 'Computer offline: Cloud · Video Owner · Bring it online. 5h 62%'],
-    ['Claude Max (Sam)', 'Claude plan', '0', 'Sign in again'],
-    ['Claude Max (Dee)', 'Claude plan', '1', 'Computer offline: Cloud · Video Owner · Bring it online.'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '1', 'week 13% resets in 4d 15h'],
-    ['ChatGPT Team (Cy)', 'ChatGPT plan', '1', 'week 0%'],
+    ['Claude Max (Ana)', 'Claude', '3', '5h 38% left'],
+    ['Claude Max (Sam)', 'Claude', '0', 'Sign in again'],
+    ['Claude Max (Dee)', 'Claude', '1', 'No reading yet'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT', '1', 'week 87% left resets in 111h'],
+    ['ChatGPT Team (Cy)', 'ChatGPT', '1', 'week 100% left'],
     ['OpenAI key (company)', 'OpenAI API key', '0', '$41.20 this month']]);
   assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
   assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
-  assert.match(await pane.locator('[data-subs-row=s1] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
-  assert.match(await pane.locator('[data-subs-row=s1] .subs-use').innerText(), /5h\s+62%/);
-  assert.match(await pane.locator('[data-subs-row=s6] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
-  // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
-  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^13% used in the week · 87% left · resets \S/);
+  assert.doesNotMatch(await pane.locator('#set-subs').innerText(), /Computer offline|Bring it online|No computer assigned|Connection unavailable|Held until|In use ·/);
+  // The hours until the window resets sit after the share left; the tooltip names the window and the reset time.
+  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^Week: 87% left · resets \S.* \(in 111h\)$/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
-  // A reading of 0% still draws its bar; offline guidance replaces an unavailable usage placeholder.
-  assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
+  // The bar is the share left: a fresh plan's is full.
+  assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:100%');
+  // No reading: muted, with the server's reason in the tooltip.
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
-  assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage').innerText(), 'Computer offline: Cloud · Video Owner · Bring it online.');
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-none').getAttribute('title'), 'Waiting for a computer to report');
+  // An offline computer is an amber dot on the count, naming it; a click opens Settings > Computers.
+  assert.equal(await pane.locator('[data-subs-row=s1] [data-subs-offline]').getAttribute('title'), 'Cloud · Video Owner is offline');
+  assert.equal(await pane.locator('[data-subs-row=s2] [data-subs-offline]').count(), 0);
+  assert.equal(await pane.locator('[data-subs-row=s4] .subs-count').getAttribute('title'), 'Not on a computer. Give it to one in Settings › Computers.');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Owner');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count .nav-icon').count(), 1);
   // The Gateway is one toggle; the key, address and spend wait behind Advanced. No four-way choice, no provider boxes.
@@ -789,12 +794,16 @@ async function personGroups(browser: Browser) {
   const ana = page.locator('#set-subs [data-subs-group="human:ana"]');
   assert.deepEqual(await groupHeads(ana), [['Ana', '· 4 plans', true]]);
   assert.equal(await ana.locator('.subs-group-head .av').count(), 1, "the owner's avatar heads the group");
-  // In pick order: the plan in use (tinted, naming its computer), the next one, then the held one with its end.
+  // In pick order: the plan in use (tinted, an In use pill naming its computer), the next one, then the held one, which
+  // reads 0% left like any plan at its limit.
   const rows = await ana.locator('[data-subs-row]').evaluateAll(list => list.map(r => [
-    r.querySelector('.subs-order')!.textContent, r.querySelector('.subs-name')!.textContent, r.querySelector('.subs-pick-mark')?.textContent || '']));
-  assert.deepEqual(rows.slice(0, 2), [['1', 'Plan 2', 'In use · Tico Team box'], ['2', 'Plan 3', 'Next']]);
+    r.querySelector('.subs-order')!.textContent, r.querySelector('.subs-name')!.firstChild!.textContent!.trim(), r.querySelector('.subs-mark')?.textContent || '']));
+  assert.deepEqual(rows.slice(0, 2), [['1', 'Plan 2', 'In use'], ['2', 'Plan 3', 'Next']]);
   assert.deepEqual(rows.slice(2).map(r => r[1]), ['Claude Max (Ana)', 'Plan 1']);
-  assert.match(rows[3]![2]!, /^Held until \S/);
+  assert.equal(rows[3]![2], '');
+  assert.equal(await ana.locator('[data-subs-row=p2] .subs-mark').getAttribute('title'), 'In use on Tico Team box');
+  assert.match(await ana.locator('[data-subs-row=p1] .subs-use').innerText(), /^week\s+0% left\s+resets in 24h$/);
+  assert.equal(await ana.locator('[data-subs-row=p1] .subs-bar').getAttribute('class'), 'subs-bar bad');
   assert.equal(await ana.locator('[data-subs-row=p2]').getAttribute('class'), 'subs-in-use');
   await shot(page, 'models-groups');
   await page.close();
@@ -966,9 +975,8 @@ async function phoneReasons(browser: Browser) {
     mutate: d => { d.subs.push(extra('s7', 'Claude Max (Eve)', 'working', []), extra('s8', 'Claude Max (Flo)', 'failing', ['r1'])); }});
   await modelsReady(page);
   const width = 390;
-  for (const [id, reason] of [['s1', /Computer offline: Cloud · Video Owner · Bring it online/], ['s4', /Sign-in expired\s*Sign in again/],
-    ['s6', /Computer offline: Cloud · Video Owner · Bring it online/], ['s7', /No computer assigned\s*Assign this plan to a computer in Settings → Computers\./],
-    ['s8', /^Connection unavailable on Tico Team box$/]] as [string, RegExp][]) {
+  for (const [id, reason] of [['s1', /^5h\s+38% left$/], ['s2', /^week\s+87% left\s+resets in 111h$/], ['s4', /Sign-in expired\s*Sign in again/],
+    ['s6', /^No reading yet$/], ['s7', /^No reading yet$/], ['s8', /^No reading yet$/]] as [string, RegExp][]) {
     const row = page.locator(`[data-subs-row=${id}]`);
     await row.scrollIntoViewIfNeeded();
     const name = (await row.locator('.subs-name').boundingBox())!, use = (await row.locator('.subs-use').boundingBox())!;
@@ -986,6 +994,94 @@ async function phoneReasons(browser: Browser) {
   assert.deepEqual(errors, []);
   await page.close();
   console.log('phone reasons under the name: ok');
+}
+
+// #335: the Usage column shows what is left of each plan and when it resets, nothing about computers. One line, the
+// tighter window (the server's reading is the most-used one), the reset in hours; the colour follows what is left.
+// A person's next and held plans count the computers their set is on.
+async function usageLeft(browser: Browser) {
+  const inHours = (h: number) => new Date(Date.now() + h * 3600e3 + 10 * 60e3).toISOString();
+  const plan = (id: string, name: string, extra: Partial<Sub>): Sub => ({id, name, kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
+    computers: [], usage: null, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana', order: null, in_use_on: [], ...extra});
+  const mutate = (d: Data) => {
+    d.subs = [
+      // AC-1: 38% used in the week, the reset 98 hours away.
+      plan('w', 'Weekly', {computers: ['r1'], order: 1, in_use_on: ['r1', 'r2', 'r3'], usage: {window: 'week', used_pct: 38, cost_usd_month: null, resets_at: inHours(98)}}),
+      // AC-2 with Chris's note: the 5-hour window is the tighter one, so it is the one line.
+      plan('f', 'Five hour', {order: 2, usage: {window: '5h', used_pct: 90, cost_usd_month: null, resets_at: inHours(3), weekly_resets_at: inHours(50), weekly_used_pct: 40}}),
+      // AC-3: at its weekly limit.
+      plan('h', 'Held', {usage: {window: 'week', used_pct: 100, cost_usd_month: null, resets_at: inHours(30)}}),
+      // AC-6: no computer has reported.
+      plan('n', 'No reading', {order: 3, usage: {window: null, used_pct: null, cost_usd_month: null, reason: 'Waiting for a computer to report'}}),
+      {id: 'g', name: 'Chatgpt', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '', computers: ['r1'],
+        usage: {window: 'week', used_pct: 85, cost_usd_month: null, resets_at: inHours(60)}, added_by: 'ana'},
+      {id: 'k', name: 'Company key', kind: 'anthropic_key', runtime: 'claude', label: 'Anthropic API key', status: 'working', status_detail: '', computers: [],
+        usage: {window: null, used_pct: null, cost_usd_month: 12.4}, added_by: 'ana', owner_id: '', owner_name: ''},
+    ];
+    // AC-4/AC-5: Ana's plans are on four computers, Cloud · Video Owner offline; an older server lists only the plan in use's.
+    d.machines.push({...d.machines[1]!, id: 'r5', label: 'Builder (cloud)'});
+    d.assignments = ['r1', 'r2', 'r3', 'r5'].map(runner_id => ({runner_id, runtime: 'claude', subscription_id: 'w', person: 'human:ana'}));
+  };
+  for (const viewport of [{width: 1280, height: 860}, {width: 390, height: 844}]) {
+    const {page, errors} = await open(browser, {viewport, mutate});
+    await modelsReady(page);
+    const pane = page.locator('#set-subs');
+    const use = (id: string) => pane.locator(`[data-subs-row=${id}] .subs-use`);
+    // AC-1: a green bar 62% full, "62% left · resets in 98h", nothing else.
+    assert.match(await use('w').innerText(), /^week\s+62% left\s+resets in 98h$/);
+    assert.equal(await use('w').locator('.subs-bar').getAttribute('class'), 'subs-bar');
+    assert.equal(await use('w').locator('.subs-bar b').getAttribute('style'), 'width:62%');
+    assert.match((await use('w').locator('.subs-usage').getAttribute('title'))!, /^Week: 62% left · resets \S.* \(in 98h\)$/);
+    // AC-2: the tighter window alone, its reset in hours; amber when 6-20% is left, red at 5% or less.
+    assert.match(await use('f').innerText(), /^5h\s+10% left\s+resets in 3h$/);
+    assert.equal(await use('f').locator('.subs-bar').getAttribute('class'), 'subs-bar warn');
+    assert.match(await use('g').innerText(), /^week\s+15% left\s+resets in 60h$/);
+    // AC-3: at its limit, 0% left and an empty red bar; "Held until" nowhere.
+    assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 30h$/);
+    assert.equal(await use('h').locator('.subs-bar').getAttribute('class'), 'subs-bar bad');
+    assert.equal(await use('h').locator('.subs-bar b').getAttribute('style'), 'width:0%');
+    const edge = (id: string) => use(id).locator('.subs-bar').evaluate(e => getComputedStyle(e).boxShadow);
+    assert.notEqual(await edge('h'), await edge('w'), 'the empty bar keeps a red edge');
+    // The colour's edges: green above 20% left, amber from 20% to 6%, red at 5% or less.
+    assert.deepEqual(await page.evaluate(() => [79, 80, 94, 95].map(used => {
+      const span = document.createElement('span');
+      span.innerHTML = subsUsageHTML({id: 'x', name: 'x', kind: 'claude_token', usage: {window: 'week', used_pct: used}});
+      return span.querySelector('.subs-bar')!.className;
+    })), ['subs-bar', 'subs-bar warn', 'subs-bar warn', 'subs-bar bad']);
+    // AC-6: no reading, muted, the server's reason in the tooltip.
+    assert.equal(await use('n').innerText(), 'No reading yet');
+    assert.equal(await use('n').locator('.subs-none').getAttribute('title'), 'Waiting for a computer to report');
+    // AC-4/AC-5: every one of Ana's plans counts the set's four computers, with the amber dot naming the offline one.
+    for (const id of ['w', 'f', 'h', 'n']) {
+      assert.equal(await pane.locator(`[data-subs-row=${id}] .subs-count .tnum`).innerText(), '4', `${id} counts its set's computers`);
+      assert.equal(await pane.locator(`[data-subs-row=${id}] [data-subs-offline]`).getAttribute('title'), 'Cloud · Video Owner is offline');
+    }
+    assert.equal(await pane.locator('[data-subs-row=w] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Owner, Builder (cloud)');
+    assert.equal(await pane.locator('[data-subs-row=w] .subs-mark').innerText(), 'In use');
+    assert.equal(await pane.locator('[data-subs-row=f] .subs-mark').innerText(), 'Next');
+    assert.doesNotMatch(await pane.innerText(), /Computer offline|Bring it online|No computer assigned|Connection unavailable|Held until|In use ·/);
+    // AC-7: the tool, not "plan"; API keys keep their kind.
+    const kinds = await pane.locator('[data-subs-row] .subs-kind').allInnerTexts();
+    assert.deepEqual(kinds, ['Claude', 'Claude', 'Claude', 'Claude', 'Anthropic API key', 'ChatGPT']);
+    assert.match(await pane.locator('[data-subs-row=k] .subs-use').innerText(), /^\$12\.40 this month$/);
+    // AC-9: on a phone each percent and reset is on screen, and nothing scrolls sideways.
+    if (viewport.width === 390) {
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 0, 'no sideways scroll');
+      const dot = (await pane.locator('[data-subs-row=w] [data-subs-offline]').boundingBox())!;
+      assert.ok(dot.width >= 40 && dot.height >= 40 && dot.x + dot.width <= 390, `the offline dot is a thumb-sized target (${dot.width}x${dot.height})`);
+      for (const id of ['w', 'f', 'h', 'g']) {
+        const box = (await use(id).locator('.subs-reset').boundingBox())!;
+        assert.ok(box.x >= 0 && box.x + box.width <= 390, `${id}: the reset is on screen`);
+      }
+    }
+    await shot(page, `models-usage-left-${viewport.width}`, pane);
+    // The dot opens Settings > Computers.
+    await pane.locator('[data-subs-row=w] [data-subs-offline]').click();
+    await page.locator('#set-machines').waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('usage left and next reset: ok');
 }
 
 async function screens(browser: Browser) {
@@ -1018,6 +1114,6 @@ async function screens(browser: Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
-    await computersTable(browser); await personGroups(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await phoneReasons(browser); await screens(browser);
+    await computersTable(browser); await personGroups(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await phoneReasons(browser); await usageLeft(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
