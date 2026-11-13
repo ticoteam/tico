@@ -76,6 +76,7 @@ async function review(browser: Browser, {viewport, theme, paged = false}: {viewp
   };
   const {page, errors} = await open(browser, {viewport, theme, hash: '#/task/t-review', tasks: [REVIEW], needs: [], beforeGoto: holdRoutes});
   const card = page.locator('#task-modal .rh-card[data-hold="h-1"]');
+  if (viewport.width <= 760) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // at max-width:760px the window is tabs opening on Chat; holds are in Info (task #409)
   await card.waitFor();
   await page.waitForTimeout(400);   // the dialog's open animation, so the screenshot is the settled modal
   const text = await card.innerText();
