@@ -112,7 +112,7 @@ TEAM_ADD_MENU.onclick = event => {
   teamAddClose();
   if (action === 'section' && orgCanGroups()) {
     if (group !== null) { orgGroupEdit({add: group}); return; }
-    if (orgHistoryOn()) $('#org-history').click();
+    if (orgHistoryOn()) orgHistoryToggle();
     const toggle = $('[data-section-toggle="organisation"]');
     if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
     orgGroupEdit({add: ''});
@@ -180,3 +180,80 @@ function teamAddHuman() {
     } catch (e) { error.textContent = errorMessage(e, ''); error.hidden = false; submit.disabled = false; }   // H
   };
 }
+
+// The Team header's ⋯: Contacts, and the list's two switches in words (ui/app/sidebar.ts orgMineToggle,
+// orgHistoryToggle). A switch keeps the menu open; Contacts opens its page and closes it. Built like the plus menu above.
+const TEAM_MORE_MENU = document.createElement('div');
+TEAM_MORE_MENU.id = 'team-more-menu';
+TEAM_MORE_MENU.setAttribute('role', 'menu');
+TEAM_MORE_MENU.setAttribute('aria-label', 'Team options');
+TEAM_MORE_MENU.hidden = true;
+TEAM_MORE_MENU.innerHTML = `<a role="menuitem" href="#/library/contacts" data-nav="contacts"><span class="nav-icon" aria-hidden="true">contact_page</span><span>Contacts</span></a>
+  <hr class="team-menu-line" role="separator">
+  <button type="button" role="menuitemcheckbox" aria-checked="false" data-org-more="mine"><span class="nav-icon" aria-hidden="true">person</span><span>${ORG_MINE_WORDS}</span><span class="nav-icon team-menu-check" aria-hidden="true">check</span></button>
+  <button type="button" role="menuitemcheckbox" aria-checked="false" data-org-more="history"><span class="nav-icon" aria-hidden="true">history</span><span>${ORG_HISTORY_WORDS}</span><span class="nav-icon team-menu-check" aria-hidden="true">check</span></button>`;
+document.body.append(TEAM_MORE_MENU);
+orgMoreSync();
+const teamMoreItems = () => [...TEAM_MORE_MENU.querySelectorAll<HTMLElement>(':is(a,button):not([hidden])')];
+function teamMoreClose(returnFocus = false) {
+  const open = !TEAM_MORE_MENU.hidden;
+  if (open) TEAM_MORE_MENU.hidden = true;
+  $('#org-more').setAttribute('aria-expanded', 'false');
+  if (open && returnFocus) {
+    if (drawerMedia.matches && !document.body.classList.contains('drawer')) $('#mobile-more').focus();
+    else $('#org-more').focus();
+  }
+}
+// Its right edge on ⋯'s right edge, 4px below it, inside the window.
+function teamMorePosition() {
+  if (TEAM_MORE_MENU.hidden) return;
+  const anchor = $('#org-more').getBoundingClientRect(), menu = TEAM_MORE_MENU.getBoundingClientRect();
+  const rail = $('.side-scroll').getBoundingClientRect();
+  if (anchor.bottom < rail.top || anchor.top > rail.bottom || drawerMedia.matches && !document.body.classList.contains('drawer')) {
+    teamMoreClose(); return;
+  }
+  TEAM_MORE_MENU.style.left = Math.max(8, Math.min(anchor.right - menu.width, innerWidth - menu.width - 8)) + 'px';
+  TEAM_MORE_MENU.style.top = Math.max(8, anchor.bottom + menu.height + 8 <= innerHeight ? anchor.bottom + 4 : anchor.top - menu.height - 4) + 'px';
+}
+function teamMoreOpen(last = false) {
+  teamAddClose();
+  orgMoreSync();
+  TEAM_MORE_MENU.hidden = false;
+  $('#org-more').setAttribute('aria-expanded', 'true');
+  teamMorePosition();
+  const items = teamMoreItems();
+  items[last ? items.length - 1 : 0]?.focus();
+}
+$('#org-more').onclick = () => TEAM_MORE_MENU.hidden ? teamMoreOpen() : teamMoreClose(true);
+$('#org-more').onkeydown = (event: KeyboardEvent) => {
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+  event.preventDefault(); teamMoreOpen(event.key === 'ArrowUp');
+};
+TEAM_MORE_MENU.onkeydown = event => {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); teamMoreClose(true); }
+  else if (event.key === 'Tab') teamMoreClose(true);
+  else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault();
+    const items = teamMoreItems();
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  }
+};
+TEAM_MORE_MENU.onclick = event => {
+  const target = eventElement(event);
+  if (target?.closest('a[data-nav="contacts"]')) { teamMoreClose(); setDrawer(false); return; }   // the link navigates
+  const which = target?.closest<HTMLElement>('[data-org-more]')?.dataset.orgMore;
+  if (which === 'mine') orgMineToggle();
+  else if (which === 'history') orgHistoryToggle();
+  else return;
+  orgMoreSync();
+  teamMorePosition();
+};
+const TEAM_MORE_KEEP = '#org-more, #team-more-menu';
+document.addEventListener('click', event => { if (!eventElement(event)?.closest(TEAM_MORE_KEEP)) teamMoreClose(); });
+document.addEventListener('focusin', event => { if (!eventElement(event)?.closest(TEAM_MORE_KEEP)) teamMoreClose(); });
+window.addEventListener('hashchange', () => teamMoreClose());
+window.addEventListener('resize', teamMorePosition);
+$('.side-scroll').addEventListener('scroll', teamMorePosition, {passive: true});

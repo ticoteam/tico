@@ -57,6 +57,13 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 .org-history .nav-icon{font-size:18px}
 .org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 40%,transparent)}
 .org-history[aria-pressed="true"] .nav-icon{color:var(--ink)}
+/* ⋯ on the Team header: a dot when a filter or sort in its menu is on (ui/app/sidebar.ts orgMoreSync). */
+.org-more{position:relative;color:var(--muted)}
+.org-more:hover{color:var(--ink)}
+.org-more.on::after{content:'';position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:var(--ink)}
+/* With Only bots I can open on, the list's first row says so and offers Show all. */
+.tree .org-filter-note{padding:4px 8px 6px calc(var(--tree-lead) + 6px);color:var(--muted);font-size:var(--t-xs)}
+.tree .org-filter-note button{border:0;background:none;padding:0;color:var(--ink);font:inherit;text-decoration:underline;cursor:pointer}
 .inbox-list{list-style:none;margin:0;padding:0 0 6px}
 .inbox-list a{display:flex;align-items:center;gap:8px;padding:6px 10px 6px 12px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-base)}
 .inbox-list a:hover{background:var(--surface2);text-decoration:none}
@@ -189,19 +196,33 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 .chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:24px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);flex:none;border-radius:4px}
 .chev.col{transform:none}
 .chev:hover{color:var(--ink);background:var(--surface2)}
-.tree a.node{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
+.tree a.node{flex:1;display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
 .tree a.node:hover{background:var(--surface2);text-decoration:none}
 .tree a.node.cur{background:var(--surface2);font-weight:600}
 .tree a.node.planned{color:var(--muted)}.tree a.node.planned .av{opacity:.35;filter:saturate(.4)}
 .tree a.node.paused{opacity:.6}
 /* A Recruiting seat: a role with no bot yet (ui/app/sidebar.ts renderTree). */
-.tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
-.tree .node.seat .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .node.seat{flex:1;display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
 .tree .node.seat .seat-icon{font-size:16px;width:20px;text-align:center}
-.tree .node.seat .seat-pill{margin-left:auto;font-size:var(--t-xs);padding:1px 6px;flex:none}
+/* The seat's state is a word at the end of its name, not a pill that takes the name's room. */
+.tree .node.seat .seat-word{color:var(--muted);font-size:var(--t-xs);font-weight:400}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.tree .nm{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .nm{min-width:0;white-space:normal;overflow-wrap:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;line-height:1.25}
+/* A name wraps between words and is never cut while its marks and counts can give way; its marks ride its last word
+   (ui/app/sidebar.ts treeName), so a mark never sits alone on a line. The clamp's "…" is a last resort. */
+.tree .nm-end{white-space:nowrap}
+/* overflow:hidden puts an inline-block's baseline at its bottom edge, so the icon font's tall line box never makes the
+   name's line taller than the clamp allows (the onboarding gear did: 35px in a 33px name). */
+.tree a.node .nm .tree-goal,.tree a.node .nm .tree-setup{display:inline-block;vertical-align:-2px;margin-left:4px;width:13px;height:13px;font-size:13px;line-height:13px;overflow:hidden}
+.tree a.node .nm .tree-setup .nav-icon{display:block;width:13px;height:13px;font-size:13px;line-height:13px}
+.tree a.node .nm .org-branch{white-space:normal;margin-left:4px}
+.tree .cnt{flex:none}
+/* Beside another count the DM unread is a dot with the same words (treeDmBadge): one count per row. */
+.tree .cnt.tree-dm.dot{width:6px;height:6px;padding:0;min-width:0;border-radius:50%;background:var(--ink)}
+/* A folded row whose subtree needs you: the dot on its chevron (treeChev), not in the row. */
+.chev{position:relative}
+.chev.needs::after{content:'';position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--wait)}
 
 /* Keep the personal branch label visible even when a long bot name is clipped. */
 .org-branch{flex:none;color:var(--muted);font-size:var(--t-2xs);font-weight:500;white-space:nowrap}

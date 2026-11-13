@@ -1,8 +1,15 @@
 /* Team plus menu and the two small add dialogs. */
-#team-add-menu{position:fixed;z-index:50;min-width:180px;max-width:calc(100vw - 16px);padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16)}
-#team-add-menu button{display:block;width:100%;border:0;background:none;text-align:left;padding:10px 12px;border-radius:6px;color:var(--ink)}
-#team-add-menu button:hover,#team-add-menu button:focus-visible{background:var(--surface2)}
-#team-add-menu button[hidden]{display:none}
+:is(#team-add-menu,#team-more-menu){position:fixed;z-index:50;min-width:180px;max-width:calc(100vw - 16px);padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16)}
+:is(#team-add-menu,#team-more-menu) :is(a,button){display:block;width:100%;border:0;background:none;text-align:left;padding:10px 12px;border-radius:6px;color:var(--ink);font:inherit;text-decoration:none;cursor:pointer}
+:is(#team-add-menu,#team-more-menu) :is(a,button):hover,:is(#team-add-menu,#team-more-menu) :is(a,button):focus-visible{background:var(--surface2);text-decoration:none}
+:is(#team-add-menu,#team-more-menu) :is(a,button)[hidden]{display:none}
+/* ⋯'s rows: an icon, the words, and a check on the right when a switch is on. */
+#team-more-menu{min-width:220px}
+#team-more-menu :is(a,button){display:flex;align-items:center;gap:10px}
+#team-more-menu .nav-icon{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
+#team-more-menu .team-menu-check{margin-left:auto;color:var(--ink);visibility:hidden}
+#team-more-menu [aria-checked="true"] .team-menu-check{visibility:visible}
+#team-more-menu .team-menu-line{border:0;border-top:1px solid var(--line);margin:var(--s1) 0}
 .tmodal.team-add-dialog{width:min(440px,calc(100vw - 32px))}
 .team-add-dialog h2{margin:0;font-size:var(--t-lg);color:var(--ink);letter-spacing:var(--track-tight)}
 .team-add-dialog .tmodal-body{padding-top:16px}

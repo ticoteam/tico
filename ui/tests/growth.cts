@@ -135,6 +135,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
 
   // Nothing at all: every default card says it has nothing yet; Settings links to Sources, which links back.
   if (phone) await page.locator('#mobile-more').click();
+  await page.locator('#side .rd-co-toggle').click();   // Company starts folded
   await page.locator('#side a[data-nav="growth"]').click();
   await arrive('#/growth', 'the sidebar');
   await grid();

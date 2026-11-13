@@ -53,7 +53,7 @@ const seats = [
     await page.goto('https://tico-ui.test/#/tasks');
     const head = page.locator('#tree [data-seat="s-eng"]');
     await head.waitFor();
-    assert.equal((await head.locator('.pill').innerText()).trim(), 'Recruiting');
+    assert.equal((await head.locator('.seat-word').innerText()).trim(), '· Recruiting', 'the name ends in Recruiting, no pill');
     assert.match(await head.getAttribute('title'), /^Head of Engineering \(Recruiting\)\n\nRuns the software factory\./);
     assert.equal(await head.getAttribute('draggable'), null, 'a seat is never dragged');
     assert.equal(await head.getAttribute('data-org'), null, 'nor a drop target');
@@ -71,7 +71,8 @@ const seats = [
     await page.locator('#tree [data-toggle="s:s-eng"]').first().click();
     await page.locator('#tree [data-seat="s-dev"]').waitFor({state: 'hidden'});
     // The "recently opened" list holds bots and people only.
-    await page.locator('#org-history').click();
+    await page.locator('#org-more').click();
+    await page.locator('#team-more-menu [data-org-more="history"]').click();
     await page.locator('#tree.history').waitFor();
     assert.equal(await page.locator('#tree [data-seat]').count(), 0);
     assert.deepEqual(errors, []);

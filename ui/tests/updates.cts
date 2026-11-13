@@ -146,15 +146,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await company.waitFor();
     assert.match(await company.innerText(), /Company/, 'search finds Company by "overview"');
     await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
-    // A folded group's pages are still in search.
-    await page.locator('#side .rd-co-toggle').click();
-    assert.equal(await page.locator('#rd-co').isVisible(), false, 'Company folds');
+    // A folded group's pages are still in search; Company starts folded.
+    assert.equal(await page.locator('#rd-co').isVisible(), false, 'Company folded');
     await page.keyboard.press('Control+k');
     await page.locator('#search-input').fill('strat');
     await page.locator('#search-results li[data-href="#/strategy/market"]').waitFor();
     await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
     await page.locator('#side .rd-co-toggle').click();
-    assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens again');
+    assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens');
     assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'tasks', 'Tasks heads the rail');
     await page.waitForFunction(() => (window as unknown as PageWin).__badges.length > 0);
     assert.equal(await page.evaluate(() => (window as unknown as PageWin).__badges[0]), '2', 'the badge opens on the unread count');

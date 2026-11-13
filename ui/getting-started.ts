@@ -62,11 +62,14 @@ function gsTourStart(): void {
   if (GS_TOUR) return;
   const phone = drawerMedia.matches;
   if (phone) setDrawer(true, false, $('#mobile-more'));
+  // Docs, Strategy and Meetings sit in Company and Library, which start folded: the tour shows them open while it runs
+  // and leaves the person's own fold as it was (getting-started.css html.gs-touring).
+  document.documentElement.classList.add('gs-touring');
   const steps = GS_STEPS.filter(([selector]) => {
     const el = $('#side ' + selector);
     return el && el.getClientRects().length;
   });
-  if (!steps.length) { if (phone) setDrawer(false); return; }
+  if (!steps.length) { document.documentElement.classList.remove('gs-touring'); if (phone) setDrawer(false); return; }
   const root = document.createElement('div');
   root.className = 'gs-tour';
   root.setAttribute('role', 'dialog');
@@ -155,6 +158,7 @@ function gsTourEnd(): void {
   const {root, phone, opener} = GS_TOUR;
   GS_TOUR.off?.();
   root.remove();
+  document.documentElement.classList.remove('gs-touring');
   GS_TOUR = null;
   if (phone) setDrawer(false, true);
   // Started from the account menu, which closed as the tour took focus: back to the button that opens it.
