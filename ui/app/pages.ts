@@ -500,7 +500,7 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
       const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
       if (d.tpEl !== slot) return;
       if (r.held) throw new Error('Not sent');
-      make.reset();
+      make.reset(); slot.tpMakeOpen = false;      // sent: the box folds back to "+" once the page is made
       try { localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ }
       taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
       await taskPageMakeLoad(d);
@@ -596,6 +596,9 @@ async function taskPagesLoad(d: TaskPagesHost) {
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
     const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
+    // A phone's Pages tab goes with the section: no pages and none to link, no tab that opens empty.
+    const tab = d.querySelector<HTMLElement>('[data-task-tab="pages"]');
+    if (tab) tab.hidden = slot.hidden;
     $('[data-tp-add]', slot).hidden = !r.can_link;
     slot.tpCanLink = !!r.can_link;
     taskPageMakeShow(slot);

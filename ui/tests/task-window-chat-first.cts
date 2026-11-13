@@ -59,6 +59,17 @@ const pages = (page: Page) => page.route(url => url.pathname.startsWith('/api/v2
       // 2. Only the newest lines are drawn; scrolling up draws older ones until the first message.
       assert.equal(await thread.locator('[data-message="m1"]').count(), 0, 'the first message waits until scrolled to');
       assert.match(await thread.locator('[data-task-earlier]').innerText(), /^↑ \d+ earlier messages and moves$/);
+      // Drawing older lines keeps the line that was at the top where it was on screen (taskChatEarlier).
+      const kept = await thread.evaluate(t => {
+        t.scrollTop = 0;
+        const top = t.querySelector<HTMLElement>('[data-message]')!, y = top.getBoundingClientRect().top;
+        t.dispatchEvent(new Event('scroll'));
+        const now = t.querySelector<HTMLElement>(`[data-message="${top.dataset.message}"]`)!;
+        return {id: top.dataset.message, moved: Math.abs(now.getBoundingClientRect().top - y), first: t.querySelector<HTMLElement>('[data-message]')!.dataset.message};
+      });
+      assert.notEqual(kept.first, kept.id, 'older lines were drawn above');
+      assert.ok(kept.moved <= 4, `the line that was at the top stays in place (moved ${kept.moved}px)`);
+      await page.waitForTimeout(100);
       for (let i = 0; i < 5 && !(await thread.locator('[data-message="m1"]').count()); i++) {
         await thread.evaluate(t => { t.scrollTop = 0; t.dispatchEvent(new Event('scroll')); });
         await page.waitForTimeout(100);
