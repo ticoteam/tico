@@ -14,7 +14,7 @@ const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {html, uiFile, isUiPath, serveUi} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 interface Who {subject: string; kind: string; id: string; name: string; initials: string; members?: number; via?: string[]}
@@ -147,6 +147,7 @@ async function shot(page: import('playwright').Page, name: string, fullPage = tr
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
+  await page.evaluate(() => document.fonts.ready);
   for (const theme of ['light', 'dark']) {
     await page.evaluate((t: string) => document.documentElement.setAttribute('data-theme', t), theme);
     await page.evaluate(() => Promise.all(document.getAnimations()
@@ -170,6 +171,8 @@ async function start(browser: import('playwright').Browser, hash: string, width:
     if (ui && fs.existsSync(uiFile(ui[1]!)))
       return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
+    // The icon font, so each icon draws as its glyph: without it a ligature prints as its name ("close" in a 24px ×).
+    if (p.startsWith('/vendor/') && isUiPath(p)) return serveUi(route, p);
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, credential_access: true, config});
@@ -497,6 +500,10 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
       assert.ok(xs.length === 5 && xs.every(([o, w, h]) => o === '1' && w === 36 && h === 36), `touch: every × shows at 36px (${JSON.stringify(xs)})`);
       const boxes = await access.locator('.tw-x').evaluateAll(b => b.map(x => getComputedStyle(x).borderTopWidth));
       assert.ok(boxes.every(w => w === '0px'), `touch: every × is a quiet ghost with no border (${JSON.stringify(boxes)})`);
+      // The × is the close glyph, not the word "close" cut off at the button's edge (it read "los" on a phone).
+      await page.evaluate(() => document.fonts.ready);
+      const spill = await access.locator('.tw-x .nav-icon').evaluateAll(s => s.map(i => i.scrollWidth - i.clientWidth));
+      assert.ok(spill.every(d => d <= 0), `touch: each × glyph fits its button (${JSON.stringify(spill)})`);
       assert.equal(await sideways(page), false, 'touch: no sideways scroll');
       assert.equal(await access.evaluate(d => d.scrollWidth > d.clientWidth + 1), false, 'touch: the dialog has no sideways scroll');
       await shot(page, 'access-touch', false);
