@@ -90,6 +90,12 @@ async function uiPartFailed(part: string, page: boolean, route: string, error: u
     + `<span>Check your connection and try again.</span><button class="primary" type="button" data-part-retry>Retry</button></section>`;
 }
 
+// The click sent again once its part has loaded: the same keys and place as the person's.
+function uiPartClick(ev: Event): MouseEvent {
+  const {clientX, clientY, ctrlKey, metaKey, shiftKey, altKey} = ev as MouseEvent;
+  return new MouseEvent('click', {bubbles: true, cancelable: true, composed: true, clientX, clientY, ctrlKey, metaKey, shiftKey, altKey});
+}
+
 // A control the shell draws (a computer's screen switch, a model's Sign in) whose click or change a part's own document
 // listener handles (ui/parts.json `events`): before that part is loaded, the first one loads it and is then sent again,
 // so the part's listener answers it. A click on a form control is left to its change.
@@ -103,7 +109,7 @@ for (const type of ['click', 'change'] as const) {
       if (type === 'click') ev.preventDefault();
       ev.stopImmediatePropagation();
       uiPartLoad(name).then(() => {
-        if (el.isConnected) el.dispatchEvent(type === 'click' ? new MouseEvent('click', {bubbles: true, cancelable: true, composed: true, clientX: (ev as MouseEvent).clientX, clientY: (ev as MouseEvent).clientY, ctrlKey: (ev as MouseEvent).ctrlKey, metaKey: (ev as MouseEvent).metaKey, shiftKey: (ev as MouseEvent).shiftKey, altKey: (ev as MouseEvent).altKey}) : new Event('change', {bubbles: true}));
+        if (el.isConnected) el.dispatchEvent(type === 'click' ? uiPartClick(ev) : new Event('change', {bubbles: true}));
       }, (error: unknown) => uiPartFailed(name, false, '', error));
       return;
     }
