@@ -16,6 +16,8 @@
 .hl-notes li{padding:3px 0;font-size:var(--t-base)}
 .hl-check{display:flex;align-items:flex-start;gap:var(--s3);padding:var(--s3) 0;border-bottom:1px solid var(--line)}
 .hl-main{flex:1;min-width:0}.hl-main p{margin:2px 0 0;color:var(--muted);font-size:var(--t-base)}
+/* Failed runs: the newest five failed jobs under the count, each with why it failed (ui/health.ts hlFailuresHtml). */
+.hl-failures{list-style:none;margin:6px 0 0;padding:0;font-size:var(--t-base)}.hl-failures li{padding:2px 0;overflow-wrap:anywhere}.hl-failures .hl-why{display:block;color:var(--muted)}
 .hl-fixes{display:flex;gap:var(--s2);flex-wrap:wrap}
 .hl-check.ok .hl-icon{color:var(--ok, #2f8f4e)}.hl-check.warn .hl-icon{color:var(--wait-ink)}.hl-check.bad .hl-icon{color:var(--fail)}.hl-check.unknown .hl-icon,.hl-check.info .hl-icon{color:var(--muted)}
 .hl-ladder{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:2px;color:var(--muted)}.hl-ladder strong{display:inline-block;min-width:2.5ch;font-size:var(--t-lg,1.25rem);color:var(--ink);font-variant-numeric:tabular-nums}

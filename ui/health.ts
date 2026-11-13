@@ -66,9 +66,11 @@ interface HlStuck {
   held?: number;
 }
 
+/** One of the newest five failed jobs under Failed runs (backend/health.py `_failed`); `why` is for administrators. */
 interface HlFailure {
   bot: string;
   at: string;
+  why?: string;
 }
 
 interface HlCopy {
@@ -305,8 +307,14 @@ function hlCheckHtml(check: HlCheck): string {
     + (update || (owner && busy) ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : '');
   return `<li class="hl-check ${esc(check.status)}" data-hl-check="${esc(check.id)}" data-status="${esc(check.status)}">
     <span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[check.status] || HL_ICONS.unknown}</span>
-    <div class="hl-main"><strong>${esc(check.label)}</strong>${(check.id === 'never_stuck' && hlLadderHtml(check.counts)) || `<p>${esc(check.summary)}</p>`}${result}</div>
+    <div class="hl-main"><strong>${esc(check.label)}</strong>${(check.id === 'never_stuck' && hlLadderHtml(check.counts)) || `<p>${esc(check.summary)}</p>`}${check.id === 'failed' ? hlFailuresHtml(HL?.failures) : ''}${result}</div>
     <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${update}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
+}
+
+// Under Failed runs, the newest five failed jobs: which bot, when, and why (its computer and tries, or its error).
+function hlFailuresHtml(rows: HlFailure[] | null | undefined): string {
+  if (!rows?.length) return '';
+  return `<ul class="hl-failures" data-hl-failures>${rows.slice(0, 5).map(row => `<li data-hl-failure>${esc(botDisplayName(row.bot))} <span class="muted">${esc(ago(row.at))}</span>${row.why ? ` <span class="hl-why">${esc(row.why)}</span>` : ''}</li>`).join('')}</ul>`;
 }
 
 // Report this on what is red: Support opens with it attached (ui/support.ts), unless this server turned support off.
@@ -462,7 +470,6 @@ function hlPageDraw(): void {
     ${hlMetricsHtml(HL_METRICS)}
     ${HL.computers.length ? `<h2>Computers</h2><ul class="hl-computers">${HL.computers.map(hlComputerHtml).join('')}</ul>` : ''}
     ${idle.length ? `<h2>Bots waiting</h2><ul class="hl-bots">${bots(idle)}</ul>` : ''}
-    ${HL.failures.length ? `<h2>Failed in the last day</h2><ul class="hl-bots">${HL.failures.map(row => `<li>${esc(botDisplayName(row.bot))} <span class="muted">${esc(ago(row.at))}</span></li>`).join('')}</ul>` : ''}
     <p class="hl-help"><button class="ghost" type="button" data-setup-help="health">Want help setting up?</button></p>`;
   // A stopped run saved for later is still reviewed from here, so a person never needs a hidden control (Dev 280).
   host.querySelectorAll<HTMLButtonElement>('[data-execution-review]').forEach(button => {

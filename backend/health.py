@@ -21,6 +21,7 @@ from . import (
     hook_relay,
     hosted_updates,
     inbox_isolation,
+    login_holds,
     model_login,
     models_preset,
     providers,
@@ -2293,9 +2294,49 @@ def _server_settings(c, settings):
 
 def _failed(c):
     """How many jobs failed in the last day and the newest five of them (runs.failed): a retry that went back in the
-    queue is not one."""
+    queue is not one. Each says why, read for all five at once (_failed_why)."""
     total, rows = runs.failed(c, H.shift(H.now(), hours=-runs.FAILED_HOURS), limit=5)
-    return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
+    ids = [r["id"] for r in rows]
+    found = (
+        {
+            r["id"]: r
+            for r in c.execute(
+                "SELECT a.id,a.state,a.started_at,a.result,r.label AS computer,d.end_reason,"
+                "(SELECT count(*) FROM attempts t WHERE t.job_id=a.job_id AND t.started_at IS NULL) AS unstarted "
+                "FROM attempts a LEFT JOIN runners r ON r.id=a.runner_id "
+                "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
+                f"WHERE a.id IN ({','.join('?' * len(ids))})",
+                ids,
+            )
+        }
+        if ids
+        else {}
+    )
+    return total, [
+        {"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"], "why": _failed_why(found.get(r["id"]))}
+        for r in rows
+    ]
+
+
+def _failed_why(row):
+    """Why one failed job failed, in one line: a job its computer never started "couldn't start on <computer> after N
+    tries" (execution.settle_unstarted failed it), else the error its run stored, as Runs words it
+    (views.attempt_details: the limit it hit, else run_diagnostics' end_reason)."""
+    if not row:
+        return "Attempt failed before completion"
+    if not row["started_at"]:
+        where = row["computer"] or "its computer"
+        return f"couldn't start on {where} after {_plural(max(row['unstarted'], 1), 'try', 'tries')}"
+    try:
+        result = json.loads(row["result"] or "{}")
+    except (ValueError, TypeError):
+        result = {}
+    reason = str(
+        login_holds.failure_line(result)
+        or row["end_reason"]
+        or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion")
+    )
+    return (reason.strip().splitlines() or ["Attempt failed before completion"])[0][:300]
 
 
 def _fallbacks(c, loads=None):
@@ -3992,7 +4033,12 @@ def view(c, who, settings, auth, github, config):
         "stuck": blocked,
         "on_fallback": on_fallback,
         "limited": limited,
-        "failures": failures if full or kind == "bot" else [],
+        # Why each one failed is for administrators, who may read every bot's runs; a bot hears which and when.
+        "failures": failures
+        if full
+        else [{k: v for k, v in f.items() if k != "why"} for f in failures]
+        if kind == "bot"
+        else [],
         "stalled_runs": stalled_runs,
         # To the minute, so an unchanged answer keeps its ETag (backend/json_response.py) between polls.
         "checked": H.now()[:17] + "00.000000Z",
