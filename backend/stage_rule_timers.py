@@ -76,7 +76,9 @@ _TASKS = (
     "v.id AS visit_id, v.entered_at, v.late_told_at, s.name AS stage_name, "
     "MAX(v.entered_at, COALESCE(v.last_change_at, ''), COALESCE((SELECT MAX(m.created_at) FROM messages m "
     "WHERE m.conversation_id = t.conversation_id AND m.sender_id <> 'keeper'), ''), "
-    "COALESCE((SELECT MAX(z.ended_at) FROM snoozes z WHERE z.visit_id = v.id), '')) AS active_at "
+    # task_id first: snoozes is indexed on it (snoozes_task), not on visit_id.
+    "COALESCE((SELECT MAX(z.ended_at) FROM snoozes z WHERE z.task_id = t.id AND z.visit_id = v.id), '')) "
+    "AS active_at "
     "FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status = 'open' AND s.kind = 'work' AND s.by_hand = 0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL)"
@@ -302,28 +304,33 @@ def _named(row: Row) -> str:
 
 
 def _wake_manager(conn: Any, manager: str, at: str) -> bool:
-    """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager, each once."""
+    """One wake, "Stage rules: N tasks", naming every task waiting to be told to this manager, each once. A task that
+    ended, that the manager may no longer read, or that Late listed while it waited is not named."""
     R, SR = _mod("rules"), _mod("stage_rules")
     pending: list[Any] = conn.execute(
-        "SELECT k.rule_id, k.task_id, k.mark FROM stage_rule_marks k LEFT JOIN tasks t ON t.id = k.task_id "
+        "SELECT k.rule_id, k.task_id, k.mark, v.late_told_at FROM stage_rule_marks k LEFT JOIN tasks t "
+        "ON t.id = k.task_id LEFT JOIN visits v ON v.task_id = k.task_id AND v.left_at IS NULL "
         "WHERE k.outcome='pending' AND k.manager_id=? ORDER BY k.matched_at, t.number, k.task_id",
         (manager,),
     ).fetchall()
     listed: list[tuple[Row, Row]] = []
-    for rule_id, task_id, _mark in pending:
+    outcome: dict[tuple[str, str, str], str] = {}  # each pending row's settling: named, late or dropped
+    for rule_id, task_id, mark, late_told_at in pending:
+        key = (str(rule_id), str(task_id), str(mark))
         row: Row | None = H.task(conn, task_id)
         rule: Row | None = SR.get(conn, rule_id)
-        if (
-            not row
-            or not rule
-            or row.get("status") != "open"
-            or task_id in {r["id"] for r, _ in listed}
-            or not H.task_private_readable(conn, manager, row)
-        ):
-            continue
-        listed.append((row, rule))
+        if not row or not rule or row.get("status") != "open" or not H.task_private_readable(conn, manager, row):
+            outcome[key] = "dropped"
+        elif late_told_at:
+            outcome[key] = "late"  # Late listed it while it waited for this wake: the manager has it already
+        else:
+            outcome[key] = "named"
+            if task_id not in {r["id"] for r, _ in listed}:
+                listed.append((row, rule))
+    _settle(conn, [k for k, o in outcome.items() if o == "dropped"], "dropped", None)
+    _settle(conn, [k for k, o in outcome.items() if o == "late"], "late", None)
+    named = [k for k, o in outcome.items() if o == "named"]
     if not listed:
-        _settle(conn, pending, "dropped", None)  # every task ended or can no longer be read by this manager
         return False
     n = len(listed)
     body = [f"Stage rules: {n} task{'' if n == 1 else 's'}."]
@@ -340,17 +347,17 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
         ok = bool(H._write_message(conn, H.KEEPER, manager, text, conv, "notice", refs, None, None))
     if not ok:
         # The manager cannot be told (archived, gone): nothing says it was, and its next match tries again.
-        _settle(conn, pending, "failed", None)
+        _settle(conn, named, "failed", None)
         return False
-    _settle(conn, pending, "told", at)
+    _settle(conn, named, "told", at)
     name = str(H.actor_name(conn, manager))
     for row, rule in listed:
         SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.KEEPER, "told", {"to": manager})
     return True
 
 
-def _settle(conn: Any, pending: list[Any], outcome: str, told_at: str | None) -> None:
+def _settle(conn: Any, keys: list[tuple[str, str, str]], outcome: str, told_at: str | None) -> None:
     conn.executemany(
         "UPDATE stage_rule_marks SET outcome=?, told_at=? WHERE rule_id=? AND task_id=? AND mark=?",
-        [(outcome, told_at, rule_id, task_id, mark) for rule_id, task_id, mark in pending],
+        [(outcome, told_at, rule_id, task_id, mark) for rule_id, task_id, mark in keys],
     )

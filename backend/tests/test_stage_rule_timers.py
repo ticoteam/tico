@@ -255,12 +255,12 @@ def test_waiting_on_a_person_tells_the_owner_once(c, time_machine):
         c,
         name="Chase the OK",
         pipeline_id="eng",
-        stages=["eng-review"],
+        stages=["eng-review", "eng-build"],
         timer={"kind": "waiting_person", "hours": 2},
         then="tell_owner",
     )
     waiting = _task(c, "eng", "Review", "bot:builder", "Waits on Ana")
-    working = _task(c, "eng", "Build", "bot:builder", "Bot's own work")  # waits on no person: no timer
+    working = _task(c, "eng", "Build", "bot:builder", "Bot's own work")  # in the rule's stages, waits on no person
     X.settled(c)
     time_machine.shift(timedelta(hours=1, minutes=59))
     assert T.sweep(c)["told"] == 0
@@ -276,3 +276,42 @@ def test_waiting_on_a_person_tells_the_owner_once(c, time_machine):
     )
     time_machine.shift(timedelta(hours=1))
     assert T.sweep(c)["told"] == 0  # the same wait is told once
+
+
+def test_a_task_late_lists_while_it_waits_for_the_hourly_wake_is_not_named_again(c, time_machine):
+    first = _task(c, "eng", "Build", "bot:builder", "Quiet first")
+    time_machine.shift(timedelta(minutes=30))
+    second = _task(c, "eng", "Build", "bot:builder", "Quiet later")
+    time_machine.shift(timedelta(hours=5, minutes=30))
+    T.sweep(c)  # the first is told; the manager has had its wake this hour
+    time_machine.shift(timedelta(minutes=30))
+    T.sweep(c)  # the second matches and waits for the next wake
+    assert len(_told(c)) == 1
+    c.execute(
+        "UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (H.now(), second)
+    )  # Late lists it
+    time_machine.shift(timedelta(minutes=31))
+    T.sweep(c)
+    assert len(_told(c)) == 1
+    outcomes = dict(c.execute("SELECT task_id, outcome FROM stage_rule_marks WHERE task_id IN (?, ?)", (first, second)))
+    assert outcomes == {first: "told", second: "late"}
+
+
+def test_a_task_that_ends_before_the_wake_is_dropped_not_told(c, time_machine):
+    first = _task(c, "eng", "Build", "bot:builder", "Told")
+    time_machine.shift(timedelta(minutes=30))
+    gone = _task(c, "eng", "Build", "bot:builder", "Closed while waiting")
+    named = _task(c, "eng", "Build", "bot:builder", "Still open")
+    time_machine.shift(timedelta(hours=5, minutes=30))
+    T.sweep(c)
+    time_machine.shift(timedelta(minutes=30))
+    T.sweep(c)  # gone and named wait for the next wake
+    H.task_close(c, ANA, gone, "Not needed")
+    time_machine.shift(timedelta(minutes=31))
+    T.sweep(c)
+    told = _told(c)
+    assert len(told) == 2 and told[1][1].startswith("Stage rules: 1 task.") and _title(c, named) in told[1][1]
+    outcomes = dict(
+        c.execute("SELECT task_id, outcome FROM stage_rule_marks WHERE task_id IN (?, ?, ?)", (first, gone, named))
+    )
+    assert outcomes == {first: "told", gone: "dropped", named: "told"}
