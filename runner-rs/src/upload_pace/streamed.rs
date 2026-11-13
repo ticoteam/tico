@@ -47,6 +47,8 @@ struct Behaviour {
     fail: HashSet<usize>,
     /// Events uploads stored whose answer is lost (the connection closes).
     drop_answer: HashSet<usize>,
+    /// When set, the first events upload is not answered (nor stored) until this is notified.
+    hold_first: Option<Arc<Notify>>,
 }
 
 /// The hub runs on its own runtime and threads, as a server does: the runner's work never delays its answers.
@@ -124,6 +126,9 @@ async fn serve(k: Arc<Mutex<Kept>>, b: Arc<Behaviour>, ready: std::sync::mpsc::S
                             *lock += 1;
                             let events = body["events"].as_array().cloned().unwrap_or_default();
                             tokio::time::sleep(b.write + b.per_event * events.len() as u32).await;
+                            if let (0, Some(hold)) = (n, &b.hold_first) {
+                                hold.notified().await;
+                            }
                             if b.fail.contains(&n) {
                                 kept.lock().unwrap().uploads.push((
                                     aid.to_string(),
@@ -578,10 +583,14 @@ async fn idle_turns_do_not_widen_the_window_and_a_turn_counts_out_a_second_after
 }
 
 /// How long a control event recorded during an upload takes to reach the hub when the store's write connection
-/// stalls for 1 s (other turns' appends and fsyncs) just as that upload's answer arrives.
+/// stalls for 1 s (other turns' appends and fsyncs) just as that upload's answer arrives. The hub holds that answer
+/// until the stall really has the connection, so the ack write always lands inside the stall, however the threads
+/// are scheduled.
 async fn control_behind_a_stalled_ack(bounds: Bounds) -> Duration {
+    let stalled = Arc::new(Notify::new());
     let hub = hub(Behaviour {
         write: Duration::from_millis(200),
+        hold_first: Some(stalled.clone()),
         ..Default::default()
     })
     .await;
@@ -617,6 +626,8 @@ async fn control_behind_a_stalled_ack(bounds: Bounds) -> Duration {
     let state = runner.state.clone();
     let stall = std::thread::spawn(move || {
         state.with(|_| {
+            // Stores a permit if the hub is not waiting yet.
+            stalled.notify_one();
             std::thread::sleep(Duration::from_secs(1));
             Ok(())
         })
