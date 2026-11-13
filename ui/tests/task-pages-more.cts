@@ -55,6 +55,9 @@ declare function liveEmit(topic: string, data: unknown): void;
 
     // ---- the Related picker
     await page.evaluate(() => { location.hash = '#/task/t-1'; });
+    // An empty Related section is under ⋯ › Activity and links (task #409).
+    await page.locator('#task-modal[open][data-task="t-1"] [data-task-more]').click();
+    await page.locator('#task-modal .prop-pop').getByRole('menuitem', {name: 'Activity and links'}).click();
     await page.locator('#task-modal[open][data-task="t-1"] [data-related-add]').click();
     await page.locator('#task-modal .prop-pop [data-prop-pick="related"]').click();
     const find = page.locator('#task-modal .prop-pop .tl-menu-q');
@@ -76,6 +79,8 @@ declare function liveEmit(topic: string, data: unknown): void;
       await page.setViewportSize({width, height: 844});
       await page.evaluate(() => { location.hash = '#/tasks'; });
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
+      // A phone shows Related, with its merge order, in the task window's Info tab (task #409).
+      if (width <= 390) await page.locator('#task-modal[open][data-task="t-2"] [data-task-tab="info"]').click();
       const order = page.locator('#task-modal[open][data-task="t-2"] .task-order');
       await order.first().waitFor();
       assert.deepEqual(await order.evaluateAll(rows => rows.map(r => (r as HTMLElement).innerText.replace(/\s+/g, ' ').trim())),

@@ -145,6 +145,9 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     assert.equal(await up.locator('[data-open-task="t-12"]').count(), 1, 'links to the parent');
     assert.equal(await up.locator('[data-prop-clear="parent"], [data-prop="parent"]').count(), 0, 'no change or remove');
     // The Related menu: only what relate writes.
+    // An empty Related section is under ⋯ › Activity and links (task #409).
+    await page.locator('#task-modal[open][data-task="t-14"] [data-task-more]').click();
+    await page.locator('#task-modal .prop-pop').getByRole('menuitem', {name: 'Activity and links'}).click();
     await page.locator('#task-modal[open][data-task="t-14"] [data-related-add]').click();
     const kinds = await page.locator('#task-modal .prop-pop [data-prop-pick]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset['propPick']));
     assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up']);
