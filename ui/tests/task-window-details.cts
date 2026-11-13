@@ -72,6 +72,24 @@ const RID = 'spec-ok-ana';
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // ---- an editable task without tags hides its Tags row; a request raised while the window is open shows the banner
+    {
+      const t: Task = task('t-3', 'Pricing page', 'spec', {owner_id: 'human:ana'});
+      const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-3', tasks: [t], needs: []});
+      const win = page.locator('#task-modal[open]');
+      await win.locator('details.task-details > summary').click();
+      assert.ok(await win.locator('[data-prop-row="due"]').isVisible());
+      assert.equal(await win.locator('[data-prop-row="tags"]').count(), 0, 'no tags: the row hides even when editable');
+      assert.equal(await win.locator('.task-need').count(), 0);
+      t.turn = {state: 'person', who: 'human:ana', line: 'Ship it?', since: null, until: null, ask: true, requirement_id: RID};
+      t.version += 1;
+      await page.evaluate(() => { void (window as unknown as {taskAskSettled: (id: string) => void}).taskAskSettled('t-3'); });
+      await win.locator('.task-need').waitFor();
+      assert.match(await win.locator('.task-need').innerText(), /Ship it\?/);
+      assert.equal(await win.locator('.task-need').getByRole('button', {name: 'Answer'}).count(), 1);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
     console.log('task window details: Details line, run lines, needs-you banner: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -1120,12 +1120,31 @@ function taskChatEarlier(state: TaskChatState) {
   thread.scrollTop = thread.scrollHeight - fromBottom;
   requestAnimationFrame(() => { state.earlier = false; });
 }
-// The needs-you banner goes once the task no longer waits on this reader's own ask (answered here or elsewhere).
+// The turn line above the chat: the needs-you banner with Answer when the reader owes the answer, else who has it now.
+function taskTurnLineHTML(t: ModalTask): string {
+  const me = myActor(), turn = !taskFinished(t) ? t.turn : null;
+  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me;
+  return yours && turn?.line ? `<div class="task-need" data-task-yours role="region" aria-label="Needs you">${taskMarkHTML(t, {space: false})}<span class="task-need-line">${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}
+    <button type="button" class="primary tmodal-act" data-task-answer="${esc(String(turn.requirement_id))}">Answer</button></div>`
+    : turn?.line ? `<p class="task-wait">${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}</p>` : '';
+}
+// The needs-you banner follows the turn: it goes once the task no longer waits on this reader's own ask, and appears when
+// a refresh raises one.
 function taskNeedBannerSync(d: ModalDialog, task: ModalTask | null | undefined): void {
+  if (!task || String(task.id) !== String(d.dataset.task)) return;
   const banner = $('.task-need', d);
-  if (!banner || !task || String(task.id) !== String(d.dataset.task)) return;
   const turn = taskFinished(task) ? null : task.turn;
-  if (!(turn?.ask && turn.requirement_id && turn.who === myActor() && String(turn.requirement_id) === ($('[data-task-answer]', banner)?.dataset.taskAnswer || ''))) banner.remove();
+  const mine = !!(turn?.ask && turn.requirement_id && turn.who === myActor());
+  if (banner) {
+    if (!(mine && String(turn?.requirement_id) === ($('[data-task-answer]', banner)?.dataset.taskAnswer || ''))) banner.remove();
+    else return;
+  }
+  if (!mine) return;
+  const html = taskTurnLineHTML(task);
+  if (!html.includes('task-need')) return;
+  const old = $('.task-wait', d);
+  if (old) old.outerHTML = html;
+  else $('.task-tabs', d)?.insertAdjacentHTML('beforebegin', html);
 }
 // An ask of this task was answered in the Needs you card: read the open task again so its banner goes.
 function taskAskSettled(taskId: string | number): void {
@@ -1301,9 +1320,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
   // A task waiting on this reader's own answer: a banner above the chat with its Answer button (it goes when answered).
-  const turnLine = yours && turn?.line ? `<div class="task-need" data-task-yours role="region" aria-label="Needs you">${taskMarkHTML(t, {space: false})}<span class="task-need-line">${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}
-    <button type="button" class="primary tmodal-act" data-task-answer="${esc(String(turn.requirement_id))}">Answer</button></div>`
-    : turn?.line ? `<p class="task-wait">${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}</p>` : '';
+  const turnLine = taskTurnLineHTML(t);
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="${esc(`Snoozed${snooze?.until ? ` until ${fmt(snooze.until)}` : ''}${snooze?.by ? ` by ${actorLabel(snooze.by)}` : ''}${snooze?.why ? ` · ${snooze.why}` : ''}`)}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>${snoozeDay(t) ? `Snoozed to ${esc(snoozeDay(t))}` : 'Snoozed'}${chipNoteHTML(snooze?.why)}</button>` : ''}
