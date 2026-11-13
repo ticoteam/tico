@@ -283,7 +283,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.locator('.decide [data-dc="give"]').click();
   await field.click();
   await pop.waitFor();
-  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gt-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gt-name')?.textContent}: ${r.querySelector('.gt-why')?.textContent}`)),
+  assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gv-name')?.textContent}: ${r.querySelector('.gv-why')?.textContent}`)),
     ['Sam: Asked for it', 'BotOps: Named in the task', 'Engineer: Named in the task', 'Release Owner: Owns its area']);
   await page.keyboard.press('Escape');
   await pop.waitFor({state: 'detached'});
@@ -347,7 +347,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.keyboard.type('sam');
   await page.keyboard.press('Enter');
   await pop.waitFor({state: 'detached'});
-  assert.equal(await why.locator('.gt-name').textContent(), 'Sam', 'the pick is on the field on screen');
+  assert.equal(await why.locator('.gv-name').textContent(), 'Sam', 'the pick is on the field on screen');
   await why.click();
   await pop.waitFor();
   assert.equal(await pop.locator('[role=group]').first().locator('[data-give-pick="api"]').count(), 1, 'opened again: a bot only the body names is suggested');
@@ -379,7 +379,7 @@ async function needsYou(browser: Browser): Promise<void> {
   release2();
   await page.waitForFunction(() => DEC_ABOUT.get('t-ok2')?.state === 'ready');
   await page.waitForFunction(() => !document.querySelector('.decide [data-before-read]'));
-  assert.equal(await why.locator('.gt-name').textContent(), 'Sam', 'the pick survives the side drawing again');
+  assert.equal(await why.locator('.gv-name').textContent(), 'Sam', 'the pick survives the side drawing again');
   assert.equal(await whyGive.isDisabled(), false, 'Give stays on');
   assert.deepEqual(errors, []);
   await page.close();
