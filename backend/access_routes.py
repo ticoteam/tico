@@ -8,6 +8,7 @@ from fastapi import Request
 from . import account_routes
 from . import org_routes
 from . import page_owners
+from . import secret_drop
 from . import team_rules
 from . import views
 
@@ -57,6 +58,12 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
         """Each page's owner, the bot its Chat opens (backend/page_owners.py). Anyone on the team reads it."""
         with store.read() as c:
             return {"pages": page_owners.read(c)}
+
+    @app.get("/api/v2/secret-rules")
+    def secret_rules_read(request: Request):
+        """The Tools chat's key detector rules (backend/secret_rules.json), which the page runs on a paste before it
+        reaches the text box; the server runs the same ones (backend/secret_drop.py). Anyone on the team reads it."""
+        return secret_drop.rules()
 
     @app.put("/api/v2/page-owners/{page}")
     def page_owner_set(request: Request, page: str, body: M.PageOwnerSet):

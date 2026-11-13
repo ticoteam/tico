@@ -28,6 +28,8 @@ interface PageChatOpts {
   button: HTMLElement;             // where the Chat button goes, in the page's header
   stays: (route: string) => boolean; // the addresses that are still this page: leaving them closes its chat
   item?: () => PageChatItem | null; // what is selected on the page now
+  empty?: () => string;            // the chat's empty state, written from the page when it opens
+  keyDrop?: () => string[];        // Tools: the composer catches keys (tools-key-drop.ts); the tools in Problem, by name
 }
 interface PageChatState extends PageChatOpts { owner: string; chat: ThvView | null; full: boolean; open: boolean; held: boolean }
 
@@ -178,7 +180,8 @@ function pgcDraw(state: PageChatState, open: boolean): void {
   panel.querySelector('.pgc-grip')?.setAttribute('aria-valuenow', String(pageChatWidth()));
   const chat = panel.querySelector<HTMLElement>('.pgc-chat');
   if (chat && !state.chat) {
-    state.chat = threadMount(chat, {dm: owner, card: true, header: false, from: () => pgcFrom(state)});
+    state.chat = threadMount(chat, {dm: owner, card: true, header: false, from: () => pgcFrom(state),
+      ...(state.empty ? {empty: state.empty()} : {}), ...(state.keyDrop ? {keyDrop: {tools: state.keyDrop}} : {})});
     chat.querySelector('.thv-composer')?.insertAdjacentHTML('beforebegin', '<div class="pgc-chip" hidden></div>');
   }
   pageChatPicked();

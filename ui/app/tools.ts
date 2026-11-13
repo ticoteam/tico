@@ -67,13 +67,13 @@ async function pageTools() {
   const show = TOOLS_FILTERS.some(([k]) => k === params.get('show')) ? params.get('show') ?? '' : '';
   const run = (TL?.run || 0) + 1;
   TL = {run, rows: TL?.rows || null, counts: TL?.counts || null, error: '', q: TL?.q || '', show};
-  $('#main').innerHTML = `<div class="tt" id="tools-root">
+  $('#main').innerHTML = `<div class="tt-wrap" id="tools-root"><div class="tt">
     <header class="tt-head"><h1>Tools</h1><span class="spacer"></span>
       <a class="ghost small" href="${TOOLS_KEYS}" data-tl-keys>Keys</a><a class="ghost small" href="#/tools/settings" data-tl-settings>Settings</a>
-      ${toolsAddMenu()}</header>
+      ${toolsAddMenu()}<span class="tt-chat"></span></header>
     <div class="tt-bar"><div class="theme-seg tt-filters" role="radiogroup" aria-label="Show"></div>
       <input type="search" class="tt-q" placeholder="Search" aria-label="Search tools" autocomplete="off" spellcheck="false" value="${esc(TL.q)}"></div>
-    <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div>`;
+    <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div></div>`;
   // The page's root, search box and filter bar are drawn just above.
   const root: HTMLElement = $('#tools-root')!;
   const search = root.querySelector<HTMLInputElement>('.tt-q')!;
@@ -87,6 +87,9 @@ async function pageTools() {
     toolsDraw();
   };
   toolsAddBind(root);
+  // The Tools owner's chat (page-chat.ts), which takes keys without a model seeing them (tools-key-drop.ts).
+  void pageChatMount({page: 'tools', label: 'Tools', button: root.querySelector<HTMLElement>('.tt-chat')!,
+    stays: r => r === TOOLS_ROUTE || r.startsWith(TOOLS_ROUTE + '?'), empty: toolsChatEmpty, keyDrop: toolsInProblem});
   if (TL.rows) toolsDraw();
   try {
     const d = await get('/v2/tool-index', {fresh: true});
@@ -94,6 +97,15 @@ async function pageTools() {
     TL.rows = d.rows || []; TL.counts = d.counts || null;
   } catch (e) { if (!TL || TL.run !== run) return; TL.error = errorMessage(e, ''); TL.rows ||= []; }
   if (root.isConnected) toolsDraw();
+}
+
+// The tools in Problem, by name: the chat's empty state names them and a dropped key's "For" offers them.
+const toolsInProblem = (): string[] => (TL?.rows || []).filter(r => r.status?.tone === 'fail').map(r => r.name).slice(0, 8);
+function toolsChatEmpty(): string {
+  const names = toolsInProblem();
+  const list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0] || '';
+  return (list ? `${list} ${names.length > 1 ? 'need' : 'needs'} keys. ` : '')
+    + 'Paste keys here, in any order, with a word about what each is for. They go to Credentials, encrypted; the bot only sees their names.';
 }
 
 function toolsDraw() {
