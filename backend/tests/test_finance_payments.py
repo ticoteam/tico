@@ -2770,3 +2770,29 @@ def test_a_payment_on_a_private_payroll_line_the_payer_cannot_see_in_full_is_ref
         assert c.execute("SELECT count(*) FROM fin_payments WHERE created_by=?", (bot,)).fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == 0
         assert act(c, OWNER, "payment_create", body).status == "committed"
+
+
+def test_an_approved_bot_payment_whose_line_turns_private_is_canceled_at_send_not_sent(books):
+    """The send is judged again: a payment approved on an open line that is made private before it goes out, so the
+    payer no longer has full detail on it, is canceled at the send and never reaches the bank."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bot = _finance_owner_pays(c)
+        line = account(c, "6100")
+        body = {"recipient_id": rid, "account_id": line, "money_account_id": _checking(c), "amount": 5_000}
+        asked = act(c, bot, "payment_create", body)
+        assert asked.status == "needs_approval", asked
+        give(c, OWNER, asked.approval_id)
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        made = act(c, OWNER, "private_lines_set", {"account_id": line, "private": True, "others_see": "hidden"})
+        assert made.status == "committed", made
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+    with books.read() as c:
+        row = c.execute(
+            "SELECT status, last_error FROM fin_payments WHERE id=?", (done.result["payment_id"],)
+        ).fetchone()
+        assert tuple(row) == ("canceled", "its line is no longer in the payer's view")
