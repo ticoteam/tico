@@ -1205,7 +1205,10 @@ def test_a_built_in_bots_product_files_follow_the_release_before_its_turn(api, c
     log = subprocess.run(
         ["git", "-C", str(repo), "log", "--format=%s", "main"], capture_output=True, text=True, check=True
     ).stdout
-    assert log.startswith("Refresh ") and "from the botops template" in log, log
+    # The refresh comes first; the runner then adds Tico's standing section to AGENTS.md in its own commit.
+    newest, refresh = log.splitlines()[:2]
+    assert newest.startswith("Instructions: AGENTS.md") and "<!-- tico:standing" in agent, log
+    assert refresh.startswith("Refresh ") and "from the botops template" in refresh, log
 
 
 def git(cwd, *args):
