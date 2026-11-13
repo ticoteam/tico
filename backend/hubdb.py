@@ -3488,36 +3488,57 @@ def task_private_readable(conn, actor, row):
     return task_reader(conn, actor, row)
 
 
-def stage_read_only(conn, actor, row):
-    """Whether `actor` reads private task `row` only because it holds the task's stage as the bot the pipeline names
-    for it (task_engine.names): it is the owner there and would not read the task otherwise. Such a bot reads the
-    task, and cannot share it: it adds no reader, gives the task to nobody, and what it files from the task stays
-    private with the task's readers (spec: a private task's stage bot can read it while it holds the stage)."""
+def stage_read_held(conn, actor, row):
+    """The stage by whose hold alone `actor` reads private task `row`, or None. Either it holds the task's stage as
+    the bot the pipeline names for it (task_engine.names), as its owner, and would not read the task otherwise; or it
+    filed `row` (or a task above it) from a private task it read that way (`STAGE_READ_FILED`), so what it copied there
+    is held as the source is. Such a bot reads the task and cannot share it: it adds no reader, gives the task to
+    nobody, and what it files from it stays private with the task's readers (spec: a private task's stage bot can read
+    it while it holds the stage)."""
     if not row or not is_bot(actor):
-        return False
+        return None
     row = dict(row)
     if "owner_id" not in row or "requester_id" not in row or "stage_id" not in row:
         row = task(conn, row["id"]) or {}
-    if not row or actor != row.get("owner_id") or not task_private(conn, row):
-        return False
+    if not row or not task_private(conn, row):
+        return None
+    filed = _one(
+        conn,
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? LIMIT 1",
+        (row["id"], STAGE_READ_FILED, actor),
+    )
+    if filed:
+        return filed["note"] or "its stage"
+    if actor != row.get("owner_id"):
+        return None
     stage = _one(conn, "SELECT * FROM stages WHERE id=?", (row.get("stage_id"),)) if row.get("stage_id") else None
     from . import task_engine
 
     if not stage or not task_engine.names(stage, actor):
-        return False
-    return not task_private_readable(conn, actor, {**row, "owner_id": None})
+        return None
+    return None if task_private_readable(conn, actor, {**row, "owner_id": None}) else stage["name"]
+
+
+# The history kind that marks a task filed by a bot from a private task it read only by holding its stage; `new` is
+# the bot, `note` the stage's name. The bot shares that task no more than its source.
+STAGE_READ_FILED = "stage_read_filed"
+
+
+def stage_read_only(conn, actor, row):
+    """Whether `actor` reads private task `row` only by holding a stage (`stage_read_held`)."""
+    return stage_read_held(conn, actor, row) is not None
 
 
 def refuse_stage_reader(conn, actor, row):
-    """Refuse a share (a reader, a give, a new owner) by a bot that reads the task only while it holds its stage."""
-    if stage_read_only(conn, actor, row):
-        held = task(conn, row["id"]) or {}
-        stage = _one(conn, "SELECT name FROM stages WHERE id=?", (held.get("stage_id"),)) or {"name": "its stage"}
+    """Refuse a share (a reader, a give, a new owner, a task for someone else) by a bot that reads the task only by
+    holding a stage."""
+    held = stage_read_held(conn, actor, row)
+    if held:
         refuse(
             conn,
             actor,
             "identity",
-            f"You can read this while you hold {stage['name']}; only someone it is shared with can share it",
+            f"You can read this while you hold {held}; only someone it is shared with can share it",
             task=row["id"],
         )
 
@@ -5581,7 +5602,8 @@ def task_create(
         or parent
         and task_private(conn, parent)
     )
-    if parent and stage_read_only(conn, actor, parent):
+    sealed = stage_read_held(conn, actor, parent) if parent else None
+    if sealed:
         # A bot that reads the parent only while it holds its stage shares it with nobody: what it files from it is
         # private, with the parent's readers, and owned by itself or by someone who already reads the parent.
         shared = task_readers(parent)
@@ -5799,6 +5821,8 @@ def task_create(
                 mover=mover,
                 check=(lambda added: readers_check(row["id"], added)) if readers_check else None,
             )
+        if sealed:  # after its readers, the parent's, are copied: from here the filer shares it no more than them
+            _task_event(conn, row["id"], actor, STAGE_READ_FILED, None, actor, sealed)
         if in_private_pipeline:
             private_pipelines.admit(conn, row["id"], pipe)
         if dedicated:

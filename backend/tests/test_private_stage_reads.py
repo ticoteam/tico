@@ -185,6 +185,31 @@ def test_the_stage_bot_cannot_give_what_it_files_from_the_private_task_to_a_bot_
     assert H.task(c, child["id"])["owner_id"] == R3
 
 
+@pytest.mark.parametrize("how", ["give", "reader", "grandchild"])
+def test_what_the_stage_bot_files_for_itself_it_shares_no_more_than_the_private_task(c, how):
+    """Review 2 of #393: a child filed for itself was the reader's own, so it could give it, list a reader on it or
+    file a task under it for a bot nobody shared the private task with. Each is refused, after the bot leaves the
+    stage too."""
+    _engineering(c)
+    row = _private(c)
+    _done(c, row, BUILDER)
+    child = H.task_create(c, R1, "Follow-up", "Quotes the contract.", R1, lint=False, parent_id=row["id"])["id"]
+    reason = "You can read this while you hold Review 1; only someone it is shared with can share it"
+    for moved_on in (False, True):
+        if moved_on:
+            _done(c, row, R1)  # Review 2 now: the read of the source ends, its child stays held the same way
+        with pytest.raises(H.Refused, match=reason):
+            if how == "give":
+                H.task_reassign(c, R1, child, R3, "Yours.", H.task(c, child)["version"])
+            elif how == "reader":
+                H.set_task_readers(c, R1, child, add=[R3])
+            else:
+                H.task_create(c, R1, "Deeper", "More of it.", R3, lint=False, parent_id=child)
+    after = H.task(c, child)
+    assert (after["owner_id"], H.task_readers(after)) == (R1, [BEN])
+    assert not H.task_private_readable(c, R3, after)
+
+
 def test_a_bot_cannot_change_who_holds_a_stage_of_a_pipeline_with_a_private_task_and_a_person_can(c):
     """Criterion 8: on a pipeline that holds an open private task only a person changes a stage's owner bot, and
     their change is in the pipeline's history."""

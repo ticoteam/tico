@@ -1830,7 +1830,8 @@ How each one works on the engine.
   while it holds that stage, as its owner, and its managers with it. That read is not on Who can see, ends when the
   task moves on, and is a line on the task's history ("Reviewer 1 can read this while it holds Review 1"). A bot that
   reads only that way shares nothing: it adds no reader, gives the task to nobody, and what it files from the task is
-  private with the task's readers. On a pipeline holding an open private task only a person changes who holds a stage.
+  private with the task's readers, for itself or for someone who already reads the task. The filer keeps reading what
+  it filed after it leaves the stage, as any requester does, and shares that no more than the task it came from. On a pipeline holding an open private task only a person changes who holds a stage.
   Anyone else a stage needs (a person asked for an OK or an answer, an assignee, the General Manager) must already
   read the task: until someone shares it, the task waits and the line names who can.
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
