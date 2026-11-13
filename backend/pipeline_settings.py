@@ -1605,9 +1605,10 @@ def _add_qa(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
     stages.insert(
         at + 1,
         {
-            **{key: shipped[key] for key in STAGE_FIELDS},
+            **{key: shipped.get(key) for key in STAGE_FIELDS},
             "id": QA_STAGE,
             "owner": fixes["owner"],
+            "pick": None,  # Fixes 2's owner, as one bot; a person can make it One of several afterwards
             "requirements": [_requirement_in(github("checks_pass"), "QA", []), {**page, "id": None}],
         },
     )
