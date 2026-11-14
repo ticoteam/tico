@@ -96,7 +96,11 @@ takes an API key. Candidates:
 A pi turn gets the same MCP servers as a Claude Code or Codex turn (the hub, the bot's bot.yaml servers and the
 repository's `.mcp.json`), in the turn's `mcp.json` under its agent folder (`PI_CODING_AGENT_DIR`: `runtime/pi-agent/<bot>`,
 or the turn's own folder for a Tico model). The file is written atomically per turn. pi takes streamable HTTP only, so an
-SSE server is named as not passed. Each tool is declared directly (`exposure: direct`). Secrets stay `${VAR}`, and each
+SSE server is named as not passed. Every server is `exposure: deferred` and the turn's `--tools` names `tool_search`
+and no `mcp__` entry: pi 1.5 declares an MCP tool only when `--tools` names it, and naming every hub tool would add about
+95k tokens to each request. So no MCP tool is declared before the model searches; `tool_search` loads the matches for the
+next request and they stay declared for the rest of the session. The hub server carries a one-line `description`, which
+lists it in pi's system prompt and ranks its tools in a search. Secrets stay `${VAR}`, and each
 stdio server's environment names the Gateway key empty so it never inherits it. Built-in MCP arrived in pi 0.99.0
 (2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
 

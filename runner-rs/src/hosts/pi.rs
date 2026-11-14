@@ -75,7 +75,12 @@ const GATEWAY_CONTEXT_WINDOW: i64 = 200_000;
 /// Compact at Tico offers (backend/providers.py COMPACT_SIZES), which is also Claude Code's own floor.
 const PI_RESERVE_DEFAULT: i64 = 16_384;
 const PI_COMPACT_FLOOR: i64 = 100_000;
-const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
+/// pi 1.5 declares an MCP tool only when `--tools` names it: every server is `deferred` (`mcp_json`), so `tool_search`
+/// loads a server's tools when the model asks, and none is declared before (the hub's 457 would be about 95k tokens).
+const TOOLS: &str = "read,bash,edit,write,grep,find,ls,tool_search";
+/// The hub server's line in pi's system prompt; `tool_search` ranks the hub's tools by it.
+const HUB_DESCRIPTION: &str =
+    "Tico: tasks, messages, files, pages, goals, approvals and the rest of your team's work";
 
 /// The catalog ids, sorted (readiness `models`).
 pub fn model_names() -> Vec<String> {
@@ -282,7 +287,8 @@ for name,value in body.items():
 /// pi's `mcp.json` for a turn: the same servers Claude Code is given (hosts/claude.rs `argv`), in pi's format. The
 /// repository's own `.mcp.json` comes first, then the bot's declared servers, then the hub, each replacing the one before
 /// by name. An SSE server (a repository's, not the bot's: those are filtered by the manifest) is left out, since pi
-/// refuses it. Secrets stay `${VAR}`: the hub's variables are named there and pi reads them from the turn's environment.
+/// refuses it. Every server is `deferred`: its tools are found with `tool_search` (`TOOLS`), never declared up front.
+/// Secrets stay `${VAR}`: the hub's variables are named there and pi reads them from the turn's environment.
 pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
     let project = if settings.cwd.is_empty() {
         None
@@ -297,7 +303,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
         .into_iter()
         .filter(|(_, s)| s.is_object() && s["type"] != "sse")
         .map(|(name, mut s)| {
-            s["exposure"] = json!("direct");
+            s["exposure"] = json!("deferred");
             (name, s)
         })
         .collect();
@@ -309,7 +315,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
             .flatten()
             .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
             .collect();
-        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
+        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "deferred", "description": HUB_DESCRIPTION}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
     // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
@@ -2105,7 +2111,8 @@ mod tests {
     }
 
     #[test]
-    fn a_pi_turn_gets_the_hub_and_the_declared_and_repository_servers_as_direct_http_servers() {
+    fn a_pi_turn_gets_the_hub_and_the_declared_and_repository_servers_deferred_behind_tool_search()
+    {
         let dir = std::env::temp_dir().join(format!("pi-mcp-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "legacy": {"type": "sse", "url": "https://old.example/sse"}, "tico": {"command": "stale"}}}"#).unwrap();
@@ -2142,11 +2149,11 @@ mod tests {
         let servers = &config["mcpServers"];
         assert_eq!(
             servers["linear"],
-            json!({"url": "https://mcp.linear.app/mcp", "exposure": "direct", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}})
+            json!({"url": "https://mcp.linear.app/mcp", "exposure": "deferred", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}})
         );
         assert_eq!(
             servers["repo"],
-            json!({"command": "npx", "args": ["x"], "exposure": "direct", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}})
+            json!({"command": "npx", "args": ["x"], "exposure": "deferred", "env": {"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""}})
         );
         assert!(
             servers.get("legacy").is_none(),
@@ -2161,13 +2168,24 @@ mod tests {
                 &servers["tico"]["env"]["HUB_TOKEN"],
                 &servers["tico"]["exposure"]
             ),
-            (&json!("${HUB_TOKEN}"), &json!("direct"))
+            (&json!("${HUB_TOKEN}"), &json!("deferred"))
         );
+        // The hub's one line lists it in pi's system prompt and ranks its tools in a search.
+        assert!(servers["tico"]["description"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("Tico: ")));
+        // No server declares a tool before a search: 457 hub tools declared at once are about 95k tokens a request.
+        for (name, row) in servers.as_object().unwrap() {
+            assert_eq!(row["exposure"], json!("deferred"), "{name}");
+            assert!(row.get("toolExposure").is_none(), "{name}");
+        }
         // Every stdio server's environment names the Gateway key empty, so pi's inherited copy never reaches it.
         for stdio in ["repo", "tico"] {
             assert_eq!(servers[stdio]["env"][GATEWAY_KEY_ENV], json!(""), "{stdio}");
         }
-        // The turn's `--tools` names no `mcp__` entry, so pi keeps every MCP tool declared to the model.
+        // pi 1.5 declares an MCP tool only when `--tools` names it, and loads a deferred one only through `tool_search`:
+        // the turn names `tool_search` and no `mcp__` entry, so every server's tools are found by search, none up front.
+        assert!(TOOLS.split(',').any(|t| t == "tool_search"));
         assert!(!TOOLS.split(',').any(|t| t.starts_with("mcp__")));
         std::fs::remove_dir_all(dir).unwrap();
     }
