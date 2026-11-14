@@ -9,7 +9,7 @@ Goals here; the Strategy Owner is the default owner and has no computer.
 import json
 
 from backend.store import H
-from backend.tests.helpers.api import claim, post, put
+from backend.tests.helpers.api import claim, get, post, put
 from backend.tests.helpers.chat_goals import setup
 
 FROM_GOALS = {'page': 'goals', 'label': 'Goals'}
@@ -68,8 +68,12 @@ def test_a_pasted_list_becomes_one_card_and_only_the_kept_rows_are_made_as_the_p
         ]
     assert owners == {'human:cara'}
     assert made == [('human:cara', 'page_chat')] * 3
-    # What ran is what was kept: the stored card lists three steps, so the dropped one can never run later.
+    # What ran is what was kept: the stored card lists three steps and three lines, so the dropped one can never run
+    # later and a reloaded card never shows it as made.
     assert len(done['body']['actions']) == 3
+    stored = get(api, f"assistant/actions/{action['id']}", 'cara-test')['action']
+    assert [d['field'] for d in stored['diff']] == [r['title'] for i, r in enumerate(ROWS) if i != 2]
+    assert len(stored['body']['actions']) == 3
 
 
 def test_a_card_with_every_row_dropped_or_a_drop_out_of_range_makes_nothing(api):
@@ -127,4 +131,62 @@ def test_a_card_takes_one_to_fifty_rows_each_with_a_title(api):
             turn['token'],
             expected=422,
         )
+    assert goal_titles(api) == []
+
+
+def test_a_bot_that_does_not_own_goals_gets_no_card_even_while_the_person_writes_to_the_owner(api):
+    # AC-8, the owner half alone: Cara's Goals message to the owner is fresh; ops, no longer the owner, is refused.
+    machine = goals_owned_by_ops(api)
+    said_from(api, 'goals')
+    turn = claim(api, machine)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('strategy-owner','strategy-owner','Strategy Owner','active')"
+        )
+    put(api, 'page-owners/goals', {'bot': 'strategy-owner'})
+    dm = post(api, 'threads/dm', {'members': ['bot:strategy-owner']}, 'cara-test')
+    post(
+        api, f"threads/{dm['id']}/messages", {'text': 'Add these goals', 'refs': {'from_page': FROM_GOALS}}, 'cara-test'
+    )
+    post(
+        api, 'page-chat/cards', {'page': 'goals', 'for_person': 'human:cara', 'rows': ROWS}, turn['token'], expected=403
+    )
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM assistant_actions').fetchone()[0] == 0
+
+
+def test_a_card_goes_only_into_the_persons_own_chat_with_the_bot(api):
+    # A Goals message in a chat someone else is in is not the person's own chat with the owner: no card there.
+    machine = goals_owned_by_ops(api)
+    dm, _ = said_from(api, 'goals')
+    turn = claim(api, machine)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO thread_members(id, thread_id, actor, added_by, created_at, updated_at) "
+            "VALUES(?, ?, 'human:ben', 'human:cara', ?, ?)",
+            (H.new_id(), dm['id'], H.now(), H.now()),
+        )
+    post(
+        api, 'page-chat/cards', {'page': 'goals', 'for_person': 'human:cara', 'rows': ROWS}, turn['token'], expected=403
+    )
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM assistant_actions').fetchone()[0] == 0
+
+
+def test_a_stored_page_card_with_another_route_runs_nothing(api):
+    # A Goals card holds only POST /api/v2/goals steps: one stored with any other route fails at Confirm, and nothing runs.
+    machine = goals_owned_by_ops(api)
+    said_from(api, 'goals')
+    turn = claim(api, machine)
+    card = post(api, 'page-chat/cards', {'page': 'goals', 'for_person': 'human:cara', 'rows': ROWS[:1]}, turn['token'])
+    other = {
+        'actions': [{'method': 'POST', 'path': '/api/v2/tasks', 'body': {'title': 'Not a goal', 'owner': 'human:cara'}}]
+    }
+    with api.app.state.store.transaction() as c:
+        tasks = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
+        c.execute('UPDATE assistant_actions SET body=? WHERE id=?', (json.dumps(other), card['action']['id']))
+    done = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, 'cara-test')['action']
+    assert done['status'] == 'failed', done
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == tasks
     assert goal_titles(api) == []

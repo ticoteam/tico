@@ -4,7 +4,8 @@
 //    goals"); × drops a row (it stays, struck, with ↺ to bring it back) and the button counts 3; Cancel is on the left;
 //  - with every row dropped the button is off; ↺ brings a row back;
 //  - Confirm sends the dropped rows' indexes (`drop`) and the card then shows what ran, with no buttons.
-// TICO_UI_SHOTS=<dir> keeps the screenshots (1440, light and dark).
+//  - at 1680 the chat with its card sits beside the page.
+// TICO_UI_SHOTS=<dir> keeps the screenshots (1440 and 1680, light and dark).
 // Run: node scripts/ui-tests.cts page-chat-goals-card
 import type {Page} from 'playwright';
 import type * as StrategyFakeSupport from './support/strategy-fake.cts';
@@ -27,8 +28,8 @@ function action(status = 'pending', kept = TITLES) {
 }
 
 let BROWSER: import('playwright').Browser;
-async function openCard(theme: 'light' | 'dark', confirms: unknown[]) {
-  const opened = await openStrategy(BROWSER, {viewport: {width: 1440, height: 900}, hash: '#/strategy/org'});
+async function openCard(theme: 'light' | 'dark', confirms: unknown[], viewport = {width: 1440, height: 900}) {
+  const opened = await openStrategy(BROWSER, {viewport, hash: '#/strategy/org'});
   const {page} = opened;
   let state = action();
   const answer = threadsFake({bot: OWNER, me: 'human:ana', messages: [
@@ -100,6 +101,15 @@ const add = (page: Page) => page.locator('aside.pgc .pgk [data-confirm]');
         assert.equal(await page.locator('aside.pgc .pgk button').count(), 0);
         assert.match(await page.locator('aside.pgc .pgk .asst-state').innerText(), /^Done\./);
       }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    for (const theme of ['light', 'dark'] as const) {
+      // 1680: the column docks beside the page and the card reads the same.
+      const {page, errors} = await openCard(theme, [], {width: 1680, height: 1050});
+      assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-docked')), true);
+      assert.equal(await add(page).innerText(), 'Add 4 goals');
+      await shot(page, `page-chat-goals-card-1680-${theme}`);
       assert.deepEqual(errors, []);
       await page.close();
     }
