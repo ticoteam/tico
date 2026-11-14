@@ -149,7 +149,8 @@ async function renderDownloadLink(): Promise<void> {
     // manifest again, and never turn a non-web URL into an executable link.
     const url = new URL(d.url, location.href);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return;
-    const label = `Download Tico for ${companyName()}`;
+    // Short, per OS (Chris, Nov 13: "Just say 'Download Mac App'"); the nudge's sentence still names the team.
+    const label = `Download ${OS_WORDS[os]} app`;
     a.href = d.url;
     a.textContent = '';
     a.insertAdjacentHTML('beforeend', `<span class="nav-icon" aria-hidden="true">download</span>${esc(label)}${os === 'mac' ? betaPill('mac_app') : ''}`);
