@@ -208,7 +208,9 @@ function settingsEditBot(slug = '', inline = false) {
   const ownerNamesIt = !!e && e.id === 'strategy-owner' && S.me?.role !== 'owner';
   // A built-in bot's slug is fixed (the server refuses its rename); any other bot's slug is renamed with its definition.
   const fixedSlug = !!e && isBuiltInBot(e.id);
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-editor-title" tabindex="-1">${editing ? 'Settings' : 'Add bot'}</h2><span class="spacer"></span>${inline ? '' : '<button class="ghost" type="button" data-bot-close aria-label="Close" title="Close (Esc)">✕</button>'}</div>
+  // Archive is the editor's one destructive action: under ⋯ in its head, never beside Save (style guide, Button order).
+  const archivable = !!e && !isBuiltInBot(e.id);
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-editor-title" tabindex="-1">${editing ? 'Settings' : 'Add bot'}</h2><span class="spacer"></span>${archivable ? `<span class="bot-editor-more people-cell-more"><button class="people-more" type="button" data-bot-more aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden><button type="button" role="menuitem" class="danger-text" data-bot-remove>Archive bot</button></div></span>` : ''}${inline ? '' : '<button class="ghost" type="button" data-bot-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button>'}</div>
     <div class="bot-editor-body">
       <div class="bot-editor-grid">
         <h3 class="bot-editor-sec bot-editor-wide">Profile</h3>
@@ -239,7 +241,7 @@ function settingsEditBot(slug = '', inline = false) {
       </div>
     </div>
     ${editing ? '<p class="bot-editor-pending" data-bot-pending role="status" hidden></p>' : ''}
-    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${!!e && !isBuiltInBot(e.id) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.owner_id))}</option>${S.emps.filter(row => row.id !== slug).map(row => `<option value="${esc(row.id)}">Hand its work to ${esc(row.display_name || row.slug)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(String(e.agent?.harness)) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
+    <div class="bot-editor-foot"><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span><button class="primary settings-go" type="submit">${editing ? 'Save bot' : 'Add bot'}</button></div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach((button: HTMLElement) => button.onclick = closeEditor);
   // Every row is held until Save bot (`pending`, and the model pickers' own pick), so a reload elsewhere redraws the
@@ -366,19 +368,29 @@ function settingsEditBot(slug = '', inline = false) {
     rows.addEventListener('input', () => paintPending());
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.ts
-  const remove = dialog.querySelector('[data-bot-remove]');
+  const more = dialog.querySelector('[data-bot-more]') as HTMLButtonElement | null, moreMenu = more?.nextElementSibling as HTMLElement | null;
+  const moreShow = (open: boolean) => { if (!more || !moreMenu) return; moreMenu.hidden = !open; more.setAttribute('aria-expanded', String(open)); };
+  if (more && moreMenu) {
+    more.onclick = () => { moreShow(moreMenu.hidden); if (!moreMenu.hidden) moreMenu.querySelector<HTMLElement>('[role=menuitem]')?.focus(); };
+    moreMenu.addEventListener('keydown', (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); moreShow(false); more.focus(); } });
+    // The editor redraws in place (Cancel, Save, a reload): this menu's listener goes with the menu it closes.
+    const outside = (event: Event) => { if (!moreMenu.isConnected) { document.removeEventListener('click', outside, true); return; }
+      if (!moreMenu.hidden && !eventElement(event)?.closest('.bot-editor-more')) moreShow(false); };
+    document.addEventListener('click', outside, true);
+  }
+  const remove = dialog.querySelector('[data-bot-remove]') as HTMLButtonElement | null;
   if (remove) remove.onclick = async () => {
     if (!e) return;
-    // Archive (#535): off the chart, no automations or new work; open tasks go to the picked heir. It asks first.
-    const successor = form.elements.successor.value;
+    moreShow(false);
+    // Archive (#535): off the chart, no automations or new work; open tasks go to the picked heir. It asks first, and the
+    // confirm holds who gets the work (and, for an external agent, whether its credential is revoked).
     const hermes = ['hermes', 'openclaw'].includes(String(e.agent?.harness));
-    const heir = successor ? settingsBotName(successor) : settingsPersonName(e.owner_id);
-    if (!await settingsConfirm({title: `Archive ${e.display_name}?`, ok: 'Archive bot',
-      text: `Its open tasks go to ${heir}. It leaves the team chart and its automations stop. You can restore it later from Archived bots.`})) return;
+    const choice = await settingsArchiveConfirm(e, slug, hermes);
+    if (!choice) { more?.focus(); return; }
     remove.disabled = true; status.textContent = 'Archiving…';
     try {
-      const done = await post(`/v2/bots/${encodeURIComponent(slug)}/archive`, {successor: successor || null, expected_revision: e.revision,
-        ...(hermes ? {revoke_agent: !!form.elements.revoke_agent?.checked} : {})});
+      const done = await post(`/v2/bots/${encodeURIComponent(slug)}/archive`, {successor: choice.successor || null, expected_revision: e.revision,
+        ...(hermes ? {revoke_agent: choice.revoke} : {})});
       SETTINGS_ARCHIVED = null;
       if (!inline) dialog.close();
       await loadSettings();
@@ -557,10 +569,10 @@ function settingsEditOwners(slug: string, {stage}: {stage?: (run: BotRun, people
   const dialog = botSettingsPanel('owner-picker', 'owner-picker', 'owner-picker-title') || $('#owner-picker');
   if (!e || !dialog) return;
   const selected = new Set((e.users || []).map(person => person.id));
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="owner-picker-title">Who ${esc(e.display_name)} works for</h2><span class="spacer"></span><button class="ghost" type="button" data-owner-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="owner-picker-title">Who ${esc(e.display_name)} works for</h2><span class="spacer"></span><button class="ghost" type="button" data-owner-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="owner-picker-body">
       <div class="owner-options">${SETTINGS_DATA.people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${selected.has(person.id) ? 'checked' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
-      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-owner-close>Cancel</button><span id="owner-picker-status" class="muted"></span></div></div></form>`;
+      <div class="row"><button class="ghost" type="button" data-owner-close>Cancel</button><span id="owner-picker-status" class="muted"></span><button class="primary settings-go" type="submit">${stage ? 'Done' : 'Save'}</button></div></div></form>`;
   dialog.querySelectorAll('[data-owner-close]').forEach((button: HTMLElement) => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async (event: Event) => {
     event.preventDefault();
@@ -614,6 +626,33 @@ function settingsTransitionDialog() {
   }
   return dialog;
 }
+// Archive's confirm: the same small dialog as settingsConfirm (pages-shell.ts), with who gets the bot's open tasks (its
+// owner unless another bot is picked) and, for a Hermes or OpenClaw agent, whether its credential is revoked. Cancel,
+// Esc and ✕ archive nothing. Resolves the choice, or null.
+function settingsArchiveConfirm(e: BotEditRow, slug: string, hermes: boolean): Promise<{successor: string; revoke: boolean} | null> {
+  return new Promise(resolve => {
+    const owner = settingsPersonName(e.owner_id);
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal settings-confirm bot-archive-confirm'; dialog.setAttribute('aria-label', `Archive ${e.display_name}?`);
+    dialog.innerHTML = `<form method="dialog"><div class="tmodal-head"><h2 class="tmodal-title">Archive ${esc(e.display_name)}?</h2><span class="spacer"></span><button class="ghost tmodal-x" type="submit" value="cancel" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
+      <div class="tmodal-body"><p data-archive-text></p>
+        <label class="settings-kv"><span>Hand its work to</span><select name="successor" aria-label="Hand its work to"><option value="">${esc(owner)}</option>${S.emps.filter(row => row.id !== slug).map(row => `<option value="${esc(row.id)}">${esc(row.display_name || row.slug)}</option>`).join('')}</select></label>
+        ${hermes ? '<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>' : ''}
+      <div class="onb-actions"><button type="submit" class="ghost" value="cancel" data-confirm-cancel>Cancel</button><span class="spacer"></span>
+      <button type="submit" class="primary people-danger" value="ok" data-confirm-ok>Archive bot</button></div></div></form>`;
+    const form = dialog.querySelector('form')!, pick = form.querySelector<HTMLSelectElement>('select[name=successor]')!;
+    const text = form.querySelector<HTMLElement>('[data-archive-text]')!;
+    const say = () => { text.textContent = `Its open tasks go to ${pick.value ? settingsBotName(pick.value) : owner}. It leaves the team chart and its automations stop. You can restore it later from Archived bots.`; };
+    pick.onchange = say; say();
+    dialog.addEventListener('close', () => {
+      const ok = dialog.returnValue === 'ok';
+      resolve(ok ? {successor: pick.value, revoke: !!form.querySelector<HTMLInputElement>('input[name=revoke_agent]')?.checked} : null);
+      dialog.remove();
+    });
+    document.body.appendChild(dialog); dialog.showModal();
+    form.querySelector<HTMLElement>('[data-confirm-cancel]')!.focus();
+  });
+}
 function settingsConfirmTransition(e: BotEditRow, kind: string, target: string | undefined): Promise<boolean> {
   const dialog = settingsTransitionDialog();
   clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
@@ -628,11 +667,11 @@ function settingsConfirmTransition(e: BotEditRow, kind: string, target: string |
       dialog.innerHTML = '';
       resolve(accepted);
     };
-    dialog.innerHTML = `<div class="tmodal-head"><h2 id="transition-title">${label} · ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-confirm-cancel aria-label="Close">✕</button></div>
+    dialog.innerHTML = `<div class="tmodal-head"><h2 id="transition-title">${label} · ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-confirm-cancel aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
       <div class="transition-body"><p>Destination: <strong>${esc(target)}</strong></p>
         <div class="transition-progress"><strong>This starts a fresh provider session.</strong>
           <p>The bot saves a checkpoint first. History is kept; session-only context is lost.</p></div>
-        <div class="transition-actions"><button class="primary" type="button" data-confirm-prepare>Prepare change</button><button class="ghost" type="button" data-confirm-cancel>Cancel</button></div></div>`;
+        <div class="transition-actions"><button class="ghost" type="button" data-confirm-cancel>Cancel</button><button class="primary settings-go" type="button" data-confirm-prepare>Prepare change</button></div></div>`;
     dialog.querySelector('[data-confirm-prepare]').onclick = () => finish(true);
     dialog.querySelectorAll('[data-confirm-cancel]').forEach((button: HTMLElement) => button.onclick = () => finish(false));
     dialog.oncancel = (event: Event) => { event.preventDefault(); finish(false); };
@@ -667,7 +706,7 @@ function settingsTransitionHTML(t: TransitionRow) {
     : t.state === 'canceled' ? 'This change was canceled.' : 'Preparing the change…';
   const pending = ['preparing','blocked','failed','prepared'].includes(t.state);
   const force = ['blocked','failed'].includes(t.state);
-  return `<div class="tmodal-head"><h2 id="transition-title">${t.kind === 'model' ? 'Change model settings' : 'Move bot'} · ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-transition-close aria-label="Close">✕</button></div>
+  return `<div class="tmodal-head"><h2 id="transition-title">${t.kind === 'model' ? 'Change model settings' : 'Move bot'} · ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-transition-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="transition-body"><p>Destination: <strong>${esc(settingsTransitionTarget(t))}</strong></p>
       <div class="transition-progress"><strong>${esc(status)}</strong>${t.state === 'preparing' ? '<p class="muted">It applies when checkpoints are saved. You can close this.</p>' : ''}</div>
       ${force ? `<p class="err">Without a checkpoint the new session starts with no handoff. History is kept.</p>` : ''}

@@ -82,10 +82,9 @@ async function desktop(browser: Browser): Promise<void> {
 
   // The task's Owner opens the picker: a combobox, focus in it, Suggested then Everyone, the owner ✓, no model text.
   const modal = page.locator('#task-modal');
-  // Owner is a row of the task's Details, which is one closed line until opened.
-  await modal.locator('details.task-details, [data-prop="owner"]').first().waitFor({state: 'attached'});
-  const details = modal.locator('details.task-details:not([open]) > summary');
-  if (await details.count()) await details.click();
+  // Owner is one of the facts on the task's Details tab.
+  await modal.locator('[data-prop="owner"]').waitFor({state: 'attached'});
+  await modal.locator('[data-task-tab="details"]').click();
   const owner = modal.locator('[data-prop="owner"]');
   const asked: string[] = [];
   // The reads a picker could make (the roster, tasks, tags); the app's own timers (live stream, sign-in, support) are not its.

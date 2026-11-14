@@ -64,9 +64,9 @@ async function learnShowNight(n: LearnNightSummary, load: number): Promise<void>
   if (load !== LEARN_LOAD) return;
   const s: Partial<Record<LearnKind, LearnSubject[]>> = night.sections || {};
   const groups = LEARN_SECTIONS.map(([k, label, icon]) => ({k, label, icon, subs: s[k] || []})).filter(g => g.subs.length);
+  // The rail already counts the night's updates and the sections name what changed: no count caption under the date.
   const total = groups.reduce((a, g) => a + g.subs.reduce((b, x) => b + x.entries.length, 0), 0);
-  const parts = groups.map(g => `${g.subs.length} ${g.label.toLowerCase()}`);
-  box.innerHTML = head(total ? `${total} update${total === 1 ? '' : 's'} across ${parts.join(', ')}` : 'Nothing changed.')
+  box.innerHTML = head(total ? '' : 'Nothing changed.')
     + groups.map(g => `<section class="lrn-grp"><h3><span class="nav-icon" aria-hidden="true">${g.icon}</span>${g.label}</h3>${g.subs.map(x => learnSubject(g.k, x)).join('')}</section>`).join('');
   learnFitNames(box);
   void document.fonts.ready.then(() => { if (load === LEARN_LOAD) learnFitNames(box); });

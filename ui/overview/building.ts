@@ -583,7 +583,6 @@ function setFloor(id: number | null, instant = false) {
   characters.forEach(c => { if (c.floor !== id) { c.face = 0; c.root.rotation.y = 0; c.head?.rotation.set(0, 0, 0); } });
   $('#floors').hidden = id !== null; $('#floor-heading').hidden = id === null; $('#back').hidden = id === null; $('#people').hidden = id === null;
   document.body.classList.toggle('inside', id !== null); tags();
-  $('#campus-hint').textContent = id === null ? 'Select a floor to look inside' : 'Select a teammate · Drag to turn';
   const f = floorAt(id);
   if (f) {
     const b = f.building;

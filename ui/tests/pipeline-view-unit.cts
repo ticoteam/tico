@@ -97,6 +97,16 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal((phone.match(/role="tab"/g) || []).length, 3, 'a tab per stage');
   assert.match(phone, /class="pv-tab on" data-pv-tab="ideas"/, 'the first stage with tasks shows first');
   assert.match(phone, /pv-is-phone/);
+  // An empty stage says so in one line: nothing found under a search, else nothing here.
+  const searched = view.html(rec(), TASKS, opts({phone: true, q: 'nothing like this'}));
+  assert.match(searched, /<p class="pv-empty muted">Nothing found<\/p>/);
+  const pv = vm.runInContext('PV', ctx) as {stage: string};
+  const was = pv.stage;
+  pv.stage = 'dev';   // In development has no task
+  const empty = view.html(rec(), TASKS, opts({phone: true}));
+  pv.stage = was;
+  assert.match(empty, /class="pv-tab on" data-pv-tab="dev"/);
+  assert.match(empty, /<p class="pv-empty muted">Nothing here<\/p>/);
 }
 
 // ---- a card (task #220): two lines of title, who asked, time in this stage, the owner's face when someone else owns it
@@ -401,7 +411,9 @@ const factories = (async () => {
     standing: 'How sure are you?', who: 'bot:builder', asked_by: null, choices: null, typed, shows: [], answer: null, may: [], ...extra}) as string;
   const open = row({});
   assert.match(open, /<span class="task-req-name">Confidence<\/span>/, 'the title only');
-  assert.doesNotMatch(open, /How sure|task-req-val/);
+  // What it is waiting on is in the row's tooltip; the row itself draws the title alone.
+  assert.match(open, / title="Not yet · Checks: builder · How sure are you\?"/);
+  assert.doesNotMatch(open.replace(/ title="[^"]*"/, ''), /How sure|task-req-val/);
   const met = row({met: true, who: null, standing: '80', answer: {id: 'a1', at: '', by: 'bot:builder', note: null, value: '80'}});
   assert.match(met, /<span class="task-req-name">Confidence<\/span>/);
   assert.match(met, /<span class="task-req-val">80<\/span>/, 'once met, its value');

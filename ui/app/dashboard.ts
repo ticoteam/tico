@@ -32,8 +32,9 @@ interface DashState {
   feed: TaskFeed;
 }
 let DASH: DashState | null = null;
-// A place drawn on this grid under its own head (the Growth page, ui/app/growth-page.ts): {head(state) → its HTML,
-// pages() → whether + Page shows, drawn(state) after each draw, wire(state) once}.
+// A place drawn on this grid under its own head (the Growth page, ui/app/growth-page.ts): {head(state) → its shared
+// header (page-head.ts), tools(state) and more(state) → its own tools and ⋯ items, which dashHeadDraw sets beside the
+// arranging ones, pages() → whether + Page shows, drawn(state) after each draw, wire(state) once}.
 const DASH_PLACES: Record<string, DashPlace> = {};
 // By template: the heading a card shows when it has no title of its own, and what it says when it shows nothing.
 const DASH_HEADING: Record<string, (card: DashCard) => string | undefined> = {};
@@ -46,7 +47,7 @@ const DASH_NONE: Record<string, (card: DashCard) => string> = {};
 type DashCard = import('../types/api').Card;
 type ApiCard = DashCard;
 // A place drawn on the grid under its own head (DASH_PLACES, ui/app/growth-page.ts).
-interface DashPlace { first?: string; pages: () => boolean; head: (state: DashState) => string; wire?: (state: DashState) => void; drawn?: (state: DashState) => void }
+interface DashPlace { first?: string; pages: () => boolean; head: (state: DashState) => string; tools?: (state: DashState) => string; more?: (state: DashState) => string; wire?: (state: DashState) => void; drawn?: (state: DashState) => void }
 // A page as a pin and the Add page form list it.
 interface DashPageItem { file_id: string; title?: string | null; bot: string; updated_at?: string | null }
 // A pin holds a card or a page.
@@ -119,9 +120,17 @@ const dashApi = (place: string) => '/v2/places/' + encodeURIComponent(place);
 // The place as it reads: the Growth page's for the month picked there.
 const dashReadUrl = (state: DashState) => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = (state: DashState) => state.place + (state.month ? '?month=' + state.month : '');
-const dashTabsHTML = (on: string) => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Company">${
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ['factories', OVERVIEW_FACTORIES, 'Factories'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
-    `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+// Company's views, one tab each. Share is the sixth and rarely used: the shared header (ui/app/page-head.ts) keeps five on
+// the row and lists it in ⋯, and while it is the one open it takes the fifth place.
+const dashTabs = (on: string): PageTab[] =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ['factories', OVERVIEW_FACTORIES, 'Factories'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])]
+    .map(([id, href, label]) => ({label: label!, href: href!, cur: on === id}));
+// The one page header of every Company view (style guide "Top bars: one line"): Company, its tabs, then the view's own
+// tools, its filled button or quiet +, and ⋯ last. `.dash-tabs` stays on the tab row as a hook for tests and the
+// read-only view's checks.
+type DashHeadParts = Pick<PageHeadOptions, 'tools' | 'primary' | 'add' | 'more' | 'hook'>;
+const dashCompanyHead = (on: string, parts: DashHeadParts = {}) => pageHead({title: 'Company', pad: true, tabs: dashTabs(on), tabsHook: 'dash-tabs',
+  tabsAttrs: 'aria-label="Company"', ...parts, more: parts.more || PAGE_HEAD_COPY});
 const dashNum = (n: unknown) => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = (n: unknown) => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
 const dashBot = (slug: string | null | undefined) => typeof botDisplayName === 'function' ? botDisplayName(slug) : slug;
@@ -149,8 +158,15 @@ function dashPageRow(p: DashPageItem) {
 }
 // A thread's address: the threads page's own when this build has it (ui/app/threads*.js).
 const dashThreadHref = (id: string) => typeof window.threadHref === 'function' ? window.threadHref(id) : '#/threads/' + encodeURIComponent(id);
-// Needs you cards (needs_attention, needs_you): each row its title and the word for what it needs; the count is dashHeadN's.
-const DASH_ACT: Record<string, string> = {done: 'Done', ok: 'OK', answer: 'Answer', reply: 'Reply', fix: 'Fix'};
+// Needs you cards (needs_attention, needs_you): each row its title and a mark for what it needs (style guide "A row is a
+// title and marks"), named for screen readers and on hover; the count is dashHeadN's. Icons from the font's subset: the
+// map's name ends in _ICONS so scripts/build-icon-font.py keeps them in it.
+const DASH_ACT_ICONS: Record<string, string> = {done: 'task_alt', ok: 'thumb_up', answer: 'help', reply: 'reply', fix: 'build'};
+const DASH_ACT_WORDS: Record<string, string> = {done: 'Done', ok: 'OK', answer: 'Answer', reply: 'Reply', fix: 'Fix'};
+const dashActMark = (act: string | null | undefined) => {
+  const icon = act ? DASH_ACT_ICONS[act] : undefined, word = act ? DASH_ACT_WORDS[act] : undefined;
+  return icon && word ? `<span class="nav-icon dash-act" role="img" aria-label="${word}" title="${word}">${icon}</span>` : '';
+};
 // A count card's number sits on its header line, 13px muted (#355): the field that holds it, where it links, what it counts.
 const DASH_HEAD_N: Record<string, [string, string, string]> = {
   needs_you: ['count', NEEDS_YOU, 'waiting on you'], needs_attention: ['count', NEEDS_YOU, 'waiting on you'],
@@ -170,12 +186,15 @@ function dashHeadN(card: DashCard) {
   return `<a class="dash-head-n" href="${href}" aria-label="${dashNum(n)} ${words}" title="${dashNum(n)} ${words}"${n ? '' : ' hidden'}>${dashNum(n)}</a>`;
 }
 function dashNeeds(d: DashCardData) {
-  return d.items.length ? `<ul class="dash-list dash-needs">${d.items.map(it => `<li><a href="${it.task_id ? '#/task/' + encodeURIComponent(it.task_id) : NEEDS_YOU}"${it.line && it.line !== it.title ? ` title="${esc(it.line)}"` : ''}><span class="dash-needs-t">${esc(it.title || 'Untitled')}</span>${it.act && DASH_ACT[it.act] ? `<span class="muted">${DASH_ACT[it.act]}</span>` : ''}</a></li>`).join('')}</ul>` : `<p class="muted dash-none"><a href="${NEEDS_YOU}">Nothing waiting on you</a></p>`;
+  return d.items.length ? `<ul class="dash-list dash-needs">${d.items.map(it => `<li><a href="${it.task_id ? '#/task/' + encodeURIComponent(it.task_id) : NEEDS_YOU}"${it.line && it.line !== it.title ? ` title="${esc(it.line)}"` : ''}><span class="dash-needs-t">${esc(it.title || 'Untitled')}</span>${dashActMark(it.act)}</a></li>`).join('')}</ul>` : `<p class="muted dash-none"><a href="${NEEDS_YOU}">Nothing waiting on you</a></p>`;
 }
+// A task's due day in the guide's words ("Dashboard list"): "Due today", "Due tomorrow", "Due Nov 20", and a day gone by
+// "Overdue Nov 10" in the failure colour. Counted on the viewer's calendar (format.ts dateOf reads a bare day as local).
 const dashDue = (due: string | null | undefined) => {
-  if (!due) return '';
-  const day = String(due).slice(0, 10), today = new Date().toISOString().slice(0, 10);
-  return `<span class="${day < today ? 'dash-bad' : 'muted'}">${day < today ? 'Overdue' : 'Due'} ${esc(day.slice(5))}</span>`;
+  const d = due ? dateOf(due) : null;
+  if (!d) return '';
+  const late = dayOffset(d) < 0;
+  return `<span class="${late ? 'dash-bad' : 'muted'}">${late ? 'Overdue' : 'Due'} ${esc(lowerDay(dayWords(d)))}</span>`;
 };
 const DASH_BODY: Record<string, DashBody> = {
   // Only what the server counts (backend/cards.py tasks_by_status): no column without a number.
@@ -252,12 +271,12 @@ async function pageDashboard(place: string, {month = ''}: {month?: string} = {})
   const state: DashState = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now(), feed: taskFeedNew()};
   const key = state.key = dashKey(state), kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
-  const head = own ? own.head(state) : `<h1>${team ? '' : 'Company'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;
-  main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">${head}
-      <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
-        <button type="button" class="ghost" data-dash-add="card" hidden><span class="dash-plus" aria-hidden="true">+</span>Card</button>
-        ${!own || own.pages() ? '<button type="button" class="ghost" data-dash-add="page" hidden><span class="dash-plus" aria-hidden="true">+</span>Page</button>' : ''}
-        <button type="button" class="ghost" data-dash-mode="edit">Edit</button><button type="button" class="primary" data-dash-mode="done" hidden>Done</button></span></header>
+  // Every place draws the shared header; its tools and ⋯ follow the reader's rights and edit mode (dashHeadDraw). A place
+  // with a head of its own (Growth) draws its header itself and adds its tools and ⋯ items to the arranging ones.
+  const head = own ? own.head(state)
+    : team ? pageHead({title: '', pad: true, hook: 'dash-head', more: PAGE_HEAD_COPY})
+      : dashCompanyHead(place === 'person:me' ? 'mine' : 'dashboard', {hook: 'dash-head'});
+  main.innerHTML = `<div class="dash" id="dash-root">${head}
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
     ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2><div class="home-card-acts" id="dash-home-acts"></div></header><div id="dash-home-thread"></div></section>' : ''}
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
@@ -457,16 +476,52 @@ function dashEditing(state: DashState, on: boolean, {focus = false}: {focus?: bo
   if (!on) dashMenuClose(state);
   if (!root) return;
   root.classList.toggle('dash-editing', on);
+  const head = root.querySelector<HTMLElement>(':scope > header.ph');
+  if (head) {
+    dashHeadDraw(state, head);
+    // Edit lives in ⋯: leaving edit mode puts the focus back on ⋯, entering it on Done.
+    if (focus) head.querySelector<HTMLElement>(on ? '[data-dash-mode="done"]' : ':scope > .ph-more')?.focus();
+    return;
+  }
   root.querySelectorAll<HTMLElement>('[data-dash-add], [data-dash-mode="done"]').forEach(b => { b.hidden = !on; });
   const edit = root.querySelector<HTMLElement>('[data-dash-mode="edit"]');
   if (!edit) return;
   edit.hidden = on;
   if (focus) root.querySelector<HTMLElement>(`[data-dash-mode="${on ? 'done' : 'edit'}"]`)?.focus();
 }
+// The shared header's parts for the reader: someone who may arrange the place has Edit in ⋯ (arranging is not a daily
+// thing, style guide "Top bars: one line"); while editing, + Card and + Page are the tools and Done the one filled
+// button. A team page's "Seen by" stays a tool for those who arrange it. Each part is set only when it changes, so a
+// read that draws the grid again never closes an open ⋯.
+function dashHeadDraw(state: DashState, head: HTMLElement) {
+  // A bot's read-only view (view-only.ts) is never offered Edit, whatever the place lets its reader do.
+  const v = state.view, edit = !!v?.can_edit && !S.me?.read_only_view, on = state.editing, team = v?.kind === 'team' || state.place.startsWith('team:');
+  // A quiet tool: its words (.ph-w) give way to its icon when the row is tight, so a long team name is never cut first.
+  const audience = team && edit ? `<button type="button" class="ghost dash-audience" data-dash-audience aria-haspopup="dialog" title="Seen by ${esc(dashAudienceWords(v?.audience))}"><span class="nav-icon" aria-hidden="true">groups</span><span class="ph-w">Seen by ${esc(dashAudienceWords(v?.audience))}</span></button>` : '';
+  const own = DASH_PLACES[state.place];
+  const adds = on ? '<button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>'
+    + (!own || own.pages() ? '<button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button>' : '') : '';
+  const parts: [PageHeadPart, string][] = [
+    ['tools', (own?.tools?.(state) || '') + audience + adds],
+    ['primary', on ? '<button type="button" class="primary ph-go" data-dash-mode="done">Done</button>' : ''],
+    ['more', (own?.more?.(state) || '') + (edit && !on ? '<button type="button" data-dash-mode="edit">Edit</button>' : '') + PAGE_HEAD_COPY],
+  ];
+  const drawn = DASH_HEAD_PARTS.get(head) || {};
+  for (const [part, html] of parts) {
+    if (drawn[part] === html) continue;
+    // Edit chosen in ⋯ redraws ⋯'s items under the click: close it first, as choosing an item does.
+    head.querySelector<HTMLElement>(':scope > .ph-menu:popover-open')?.hidePopover();
+    drawn[part] = html;
+    pageHeadSet(head, part, html);
+  }
+  DASH_HEAD_PARTS.set(head, drawn);
+}
+// What dashHeadDraw last set in each header, by part.
+const DASH_HEAD_PARTS = new WeakMap<HTMLElement, Partial<Record<PageHeadPart, string>>>();
 // Escape leaves edit mode, unless a menu or a dialog has it, or it is typed into a field.
 document.addEventListener('keydown', ev => {
   const state = DASH;
-  if (ev.key !== 'Escape' || ev.defaultPrevented || !state?.editing || state.menu || document.querySelector('dialog[open]')) return;
+  if (ev.key !== 'Escape' || ev.defaultPrevented || !state?.editing || state.menu || document.querySelector('dialog[open], .ph-menu:popover-open')) return;
   if (eventElement(ev)?.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
   if (!state.root) return;
   dashEditing(state, false, {focus: state.root.contains(document.activeElement)});
@@ -477,14 +532,8 @@ function dashDraw(state: DashState) {
   S.lastRead.places[String(state.key)] = v;
   if (v.kind === 'team') { const h1 = root.querySelector('h1'); if (!h1) return; h1.textContent = v.name ?? ''; }
   const actions = root.querySelector<HTMLElement>('.dash-actions');
-  if (!actions) return;
-  actions.hidden = !v.can_edit;
+  if (actions) actions.hidden = !v.can_edit;
   dashEditing(state, state.editing);
-  const aud = root.querySelector('[data-dash-audience]');
-  if (aud) {
-    aud.innerHTML = `<span class="nav-icon" aria-hidden="true">groups</span>Seen by ${esc(dashAudienceWords(v.audience))}`;
-    aud.setAttribute('aria-haspopup', 'dialog');
-  }
   const grid = root.querySelector('#dash-grid');
   if (!grid) return;
   grid.innerHTML = v.pins.length ? '' : `<p class="empty">${v.can_edit ? 'Add a card or a page' : 'Nothing pinned'}</p>`;
@@ -715,9 +764,12 @@ async function dashCardForm(state: DashState, at: number) {
   const team = state.view.kind === 'team' ? state.view.group : '';
   const settings = card ? card.settings : {team};
   // A new card starts on the place's own first template (a Number on the Growth page), else the first offered.
-  const first = DASH_PLACES[state.place]?.first, template = card ? card.template : (choices.templates.find(t => t.id === first) || choices.templates[0]).id;
+  // needs_attention (My dashboard's default) and needs_you are both "Needs you", the same list; a new card offers the one
+  // that also takes a team, so the list never names one card twice.
+  const offered = choices.templates.filter(t => !(t.id === 'needs_attention' && choices.templates.some(x => x.id === 'needs_you')));
+  const first = DASH_PLACES[state.place]?.first, template = card ? card.template : (offered.find(t => t.id === first) || offered[0] || choices.templates[0]).id;
   const form = dashDialog(state, card ? dashHeading(card) : 'Add card', `
-    ${card ? '' : `<label>Card<select name="template">${dashOptions(choices.templates.map(t => [t.id, t.name]), template)}</select></label>`}
+    ${card ? '' : `<label>Card<select name="template">${dashOptions(offered.map(t => [t.id, t.name]), template)}</select></label>`}
     <label>Title<input name="title" maxlength="80" value="${esc(card?.title || '')}"></label>
     <div class="dash-fields">${dashFieldsHTML(template, choices, settings)}</div>
     ${card ? '' : `<label>Size<select name="size">${DASH_SIZES.map(([id, label]) => `<option value="${id}"${id === dashSizeOf(template) ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`}`,

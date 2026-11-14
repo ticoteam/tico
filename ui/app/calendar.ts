@@ -3,8 +3,8 @@
    in view has a hue), shape says what, and nothing is drawn as an outline: an event is a solid block with a strong left
    edge, a bot run a lighter solid tint of its bot's colour (striped until it starts), a pill in the top row something
    due, a hatched block Busy. One header line, no title (spec calendar-page-cleanup): Today, the arrows, the range, the
-   chips and Add (people, bots, "Bots that report to me", "Everyone" and what to show), then search folded to an icon,
-   the view switch and ⋯. The search box adds calendars, finds events, suggests narrowing words and hands the words to
+   chips and Add (people, bots, "Bots that report to me", "Everyone" and what to show), then the search field ("Find a
+   person, event or question", as the style guide draws it), the view switch and ⋯. Week shows all seven days. The search box adds calendars, finds events, suggests narrowing words and hands the words to
    the Assistant. People only view here (decision 13): Google events open in Google.
    Address: #/calendar?who=<refs>&view=day|3day|week|month|list&date=YYYY-MM-DD&q=<words>&open=<occurrence id>
    Shapes, Join and the time helpers are in calendar-row.ts.
@@ -128,8 +128,8 @@ function pageCalendar(r: string): void {
       <div class="cal-chips" data-cal-chips></div>
       <div class="cal-add"><button type="button" class="ghost small cal-add-b" data-cal-add aria-haspopup="dialog" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span>Add</button>
         <div class="cal-addm" role="dialog" aria-label="Add people and bots" data-cal-addm hidden></div></div>
-      <div class="cal-sr" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="cal-dd"><button type="button" class="ghost small cal-ib cal-sr-ic" data-cal-find aria-label="Search (/)" title="Search (/)"><span class="nav-icon" aria-hidden="true">search</span></button>
-        <input type="search" id="cal-q" placeholder="Name, event, with:" autocomplete="off" spellcheck="false" aria-label="Search calendars and events" aria-controls="cal-dd" aria-autocomplete="list">
+      <div class="cal-sr open" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="cal-dd"><button type="button" class="ghost small cal-ib cal-sr-ic" data-cal-find tabindex="-1" aria-label="Search (/)" title="Search (/)"><span class="nav-icon" aria-hidden="true">search</span></button>
+        <input type="search" id="cal-q" placeholder="Find a person, event or question" autocomplete="off" spellcheck="false" aria-label="Search calendars and events" aria-keyshortcuts="/" aria-controls="cal-dd" aria-autocomplete="list">
         <div class="cal-dd" id="cal-dd" role="listbox" hidden></div></div>
       <div class="theme-seg cal-views" role="radiogroup" aria-label="View" data-cal-views></div>
       <div class="cal-more"><button type="button" class="ghost small cal-ib" data-cal-more aria-label="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
@@ -140,7 +140,6 @@ function pageCalendar(r: string): void {
   </div>`;
   const q = document.querySelector<HTMLInputElement>('#cal-q');
   if (q) q.value = CALP.q;
-  if (CALP.q) calFindOpen(false);
   calBind();
   calHead(); calWrite(CALP);
   void calLoad();
@@ -210,16 +209,20 @@ function calMenuDraw(): void {
 }
 
 // Chips past the header's one line fold into "+N", which opens Add (where each can be unticked). A phone scrolls them.
+// The chips keep their width and the search field gives way first (calendar.css), so the line is over-full only once
+// the field is at its narrowest: then the last chips fold.
 function calChipsFit(): void {
   const box = document.querySelector<HTMLElement>('#cal-root [data-cal-chips]'), more = box?.querySelector<HTMLElement>('[data-cal-chips-more]');
-  if (!box || !more) return;
+  const head = box?.closest<HTMLElement>('.cal-h');
+  if (!box || !more || !head) return;
   const chips = [...box.querySelectorAll<HTMLElement>('[data-cal-chip]')];
   for (const c of chips) c.hidden = false;
   more.hidden = true;
-  if (calPhone() || box.scrollWidth <= box.clientWidth) return;
+  const over = () => head.scrollWidth > head.clientWidth + 1;
+  if (calPhone() || !over()) return;
   more.hidden = false; more.textContent = '+' + chips.length;      // its widest, so the room is kept for it
   let hidden = 0;
-  for (let i = chips.length - 1; i > 0 && box.scrollWidth > box.clientWidth; i--) { chips[i]!.hidden = true; hidden++; }
+  for (let i = chips.length - 1; i > 0 && over(); i--) { chips[i]!.hidden = true; hidden++; }
   more.textContent = '+' + hidden;
 }
 window.addEventListener('resize', () => { if (CALP) calChipsFit(); });
@@ -290,15 +293,9 @@ function calWhoSet(p: CalPage, who: string[]): void {
   p.who = who.length ? [...new Set(who)].slice(0, CAL_WHO_MAX) : [calMe()];
   calCardClose(); calWrite(p); calHead(); void calLoad();
 }
-// Search folds to an icon; the icon and "/" open the same box with the cursor in it.
-function calFindOpen(focus = true): void {
-  const sr = document.querySelector<HTMLElement>('#cal-root .cal-sr'); if (!sr) return;
-  sr.classList.add('open'); calChipsFit();
-  if (focus) document.querySelector<HTMLInputElement>('#cal-q')?.focus();
-}
-function calFindFold(): void {
-  const input = document.querySelector<HTMLInputElement>('#cal-q');
-  if (input && !input.value.trim() && document.activeElement !== input) { document.querySelector('#cal-root .cal-sr')?.classList.remove('open'); calChipsFit(); }
+// The search is a field that stays open (the guide's header); its icon and "/" put the cursor in it.
+function calFindOpen(): void {
+  document.querySelector<HTMLInputElement>('#cal-q')?.focus();
 }
 
 // ----------------------------------------------------------------- what is drawn
@@ -429,11 +426,8 @@ function calGrid(p: CalPage): string {
   else {
     const days: Date[] = [];
     for (let d = s; d < e; d = calAddDays(d, 1)) days.push(d);
-    // Week shows the working days, and a weekend day only when something is on it; Day and 3 days show every day.
-    const work = (cals[0]?.work_days || 'mon,tue,wed,thu,fri').split(',');
-    const wd = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const shown = p.view !== 'week' ? days : days.filter(d => work.includes(wd[d.getDay()] || '') || items.some(it => calOn(it, d)));
-    cols = shown.map(d => ({day: d, ref: '', today: calDay(d) === today,
+    // Every view shows every day of its window: a week that skipped an empty Saturday read as a missing day.
+    cols = days.map(d => ({day: d, ref: '', today: calDay(d) === today,
       head: `${esc(d.toLocaleDateString(undefined, {weekday: 'short'}))} <span>${d.getDate()}</span>`}));
   }
   const n = cols.length, span = hi - lo, px = (m: number) => (m - lo) / 60 * CAL_HOUR;
@@ -695,7 +689,7 @@ function calBind(): void {
   const root = document.getElementById('cal-root'), input = document.querySelector<HTMLInputElement>('#cal-q'); if (!root || !input) return;
   input.addEventListener('input', () => calSearchInput(input.value));
   input.addEventListener('focus', () => { if (CALP && input.value.trim()) { CALP.drop.open = true; calDropDraw(); } });
-  input.addEventListener('blur', () => setTimeout(() => { if (CALP && document.activeElement !== input) { CALP.drop.open = false; calDropDraw(); calFindFold(); } }, 150));
+  input.addEventListener('blur', () => setTimeout(() => { if (CALP && document.activeElement !== input) { CALP.drop.open = false; calDropDraw(); } }, 150));
   input.addEventListener('keydown', ev => {
     const p = CALP, dd = document.getElementById('cal-dd'); if (!p || !dd) return;
     const rows = [...dd.querySelectorAll<HTMLElement>('button')];
@@ -725,6 +719,9 @@ function calBind(): void {
   const dd = document.getElementById('cal-dd');
   dd?.addEventListener('mousedown', ev => ev.preventDefault());      // the box keeps focus
   dd?.addEventListener('click', ev => { const b = eventElement(ev)?.closest<HTMLElement>('button'); if (b) void calDropTake(b); });
+  // A phone's search is an icon that opens into a line of its own (calendar.css). A browser that focuses a button on
+  // press moves the header under the finger before the click lands, so the press itself hands the cursor to the field.
+  root.addEventListener('focusin', ev => { if (eventElement(ev)?.closest('[data-cal-find]')) calFindOpen(); });
   root.addEventListener('click', ev => {
     const p = CALP, t = eventElement(ev); if (!p || !t) return;
     const at = (sel: string) => t.closest<HTMLElement>(sel);

@@ -155,7 +155,7 @@
     const title = connect ? text(connect.title) : toSubscription ? `Switch ${text(name)}${machine ? ` on ${text(machine)}` : ''} to a subscription`
       : `${switchAccount ? 'Switch account for' : 'Sign in to'} ${text(name)}${machine ? ` on ${text(machine)}` : ''}`;
     dialog.innerHTML = `<header><h2 id="model-login-title">${title}</h2>
-        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <div class="model-login-body" data-body></div>
       <p class="model-login-status" role="status" aria-live="polite" data-status></p>
       <div class="model-login-actions" data-actions></div>`;
@@ -228,8 +228,9 @@
       status.dataset.state = state;
       actions.innerHTML = state === 'finishing' ? ''
         : active(state) ? '<button class="ghost" type="button" data-cancel>Cancel sign-in</button>'
-        : `${state === 'signed_in' ? '' : '<button class="primary" type="button" data-retry>Try again</button>'}
-           <button class="ghost" type="button" data-close>${state === 'signed_in' ? 'Done' : 'Close'}</button>`;
+        // Cancel left and the forward action last (style guide, Button order); finished, Done ends it. ✕ always dismisses.
+        : state === 'signed_in' ? '<button class="primary" type="button" data-close>Done</button>'
+        : '<button class="ghost" type="button" data-close>Cancel</button><button class="primary" type="button" data-retry>Try again</button>';
     };
 
     body.addEventListener('click', event => {
@@ -294,7 +295,7 @@
           // Closed while Try again was on its way: nobody is left to finish the sign-in it started.
           if (closed) { await cancel(login); return; }
         } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})});
-      } catch (error) { status.textContent = errorMessage(error, ''); actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
+      } catch (error) { status.textContent = errorMessage(error, ''); actions.innerHTML = '<button class="ghost" type="button" data-close>Done</button>'; return; }
       draw();
       if (login && active(login.state)) timer = setTimeout(tick, POLL_MS);
     };
@@ -323,7 +324,7 @@
     dialog.className = 'tmodal tmodal-shell model-login model-logout';
     dialog.setAttribute('aria-labelledby', 'model-logout-title');
     dialog.innerHTML = `<header><h2 id="model-logout-title">Sign out of ${text(name)} on ${text(where)}?</h2>
-        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <div class="model-login-body"><p data-bots>Checking which bots use it…</p>
         <p class="muted">Bots keep this login, so nothing needs reassigning: they start again once someone signs in.${profile ? '' : ' The company\'s shared key won\'t sign it back in by itself.'}</p></div>
       <p class="model-login-status" role="status" aria-live="polite" data-status></p>
@@ -364,7 +365,7 @@
       status.textContent = row.state === 'signed_out' ? `Signed out. ${name} on ${where} stays signed out until someone signs in.`
         : row.state === 'failed' ? (row.message || 'The sign-out did not finish; the login is as it was.')
         : row.state === 'expired' ? 'The computer did not sign out in time; the login is as it was.' : '';
-      actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+      actions.innerHTML = '<button class="ghost" type="button" data-close>Done</button>';
       refreshUntil(runnerId, runtime, profile, row.state === 'signed_out' ? 'signed_out' : 'ready', row.updated_at);
     };
     const tick = async (id: string) => {
@@ -385,7 +386,7 @@
         if (active(row.state)) timer = setTimeout(() => tick(row.id), POLL_MS); else finish(row);
       } catch (error) {
         status.textContent = errorMessage(error, '');
-        actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+        actions.innerHTML = '<button class="ghost" type="button" data-close>Done</button>';
       }
     });
     dialog.showModal();
@@ -456,7 +457,7 @@
     const rows = (info.computers || []).map(c => `<li data-scope-computer="${text(c.id)}">${text(c.label)}${stale.includes(c) ? ' <span class="muted">(needs a runner update to clear it from here)</span>' : c.online ? '' : ` <span class="muted">(offline: ${later})</span>`}${c.may ? '' : ' <span class="muted">(not yours to change)</span>'}</li>`).join('');
     const all = verb === 'replace' && !info.can_replace_all ? ' disabled' : verb === 'clear' && ((info.computers || []).some(c => !c.may) || stale.length) ? ' disabled' : '';
     const why = !all ? '' : verb === 'clear' && stale.length && !(info.computers || []).some(c => !c.may)
-      ? `<span class="muted"> Update ${text(stale.map(c => c.label).join(', '))} first, or delete the shared key in Credentials.</span>`
+      ? `<span class="muted"> Update ${text(stale.map(c => c.label).join(', '))} first, or delete the shared key in Tools.</span>`
       : `<span class="muted"> Only ${verb === 'replace' ? 'a credential administrator' : 'someone who may change every one of them'} can do this.</span>`;
     return `<fieldset class="model-key-scope" data-key-scope><legend>This key is shared with ${(info.computers || []).length} computers:</legend>
       <ul>${rows}</ul>
@@ -477,7 +478,7 @@
     dialog.className = 'tmodal tmodal-shell model-login model-key';
     dialog.setAttribute('aria-labelledby', 'model-key-title');
     dialog.innerHTML = `<header><h2 id="model-key-title">${text(title)}</h2>
-        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <form class="model-login-body" data-key-form>${inner}</form>
       <p class="model-login-status" role="status" aria-live="polite" data-status></p>
       <div class="model-login-actions" data-actions><button class="ghost" type="button" data-close>Cancel</button>
@@ -556,13 +557,13 @@
           status.dataset.state = row.state;
           status.textContent = (row.state === 'signed_out' ? `Cleared. ${name} on ${where} has no key until one is added.`
             : row.message || 'The key could not be cleared on the computer.') + later;
-          part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+          part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Done</button>';
         };
         if (here) followKeyJob(dialog, runnerId, runtime, here, end); else end({state: 'signed_out'});
         for (const c of out.computers) if (c.login && c.id !== runnerId) refreshUntil(c.id, runtime, '', 'signed_out', c.login.created_at);
       } catch (error) {
         status.textContent = errorMessage(error, '');
-        part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+        part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Done</button>';
       }
     });
     return dialog;
@@ -622,7 +623,7 @@
     go.addEventListener('click', async () => {
       if (go.disabled) return;
       const mode = shareMode();
-      const close = () => { part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; };
+      const close = () => { part(dialog, '[data-actions]').innerHTML = '<button class="ghost" type="button" data-close>Done</button>'; };
       const sharedDone = (out: KeyOut) => {
         const listed = (out.computers || []).map(c => c.label);
         status.dataset.state = 'done';

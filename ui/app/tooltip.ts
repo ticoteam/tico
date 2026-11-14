@@ -24,7 +24,7 @@ function tipHTML(slug: string): string {
       s.changed_at ? ` <span class="muted">${esc(ago(s.changed_at))}</span>` : ''}`]);
     if (s.focus) rows.push(['Focus', esc(s.focus)]);
     if (s.last_result) rows.push(['Last result', esc(String(s.last_result).slice(0, 160))]);
-    rows.push(['Next run', s.next_due_at ? `${esc(until(s.next_due_at))} <span class="muted">${esc(fmt(s.next_due_at))}</span>` : '—']);
+    rows.push(['Next run', s.next_due_at ? (/^(in |due)/.test(until(s.next_due_at)) ? `${esc(until(s.next_due_at))} <span class="muted">${esc(fmt(s.next_due_at))}</span>` : esc(fmt(s.next_due_at))) : '—']);
     rows.push(['Open tasks', esc(String(s.open_tasks ?? 0))]);
     rows.push(['Needs humans', esc(String(s.needs_human ?? 0))]);
   } else {

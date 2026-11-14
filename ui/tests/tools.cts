@@ -1,10 +1,11 @@
 // Tools (ui/app/tools.ts, tools-api.js and the inbox pages under it) over a fake API in backend/api_tools.py's shapes: GET
 // /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
 // …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cts) for a mailbox's page and its Limits.
-// Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity
+// Covers: the list in Automations' layout (its rail: search, Kind, Needs you, Who has access; In use and Available;
+// pills only when wrong; a phone's folded filters; empty, failing, 60 rows, a long name, read-only); an API tool's level change, Check now and Move to proxy; the Activity
 // tab's filter; Who can see it (Private pills, Only listed's Who | Why, Remove, Add through the audience picker, back
 // to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
-// mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
+// mailbox Limits card; the old addresses' redirects (Keys' too); 390px with no sideways scroll; light and dark.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
 import type * as MailboxesFake from './support/mailboxes-fake.cts';
 import type * as GoogleFake from './support/google-fake.cts';
@@ -221,68 +222,179 @@ async function start(browser: import('playwright').Browser, hash: string, {width
     }
     for (const width of [1440, 390]) {
       const tag = width < 500 ? 'phone' : 'desktop';
-      // The list: every row, its faces and "+N more", the filters and Needs you; Websites stays hidden at zero.
+      // The list in Automations' layout: a rail (search, Kind, Needs you, Who has access, each with counts) beside one
+      // list grouped In use, then Available; a row is a mark, a name, faces, and a pill only when something is wrong,
+      // a tool that needs someone first in its group. On a phone the search is in the header and the filters fold
+      // behind a button, one section at a time.
       {
         const {page, seen} = await start(browser, '#/tools', {width, ready: 'tr[data-tl-row]'});
         const rows = page.locator('tr[data-tl-row]');
+        const ids = () => rows.evaluateAll(r => r.map(x => (x as HTMLElement).dataset.tlRow));
         assert.equal(await rows.count(), 6, `${tag}: all rows`);
-        assert.equal(await page.locator('[data-tl-show="websites"]').count(), 0, `${tag}: no Websites filter at zero`);
+        assert.deepEqual(await page.locator('tr[data-tl-grp]').evaluateAll(g => g.map(x => (x as HTMLElement).dataset.tlGrp + ' ' + x.querySelector('.au-fn')!.textContent)),
+          ['In use 4', 'Available 2'], `${tag}: grouped In use, then Available`);
+        assert.deepEqual(await ids(), ['api:t-billing', 'slack', 'api:t-crm', 'mailbox:support@acme.example', 'github', 'number:ibx-1'],
+          `${tag}: what needs someone first, then by name`);
         const crm = page.locator('tr[data-tl-row="api:t-crm"]');
         assert.equal(await crm.locator('.tt-face').count(), 4, `${tag}: four faces`);
-        assert.match(await crm.locator('.tt-more').innerText(), /\+3 more/, `${tag}: the rest counted`);
+        assert.match(await crm.locator('.tt-more').innerText(), /\+3/, `${tag}: the rest counted`);
         assert.equal(await crm.locator('.tt-face').first().getAttribute('title'), 'Ana', `${tag}: named on hover`);
-        // Only a row that needs someone is coloured: Waiting and Key rejected keep their pill; Working, Connected and On
-        // are for screen readers only; Off is a plain word. Nobody yet is not shown, and Way in is plain text.
-        assert.deepEqual(await page.locator('tr[data-tl-row] .tt-st .pill').evaluateAll(p => p.map(x => [x.closest('tr')!.dataset.tlRow, x.textContent])),
+        // A pill only where something is wrong; working, off and on are not written on the row.
+        assert.deepEqual(await page.locator('tr[data-tl-row] .tt-pill').evaluateAll(p => p.map(x => [x.closest('tr')!.dataset.tlRow, x.textContent])),
           [['api:t-billing', 'Key rejected'], ['slack', 'Waiting']], `${tag}: pills only where someone is needed`);
-        assert.equal(await crm.locator('.tt-st .sr-only').textContent(), 'Working', `${tag}: working is in the accessible text`);
-        assert.equal(await page.locator('tr[data-tl-row="github"] .tt-st').innerText(), 'Off', `${tag}: Off is a word`);
-        assert.equal(await page.locator('tr[data-tl-row="github"] .tt-st .muted').count(), 1, `${tag}: Off is muted`);
+        assert.equal(await page.locator('tr[data-tl-row="github"]').innerText().then(t => /Off/.test(t)), false, `${tag}: Off is not a pill or a word`);
+        assert.deepEqual(await page.locator('tr[data-tl-row] [data-private]').evaluateAll(p => p.map(x => x.closest('tr')!.dataset.tlRow)),
+          ['api:t-billing'], `${tag}: the lock on the private tool only`);
         const number = page.locator('tr[data-tl-row="number:ibx-1"]');
         assert.equal(await number.locator('.tt-who .sr-only').textContent(), 'Nobody yet', `${tag}: Nobody yet for screen readers`);
-        assert.equal(await number.locator('.tt-who .muted').count(), 0, `${tag}: Nobody yet not shown`);
-        assert.equal(await page.locator('tr[data-tl-row] .tt-way .pill').count(), 0, `${tag}: Way in is plain text`);
-        assert.equal(await number.locator('.tt-way').innerText(), 'Tico', `${tag}: Tico stays a word`);
+        const rowBox = (await crm.boundingBox())!;
+        assert.ok(rowBox.height >= (tag === 'phone' ? 44 : 32), `${tag}: a row is a big enough target (${rowBox.height})`);
+        // The rail: Kind leaves out what has nothing (no websites, no keys here); Needs you counts what needs someone.
+        const filters = page.locator('[data-tl-filters]');
+        assert.equal(await filters.isVisible(), tag === 'phone', `${tag}: the filter button is a phone's`);
+        const facet = async (sec: string, sel: string) => {
+          if (tag === 'phone' && !(await page.locator(sel).count())) {
+            if (!(await page.locator('#tools-root.filters-open').count())) await filters.click();
+            await page.locator(`[data-tl-fsec="${sec}"]`).click();
+          }
+          await page.locator(sel).click();
+        };
         if (tag === 'phone') {
-          const tool = (await number.locator('.tt-tool').boundingBox())!, st = (await number.locator('.tt-st').boundingBox())!, row = (await number.boundingBox())!;
-          assert.ok(row.y + row.height - (Math.max(tool.y + tool.height, st.y + st.height)) < 20, `${tag}: no empty line for Nobody yet`);
+          assert.equal(await page.locator('.ph-tools [data-tl-q]').count(), 1, `${tag}: the search is in the header`);
+          assert.equal(await page.locator('.au-rail').isVisible(), false, `${tag}: the filters are folded`);
+          await filters.click();
+          assert.deepEqual(await page.locator('[data-tl-fsec]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.tlFsec)), ['kind', 'needs', 'who'], `${tag}: one header a section`);
+          const head = (await page.locator('[data-tl-fsec="kind"]').boundingBox())!;
+          assert.ok(head.height >= 44, `${tag}: a section header is a 44px target`);
+          await page.locator('[data-tl-fsec="kind"]').click();
         }
-        await page.fill('.tt-q', 'nobody');
-        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['number:ibx-1', 'github'], `${tag}: search still finds Nobody yet`);
-        await page.fill('.tt-q', 'working');
-        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-crm'], `${tag}: search still finds a blank status`);
-        await page.fill('.tt-q', '');
-        await page.locator('[data-tl-show="needs"]').click();
-        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlRow)), ['api:t-billing', 'slack'], `${tag}: Needs you`);
-        assert.deepEqual(await page.locator('tr[data-tl-row] [data-private]').evaluateAll(p => p.map(x => [x.closest('tr')!.dataset.tlRow, x.textContent])),
-          [['api:t-billing', 'Private']], `${tag}: the Private pill on the private tool only`);
-        assert.equal(await page.evaluate(() => location.hash), '#/tools?show=needs', `${tag}: the filter is in the address`);
-        await page.locator('[data-tl-show="mail"]').click();
-        assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.tlKind)), ['mailbox', 'number'], `${tag}: Mail and numbers`);
-        await page.locator('[data-tl-show="api"]').click();
+        assert.deepEqual(await page.locator('[data-tl-show]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.tlShow)), ['', 'api', 'mail', 'other'], `${tag}: kinds with tools`);
+        assert.equal(await page.locator('[data-tl-show="api"] .au-fn').innerText(), '2', `${tag}: counted`);
+        await page.fill('[data-tl-q]', 'nobody');
+        assert.deepEqual(await ids(), ['github', 'number:ibx-1'], `${tag}: search still finds Nobody yet`);
+        await page.fill('[data-tl-q]', 'working');
+        assert.deepEqual(await ids(), ['api:t-crm'], `${tag}: search reads a status the row leaves blank`);
+        assert.equal(await page.evaluate(() => location.hash), '#/tools?q=working', `${tag}: the search is in the address`);
+        await page.fill('[data-tl-q]', 'nothing-like-it');
+        await page.locator('[data-tl-empty]').filter({hasText: 'Nothing matches.'}).waitFor();
+        await page.locator('[data-tl-clear]').click();
+        assert.equal(await rows.count(), 6, `${tag}: Clear filters shows everything again`);
+        assert.equal(await page.locator('[data-tl-q]').inputValue(), '', `${tag}: and empties the search`);
+        await facet('needs', '[data-tl-fneeds]');
+        assert.deepEqual(await ids(), ['api:t-billing', 'slack'], `${tag}: Needs you`);
+        assert.equal(await page.evaluate(() => location.hash), '#/tools?needs=1', `${tag}: the filter is in the address`);
+        await facet('needs', '[data-tl-fneeds]');
+        await facet('kind', '[data-tl-show="mail"]');
+        assert.deepEqual(await rows.evaluateAll(r => r.map(x => (x as HTMLElement).dataset.tlKind)), ['mailbox', 'number'], `${tag}: Mail`);
+        await facet('kind', '[data-tl-show="api"]');
         assert.equal(await rows.count(), 2, `${tag}: APIs`);
-        await page.locator('[data-tl-show=""]').click();
+        await facet('kind', '[data-tl-show="other"]');
+        assert.deepEqual(await ids(), ['slack', 'github'], `${tag}: Other`);
+        await facet('kind', '[data-tl-show=""]');
+        // Who has access: a person, then a bot; picking it again lets go.
+        await facet('who', '[data-tl-who="human:ana"]');
+        assert.deepEqual(await ids(), ['api:t-crm'], `${tag}: a person`);
+        await facet('who', '[data-tl-who="bot:support-bot"]');
+        assert.deepEqual(await ids(), ['slack', 'api:t-crm', 'mailbox:support@acme.example'], `${tag}: a bot`);
+        assert.equal(await page.locator('[data-tl-who="bot:support-bot"] .au-fn').innerText(), '3', `${tag}: counted`);
+        await facet('who', '[data-tl-who="bot:support-bot"]');
+        assert.equal(await rows.count(), 6, `${tag}: all again`);
+        if (tag === 'phone') { await filters.click(); assert.equal(await page.locator('.au-rail').isVisible(), false, `${tag}: folded again`); }
+        // A group folds and opens from the keyboard.
+        await page.locator('tr[data-tl-grp="Available"]').focus();
+        await page.keyboard.press('Enter');
+        assert.equal(await rows.count(), 4, `${tag}: Available folded`);
+        assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.tlGrp), 'Available', `${tag}: focus stays on the group`);
+        await page.keyboard.press(' ');
+        assert.equal(await rows.count(), 6, `${tag}: and open`);
         assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
         if (tag === 'desktop') await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached'});
         await shot(page, `list-${tag}`);
-        // The whole row opens the tool (its Status cell is blank while it works, so click Way in).
-        await rows.filter({hasText: 'Acme CRM'}).locator('.tt-way').click();
+        // The whole row opens the tool.
+        await crm.locator('.tt-who').click();
         await page.waitForFunction(() => location.hash === '#/tools/api/t-crm');
         await page.locator('#tool-access').waitFor();
         assert.deepEqual(seen.errors, [], `${tag}: list errors`);
         await page.close();
       }
-      // With nothing needing anyone, the Needs you filter leaves, as Websites does at zero; All always shows.
+      // With nothing needing anyone, Needs you leaves, as Websites does at zero; All always shows.
       {
         const {page, seen} = await start(browser, '#/tools', {width, ready: 'tr[data-tl-row]'});
         await page.route('**/api/v2/tool-index', r => r.fulfill({contentType: 'application/json',
-          body: JSON.stringify({rows: ROWS.map(x => ({...x, needs_you: false})), counts: {...COUNTS, needs_you: 0}, next: null})}));
+          body: JSON.stringify({rows: ROWS.map(x => ({...x, needs_you: false, status: {tone: 'ok', text: 'Working'}})), counts: {...COUNTS, needs_you: 0}, next: null})}));
         await page.evaluate(() => { pageTools(); });
-        await page.waitForFunction(() => !document.querySelector('[data-tl-show="needs"]') && document.querySelector('[data-tl-show] .tt-n'));
-        assert.deepEqual(await page.locator('[data-tl-show]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.tlShow)), ['', 'api', 'mail'], `${tag}: no Needs you at zero`);
+        await page.waitForFunction(() => !document.querySelector('.tt-pill') && document.querySelector('tr[data-tl-row]'));
+        if (tag === 'phone') await page.locator('[data-tl-filters]').click();
+        assert.deepEqual(await page.locator('[data-tl-fsec] .au-ft, #tools-root .au-lb').evaluateAll(b => b.map(x => x.textContent!.trim())), ['Kind', 'Who has access'], `${tag}: no Needs you at zero`);
         assert.deepEqual(seen.errors, [], `${tag}: no Needs you errors`);
         await page.close();
       }
+    }
+    // Empty, failing, many, long and read-only lists (a computer and a phone each).
+    for (const width of [1440, 390]) {
+      const tag = width < 500 ? 'phone' : 'desktop';
+      const index = (body: unknown, status = 200) => (p: string) => p === '/api/v2/tool-index' ? (status === 200 ? body : {status, body}) : undefined;
+      const begin = async (answer: (p: string) => unknown, me?: Record<string, unknown>) => {
+        const api = apiFake(), mail = mailboxesFake();
+        return open(browser, mail, googleFake(), {hash: '#/tools', width, height: width < 500 ? 844 : 900, ready: '[data-tl-table]:not(:has(.skel))',
+          extra: (p, method, body, url) => p === '/api/me' && me ? {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, ...me}
+            : answer(p) ?? api.answer(p, method, body as FakeBody, url)});
+      };
+      {
+        // No tools at all: one line and one action, which opens Add tool.
+        const {page, seen} = await begin(index({rows: [], counts: {}, next: null}));
+        await page.locator('[data-tl-empty]').filter({hasText: 'No tools yet.'}).waitFor();
+        await page.locator('[data-tl-add-open]').click();
+        await page.locator('.au-newm [data-tl-add-item="webhook"]').waitFor();
+        assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('role')), 'menuitem', `${tag}: the menu takes focus`);
+        await page.keyboard.press('Escape');
+        assert.equal(await page.locator('.au-newm').isHidden(), true, `${tag}: Esc closes it`);
+        assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.tlAdd !== undefined), true, `${tag}: focus back on +`);
+        assert.deepEqual(seen.errors, [], `${tag}: empty errors`);
+        await page.close();
+      }
+      {
+        // The hub's list failing says so and carries Try again, which reads it again.
+        let fail = true;
+        const {page, seen} = await begin(p => p !== '/api/v2/tool-index' ? undefined : fail ? {status: 500, body: {error: {code: 'internal', detail: 'Tools could not be read', retryable: true}}}
+          : {rows: structuredClone(ROWS), counts: COUNTS, next: null});
+        await page.locator('[data-tl-error]').filter({hasText: 'Tools could not be read'}).waitFor();
+        assert.equal(await page.locator('[data-tl-empty]').count(), 0, `${tag}: no "No tools yet" under an error`);
+        fail = false;
+        await page.locator('[data-tl-retry]').click();
+        await page.locator('tr[data-tl-row]').first().waitFor();
+        assert.equal(await page.locator('[data-tl-error]').count(), 0, `${tag}: the error goes once it reads`);
+        assert.deepEqual(seen.errors, [], `${tag}: error errors`);
+        await page.close();
+      }
+      {
+        // 60 tools, one with a very long name: every row, nothing sideways, the long name ends in "…" and keeps its pill.
+        const many = Array.from({length: 60}, (_, i) => ({id: 'api:t' + i, kind: i % 3 ? 'api' : 'mailbox', name: i === 7 ? 'A very long tool name '.repeat(8).trim() : `Tool ${i + 1}`,
+          detail: '', way: '', status: {tone: i === 7 ? 'fail' : 'ok', text: i === 7 ? 'Key expired' : 'Working'}, who: i % 2 ? [who('bot', 'ops', 'Ops')] : [], who_total: i % 2,
+          needs_you: i === 7, href: '#/tools/api/t' + i}));
+        const {page, seen} = await begin(index({rows: many, counts: {}, next: null}));
+        assert.equal(await page.locator('tr[data-tl-row]').count(), 60, `${tag}: 60 rows`);
+        assert.equal(await page.locator('tr[data-tl-row]').first().getAttribute('data-tl-row'), 'api:t7', `${tag}: the one needing someone first`);
+        const long = page.locator('tr[data-tl-row="api:t7"]');
+        const [cell, name, pill] = await Promise.all([long.locator('.au-tn').boundingBox(), long.locator('.au-nm').boundingBox(), long.locator('.tt-pill').boundingBox()]);
+        assert.ok(name!.x + name!.width <= cell!.x + cell!.width && pill!.x + pill!.width <= cell!.x + cell!.width + 1, `${tag}: the long name and its pill stay in the cell`);
+        assert.ok(pill!.width > 20, `${tag}: the pill still shows`);
+        assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
+        await shot(page, `list-many-${tag}`);
+        assert.deepEqual(seen.errors, [], `${tag}: many errors`);
+        await page.close();
+      }
+      {
+        // A read-only view adds nothing: no +.
+        const {page, seen} = await begin(index({rows: structuredClone(ROWS), counts: COUNTS, next: null}), {read_only_view: true});
+        await page.locator('tr[data-tl-row]').first().waitFor();
+        assert.equal(await page.locator('[data-tl-add]').count(), 0, `${tag}: no + for a read-only view`);
+        assert.deepEqual(seen.errors, [], `${tag}: read-only errors`);
+        await page.close();
+      }
+    }
+    for (const width of [1440, 390]) {
+      const tag = width < 500 ? 'phone' : 'desktop';
       // An API tool: Who can use it with levels, Recent, Keys, Check, Limits not yet.
       {
         const {page, seen, api} = await start(browser, '#/tools/api/t-crm', {width, ready: '#tool-access tr'});
@@ -442,8 +554,12 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       const {page, seen} = await start(browser, '#/tools');
       for (const [from, to] of [
         ['#/library/connections', '#/tools'], ['#/library/tools', '#/tools'], ['#/library/tools/github', '#/tools/github'],
-        ['#/library/tools?who=bot:ops', '#/tools/keys?who=bot:ops'], ['#/integrations/close-crm', '#/tools/close-crm'],
-        ['#/credentials', '#/tools/keys?show=credentials'], ['#/settings/inboxes', '#/tools?show=mail'],
+        ['#/library/tools?who=bot:ops', '#/tools?who=bot%3Aops'], ['#/integrations/close-crm', '#/tools/close-crm'],
+        ['#/credentials', '#/tools?show=keys'], ['#/settings/inboxes', '#/tools?show=mail'],
+        // Keys is folded into Tools: its list (with its filters), a tool on it and a key on it.
+        ['#/tools/keys', '#/tools'], ['#/tools/keys?show=credentials', '#/tools?show=keys'],
+        ['#/tools/keys?who=group:g-books&issues=1&q=crm', '#/tools?needs=1&who=group%3Ag-books&q=crm'],
+        ['#/tools/keys/close-crm', '#/tools/close-crm'], ['#/tools/keys/credentials/c3', '#/tools/key/c3'], ['#/library/tools/credentials/c3', '#/tools/key/c3'],
         ['#/settings/inboxes/settings/email', '#/tools/settings/email'], ['#/settings/inboxes/mailbox/mb-support', '#/tools/mailbox/mb-support'],
         ['#/settings/mailboxes', '#/tools?show=mail'], ['#/settings/mail', '#/tools/settings/letters-in'], ['#/settings/google', '#/tools/settings/email'],
       ] as [string, string][]) {

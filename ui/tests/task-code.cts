@@ -1,12 +1,12 @@
 // Offline regression for code work on tasks (docs: PLAN sections 4, 5 and 9). Fixtures only.
-//  - the task modal's right rail: Code has one line per worktree (repo · branch · ↑ahead ↓behind · N files, a missing
+//  - the task window's Details tab: the Code fact has one line per worktree (repo · branch · ↑ahead ↓behind · N files, a missing
 //    or removed one says so) and per pull request (#212 title and its checks, conflict, review and comment chips), each
 //    a GitHub link; a mover removes one with its ✕ (DELETE .../links/{id}), or asks again with Retry cleanup when a
 //    worktree's cleanup stopped retrying;
 //  - Subtasks: the roll-up line from children_summary, one level of children from GET /tasks/{id}/tree (the list's status
 //    icon, PR badge, owner), a child's own children on expand, and "Add subtask" posting a task with a parent relation;
 //  - a worktree with no repo names it from its folder, else says "unknown repo" (muted);
-//  - a task with no code links and no children has no rail at all; on a phone the rail sits under the details;
+//  - a task with no code links and no children has no Code row and no Subtasks; Subtasks sit under the facts;
 //  - only the latest open shows: a late detail cannot replace it or reopen a task after leaving the page;
 //  - Runs (GET /tasks/{id}/run-view): the checkpoint with its author, background work still running, each try with what
 //    woke it and what followed it (a resume or dismiss decision beside its state: "Canceled: dismissed by BotOps at 09:50Z, <note>";
@@ -255,8 +255,11 @@ async function open(browser: Pick<Browser, 'newPage'>, {viewport = {width: 1440,
 async function desktop(browser: Browser) {
   const {page, errors, writes} = await open(browser);
   const modal = page.locator('#task-modal');
-  const rail = modal.locator('[data-task-rail]');
+  // Code is one of the facts and Subtasks follow them, all on the Details tab.
+  const rail = modal.locator('.task-side');
+  await modal.locator('[data-task-tab="details"]').click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
+  assert.equal(await modal.locator('[data-prop-row="code"] .prop-k').innerText(), 'Code');
   // Code: worktrees first, then pull requests; other links stay under Links.
   const lines = await rail.locator('.code-line').allInnerTexts();
   assert.equal(lines.length, 7);
@@ -366,8 +369,8 @@ async function desktop(browser: Browser) {
   // Runs: the checkpoint, what still runs in the background, then each try, newest open.
   const runs = modal.locator('[data-task-runs]');
   await runs.locator('.truns-try').first().waitFor();
-  assert.match(await runs.locator('.truns-cp').innerText(), /Summary step built; receipts next\.\s*Engineer · 5m ago/);
-  assert.deepEqual(await runs.locator('.truns-live li').allInnerTexts(), ['Bash · npm running · started 1m ago']);
+  assert.match(await runs.locator('.truns-cp').innerText(), /Summary step built; receipts next\.\s*Engineer · 5m/);
+  assert.deepEqual(await runs.locator('.truns-live li').allInnerTexts(), ['Bash · npm running · started 1m']);
   const tries = runs.locator('.truns-try');
   assert.equal(await tries.count(), 5);
   assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5 \(high\)/);
@@ -476,17 +479,17 @@ async function desktop(browser: Browser) {
 async function phone(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   const modal = page.locator('#task-modal'), rail = modal.locator('[data-task-rail]');
-  // A phone shows the window as tabs (task #409): the rail is in Info, under the details; the chat is its own tab.
+  // A phone shows the same tabs: Subtasks are on Details, under the facts; the chat is its own tab.
   await rail.locator('.task-subs .sub-row').first().waitFor({state: 'attached'});
-  await modal.getByRole('tab', {name: 'Info'}).click();
+  await modal.getByRole('tab', {name: /^Details/}).click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
-  const main = (await modal.locator('.tmodal-main').boundingBox())!, side = (await rail.boundingBox())!;
+  const main = (await modal.locator('[data-task-props]').boundingBox())!, side = (await rail.boundingBox())!;
   assert.ok(side.y >= main.y + main.height - 1, 'details, then the rail');
   assert.equal(await modal.locator('.task-chat').isVisible(), false, 'the chat is a tab away');
   assert.ok(side.x >= 0 && side.x + side.width <= 390, 'inside the screen');
   const overflow = await modal.evaluate(d => d.querySelector('.tmodal-body')!.scrollWidth - d.querySelector('.tmodal-body')!.clientWidth);
   assert.ok(overflow <= 1, 'no sideways scroll');
-  const explanation = rail.locator('.code-line[data-code-link="w2"] .code-error');
+  const explanation = modal.locator('[data-task-code] .code-line[data-code-link="w2"] .code-error');
   await explanation.scrollIntoViewIfNeeded();
   assert.equal(await explanation.isVisible(), true, 'touch users can read the error without hover');
   assert.equal(await explanation.innerText(), worktreeError);
@@ -507,7 +510,8 @@ async function phone(browser: Browser) {
 async function member(browser: Browser) {
   // Someone who may not move tasks sees the links but no ✕ and no Add subtask.
   const {page, errors} = await open(browser, {mover: false});
-  const rail = page.locator('#task-modal [data-task-rail]');
+  const rail = page.locator('#task-modal .task-side');
+  await page.locator('#task-modal [data-task-tab="details"]').click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
   assert.equal(await rail.locator('[data-code-drop]').count(), 0);
   assert.equal(await rail.locator('[data-code-retry]').count(), 0);
@@ -561,9 +565,9 @@ async function lateOpen(browser: Browser) {
 async function retirementHistory(browser: Browser) {
   for (const width of [1440, 390]) {
     const {page, errors} = await open(browser, {viewport: {width, height: 900}});
-    const rail = page.locator('#task-modal [data-task-rail]');
-    // A phone shows the rail in the task window's Info tab (task #409).
-    if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();
+    const rail = page.locator('#task-modal [data-task-code]');
+    // Code is one of the facts on the task window's Details tab.
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();
     await rail.locator('.code-line').first().waitFor();
     await rail.evaluate(el => {
       const first = {computer_id: 'first', ahead: 2, dirty_files: 1, last_commit: 'a'.repeat(40)};

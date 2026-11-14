@@ -543,8 +543,6 @@
 /* Review button, pipeline stage */
 .sg-page .rv-stagecol{display:grid;grid-template-columns:repeat(2,minmax(0,240px));gap:var(--s3);align-items:start}
 .sg-page .rv-stagecol .pv-col{min-width:0;width:auto}
-.sg-page .rv-rulemark{font-size:15px;width:15px;height:15px;color:var(--muted);opacity:.7;margin-left:auto}
-.sg-page .rv-rulemark + .pv-play{margin-left:6px}
 .sg-page .pv-play.rv-nb{margin-left:0}
 .sg-page .rv-ph-sample{margin-top:var(--s3);border:1px solid var(--line);border-radius:var(--radius)}
 
@@ -616,3 +614,20 @@
 .sg-page .rv-tw-chat{position:relative}.sg-page .rv-tw-chat .rv-pidx{top:30%;bottom:auto;right:0}
 .sg-page .rv-tw-menu .danger,.sg-page .rv-tw-menu .danger .nav-icon{color:var(--fail)}
 @media (max-width:600px){.sg-page .rv-tw-acts>:nth-child(-n+3):not(:nth-last-child(-n+3)),.sg-page .rv-tw-sep{display:none}.sg-page .rv-tw-ic{width:44px;min-width:44px;height:44px}}
+
+/* A table of things you manage (the Bots table) */
+.sg-page .rv-mt-head{display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s2);font-size:var(--t-card)}
+.sg-page .rv-mt-plus{width:var(--ctl);min-width:var(--ctl);padding:0;display:inline-grid;place-items:center}
+.sg-page .rv-mt-plus .nav-icon{font-size:20px;color:var(--muted)}
+.sg-page .rv-mt-scroll{overflow-x:auto}
+.sg-page .rv-mt{min-width:520px}
+.sg-page .rv-mt td{vertical-align:middle;white-space:nowrap}
+.sg-page .rv-mt-name{display:flex;align-items:center;gap:var(--s2);color:var(--ink);text-decoration:none}
+.sg-page .rv-mt-name>span{display:flex;flex-direction:column;min-width:0}
+.sg-page .rv-mt-name:hover b{text-decoration:underline}
+.sg-page .rv-mt-name .muted,.sg-page .rv-mt-bad{font-size:var(--t-sm)}
+.sg-page .rv-mt-bad{color:var(--fail)}
+.sg-page .rv-mt-pick,.sg-page .rv-mt-sub{display:inline-flex;align-items:center;gap:2px;padding:2px 0;border:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.sg-page .rv-mt-pick .nav-icon{font-size:16px;color:var(--muted)}
+.sg-page .rv-mt-sub{margin-left:var(--s2);font-size:var(--t-xs);color:var(--muted);opacity:.6}
+.sg-page .rv-mt-sub.on{color:var(--ink);opacity:1}

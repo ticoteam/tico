@@ -115,14 +115,30 @@
 .rdo-tray .rdo-g.folded>.rdo-tab{position:static;transform:none}
 /* The lead's and owner's role reads a step under the name. */
 .rdo-card:is(.top,.lead) .rdo-rl{color:var(--muted);font-weight:400}
-/* The tab's chevron points down when the group is open, along when folded; the count shows only folded. */
+/* The tab's chevron points down when the group is open, along when folded; the count shows either way (style guide, Org
+   chart: "Teams are dashed groups that fold from their tab, with a count"). */
 .rdo-cx{display:inline-block;font-size:12px;line-height:var(--lh-none);letter-spacing:0;transform:var(--chev-open)}
 .rdo-tab[aria-expanded="false"] .rdo-cx{transform:none}
-.rdo-g:not(.folded)>.rdo-tab .rdo-n{display:none}
+/* A phone: the team picker stands in the zoom bar's place (ui/app/redesign-org.ts rdoTeamBar), the frame below it shows
+   that one team at full size. */
 @media (max-width:760px){
-  .rdo-bar{height:40px;margin-bottom:4px}
-  .rdo-bar button{min-width:40px;height:40px}
-  .rdo-pct{display:none}
+  .rdo-bar{height:auto;margin-bottom:8px;justify-content:stretch}
+  .rdo-team{flex:1;min-width:0}
+  .rdo-team select{width:100%}
+  /* One team has the frame to itself: cards as wide as a name needs, two lines before it is cut. */
+  .rdo-cv.rdo-one{--rdo-w:200px;--rdo-pw:200px;padding:18px 12px 20px}
+  /* one team's frame is as tall as the team (ui/app/redesign-org.ts rdoFitHeight), down to a short empty one */
+  .rdo-pane:has(>.rdo-sz>.rdo-one){min-height:120px}
+  .rdo-one .rdo-card{width:var(--rdo-w)}
+  .rdo-one .rdo-card b{display:-webkit-box;white-space:normal}
+  /* A folded group's tab stays a small mark; a finger's 44px reaches past it (an open one's comes from forms.css). */
+  .rdo-g.folded>.rdo-tab::before{content:"";position:absolute;top:-11px;bottom:-11px;left:0;right:0}
+  .rdo-tray .rdo-g.folded>.rdo-tab{position:relative}
+  /* A tab's 44px target reaches 11px past it each way: the group's first card starts below that, and a group under a
+     card starts far enough down that its tab's target stays clear of the card above. */
+  .rdo-g:not(.folded){padding-top:24px}
+  .rdo-stack>li.is-g,.rdo-stack>li.is-g+li,.rdo-stack>li+li.is-g{--rdo-mt:24px}
+  .rdo-gi.is-g{margin-top:24px}
 }
 @media (prefers-reduced-motion:reduce){.rdo-cv{transition:none}}
 
@@ -148,7 +164,7 @@ a.rdm-row:hover{background:var(--surface2)}
 .rdm-row.hl{background:var(--surface2);box-shadow:inset 2px 0 0 var(--ink)}
 .rdm-none{margin:10px 0 4px}
 @media (max-width:760px){
-  .rdm-row{grid-template-columns:16px minmax(0,1fr) 30px;min-height:40px}
+  .rdm-row{grid-template-columns:16px minmax(0,1fr) 30px;min-height:44px}
   .rdm-d{display:none}
   .rdm-leg{margin-left:0;order:3;flex-basis:100%}
 }

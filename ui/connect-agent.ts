@@ -218,7 +218,7 @@ interface Window {
     dialog.setAttribute('aria-labelledby', 'ca-title');
     dialog.innerHTML = `<header class="ca-head"><div><h2 id="ca-title">Connect an external agent</h2>
         <p class="ca-intro">Connect Grok, Dots, Muse or any external agent to Tico. It can then read and act on your tasks, goals and docs as you.</p></div>
-        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <div class="ca-body" data-ca-body></div>`;
     // The template above always holds the body.
     const body = dialog.querySelector<HTMLElement>('[data-ca-body]')!;
@@ -254,7 +254,7 @@ interface Window {
       host.innerHTML = `<h3 class="ca-label">External agents</h3><ul class="ca-conns">${live.map(row =>
         `<li class="ca-conn" data-conn="${esc(row.id)}">${logo(agentOf(row.label), row.label, true)}
           <span class="ca-conn-name">${esc(row.label)}</span>
-          <span class="ca-conn-used">${row.last_used_at ? 'Used ' + esc(ago(row.last_used_at)) : 'Never used'}</span>
+          <span class="ca-conn-used">${row.last_used_at ? 'Used ' + esc(agoSaid(row.last_used_at)) : 'Never used'}</span>
           <button class="ghost" type="button" data-revoke="${esc(row.id)}">Revoke</button></li>`).join('')}</ul>`;
       host.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach(button => {
         // Each revoke button was rendered from a row of live, so its row is there.
@@ -311,7 +311,7 @@ interface Window {
       const section = body.querySelector<HTMLElement>('[data-token-section]')!;
       section.innerHTML = `<h4 class="ca-label">Token</h4>
         <div class="ca-row"><code data-token>${esc(issued.token)}</code><button class="ghost" type="button" data-copy-token>Copy</button></div>
-        <p class="ca-note">Shown once. Expires ${esc(new Date(issued.expires_at).toLocaleDateString())}.</p>
+        <p class="ca-note">Shown once. Expires ${esc(lowerDay(dayWords(issued.expires_at)))}.</p>
         <p class="ca-status" data-status data-state="waiting" role="status"></p>`;
       const token = issued.token;
       // The copy button in the section just rendered above.

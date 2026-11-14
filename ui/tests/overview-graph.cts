@@ -2,7 +2,7 @@ import type {Route} from 'playwright';
 // Overview › Graph (ui/app/overview-graph.ts): the team chart top down with each teammate's rules or goals.
 //  - the Graph tab beside Campus at #/overview/graph; built-in bots stay off; groups are labelled boxes;
 //  - Rules | Goals in the address (?view=goals), kept on reload;
-//  - Rules: counts on bots and people, Stop / Ask first marked; a tap opens the panel (Follows, With, Team), a rule
+//  - Rules: counts on bots and people (no pill on a card; Stop / Ask first said per rule in the panel); a tap opens the panel (Follows, With, Team), a rule
 //    picked there lights up its Who and With teammates and the link between them; Edit only where the rule allows;
 //    Add rule opens the Rules dialog with Who set to the teammate, and the graph reads its rules again after;
 //  - Goals: chips coloured by status, the panel with KPI and target, a link where a goal supports another owner's;
@@ -134,6 +134,13 @@ async function tabAndToggle(browser: import('playwright').Browser) {
   await ready(page, 'rules');
   assert.deepEqual(await page.locator('.dash-tabs a').allInnerTexts(), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
   assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Graph');
+  // One top bar: Company, five tabs (Share waits in ⋯), the Rules | Goals segment as its tool, ⋯ last. No second bar.
+  const head = page.locator('#main header.ph');
+  assert.equal(await head.locator('.ph-tabs > .ph-tab:visible').count(), 5);
+  assert.equal(await head.locator('.ph-tools [data-og-view]').count(), 2, 'the segment is in the top bar');
+  assert.equal(await page.locator('.og-bar').count(), 0);
+  assert.equal(await head.evaluate(h => h.lastElementChild!.previousElementSibling!.matches('.ph-more')), true, '⋯ is last');
+  assert.ok((await head.boundingBox())!.height < 60, 'one line');
   // The chart: people at the top, the group as a box, bots under their managers; built-ins stay off.
   for (const k of ['p:ana', 'p:sam', 'g:growth', 'b:lead', 'b:writer', 'b:seo', 'b:builder']) assert.equal(await node(page, k).count(), 1, k);
   assert.equal(await node(page, 'b:botops').count(), 0, 'BotOps stays off the chart');
@@ -164,12 +171,24 @@ async function rulesMode(browser: import('playwright').Browser) {
   assert.equal(await count('b:lead'), '1');
   assert.equal(await count('p:sam'), '2', 'people carry counts too');
   assert.equal(await count('p:ana'), '0');
-  assert.equal(await node(page, 'b:writer').locator('.og-flag.block').count(), 1);
-  assert.equal(await node(page, 'b:builder').locator('.og-flag.block').count(), 1, 'block outranks escalate');
-  assert.equal(await node(page, 'p:sam').locator('.og-flag.escalate').count(), 1);
+  // A card is its name and its count: no Stop / Ask first pill on every card (style guide, Status); the panel says it per rule.
+  assert.equal(await page.locator('#og-cv .og-flag, #og-cv .pill').count(), 0, 'no pill on the cards');
   // A tap opens the panel: Follows and With, then Team.
   await node(page, 'b:builder').click();
   const panel = page.locator('#og-panel');
+  await panel.waitFor();
+  assert.deepEqual(await panel.locator('.og-flag').allInnerTexts(), ['Ask first', 'Stop'], 'what a broken rule does, per rule');
+  assert.equal(await panel.locator('.og-flag').first().evaluate(f => getComputedStyle(f).backgroundColor), 'rgba(0, 0, 0, 0)', 'plain words, no pill');
+  // Escape with the header's ⋯ open closes ⋯ only; the panel stays until the next Escape.
+  await page.locator('#main header.ph > .ph-more').click();
+  const menu = page.locator('#main header.ph > .ph-menu');
+  await menu.waitFor({state: 'visible'});
+  await page.keyboard.press('Escape');
+  await menu.waitFor({state: 'hidden'});
+  assert.equal(await panel.isVisible(), true, 'the panel stays while ⋯ takes Escape');
+  await page.keyboard.press('Escape');
+  await panel.waitFor({state: 'hidden'});
+  await node(page, 'b:builder').click();
   await panel.waitFor();
   assert.equal(await node(page, 'b:builder').evaluate(el => el.classList.contains('sel')), true);
   assert.deepEqual(await panel.locator('.og-sh h3').allInnerTexts(), ['RULES', 'GOALS', 'TEAM']);
@@ -281,12 +300,19 @@ async function keyboardAndZoom(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser, {many: 64});
   await ready(page, 'rules');
   assert.ok(await page.locator('#og-cv [data-og]').count() >= 70);
-  // Fit on open: the whole chart inside the frame.
+  // A chart too big to read when fitted opens at a readable 75%, from its top (the punch list's "opens at 32%"); Fit
+  // shows the whole of it.
   const fits = () => page.evaluate(() => { const f = $('#og-frame').getBoundingClientRect(), c = $('#og-cv').getBoundingClientRect();
     return c.left >= f.left - 1 && c.right <= f.right + 1 && c.top >= f.top - 1 && c.bottom <= f.bottom + 1; });
-  assert.equal(await fits(), true, 'the chart opens fitted');
   const scale = () => page.evaluate(() => OG.tf.s);
+  assert.equal(await scale(), 0.75, 'the chart opens at a readable size');
+  assert.equal(await fits(), false, 'not shrunk to fit');
+  const top = await page.evaluate(() => $('#og-cv').getBoundingClientRect().top - $('#og-frame').getBoundingClientRect().top);
+  assert.ok(Math.abs(top - 24) <= 1, `from its top (${top})`);
+  await page.locator('[data-og-zoom=fit]').click();
+  await until(fits, 'Fit shows the whole chart');
   const s0 = await scale();
+  assert.ok(s0 < 0.75, 'fitted is smaller than the open size');
   await page.locator('[data-og-zoom=in]').click();
   assert.ok(await scale() > s0);
   await page.locator('#og-frame').focus();
@@ -328,6 +354,19 @@ async function keyboardAndZoom(browser: import('playwright').Browser) {
   console.log('keyboard, pan and zoom with 60+ bots: ok');
 }
 
+// A big chart opens at 75% on the reader's own part of the company: Sam (not in a team) sees their own card first.
+async function opensOnMine(browser: import('playwright').Browser) {
+  const {page, errors} = await open(browser, {many: 64, as: 'member'});
+  await ready(page, 'rules');
+  assert.equal(await page.evaluate(() => OG.tf.s), 0.75);
+  const seen = await page.evaluate(() => { const f = $('#og-frame').getBoundingClientRect(), n = document.querySelector('[data-og="p:sam"]')!.getBoundingClientRect();
+    return n.left >= f.left && n.right <= f.right && n.top >= f.top && n.bottom <= f.bottom; });
+  assert.equal(seen, true, 'the reader\'s own card is in view on open');
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('opens on the reader: ok');
+}
+
 async function phone(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   await ready(page, 'rules');
@@ -347,6 +386,24 @@ async function phone(browser: import('playwright').Browser) {
   assert.ok(await overflow() <= 0, 'no sideways page scroll with the sheet open');
   await panel.locator('[data-og-close]').tap();
   assert.equal(await panel.isHidden(), true);
+  // One team at a time (style guide, Org chart on a phone): the Team list over the chart opens on the first team, fitted no
+  // bigger than 1:1 under the list; Everyone fits the whole chart. Its controls are 44px targets.
+  const team = page.locator('#og-team');
+  assert.equal(await team.isVisible(), true, 'the Team list shows on a phone');
+  assert.deepEqual(await team.locator('option').allInnerTexts(), ['Growth', 'Everyone']);
+  assert.equal(await team.inputValue(), 'g:growth');
+  await page.locator('[data-og-zoom=fit]').tap();
+  await page.waitForTimeout(400);
+  const inView = (k: string) => page.evaluate(key => { const f = $('#og-frame').getBoundingClientRect(), n = document.querySelector(`[data-og="${key}"]`)!.getBoundingClientRect(), l = $('#og-team').getBoundingClientRect();
+    return n.left >= f.left - 1 && n.right <= f.right + 1 && n.top >= l.bottom && n.bottom <= f.bottom + 1; }, k);
+  assert.equal(await inView('g:growth'), true, 'the team shows under the list');
+  assert.ok(await page.evaluate(() => OG.tf.s) <= 1);
+  await team.selectOption('');
+  await page.waitForTimeout(400);
+  assert.equal(await page.evaluate(() => { const f = $('#og-frame').getBoundingClientRect(), c = $('#og-cv').getBoundingClientRect();
+    return c.left >= f.left - 1 && c.right <= f.right + 1; }), true, 'Everyone fits the whole chart');
+  const small = await page.locator('#og-team, .og-tools button').evaluateAll(els => els.filter(el => el.getBoundingClientRect().height < 44).length);
+  assert.equal(small, 0, 'the list and the zoom buttons are 44px');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('phone: ok');
@@ -380,6 +437,6 @@ async function screens(browser: import('playwright').Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await tabAndToggle(browser); await rulesMode(browser); await goalsMode(browser); await olderServer(browser);
-    await keyboardAndZoom(browser); await phone(browser); await screens(browser);
+    await keyboardAndZoom(browser); await opensOnMine(browser); await phone(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

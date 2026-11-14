@@ -208,6 +208,8 @@ function threadTitle(t: ThreadRow | null | undefined, messages?: { sender_id?: s
   const people = others.length ? others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '') : '';
   const own = String(t.title || '').trim(), named = String(t.name || '');
   if (threadIsDm(t) && !t.parent_id && people && !(total >= 2 && own && !/^(chat with|private\b)/i.test(own))) return people;
+  // A team's Home is stored under the team's id ("engineering"): it shows the team's name, as the team's page does.
+  if (t.audience === 'home' && actorGroup(t.home?.actor)) return actorName(t.home?.actor);
   if (own) return own;
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
   if (named && !threadIsDm(t)) return named;

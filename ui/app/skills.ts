@@ -71,21 +71,33 @@ const skillsErr = (e: unknown) => `<p class="err" data-sk-error>${esc(errorMessa
 const skillsLive = (run: number) => SKP && SKP.run === run;
 const skillsN = (n: unknown) => Number(n || 0).toLocaleString();
 const skillsUses = (n: number | null | undefined) => `${skillsN(n)} ${n === 1 ? 'use' : 'uses'}`;
+// The screening as a pill only when it is of interest (style guide, Status: "A row with nothing wrong has no pill";
+// red for what failed, amber for waiting, no hue for the rest): high risk or unsafe and not screened are red, a
+// screening still running is amber, medium risk is a plain pill, and a low-risk screening shows nothing.
 function skillsScreenPill(p: SkillProposal, screen?: SkillScreening | null) {
   if (p.screen_status === 'screened') {
     const risk = screen?.risk || '', bad = risk === 'high' || screen?.verdict === 'unsafe';
-    return `<span class="pill ${bad ? 'fail' : risk === 'medium' ? 'waiting' : 'ok'}" data-sk-screen="screened">Screened${risk ? ' · ' + esc(risk) : ''}</span>`;
+    if (!bad && risk !== 'medium') return '';
+    return `<span class="pill${bad ? ' blocked' : ''}" data-sk-screen="screened">Screened${risk ? ' · ' + esc(risk) : ''}</span>`;
   }
-  if (p.screen_status === 'not_screened') return '<span class="pill fail" data-sk-screen="not_screened">Not screened</span>';
+  if (p.screen_status === 'not_screened') return '<span class="pill blocked" data-sk-screen="not_screened">Not screened</span>';
   return '<span class="pill waiting" data-sk-screen="pending">Pending</span>';
 }
-const skillsStatusPill = (s: string) => s === 'pending' ? '' : `<span class="pill${s === 'approved' ? ' ok' : ''}" data-sk-status="${esc(s)}">${esc(s.charAt(0).toUpperCase() + s.slice(1))}</span>`;
+// A decided proposal's state: a plain pill (approved is not a warning, so it has no hue).
+const skillsStatusPill = (s: string) => s === 'pending' ? '' : `<span class="pill" data-sk-status="${esc(s)}">${esc(s.charAt(0).toUpperCase() + s.slice(1))}</span>`;
 
-// ----------------------------------------------------------------- the frame: title, Claude Code
+// ----------------------------------------------------------------- the frame: the one page header
+// The list's header (ui/app/page-head.ts): the search is its tool; Use in my Claude Code is used once per computer, so it
+// lives in ⋯ (style guide "Top bars: one line": what is used less than daily goes in ⋯). The shared menu popover
+// (#task-filter-pop, task-list-menus.ts) holds a Suggestions row's ⋯.
 function skillsHead() {
-  return `<header class="tt-head"><h1>Skills</h1><span class="spacer"></span>
-      <button type="button" class="ghost small" data-sk-helper><span class="nav-icon" aria-hidden="true">content_copy</span>Use in my Claude Code</button></header>`;
+  return pageHead({title: 'Skills', hook: 'sk-head',
+    tools: `<input type="search" class="sk-q" data-sk-q placeholder="Search" aria-label="Search skills" autocomplete="off" spellcheck="false" value="${esc(SKILLS_Q)}">`,
+    more: '<button type="button" data-sk-helper>Use in my Claude Code</button>' + PAGE_HEAD_COPY})
+    + '<div id="task-filter-pop" class="tl-pop" popover></div>';
 }
+// A skill's or a proposal's own page: Skills › its name, and the page's one filled button where it has one.
+const skillsSubHead = (title: string, primary = '') => pageHead({title, hook: 'sk-head', back: {href: SKILLS_ROUTE, label: 'Skills'}, primary, more: PAGE_HEAD_COPY});
 function skillsBindHead(root: HTMLElement) {
   root.querySelector<HTMLElement>('[data-sk-helper]')?.addEventListener('click', skillsHelperDialog);
 }
@@ -94,21 +106,24 @@ const skillsHelperCommand = () => `curl -fsSL --create-dirs ${publicUrl().replac
 function skillsHelperDialog() {
   const command = skillsHelperCommand();
   const dialog = skillsDialog('Use in my Claude Code', `<pre class="sk-cmd" data-sk-command>${esc(command)}</pre>`,
-    '<button type="button" class="primary" data-sk-copy>Copy</button>');
+    '<button type="button" class="primary" data-sk-copy>Copy</button>', {cancel: ''});
   const copy = dialog.querySelector<HTMLButtonElement>('[data-sk-copy]');
   if (copy) copy.onclick = async () => {
     try { await copyText(command); toast('Copied'); } catch (e) { toast(errorMessage(e, ''), true); }
   };
 }
-// A modal in the house style; `actions` is the buttons after Cancel. Returns the open <dialog>.
-function skillsDialog(title: string, body: string, actions: string, {cancel = 'Close'}: {cancel?: string} = {}): HTMLDialogElement {
+// A modal in the house style: its title and ✕ (style guide, Overlays: the one close icon, never a "Close" word), then
+// Cancel on the left and `actions` on the right. `cancel: ''` leaves Cancel out where there is nothing to cancel (a
+// command to copy). Returns the open <dialog>.
+function skillsDialog(title: string, body: string, actions: string, {cancel = 'Cancel'}: {cancel?: string} = {}): HTMLDialogElement {
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal sk-dialog'; dialog.setAttribute('aria-label', title);
-  dialog.innerHTML = `<form method="dialog"><div class="tmodal-title">${esc(title)}</div><div class="tmodal-body">${body}
+  dialog.innerHTML = `<form method="dialog"><div class="tmodal-head"><b>${esc(title)}</b><span class="spacer"></span>`
+    + `<button type="submit" class="ghost tmodal-x" value="cancel" formnovalidate data-sk-x aria-label="Close" title="Close">✕</button></div><div class="tmodal-body">${body}
     <p class="err" data-sk-dialog-error hidden></p>
-    <div class="onb-actions"><button type="submit" class="ghost" value="cancel" data-sk-cancel>${esc(cancel)}</button><span class="spacer"></span>${actions}</div></div></form>`;
+    <div class="onb-actions">${cancel ? `<button type="submit" class="ghost" value="cancel" formnovalidate data-sk-cancel>${esc(cancel)}</button>` : ''}<span class="spacer"></span>${actions}</div></div></form>`;
   dialog.addEventListener('close', () => dialog.remove());
-  // Enter in a field presses the dialog's own button, not Close (the form's first submit button).
+  // Enter in a field presses the dialog's own button, not ✕ (the form's first submit button).
   dialog.addEventListener('keydown', ev => {
     const target = eventElement(ev);
     if (ev.key !== 'Enter' || !target?.matches('input')) return;
@@ -116,6 +131,9 @@ function skillsDialog(title: string, body: string, actions: string, {cancel = 'C
     dialog.querySelector<HTMLElement>('.onb-actions .primary')?.click();
   });
   document.body.appendChild(dialog); dialog.showModal();
+  // The focus starts on the first field (Install's For), or on the one action where there is none (Copy): never on ✕,
+  // which comes first in the markup.
+  dialog.querySelector<HTMLElement>('.tmodal-body :is(select, input, textarea), .onb-actions .primary')?.focus();
   return dialog;
 }
 const skillsDialogError = (dialog: HTMLDialogElement, e: unknown) => {
@@ -132,6 +150,9 @@ async function pageSkills() {
   const root = $('#skills-root');
   skillsBindHead(root);
   const body = root.querySelector('[data-sk-body]');
+  // The header's search narrows the skills list as it is typed (wherever the header keeps it: the row, or ⋯).
+  const q: HTMLInputElement | null = $('#skills-root [data-sk-q]');
+  if (q) q.oninput = () => { SKILLS_Q = q.value; skillsFilter(body); };
   try { await skillsList(body, run); } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); }
 }
 
@@ -149,8 +170,7 @@ async function skillsList(body: HTMLElement, run: number) {
   if (!skillsLive(run)) return;
   const used = Object.fromEntries((usage.skills || []).map((u): [string, SkillUsageRow] => [u.name, u]));
   const rows = list.skills || [];
-  const table = rows.length ? `<div class="tt-bar"><input type="search" class="tt-q" data-sk-q placeholder="Search" aria-label="Search skills" autocomplete="off" spellcheck="false" value="${esc(SKILLS_Q)}"></div>
-    <table class="tt-list sk-list"><thead><tr><th>Skill</th><th>On</th><th>Version</th><th>Last used</th></tr></thead>
+  const table = rows.length ? `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>On</th><th>Version</th><th>Last used</th></tr></thead>
     <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}" data-sk-find="${esc((s.name + ' ' + (s.description || '')).toLowerCase())}">
       <td class="sk-name"><a href="${skillsHref(s.name)}"><strong>${esc(s.name)}</strong></a></td>
       <td class="sk-on" data-sk-on>${skillsOnHTML(s)}</td>
@@ -160,8 +180,7 @@ async function skillsList(body: HTMLElement, run: number) {
   body.innerHTML = skillsWaitingHTML(pending, screens) + table + skillsIdeasHTML(ideas.suggestions || []) + skillsElsewhereHTML(usage.popular_elsewhere || []);
   skillsRowLinks(body);
   skillsBindIdeas(body, ideas.suggestions || []);
-  const q = body.querySelector<HTMLInputElement>('[data-sk-q]');
-  if (q) { q.oninput = () => { SKILLS_Q = q.value; skillsFilter(body); }; skillsFilter(body); }
+  skillsFilter(body);
 }
 // Who a skill is on: the first few the server names (the ones the caller may see), then +N for the rest of its installs.
 function skillsOnHTML(s: SkillRow) {
@@ -182,16 +201,19 @@ function skillsWaitingHTML(pending: SkillProposal[], screens: Record<string, Ski
       <td class="tt-used muted sk-by">${esc(skillsWho(p.proposed_by))}</td>
       <td class="tt-used muted sk-when">${agoSpan(p.created_at)}</td></tr>`).join('')}</table></section>`;
 }
-// Remove / Ask to submit suggestions from the maintenance run (backend/skill_suggestions.py). Admins only.
+// Remove / Ask to submit suggestions from the maintenance run (backend/skill_suggestions.py). Admins only. A row has one
+// quiet action (Remove or Ask to submit) and a ⋯ with the rest (Dismiss).
 function skillsIdeasHTML(ideas: SkillIdea[]) {
   if (!ideas.length) return '';
   return `<section class="card sk-ideas" data-sk-ideas><header><h2>Suggestions</h2></header>
     <table class="tt-who-table">${ideas.map(i => `<tr data-sk-idea="${esc(i.id)}" data-sk-kind="${esc(i.kind)}">
       <td class="tt-who-name"><strong>${esc(i.name)}</strong> <span class="muted">${esc(skillsWho(i.target))}</span></td>
-      <td class="tt-used muted">${i.kind === 'remove' ? 'Unused 30d' : `${skillsUses(i.uses_30d)} · ${skillsN(i.bots)} ${i.bots === 1 ? 'bot' : 'bots'}`}</td>
+      <td class="tt-used muted">${i.kind === 'remove' ? 'Not used in 30 days' : `${skillsUses(i.uses_30d)} · ${skillsN(i.bots)} ${i.bots === 1 ? 'bot' : 'bots'}`}</td>
       <td class="sk-act"><button type="button" class="ghost small" data-sk-idea-go>${i.kind === 'remove' ? 'Remove' : 'Ask to submit'}</button>
-        <button type="button" class="ghost small" data-sk-idea-dismiss>Dismiss</button></td></tr>`).join('')}</table></section>`;
+        <button type="button" class="tl-ib sk-more" data-sk-idea-more aria-haspopup="menu" aria-expanded="false" aria-label="${esc('More for ' + i.name)}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></td></tr>`).join('')}</table></section>`;
 }
+// The open row ⋯ (task-list-menus.ts tasksMenu keeps its anchor here).
+const SK_MENU: TasksMenuHost = {};
 function skillsBindIdeas(box: HTMLElement, ideas: SkillIdea[]) {
   box.querySelectorAll<HTMLElement>('[data-sk-idea]').forEach(tr => {
     const idea = ideas.find(i => i.id === tr.dataset.skIdea); if (!idea) return;
@@ -215,11 +237,26 @@ function skillsBindIdeas(box: HTMLElement, ideas: SkillIdea[]) {
         skillsRedraw();
       } catch (e) { toast(errorMessage(e, ''), true); }
     };
-    const dismiss = tr.querySelector<HTMLButtonElement>('[data-sk-idea-dismiss]');
-    if (dismiss) dismiss.onclick = async () => {
+    const dismiss = async () => {
       try { await post(base + '/dismiss', {}); skillsRedraw(); } catch (e) { toast(errorMessage(e, ''), true); }
     };
+    const more = tr.querySelector<HTMLButtonElement>('[data-sk-idea-more]');
+    if (more) more.onclick = () => tasksMenu(SK_MENU, more, `<div class="tl-menu" role="menu" aria-label="${esc(idea.name)}">`
+      + `<button type="button" class="tl-mi" role="menuitem" data-sk-idea-dismiss>Dismiss</button></div>`, pop => {
+      pop.onclick = ev => { if (!eventElement(ev)?.closest('[data-sk-idea-dismiss]')) return; tasksMenuClose(); void dismiss(); };
+    });
   });
+  // The row ⋯ says whether its menu is open; Esc or a click away gives the focus back to it.
+  const pop = document.getElementById('task-filter-pop');
+  if (pop && !pop.dataset.skWired) {
+    pop.dataset.skWired = '1';
+    pop.onkeydown = tasksMenuKeys;
+    pop.addEventListener('beforetoggle', ev => {
+      const open = 'newState' in ev && ev.newState === 'open', anchor = SK_MENU.menuAnchor;
+      anchor?.setAttribute('aria-expanded', String(open));
+      if (!open && anchor && pop.contains(document.activeElement)) requestAnimationFrame(() => { if (anchor.isConnected) anchor.focus(); });
+    });
+  }
 }
 // Skills bots ran that the directory does not have (admins; null for anyone else).
 function skillsElsewhereHTML(rows: SkillElsewhere[]) {
@@ -251,8 +288,7 @@ async function pageSkill(name: string) {
   const run = (SKP?.run || 0) + 1;
   const page: SkillsPage = {run, name, days: SKP?.name === name ? SKP.days : 30};
   SKP = page;
-  $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="skill">
-    <div class="tt-crumb"><a href="${SKILLS_ROUTE}">Skills</a><span aria-hidden="true">›</span><span>${esc(name)}</span></div>
+  $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="skill">${skillsSubHead(name)}
     <div data-sk-body>${skelRows(4)}</div></div>`;
   const body = $('#skills-root [data-sk-body]');
   let d: SkillDetail, usage: SkillUsage;
@@ -262,8 +298,10 @@ async function pageSkill(name: string) {
   } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); return; }
   if (!skillsLive(run)) return;
   const versions = d.versions || [];
-  body.innerHTML = `<div class="tt-title"><div class="tt-title-text"><h1>${esc(d.skill.name)}</h1><p class="muted">${esc(d.skill.description || '')}</p></div>
-      <div class="tt-title-act">${d.skill.latest ? `<button type="button" class="primary small" data-sk-install>Install</button>` : ''}</div></div>
+  // Install is the page's one filled button, in the header; the description is the first line under it.
+  const head = $('#skills-root > header.ph');
+  if (head && d.skill.latest) pageHeadSet(head, 'primary', '<button type="button" class="primary ph-go" data-sk-install>Install</button>');
+  body.innerHTML = `${d.skill.description ? `<p class="muted sk-desc">${esc(d.skill.description)}</p>` : ''}
     <div class="tt-cols"><div class="tt-col">
       <section class="card" id="skill-usage"><header><h2>Usage</h2><span class="spacer"></span>
         <div class="theme-seg" role="radiogroup" aria-label="Days">${[7, 30].map(n =>
@@ -279,7 +317,7 @@ async function pageSkill(name: string) {
           : '<p class="muted">None yet.</p>'}</section>
       <section class="card" id="skill-installs"><header><h2>Installs</h2></header><div data-sk-installs>${skillsCoverageHTML(usage.installs || [])}</div></section>
     </div></div>`;
-  body.querySelector('[data-sk-install]')?.addEventListener('click', () => skillsInstallDialog(d.skill, versions));
+  $('#skills-root [data-sk-install]')?.addEventListener('click', () => skillsInstallDialog(d.skill, versions));
   skillsBindRemove(body);
   body.querySelector('#skill-usage .theme-seg').onclick = async (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-sk-days]'); if (!b) return;
@@ -309,15 +347,16 @@ function skillsUsageHTML(u: SkillUsage) {
       <td class="tt-used muted">${a.last_used_at ? agoSpan(a.last_used_at) : ''}</td></tr>`).join('')}</table>` : ''}
     ${recent.length ? `<h3 class="sk-sub">Recent</h3><table class="tt-log tt-log-short" data-sk-recent><tbody>${recent.map(r => `<tr>
       <td class="tt-log-what"><strong>${esc(skillsWho(r.actor))}</strong>${r.requested_by ? `<span class="muted">for ${esc(skillsWho(r.requested_by))}</span>` : ''}</td>
-      <td><span class="pill">${esc((SKILLS_TRIGGERS.find(([k]) => k === r.trigger) || [, r.trigger])[1])}</span></td>
+      <td class="muted">${esc((SKILLS_TRIGGERS.find(([k]) => k === r.trigger) || [, r.trigger])[1])}</td>
       <td class="muted">${agoSpan(r.used_at)}</td><td>${link(r)}</td></tr>`).join('')}</tbody></table>`
       : '<p class="muted" data-sk-no-uses>No uses.</p>'}`;
 }
 function skillsCoverageHTML(installs: SkillInstallCoverage[]) {
   if (!installs.length) return '<p class="muted">Not installed.</p>';
-  const pill = (c: string) => c === 'used' ? '<span class="pill ok">Used</span>' : c === 'unused' ? '<span class="pill waiting">Unused</span>' : '<span class="pill">Unknown</span>';
+  // Only an install nobody uses is worth a pill; used (or not known yet) is the normal case and shows nothing.
+  const pill = (c: string) => c === 'unused' ? '<span class="pill">Unused</span>' : '';
   return `<table class="tt-who-table">${installs.map(i => `<tr data-sk-coverage="${esc(i.coverage)}"${i.id ? ` data-sk-install-row="${esc(i.id)}"` : ''}>
-    <td class="tt-who-name">${esc(skillsWho(i.target))}${i.pinned_version ? ` <span class="pill" title="Pinned" data-sk-pinned>v${i.pinned_version}</span>` : ''}</td>
+    <td class="tt-who-name">${esc(skillsWho(i.target))}${i.pinned_version ? ` <span class="muted" title="Pinned to this version" data-sk-pinned>v${i.pinned_version}</span>` : ''}</td>
     <td class="tnum tt-used">${skillsUses(i.uses_30d)}</td><td>${pill(i.coverage)}</td>
     <td class="sk-act">${i.removable && i.id ? `<button type="button" class="ghost small" data-sk-remove="${esc(i.id)}" data-sk-remove-name="${esc(skillsWho(i.target))}">Remove</button>` : ''}</td></tr>`).join('')}</table>`;
 }
@@ -394,8 +433,7 @@ async function skillsInstallDialog(skill: SkillInfo, versions: SkillVersionRow[]
 async function pageSkillProposal(id: string) {
   const run = (SKP?.run || 0) + 1;
   SKP = {run};
-  $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="proposal">
-    <div class="tt-crumb" data-sk-crumb><a href="${SKILLS_ROUTE}">Skills</a></div>
+  $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="proposal">${skillsSubHead('')}
     <div data-sk-body>${skelRows(4)}</div></div>`;
   const body = $('#skills-root [data-sk-body]');
   let d: SkillProposalDetail, admin = false;
@@ -404,24 +442,31 @@ async function pageSkillProposal(id: string) {
     const [detail, usage] = await Promise.all([get<SkillProposalDetail>('/v2/skills/proposals/' + encodeURIComponent(id), {fresh: true}),
       get<SkillUsage>('/v2/skills/usage?days=7').catch((): SkillUsage => ({}))]);
     d = detail; admin = !!usage.admin;
-  } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); return; }
+  } catch (e) {
+    // The header still names what this is (its title came empty, waiting for the proposal's name).
+    if (!skillsLive(run)) return;
+    const head = $('#skills-root > header.ph');
+    if (head) pageHeadSet(head, 'title', 'Proposal');
+    body.innerHTML = skillsErr(e);
+    return;
+  }
   if (!skillsLive(run)) return;
   const p = d.proposal, s = d.screening, pending = p.status === 'pending';
-  $('#skills-root [data-sk-crumb]')?.insertAdjacentHTML('beforeend', `<span aria-hidden="true">›</span><span>${esc(p.name)}</span>`);
+  const head = $('#skills-root > header.ph');
+  if (head) pageHeadSet(head, 'title', esc(p.name));
   const mine = p.proposed_by?.id === S.me?.id && p.proposed_by?.type === 'Human';
   const ack = !!s && (s.risk === 'high' || s.verdict === 'unsafe');
   const canApprove = admin && pending && p.screen_status === 'screened' && !d.stale;
-  body.innerHTML = `<div class="tt-title"><div class="tt-title-text"><h1>${esc(p.name)}</h1>
-      <p class="muted">${p.base_version ? `Update to v${p.base_version + 1}` : 'New'} · ${esc(skillsWho(p.proposed_by))} · ${agoSpan(p.created_at)}</p></div>
-      <div class="tt-title-act">${skillsStatusPill(p.status)}${d.stale && pending ? '<span class="pill fail" data-sk-stale>Stale</span>' : ''}</div></div>
+  body.innerHTML = `<p class="muted sk-desc">${p.base_version ? `Update to v${p.base_version + 1}` : 'New'} · ${esc(skillsWho(p.proposed_by))} · ${agoSpan(p.created_at)}
+      ${skillsStatusPill(p.status)}${d.stale && pending ? '<span class="pill blocked" data-sk-stale>Stale</span>' : ''}</p>
     ${p.decline_reason ? `<p class="muted" data-sk-decline-reason>${esc(p.decline_reason)}</p>` : ''}
     <section class="card" id="proposal-screening"><header><h2>Screening</h2><span class="spacer"></span>${skillsScreenPill(p, s)}</header>
       ${skillsScreeningHTML(p, s, pending)}</section>
     ${pending && (admin || mine) ? `<div class="sk-decide" data-sk-decide>
       ${admin && ack ? `<label class="sk-ack"><input type="checkbox" data-sk-ack> I've read this</label>` : ''}
-      ${admin ? `<button type="button" class="primary small" data-sk-approve${canApprove && !ack ? '' : ' disabled'}>Approve</button>
-        <button type="button" class="ghost small" data-sk-decline>Decline</button>` : ''}
-      ${mine ? '<button type="button" class="ghost small" data-sk-withdraw>Withdraw</button>' : ''}</div>` : ''}
+      ${mine ? '<button type="button" class="ghost small" data-sk-withdraw>Withdraw</button>' : ''}
+      ${admin ? `<button type="button" class="ghost small" data-sk-decline>Decline</button>
+        <button type="button" class="primary small" data-sk-approve${canApprove && !ack ? '' : ' disabled'}>Approve</button>` : ''}</div>` : ''}
     <section class="card" id="proposal-changes"><header><h2>${p.base_version ? 'Changes' : 'Files'}</h2></header>
       <div data-sk-changes></div>
       ${d.stale && d.diff_latest != null && p.base_version ? `<h3 class="sk-sub">Against latest</h3>${skillsDiffHTML(d.diff_latest)}` : ''}</section>`;
@@ -463,7 +508,8 @@ function skillsScreeningHTML(p: SkillProposal, s: SkillScreening | null | undefi
   const rerun = pending ? ' <button type="button" class="ghost small" data-sk-rescreen>Re-run</button>' : '';
   if (p.screen_status === 'pending') return '<p class="muted">Screening runs before anyone can approve.</p>';
   if (p.screen_status === 'not_screened' || !s) return `<p class="muted" data-sk-screen-reason>${esc(s?.reason || 'Not screened.')}${rerun}</p>`;
-  const sev = (v?: string) => `<span class="pill ${v === 'high' ? 'fail' : v === 'medium' ? 'waiting' : ''}">${esc(v || '')}</span>`;
+  // A finding's severity: high is red, medium a plain pill, low plain muted words.
+  const sev = (v?: string) => v === 'high' || v === 'medium' ? `<span class="pill${v === 'high' ? ' blocked' : ''}">${esc(v)}</span>` : `<span class="muted">${esc(v || '')}</span>`;
   const where = (x: {file?: string; line?: number | string}) => `<code>${esc(x.file || '')}${x.line ? ':' + esc(x.line) : ''}</code>`;
   const findings = s.findings || [], patterns = s.patterns || [];
   return `<p data-sk-summary>${esc(s.summary || '')}</p>

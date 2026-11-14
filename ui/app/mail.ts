@@ -1,4 +1,7 @@
 /* ui/app/mail.ts — Message bots page (synced mail)
+   The one page header: the title, Messages and Instructions as tabs when a mailbox has instructions (one view is no
+   tabs), search and the shared filter icon (labels and attachments, chips under the header as on Tasks). The mailboxes
+   list sits beside the messages only when there are two or more to choose from. Every empty state is said once.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -62,12 +65,15 @@ interface MailPageAcc {
 
 // ----------------------------------------------------------------- Mail
 // Server-stored copies only (GET /api/v2/mail). Bodies stay in <pre>; never md() them.
-const MAIL_CHIPS = [
-  ['INBOX', 'Messages'], ['UNREAD', 'Unread'], ['STARRED', 'Starred'],
+// The label filter's choices ('' is any label).
+const MAIL_CHIPS: [string, string][] = [
+  ['', 'Any label'], ['INBOX', 'Inbox'], ['UNREAD', 'Unread'], ['STARRED', 'Starred'],
 ];
 const MAIL_LABEL: Record<string, string> = {INBOX: 'Messages', UNREAD: 'Unread', STARRED: 'Starred', SENT: 'Sent',
   IMPORTANT: 'Important', DRAFT: 'Drafts', SPAM: 'Spam', TRASH: 'Trash'};
 let MAIL_ACC: MailPageAcc = {key: '', messages: [], cursor: null};
+// The filter popover's anchor (task-list-menus.ts keeps it here to know a second click on the icon closes it).
+const MAIL_MENU: TasksMenuHost = {};
 // A page element the drawn markup must hold: a missing one throws a plain Error that names it.
 function mailNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {
   const el = root.querySelector<T>(selector);
@@ -123,15 +129,17 @@ function mailLabelName(label: string): string | undefined {
   if (label.startsWith('CATEGORY_')) return '';
   return label.startsWith('hub/') ? label.slice(4) : label;
 }
+// A message's labels as pills, less Inbox: nearly every message has it, and a pill is for what stands out.
 function mailTags(labels: string[] | null | undefined): string {
-  return (labels || []).map(l => { const n = mailLabelName(l); return n ? `<span class="pill">${esc(n)}</span>` : ''; }).join('');
+  return (labels || []).filter(l => l !== 'INBOX').map(l => { const n = mailLabelName(l); return n ? `<span class="pill">${esc(n)}</span>` : ''; }).join('');
 }
+// A mailbox's last sync, for its tooltip: the page shows no caption for it, only an error when the sync failed.
 function mailFresh(box: MailPageBox | null | undefined): string {
-  if (!box) return 'Choose a mailbox to browse the synced copy.';
-  if (box.error) return `Last sync failed${box.synced_at ? ' · ' + ago(box.synced_at) : ''}.`;
-  if (!box.synced_at) return `${box.address} has not been synced yet.`;
+  if (!box) return '';
+  if (box.error) return `Last sync failed${box.synced_at ? ' · ' + ago(box.synced_at) : ''}`;
+  if (!box.synced_at) return 'Not synced yet';
   const n = box.message_count || 0;
-  return `Last synced ${ago(box.synced_at)} · ${n} message${n === 1 ? '' : 's'} on the server`;
+  return `Last synced ${ago(box.synced_at)} · ${n} message${n === 1 ? '' : 's'}`;
 }
 function mailQuery(st: MailPageState, cursor: string | null | undefined): string {
   const qs = new URLSearchParams();
@@ -150,10 +158,12 @@ async function mailFill(st: MailPageState, append: boolean): Promise<void> {
   MAIL_ACC.cursor = page.next_cursor || null;
 }
 function mailDrawList(st: MailPageState, listed: MailPageMessage[], boxes: MailPageBox[]): void {
+  // An empty list is the page's one empty line, and the reading pane beside it folds away.
+  $('#mail-split')?.classList.toggle('mail-none', !listed.length);
   if (!listed.length) {
-    mailNeed('#mail-list').innerHTML = `<div class="empty">${st.q || st.label || st.attach
-      ? 'Nothing matches this search.'
-      : (boxes.some(b => b.synced_at) ? 'No messages in this mailbox.' : 'No synced messages yet.')}</div>`;
+    mailNeed('#mail-list').innerHTML = `<div class="empty-state">${st.q || st.label || st.attach
+      ? 'No matches'
+      : (boxes.some(b => b.synced_at) ? 'No messages' : 'No synced messages yet')}</div>`;
     return;
   }
   const filterBox = mailBoxParam(st.mailbox);
@@ -177,6 +187,34 @@ async function mailMore(): Promise<void> {
   if (load !== MAIL_LOAD) return;
   mailDrawList(st, MAIL_ACC.messages, []);
 }
+// The filter: one popover (task-list-menus.ts tasksMenu) with the label as a choice of one and attachments as a tick.
+function mailFilterMenu(anchor: HTMLElement): void {
+  const st = mailParams();
+  tasksMenu(MAIL_MENU, anchor, `<div class="tl-menu" role="group" aria-label="Filter">
+    <div class="tl-menu-h" aria-hidden="true">Label</div>
+    <div class="tl-menu-list">${MAIL_CHIPS.map(([id, label]) => `<label class="tl-opt"><input type="radio" name="mail-label" value="${id}"${st.label === id ? ' checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div>
+    <div class="tl-menu-sep" role="separator"></div>
+    <label class="tl-opt"><input type="checkbox" name="mail-attach"${st.attach ? ' checked' : ''}><span>Has attachment</span></label>
+  </div>`, pop => {
+    pop.onchange = ev => {
+      const t = eventElement(ev);
+      if (!(t instanceof HTMLInputElement)) return;
+      if (t.name === 'mail-attach') mailGo({attach: t.checked, thread: ''});
+      else mailGo({label: t.value, thread: ''});
+    };
+  });
+}
+// The badge on the filter icon and a chip under the header for each filter in force.
+function mailFilterPaint(st: MailPageState): void {
+  const label = MAIL_CHIPS.find(([id]) => id && id === st.label)?.[1] || (st.label ? mailLabelName(st.label) || st.label : '');
+  const chip = (key: string, k: string, v: string) => `<span class="tl-chip" data-chip="${key}"><button type="button" class="tl-chip-main" data-mail-edit aria-haspopup="true" title="${esc(k ? `${k}: ${v}` : v)}">${k ? `<span class="k">${esc(k)}</span>` : ''}<span class="v">${esc(v)}</span></button><button type="button" class="tl-chip-x" data-mail-drop="${key}" aria-label="Remove ${esc(k || v)}">${TL_ICON.x}</button></span>`;
+  const chips = [label ? chip('label', 'Label', label) : '', st.attach ? chip('attach', '', 'Has attachment') : ''].filter(Boolean);
+  const bar = $('#mail-filters'), host = $('#mail-chips'), badge = $('#mail-filter .tl-fbadge');
+  if (host) host.innerHTML = chips.join('');
+  if (bar) bar.hidden = !chips.length;
+  if (badge) { badge.hidden = !chips.length; badge.textContent = String(chips.length); }
+  $('#mail-filter')?.setAttribute('aria-label', chips.length ? `Filter, ${chips.length} on` : 'Filter');
+}
 // The mail page's search box (drawn with the page): a timer and the list read it when they run.
 function mailSearchBox(): HTMLInputElement | null { return $('#mail-q') as HTMLInputElement | null; }
 async function pageMail(): Promise<void> {
@@ -186,26 +224,25 @@ async function pageMail(): Promise<void> {
   const load = ++MAIL_LOAD;
   if (!$('#mail-page')) {
     mailNeed('#main').innerHTML = `<div id="mail-page">
-      <div class="meeting-head"><div><h1>Message bots${betaPill('message_bots')}</h1></div></div>
-      <div class="mail-shell">
-        <nav class="mail-boxes" aria-label="Message bots"><h2>Message bots</h2><div class="mail-box-list" id="mail-box-list"></div></nav>
+      ${pageHead({title: 'Message bots', hook: 'mail-head', after: betaPill('message_bots'), tabsHook: 'mail-tabs', tabsAttrs: 'aria-label="Mailbox view"',
+        tools: '<input id="mail-q" type="search" autocomplete="off" placeholder="Search messages" aria-label="Search messages">'
+          + `<button type="button" class="tl-ib" id="mail-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`})}
+      <div class="tl-bar mail-filter-bar" id="mail-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="mail-chips"></span></div></div>
+      <p class="err mail-fresh" id="mail-fresh" role="status" hidden></p>
+      <div class="mail-shell" id="mail-shell">
+        <nav class="mail-boxes" aria-label="Mailboxes" hidden><div class="mail-box-list" id="mail-box-list"></div></nav>
         <div class="mail-main">
-          <div class="mail-main-head"><h2 id="mail-current"></h2><div class="mail-tabs" role="tablist" aria-label="Mailbox view">
-            <button class="mail-tab" type="button" role="tab" data-mail-view="inbox" aria-controls="mail-inbox-view">Messages</button>
-            <button class="mail-tab" type="button" role="tab" data-mail-view="agent" aria-controls="mail-agent-view" hidden>Instructions</button>
-          </div></div>
+          <h2 class="mail-current" id="mail-current" hidden></h2>
           <div id="mail-inbox-view" role="tabpanel">
-            <div class="mail-toolbar"><input id="mail-q" type="search" autocomplete="off" placeholder="Search subject, body, or sender…" aria-label="Search messages"></div>
-            <div class="mail-chips" id="mail-chips"></div>
-            <p class="mail-fresh" id="mail-fresh" role="status"></p>
             <div class="mail-split" id="mail-split">
-              <div class="mail-list" id="mail-list"><div class="empty">Loading…</div></div>
-              <div class="mail-thread" id="mail-thread"><div class="empty">Select a message.</div></div>
+              <div class="mail-list" id="mail-list">${skelRows(4)}</div>
+              <div class="mail-thread" id="mail-thread"></div>
             </div>
           </div>
           <section class="mail-agent-view" id="mail-agent-view" role="tabpanel" hidden></section>
         </div>
       </div>
+      <div id="task-filter-pop" class="tl-pop" popover></div>
     </div>`;
     const tabBar = $('.mail-tabs') as HTMLElement;
     const searchBox = mailNeed<HTMLInputElement>('#mail-q');
@@ -233,12 +270,18 @@ async function pageMail(): Promise<void> {
     searchBox.onkeydown = ev => {
       if (ev.key === 'Enter') { ev.preventDefault(); clearTimeout(MAIL_SEARCH); mailGo({q: searchBox.value.trim(), thread: ''}); }
     };
+    const filterBtn = mailNeed('#mail-filter'), pop = mailNeed('#task-filter-pop');
+    filterBtn.onclick = () => mailFilterMenu(filterBtn);
     ($('#mail-chips') as HTMLElement).onclick = ev => {
-      const b = eventElement(ev)?.closest<HTMLElement>('[data-mail-chip]'); if (!b) return;
-      const cur = mailParams();
-      if (b.dataset.mailChip === 'attach') mailGo({attach: !cur.attach, thread: ''});
-      else mailGo({label: cur.label === b.dataset.mailChip ? '' : b.dataset.mailChip, thread: ''});
+      const drop = eventElement(ev)?.closest<HTMLElement>('[data-mail-drop]');
+      if (drop) { mailGo(drop.dataset.mailDrop === 'attach' ? {attach: false, thread: ''} : {label: '', thread: ''}); filterBtn.focus(); return; }
+      if (eventElement(ev)?.closest('[data-mail-edit]')) mailFilterMenu(filterBtn);
     };
+    pop.addEventListener('keydown', tasksMenuKeys);
+    pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
+      filterBtn.setAttribute('aria-expanded', String(ev.newState === 'open'));
+      if (ev.newState === 'closed' && (pop.contains(document.activeElement) || document.activeElement === document.body)) filterBtn.focus();
+    });
     ($('#mail-list') as HTMLElement).onclick = ev => {
       if (eventElement(ev)?.closest('[data-mail-more]')) { mailMore(); return; }
       const row = eventElement(ev)?.closest<HTMLElement>('[data-thread]'); if (!row) return;
@@ -253,7 +296,7 @@ async function pageMail(): Promise<void> {
   if (load !== MAIL_LOAD) return;
   let boxes: MailPageBox[] = [];
   try { boxes = (await get<{mailboxes?: MailPageBox[] | null}>('/v2/mail/mailboxes')).mailboxes || []; }
-  catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+  catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MAIL_LOAD) return;
   const mine = (S.me?.email || '').toLowerCase();
   if (!st.mailbox && boxes.length) {
@@ -263,49 +306,54 @@ async function pageMail(): Promise<void> {
   }
   const filterBox = mailBoxParam(st.mailbox);
   const box = boxes.find(b => b.address === filterBox);
-  $('#mail-box-list')!.innerHTML = (boxes.length > 1
+  // The mailboxes list only when there is a choice; with one, the heading over the messages names it.
+  const several = boxes.length > 1;
+  $('#mail-box-list')!.innerHTML = (several
     ? `<button class="mail-box-link${st.mailbox === 'all' ? ' on' : ''}" type="button" data-mailbox="all"${st.mailbox === 'all' ? ' aria-current="true"' : ''}><span class="name">All message bots</span></button>` : '') +
-    boxes.map(b => `<button class="mail-box-link${st.mailbox === b.address ? ' on' : ''}" type="button" data-mailbox="${esc(b.address)}" title="${esc(b.address)}"${st.mailbox === b.address ? ' aria-current="true"' : ''}>
+    boxes.map(b => `<button class="mail-box-link${st.mailbox === b.address ? ' on' : ''}" type="button" data-mailbox="${esc(b.address)}" title="${esc([b.address, mailFresh(b)].join(' · '))}"${st.mailbox === b.address ? ' aria-current="true"' : ''}>
       <span class="name">${esc(b.name || b.address)}</span>${b.agent_bot ? '<span class="agent-mark" aria-hidden="true">mail</span>' : ''}<span class="count">${esc(b.message_count || 0)}</span></button>`).join('');
-  $('#mail-current')!.textContent = filterBox ? (box?.name ? `${box.name} · ${filterBox}` : filterBox) : 'All message bots';
-  const agentTab = $('[data-mail-view="agent"]') as HTMLElement;
-  agentTab.hidden = !box?.agent_instructions;
-  if (st.view === 'agent' && agentTab.hidden) { mailGo({view: 'inbox'}); return; }
-  document.querySelectorAll<HTMLElement>('[data-mail-view]').forEach(button => {
-    const active = button.dataset.mailView === st.view;
-    button.classList.toggle('on', active);
-    button.setAttribute('aria-selected', String(active));
-    button.tabIndex = active ? 0 : -1;
-  });
+  ($('.mail-boxes') as HTMLElement).hidden = !several;
+  $('#mail-shell')!.classList.toggle('one', !several);
+  const current = $('#mail-current') as HTMLElement;
+  current.hidden = several || !box;
+  current.textContent = box ? (box.name ? `${box.name} · ${box.address}` : box.address) : '';
+  current.title = mailFresh(box);
+  // Messages and Instructions are tabs only when the mailbox has instructions: one view is no tabs.
+  const agent = !!box?.agent_instructions;
+  if (st.view === 'agent' && !agent) { mailGo({view: 'inbox'}); return; }
+  const head = $('.mail-head') as HTMLElement;
+  pageHeadSet(head, 'tabs', agent ? [['inbox', 'Messages'], ['agent', 'Instructions']].map(([v, label]) =>
+    `<button class="ph-tab mail-tab" type="button" role="tab" data-mail-view="${v}" aria-controls="mail-${v === 'agent' ? 'agent' : 'inbox'}-view" aria-selected="${st.view === v}" tabindex="${st.view === v ? 0 : -1}">${label}</button>`).join('') : '');
   ($('#mail-inbox-view') as HTMLElement).hidden = st.view === 'agent';
   const agentView = $('#mail-agent-view') as HTMLElement;
   agentView.hidden = st.view !== 'agent';
+  // Search and the filter narrow the messages, so they rest while Instructions is open.
+  for (const el of [$('#mail-q'), $('#mail-filter')] as HTMLInputElement[]) el.disabled = st.view === 'agent';
+  mailFilterPaint(st);
   if (st.view === 'agent') {
     const target = agentView;
-    target.innerHTML = '<div class="empty">Loading instructions…</div>';
+    target.innerHTML = '<div class="empty">Loading…</div>';
     try {
       const response = await get<MailPageAgent>(`/v2/mail/agent?mailbox=${encodeURIComponent(filterBox)}`);
       if (load !== MAIL_LOAD) return;
-      target.innerHTML = `<div class="mail-agent-meta">Current AGENTS.md · updated ${esc(ago(response.updated_at))}</div>
-        <pre class="mail-agent-text">${esc(response.instructions)}</pre>`;
+      target.title = response.updated_at ? `Updated ${ago(response.updated_at)}` : '';
+      target.innerHTML = `<div class="mail-agent-text">${esc(response.instructions)}</div>`;
     } catch (e) {
-      if (load === MAIL_LOAD) target.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
+      if (load === MAIL_LOAD) target.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`;
     }
     return;
   }
   const qbox = mailSearchBox(); if (qbox && qbox.value !== st.q) qbox.value = st.q;
-  $('#mail-chips')!.innerHTML = MAIL_CHIPS.map(([id, label]) =>
-    `<button type="button" class="mail-chip${st.label === id ? ' on' : ''}" data-mail-chip="${id}">${esc(label)}</button>`).join('') +
-    `<button type="button" class="mail-chip${st.attach ? ' on' : ''}" data-mail-chip="attach">Has attachment</button>`;
-  const freshBox = filterBox ? box : boxes.filter(b => b.synced_at).sort((a, b) => (b.synced_at || '').localeCompare(a.synced_at || ''))[0];
-  $('#mail-fresh')!.textContent = boxes.some(b => b.synced_at)
-    ? (filterBox ? mailFresh(box || {address: filterBox}) : `Showing every mailbox you can see · newest sync ${ago(freshBox!.synced_at)}`)
-    : 'No messages have been synced yet.';
+  // Freshness is in the mailbox's tooltip; only a failed sync is said on the page, and it stays until the sync works.
+  const failed = (filterBox ? [box] : boxes).filter((b): b is MailPageBox => !!b?.error);
+  const fresh = $('#mail-fresh') as HTMLElement;
+  fresh.hidden = !failed.length;
+  fresh.textContent = failed.map(b => `${b.name || b.address}: ${mailFresh(b)}`).join(' · ');
   const key = mailFilterKey(st);
   if (MAIL_ACC.key !== key) MAIL_ACC = {key, messages: [], cursor: null};
   if (!MAIL_ACC.messages.length) {
     try { await mailFill(st, false); }
-    catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+    catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   }
   if (load !== MAIL_LOAD) return;
   const listed = MAIL_ACC.messages;
@@ -313,7 +361,7 @@ async function pageMail(): Promise<void> {
   if (split) split.classList.toggle('thread-open', !!st.thread);
   mailDrawList(st, listed, boxes);
   if (!st.thread) {
-    mailNeed('#mail-thread').innerHTML = '<div class="empty">Select a message to read the thread.</div>';
+    mailNeed('#mail-thread').innerHTML = '';
     return;
   }
   mailNeed('#mail-thread').innerHTML = '<div class="empty">Loading thread…</div>';
@@ -333,6 +381,6 @@ async function pageMail(): Promise<void> {
         ${(m.attachments || []).length ? `<p class="muted" style="margin:8px 0 0">${m.attachments!.map(a => esc(a.name || a.filename || 'attachment')).join(' · ')}</p>` : ''}
       </article>`).join('')}`;
   } catch (e) {
-    if (load === MAIL_LOAD) mailNeed('#mail-thread').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
+    if (load === MAIL_LOAD) mailNeed('#mail-thread').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`;
   }
 }

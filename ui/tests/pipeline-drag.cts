@@ -27,7 +27,9 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
 // Task #339: columns are at least 300px, so a board whose stages don't fit scrolls sideways. Each redraw replaced the
 // columns and put the board back at its first stage. At 1440×900 with the manager's panel open, scrolled to 300px, the
 // board stays there through a search typed and cleared, a live update, a drop on another stage, the refused-move bar
-// closed, a reload and Threads and back; another pipeline keeps its own position. Runs on the fake server of tasks-page.cts.
+// closed, a reload and Threads and back; another pipeline keeps its own position. The board's edges fade where stages lie
+// beyond them; a stage with no task is its header's height, and every column stretches while a task is held. Runs on the
+// fake server of tasks-page.cts.
 async function scrollKept(browser: import('playwright').Browser): Promise<void> {
   const {open, PIPELINES, fixtures, task, brief} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
   const product = PIPELINES.find(p => p.id === 'product')!, ops = PIPELINES.find(p => p.id === 'ops')!;
@@ -48,6 +50,30 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
   };
   await cols.evaluate(el => { el.scrollLeft = 300; });
   await settled(300, 'scrolling');
+  // The board scrolls in its own box with a cue: scrolled to the middle, both edges fade (task-pipelines.ts pvEdges).
+  const fades = () => cols.evaluate(el => [el.classList.contains('fade-l'), el.classList.contains('fade-r')]);
+  assert.deepEqual(await fades(), [true, true], 'scrolled to the middle: both edges fade');
+  // The fade leaves the scrollbars alone: the strip each takes is masked in whole (0 where they overlay the content).
+  const bars = await cols.evaluate(el => ({v: (el as HTMLElement).offsetWidth - el.clientWidth, h: (el as HTMLElement).offsetHeight - el.clientHeight,
+    size: getComputedStyle(el).maskSize || getComputedStyle(el).getPropertyValue('-webkit-mask-size')}));
+  assert.equal(bars.size, `100% 100%, ${bars.v}px 100%, 100% ${bars.h}px`, `the scrollbars' strips are kept whole: ${JSON.stringify(bars)}`);
+  // A stage with no task is as tall as its header (no empty box under it)...
+  const emptyCol = () => page.locator('[data-pv-col="learn"]').evaluate(el => ({col: el.getBoundingClientRect().height,
+    head: el.querySelector('.pv-col-head')!.getBoundingClientRect().height, body: getComputedStyle(el.querySelector('.pv-col-body')!).display,
+    tallest: Math.max(...[...document.querySelectorAll('.pv-col')].map(c => c.getBoundingClientRect().height))}));
+  const idle = await emptyCol();
+  assert.ok(idle.body === 'none' && idle.col - idle.head <= 17 && idle.col < idle.tallest, `an empty stage is its header's height: ${JSON.stringify(idle)}`);
+  // ...and while a task is held every column is as tall as the tallest, so an empty stage takes a drop anywhere down it.
+  const held = await page.locator('.tk-card[data-task="t-4"]').boundingBox();
+  await page.mouse.move(held!.x + held!.width / 2, held!.y + held!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(held!.x + held!.width / 2 + 20, held!.y + held!.height / 2, {steps: 3});
+  const holding = await emptyCol();
+  assert.ok(Math.abs(holding.col - holding.tallest) < 1, `held: the empty stage stretches to the tallest: ${JSON.stringify(holding)}`);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  assert.ok(Math.abs((await emptyCol()).col - idle.col) < 1, 'let go: back to its header');
+  await settled(300, 'a held task let go with Escape');
 
   // Search typed and cleared: two redraws, one with fewer cards.
   await page.locator('#task-q').fill('Rounding');
@@ -103,6 +129,12 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
   await page.locator('#task-body [data-pv-col="todo"]').waitFor();
   assert.ok(await cols.evaluate(el => el.scrollWidth > el.clientWidth), 'Operations scrolls sideways too');
   await settled(0, 'opening another pipeline');
+  assert.deepEqual(await fades(), [false, true], 'at its first stage only the right edge fades');
+  await cols.evaluate(el => { el.scrollLeft = el.scrollWidth; });
+  await page.waitForFunction(() => document.querySelector('#task-body .pv-cols')!.classList.contains('fade-l'));
+  assert.deepEqual(await fades(), [true, false], 'at its last stage only the left edge fades');
+  await cols.evaluate(el => { el.scrollLeft = 0; });
+  await page.waitForFunction(() => !document.querySelector('#task-body .pv-cols')!.classList.contains('fade-l'));
   await page.evaluate(() => { location.hash = '#/tasks?pipeline=product&layout=columns'; });
   await page.locator('#task-body [data-pv-col="spec"]').waitFor();
   await settled(300, 'coming back to Product');
@@ -135,7 +167,12 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
       if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
         saves.push(body);
-        Object.assign(pipeline, {goal: body['goal'], settings_version: pipeline.settings_version + 1});
+        // As backend/pipeline_settings.py save: a save at a version that is no longer the record's is refused.
+        if (body['settings_version'] !== pipeline.settings_version) {
+          return json({error: 'task_changed', detail: 'The pipeline changed since you looked. Read it again.'}, 409);
+        }
+        const {settings_version: _seen, ...given} = body;
+        Object.assign(pipeline, JSON.parse(JSON.stringify(given)), {settings_version: pipeline.settings_version + 1});
         return json({pipeline});
       }
       if (p === '/api/v2/pipelines/product') return json({pipeline});
@@ -191,16 +228,29 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     await said.locator('[data-pv-bar-x]').click();
     assert.equal(await page.locator('.pv-bar').count(), 0, 'closed');
 
-    // A stage's header opens the editor on that pipeline; a save sends the record read and draws the saved one.
+    // A stage's header opens that stage's editor, and only that stage (style guide, Pipeline stage): its name in the
+    // title, its panel open, no pipeline fields, + Stage or moves.
     await page.locator('[data-pv-settings="build"]').click();
+    await page.locator('#pe-dialog .pe-stage[open]').waitFor();
+    assert.equal(await page.locator('#pe-title').innerText(), 'Product › Build');
+    assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Build']);
+    assert.equal(await page.locator('#pe-dialog .pe-stage[open] .pe-stage-name').innerText(), 'Build');
+    assert.equal(await page.locator('#pe-dialog [data-pe-pf], #pe-dialog [data-pe-stage-add]').count(), 0, 'no pipeline fields, no + Stage');
+    assert.equal(await page.locator('#pe-dialog .pe-tools').isVisible(), false, 'no moves or Remove');
+    assert.equal(await page.locator('#pe-dialog [data-pe-save]').isVisible(), true);
+    await page.locator('#pe-dialog [data-pe-close]').click();
+    await page.locator('#pe-dialog').waitFor({state: 'detached'});
+
+    // ⋯ › Edit pipeline opens the whole pipeline; a save sends the record read and draws the saved one.
+    await page.locator('#task-menu').click();
+    await page.locator('#task-mi-edit').click();
     const goal = page.locator('#pe-dialog [data-pe-pf="goal"]');
     await goal.waitFor();
     assert.equal(await page.locator('#pe-title').innerText(), 'Product');
-    // S11 as drawn: each stage one row, in order, the one asked for open; a closed row shows how many requirements it
-    // has; labels sit left-aligned above their fields, and Prefix is a short field beside Manager.
+    // S11 as drawn: each stage one row, in order; a closed row shows how many requirements it has; labels sit
+    // left-aligned above their fields, and Prefix is a short field beside Manager.
     assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Spec', 'Build']);
-    assert.equal(await page.locator('#pe-dialog .pe-stage[open] .pe-stage-name').innerText(), 'Build');
-    assert.equal((await page.locator('#pe-dialog .pe-stage:not([open]) .pe-stage-reqs').innerText()).trim(), '✓ 1');
+    assert.equal((await page.locator('#pe-dialog .pe-stage:not([open]) .pe-stage-reqs').first().innerText()).trim(), '✓ 1');
     const layout = await page.evaluate(() => {
       const box = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
       const label = document.querySelector('#pe-dialog .pe-fields .pe-f > span')!;
@@ -221,6 +271,71 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     assert.deepEqual((saves[0]!['stages'] as {id: string}[]).map(x => x.id), ['spec', 'build']);
     assert.equal(await page.locator('#pe-dialog [data-pe-error]:not([hidden])').count(), 0);
     assert.equal(await page.locator('#pe-dialog').count(), 1, 'the editor stays open');
+    await page.locator('#pe-dialog [data-pe-close]').click();
+    await page.locator('#pe-dialog').waitFor({state: 'detached'});
+
+    // One stage's editor saves that stage and leaves the rest as it was read: Build (the second stage) from its header.
+    const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+    const oneStage = async (sid: string) => {
+      await page.locator(`[data-pv-settings="${sid}"]`).click();
+      await page.locator('#pe-dialog .pe-stage[open]').waitFor();
+    };
+    const purpose = page.locator('#pe-dialog [data-pe-sf="purpose"]');
+    const specRead = clone(pipeline.stages[0]!);
+    await oneStage('build');
+    await purpose.fill('Ship the build');
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    for (let i = 0; i < 100 && saves.length < 2; i++) await page.waitForTimeout(20);
+    const one = saves.at(-1)!;
+    assert.deepEqual((one['stages'] as {id: string}[]).map(x => x.id), ['spec', 'build'], 'every stage, in order');
+    assert.deepEqual((one['stages'] as unknown[])[0], specRead, 'Spec is sent as it was read, requirements and all');
+    assert.equal((one['stages'] as {purpose: string}[])[1]!.purpose, 'Ship the build');
+    assert.deepEqual([one['goal'], one['manager_id']], ['Ship it', null], 'the goal and the manager are untouched');
+    await page.locator('#pe-dialog [data-pe-close]').click();
+    await page.locator('#pe-dialog').waitFor({state: 'detached'});
+
+    // Someone else saves while Build is open on its own (a new Goal, another requirement on Spec): Save mine sends their
+    // record with only this person's Build in it, so nothing they never saw is undone.
+    await oneStage('build');
+    const theirReq = {...req, kind: 'page', line: 'Spec page'};
+    Object.assign(pipeline, {goal: 'Theirs', settings_version: pipeline.settings_version + 1});
+    pipeline.stages[0]!.requirements = [...pipeline.stages[0]!.requirements, theirReq];
+    const specTheirs = clone(pipeline.stages[0]!);
+    await purpose.fill('Mine');
+    const before = saves.length;
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    await page.locator('#pe-dialog .pe-clash [data-pe-mine]').waitFor();
+    assert.equal(saves.length, before + 1, 'the first save was refused');
+    await page.locator('#pe-dialog [data-pe-mine]').click();
+    for (let i = 0; i < 100 && saves.length < before + 2; i++) await page.waitForTimeout(20);
+    const mine = saves.at(-1)!;
+    assert.equal(mine['goal'], 'Theirs', 'their Goal is kept');
+    assert.deepEqual((mine['stages'] as unknown[])[0], specTheirs, 'their Spec is kept');
+    assert.equal((mine['stages'] as {purpose: string}[])[1]!.purpose, 'Mine', 'and this person\'s Build is saved');
+    await page.locator('#pe-dialog .pe-clash').waitFor({state: 'detached'});
+    await page.locator('#pe-dialog [data-pe-close]').click();
+    await page.locator('#pe-dialog').waitFor({state: 'detached'});
+
+    // Load theirs on one stage: they renamed it, so the title follows and the stage stays open; they removed it, so the
+    // editor becomes the whole pipeline's, titled with its name.
+    await oneStage('build');
+    pipeline.stages[1]!.name = 'Building';
+    pipeline.settings_version += 1;
+    await purpose.fill('Mine again');
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    await page.locator('#pe-dialog [data-pe-theirs]').click();
+    await page.locator('#pe-dialog .pe-stage[open]').waitFor();
+    assert.equal(await page.locator('#pe-title').innerText(), 'Product › Building');
+    assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Building']);
+    pipeline.stages = pipeline.stages.slice(0, 1);
+    pipeline.settings_version += 1;
+    await purpose.fill('Gone?');
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    await page.locator('#pe-dialog [data-pe-theirs]').click();
+    await page.locator('#pe-dialog [data-pe-pf="goal"]').waitFor();
+    assert.equal(await page.locator('#pe-title').innerText(), 'Product');
+    assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Spec']);
+    await page.locator('#pe-dialog [data-pe-close]').click();
 
     assert.deepEqual(errors, []);
     await page.close();

@@ -25,11 +25,24 @@ const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings']
 // A bot's conversation is two threads: its Home (public, ui/app/thread-view.js) and the viewer's DM with it.
 const BOT_TABS = ['home', 'dm', 'tasks', ...BOT_DETAIL_TABS];
 const BOT_WORK_TABS = ['home', 'dm', 'tasks'];
-const BOT_TAB_LABELS: Record<string, string> = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'More'};
-// The top line's tabs are icons everyone knows (#282, Chris 13 Nov): chat, the app's Tasks check, ⋯ for More.
-const BOT_MORE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+const BOT_TAB_LABELS: Record<string, string> = {home: 'Home', dm: 'DM', tasks: 'Tasks'};
+const BOT_DETAIL_LABELS: Record<string, string> = {info: 'Info', rules: 'Rules', instructions: 'Instructions', history: 'History', settings: 'Settings'};
+// The top line's tabs are icons everyone knows (#282, Chris 13 Nov): chat and the app's Tasks check. ⋯ comes last, at
+// the far right of the line on every width (style guide, "Top bars: one line"): the list of the bot's details.
 const BOT_TAB_ICON: Record<string, string> = {home: '<span class="nav-icon" aria-hidden="true">chat_bubble</span>', dm: '<span class="nav-icon" aria-hidden="true">chat_bubble</span>',
-  tasks: '<span class="nav-icon" aria-hidden="true">task_alt</span>', info: BOT_MORE_SVG};
+  tasks: '<span class="nav-icon" aria-hidden="true">task_alt</span>'};
+// The ⋯ list (the shared header's ⋯, page-head.ts pageHeadMore: a named group of plain buttons and links, not an ARIA
+// menu): Incognito on a phone, where the top line has no room for the lock; then the five detail views; then, after a
+// line, the private chat's Archive (#282: never in the top line itself). On a phone the chat's Members leaves the line
+// for ⋯ too (botMoreOpening), so the bot's name is not cut for it.
+function botMoreItemsHTML(slug: string, lockable: boolean): string {
+  const base = `#/bot/${encodeURIComponent(slug)}`;
+  const views = BOT_DETAIL_TABS.filter(t => botTabs(slug).includes(t));
+  return (lockable ? '<button type="button" class="bot-mi bot-mi-phone" data-bot-incognito aria-pressed="false"><span class="nav-icon" aria-hidden="true">lock</span>Incognito</button>' : '')
+    + '<button type="button" class="bot-mi bot-mi-phone" data-bot-members hidden><span class="nav-icon" aria-hidden="true">groups</span>Members</button>'
+    + `<div class="bot-mgroup" role="group" aria-label="Details">${views.map(t => `<a class="bot-mi" href="${base}/${t}" data-bot-mtab="${t}">${BOT_DETAIL_LABELS[t]}</a>`).join('')}</div>`
+    + '<div class="bot-mgroup" id="bot-dm-arch-host" role="group" aria-label="Private chat" hidden></div>';
+}
 // The assistant is talked to only on each person's own Assistant page (#/assistant), and its helpers take their work
 // from it: neither has a DM, and the assistant has no Home.
 const botTabs = (slug: string): string[] => {
@@ -79,13 +92,17 @@ function lastStopOpen(slug: string) {
     : stop.action === 'review' ? (review ? 'Yes: say whether to try it again or let it go.'
                                          : 'Yes: a person who manages this bot decides whether to try it again.')
     : 'Yes, as the line above says.';
-  const dialog = document.createElement('dialog'); dialog.className = 'tmodal'; dialog.id = 'last-stop';
-  dialog.innerHTML = `<header><h2>Last run</h2><button class="ghost" type="button" data-close>Close</button></header>
+  const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell bot-last-stop'; dialog.id = 'last-stop';
+  dialog.setAttribute('aria-labelledby', 'last-stop-title');
+  // A small dialog in the house shape: title and ✕ on top, the facts, the one action at the right of the foot.
+  dialog.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title" id="last-stop-title">Last run</h2><span class="spacer"></span>
+      <button class="ghost tmodal-x" type="button" data-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div>
+    <div class="tmodal-body">
     <p>${esc(stop.text)}</p>
     ${stop.reason ? `<p><strong>What happened</strong><br>${esc(stop.reason)}</p>` : ''}
     <p><strong>Is anything needed?</strong><br>${esc(needed)}</p>
-    ${stop.at ? `<p class="muted">${esc(fmt(stop.at))}</p>` : ''}
-    ${review ? '<div class="row"><button class="primary" type="button" data-stop-review>Retry or dismiss</button></div>' : ''}`;
+    ${stop.at ? `<p class="muted">${esc(fmt(stop.at))}</p>` : ''}</div>
+    ${review ? '<div class="tmodal-foot"><button class="primary" type="button" data-stop-review>Retry or dismiss</button></div>' : ''}`;
   dialog.querySelector<HTMLElement>('[data-close]')!.onclick = () => dialog.close();
   const open = dialog.querySelector<HTMLElement>('[data-stop-review]');
   if (open) open.onclick = () => { dialog.close(); stopReview(slug); };
@@ -226,8 +243,10 @@ async function pageBot(slug: string, tab: string | undefined) {
   const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
   const base = `#/bot/${encodeURIComponent(slug)}`;
   const talkTabs = work.filter(t => t === 'home' || t === 'dm');
-  // One chat tab at every width: with both Home and DM, the lock in the top line (Incognito) flips to the DM.
-  const tabsShown = [...work.filter(t => !(t === 'dm' && talkTabs.length > 1)), 'info'];
+  // One chat tab at every width: with both Home and DM, the lock in the top line (Incognito) flips to the DM. The
+  // details are ⋯'s list, last in the line.
+  const tabsShown = work.filter(t => !(t === 'dm' && talkTabs.length > 1));
+  const lockable = !limited && talkTabs.length > 1;
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
   // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
@@ -237,7 +256,7 @@ async function pageBot(slug: string, tab: string | undefined) {
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
-    <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || e.slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
+    <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || e.slug)} status">${avatar(slug, 28, stateOf(slug))}</span>
       <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${botBetaPill(e)}</h1><span id="bot-paused">${botPausedBadge(slug)}</span><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button>${limited ? '' : botScreenLinkHTML(slug)}<span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
@@ -248,18 +267,17 @@ async function pageBot(slug: string, tab: string | undefined) {
     </div>
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
-    ${limited || talkTabs.length < 2 ? '' : `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>`}
-    <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="More" title="More"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></a>
+    ${lockable ? `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>` : ''}
+    ${pageHeadMore(botMoreItemsHTML(slug, lockable), 'bot-more-btn', 'bot-more-menu')}
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
   <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div>
   ${limited || isBuiltInBot(slug) ? '' : `<div id="bot-github-host" data-bot="${esc(slug)}"></div>`}</div>
-  <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${BOT_TAB_LABELS[work[0] ?? ''] || 'Tasks'}</a>
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
-    <div class="bot-thread" id="bot-thread"></div>
+    <div class="bot-thread" id="bot-thread"><div class="th-empty muted">Loading…</div></div>
   </div>
 
   <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${!botSidebarLayout(slug) ? ' data-loading' : ''}>
@@ -283,10 +301,11 @@ async function pageBot(slug: string, tab: string | undefined) {
   </aside>
   ${railEdgeHTML('right')}
   </div>
+  <div id="task-filter-pop" class="tl-pop" popover></div>
 
   <div id="bot-details" hidden>
-    <div class="tabs bot-detail-tabs" id="bot-detail-tabs" role="tablist" aria-label="Bot details">
-      ${BOT_DETAIL_TABS.filter(t => botTabs(slug).includes(t)).map(t => `<button type="button" id="bot-tab-${t}" data-bot-detail-tab="${t}" role="tab" aria-controls="${t === 'info' ? 'pane-more' : t === 'instructions' ? 'pane-docs' : 'pane-' + t}">${t[0]!.toUpperCase() + t.slice(1)}</button>`).join('')}
+    <div class="bot-detail-tabs" id="bot-detail-tabs" role="tablist" aria-label="Bot details">
+      ${BOT_DETAIL_TABS.filter(t => botTabs(slug).includes(t)).map(t => `<button type="button" class="ph-tab" id="bot-tab-${t}" data-bot-detail-tab="${t}" role="tab" aria-controls="${t === 'info' ? 'pane-more' : t === 'instructions' ? 'pane-docs' : 'pane-' + t}">${BOT_DETAIL_LABELS[t]}</button>`).join('')}
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
@@ -304,13 +323,13 @@ async function pageBot(slug: string, tab: string | undefined) {
         ${botScreenRowHTML(slug)}
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
-` : `    <section class="card" id="bot-setup-card"><header><h2>Info</h2></header>
+` : `    <section class="card" id="bot-setup-card" aria-label="Info">
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
         <dt>Humans</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
         ${!e.agent ? `<dt>Computer</dt><dd>${cloudMachineOn(e) ? cloudMachineComputerHTML(e) : e.machine ? `${esc(e.machine.label || e.machine.runner_id)} <span class="muted">· ${e.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>'}</dd>
         <dt>Harness</dt><dd>${esc(harnessWords(e.harness || e.runtime || e.resolved_runtime) || 'Team default')}</dd>` : ''}
-        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen_at ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen_at))}` : ''}</span></dd>
+        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen_at ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(agoSaid(e.agent.last_seen_at))}` : ''}</span></dd>
         <dt>Model</dt><dd>${e.agent.model ? `${esc(e.agent.model)}${e.agent.provider ? `<span class="muted"> · ${esc(e.agent.provider)}</span>` : ''}` : "<span class=\"muted\">the profile's own</span>"}</dd>`
         : `<dt>Model</dt><dd>${esc(e.model ? settingsChoiceLabel(e.harness || e.runtime, e.model, e.reasoning_effort || e.effort) : settingsDefaultLabel(e))}${e.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(e.fallback.harness, e.fallback.model, e.fallback.reasoning_effort || e.fallback.effort))}</span>` : ''}</dd>`}
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${encodeURIComponent(boss.id)}">${esc(boss.display_name)}</a></dd>` : ''}
@@ -321,7 +340,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
     <div id="bot-quarantine-host">${botQuarantineCard(slug)}</div>
     <section class="card" id="bot-goals-card"><header><h2>Goals</h2>
-        <button class="linkish" type="button" id="bot-goals-add">Add goal</button></header>
+        <button class="bp-ico" type="button" id="bot-goals-add" aria-label="Add goal" title="Add goal"><span class="nav-icon" aria-hidden="true">add</span></button></header>
       <div id="bot-goals-list"><div class="empty">Loading…</div></div></section>
 
 `}
@@ -340,7 +359,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     ${settingsCanManageBot(e) ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
-    <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
+    <section class="card bot-editor-card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
     <div id="bot-builtin-cards">${botBuiltinCardsHTML(slug)}</div>
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
     <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
@@ -351,10 +370,10 @@ async function pageBot(slug: string, tab: string | undefined) {
 
   <div id="pane-rules" role="tabpanel" aria-labelledby="bot-tab-rules" hidden><div id="bot-rules" class="ru-bot"></div></div>
   ${limited ? '<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>' : `<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>
-    <section class="card"><header><h2>Instructions</h2></header><div class="md" id="agent">Loading…</div>
+    <section class="card" aria-label="Instructions"><div class="md" id="agent">Loading…</div>
       <div id="bot-instructions-editor"></div></section>
-    <section class="card"><header><h2>Working notes</h2></header>
-      <div class="tabs" id="tabs"></div><div class="md" id="doc">Loading…</div></section>
+    <section class="card" id="bot-notes-card"><header><h2>Working notes</h2></header>
+      <div id="bot-notes"><div class="muted">Loading…</div></div></section>
   `}
   </div>
   </div>`;
@@ -376,12 +395,26 @@ async function pageBot(slug: string, tab: string | undefined) {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-bt]'); if (!b) return;
     location.hash = b.dataset.bt === work[0] ? base : `${base}/${b.dataset.bt}`;
   };
-  // The lock in the top line flips the chat between Home and the private DM; it says Incognito only while on.
-  const incognito = $('#bot-incognito');
-  if (incognito) incognito.onclick = () => {
-    const next = incognito.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm';
-    location.hash = next === work[0] ? base : `${base}/${next}`;
+  // The lock in the top line (on a phone, Incognito in ⋯) flips the chat between Home and the private DM; it says
+  // Incognito only while on. Each names its chat in the address: the bare address is the page's own pick (botTalkPick).
+  const incognitoFlip = () => {
+    location.hash = `${base}/${$('#bot-incognito')?.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm'}`;
   };
+  const incognito = $('#bot-incognito');
+  if (incognito) incognito.onclick = incognitoFlip;
+  const moreMenu: HTMLElement = $('#bot-more-menu');
+  moreMenu.addEventListener('click', (ev: MouseEvent) => {
+    if (eventElement(ev)?.closest('[data-bot-incognito]')) incognitoFlip();
+    // Members in ⋯ is the chat's own Members button, out of the phone's line: the thread's handler opens it.
+    if (eventElement(ev)?.closest('[data-bot-members]')) ($('#bot-top-acts [data-thv-members]') as HTMLElement | null)?.click();
+  });
+  // As ⋯ opens it offers Members only while the chat has it.
+  moreMenu.addEventListener('beforetoggle', (ev: Event) => {
+    if ((ev as Event & {newState?: string}).newState !== 'open') return;
+    const members = moreMenu.querySelector<HTMLElement>('[data-bot-members]');
+    if (members) members.hidden = !$('#bot-top-acts [data-thv-members]');
+  });
+  if (lockable) void botDmArchiveLoad(slug);
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
   $('#bot-detail-tabs').onkeydown = (event: KeyboardEvent & {currentTarget: HTMLElement}) => {
@@ -461,6 +494,8 @@ async function pageBot(slug: string, tab: string | undefined) {
   $('#pane-tasks').addEventListener('click', (ev: MouseEvent) => {
     const tabButton = eventElement(ev)?.closest<HTMLElement>('[data-bot-task-tab]');
     if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); return; }
+    const tabsMore = eventElement(ev)?.closest<HTMLElement>('.bot-tab-more');
+    if (tabsMore) { botTaskTabsMore(slug, tabsMore); return; }
     // A task row opens: in Needs you, its card over the rail; else the task.
     const task = eventElement(ev)?.closest<HTMLElement>('.tpane [data-task]')?.dataset.task;
     if (!task) return;
@@ -473,6 +508,9 @@ async function pageBot(slug: string, tab: string | undefined) {
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', (ev: KeyboardEvent) => botTaskTabKey(slug, ev));
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
+  botTaskTabsMoreWire($('#task-filter-pop'));
+  // The rail's width changes with the window and the rail's own drag: the tabs fit again (and when it first shows).
+  new ResizeObserver(() => { if (BOT?.slug === slug) botTaskTabsFit(slug); }).observe($('#pane-tasks .bot-task-tabs'));
 
   moreClampWatch();
   showBotTab(tab);
@@ -482,18 +520,27 @@ async function pageBot(slug: string, tab: string | undefined) {
 // card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
-// The private chat's Archive sits in More (#282, Chris 13 Nov), not in the top line: a worded button in More's top row
-// when the bot has a private chat the viewer may archive; Unarchive when it is archived.
+// The private chat's Archive is the last item of ⋯ (#282, Chris 13 Nov: never in the top line), after a line, with the
+// archive mark: there when the bot has a private chat the viewer may archive; Unarchive when it is archived.
 async function botDmArchiveLoad(slug: string): Promise<void> {
   if (!$('#bot-incognito')) return;
   let t: ThvThread | null = null;
   try { const r = await get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?create=false&with=' + encodeURIComponent('bot:' + slug), {fresh: true}); t = r?.thread !== undefined ? r.thread : r; }
   catch { return; }
-  $('#bot-dm-arch')?.remove();
-  const host = $('#bot-more-top'); if (!host || !t?.id || !thvArchivable(t) || BOT?.slug !== slug) return;
-  host.insertAdjacentHTML('beforeend', `<button type="button" class="bot-learn" id="bot-dm-arch"><span class="bl-label">${t.archived_at ? 'Unarchive private chat' : 'Archive private chat'}</span></button>`);
-  const id = t.id, archived = !!t.archived_at;
-  $('#bot-dm-arch').onclick = async () => {
+  const host: HTMLElement | null = $('#bot-dm-arch-host'); if (!host || BOT?.slug !== slug) return;
+  const shown = !!t?.id && thvArchivable(t);
+  host.hidden = !shown;
+  if (!shown || !t) { host.innerHTML = ''; return; }
+  const archived = !!t.archived_at, id = t.id;
+  // The same button stays when only its words change, so a keyboard user on it keeps the focus.
+  let button = host.querySelector<HTMLButtonElement>('#bot-dm-arch');
+  if (!button) {
+    host.innerHTML = '<button type="button" class="bot-mi" id="bot-dm-arch"><span class="nav-icon" aria-hidden="true"></span><span class="bot-mi-w"></span></button>';
+    button = host.querySelector<HTMLButtonElement>('#bot-dm-arch')!;
+  }
+  button.querySelector('.nav-icon')!.textContent = archived ? 'unarchive' : 'archive';
+  button.querySelector('.bot-mi-w')!.textContent = archived ? 'Unarchive private chat' : 'Archive private chat';
+  button.onclick = async () => {
     try { if (archived) threadsUnarchived(await patch(thvPath(id), {archived: false})); else await threadsArchive(id, () => void botDmArchiveLoad(slug)); }
     catch (e) { toast(errorMessage(e, ''), true); }
     void botDmArchiveLoad(slug);
@@ -549,6 +596,7 @@ function showBotTab(tab: string | null | undefined) {
   const want = aliases[String(tab)] || tab;
   const view = typeof want === 'string' && tabs.includes(want) ? want : tabs[0]!;
   BOT.tab = view;
+  BOT.asked = typeof want === 'string' && tabs.includes(want) ? want : '';
   const work = BOT_WORK_TABS.includes(view);
   const talk: string[] = tabs.filter(t => t === 'home' || t === 'dm');
   const split = work && BOT_WIDE.matches && talk.length > 0;
@@ -560,17 +608,20 @@ function showBotTab(tab: string | null | undefined) {
   // The DM has no tab of its own when Home has one: Chat stays current under Incognito.
   const curTab = !work ? 'info' : view === 'dm' && !$('#btabs [data-bt="dm"]') ? 'home' : view;
   $('#btabs').querySelectorAll('[data-bt]').forEach((b: HTMLElement) => { const on = b.dataset.bt === curTab; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
-  const more = $('#bot-more-btn');
-  more.classList.toggle('cur', !work);
-  if (!work) more.setAttribute('aria-current', 'page'); else more.removeAttribute('aria-current');
+  // ⋯ is marked while one of its views shows, and its list marks which one. A view reached another way (Back, a link)
+  // closes the list, so it never stays open over the page it changed.
+  $('#bot-more-btn')?.classList.toggle('cur', !work);
+  const moreList: HTMLElement | null = $('#bot-more-menu');
+  if (moreList?.matches(':popover-open')) moreList.hidePopover();
+  ($('#bot-more-menu') as HTMLElement | null)?.querySelectorAll<HTMLElement>('[data-bot-mtab]').forEach(a => {
+    if (a.dataset.botMtab === view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
   $('#bot-work').hidden = !work;
-  $('#bot-back').hidden = work;
   $('#pane-chat').hidden = !chat;
   $('#pane-tasks').hidden = !(split || view === 'tasks');
   $('#pane-tasks').setAttribute('role', split ? 'complementary' : 'region');
   $('#bot-details').hidden = work;
   $('#pane-more').hidden = view !== 'info';
-  if (view === 'info') void botDmArchiveLoad(BOT.slug);
   $('#pane-docs').hidden = view !== 'instructions';
   for (const t of ['history', 'rules', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
   $('#bot-detail-tabs').querySelectorAll('[data-bot-detail-tab]').forEach((button: HTMLElement) => {
@@ -582,11 +633,20 @@ function showBotTab(tab: string | null | undefined) {
   if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
   if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
-  // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
-  if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : BOT.thread && talk.includes(BOT.thread.kind) ? BOT.thread.kind : talk[0]);
+  // Home or DM on the left: the one the address names, else the one on show (Tasks beside it), else the one last shown
+  // on this visit, else the page's pick (botTalkPick: never an empty Home while the DM has the talk).
+  if (chat) {
+    const asked = BOT.asked === 'home' || BOT.asked === 'dm' ? BOT.asked
+      : BOT.thread && talk.includes(BOT.thread.kind) ? BOT.thread.kind : BOT_TALK_LAST.get(BOT.slug);
+    if (talk.length < 2) botThreadShow(talk[0]);
+    else if (asked && talk.includes(asked)) botThreadShow(asked);
+    else {
+      const bot = BOT;
+      void botTalkPick(bot.slug).then(kind => { if (BOT === bot && !$('#pane-chat')?.hidden && !bot.thread) { botThreadShow(kind); botIncognitoPaint(); } });
+    }
+  }
   else botThreadStop();
-  const incognitoOn = $('#bot-incognito');
-  if (incognitoOn) { incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm')); incognitoOn.hidden = !chat; }
+  botIncognitoPaint();
   const once = (key: string, fn: (slug: string) => unknown) => { const bot = botNow(); if (!bot.loaded.has(key)) { bot.loaded.add(key); fn(bot.slug); } };
   if (split || view === 'tasks') {
     once('tasks', loadBotTasksV2);
@@ -624,6 +684,33 @@ function botThreadShow(kind: string | undefined) {
   const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
+  BOT_TALK_LAST.set(BOT.slug, kind);
+}
+// The lock (and, on a phone, Incognito in ⋯) is pressed while the private DM shows; the lock shows only with the chat.
+function botIncognitoPaint() {
+  if (!BOT) return;
+  const on = String(BOT.thread?.kind === 'dm'), lock = $('#bot-incognito');
+  if (lock) { lock.setAttribute('aria-pressed', on); lock.hidden = $('#pane-chat')?.hidden !== false; }
+  const item = $('#bot-more-menu [data-bot-incognito]');
+  if (item) { item.setAttribute('aria-pressed', on); item.hidden = $('#pane-chat')?.hidden !== false; }
+}
+// Which chat the bare address opens (#/bot/<slug>, the sidebar's link), when the bot has both a Home and a DM with the
+// viewer: the one the viewer last had open on this visit, else the one whose newest message is newer. Home's update
+// cards are not counted (the rail shows them; the thread hides them), so a Home that holds only those is empty, and a
+// bot that talks to the viewer in the DM opens on the DM instead of an empty "No messages yet". With no talk in
+// either, or when a read fails, it is Home. Nothing is stored: the address still names either one (/home, /dm).
+const BOT_TALK_LAST = new Map<string, string>();
+async function botTalkPick(slug: string): Promise<string> {
+  const actor = encodeURIComponent('bot:' + slug);
+  const newest = (rows: ThvMessage[]) => rows.filter(m => !m.deleted && !m.hidden && !thvIsUpdateCard(m))
+    .reduce((at, m) => String(m.created_at || '') > at ? String(m.created_at || '') : at, '');
+  const [home, dm] = await Promise.all([
+    get<ThvThread>('/v2/threads/home/' + actor, {fresh: true})
+      .then(t => t?.id ? get<ThvTimeline>(thvTimeline(t.id), {fresh: true}).then(r => newest(r?.messages || [])) : '').catch(() => ''),
+    get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?create=false&with=' + actor, {fresh: true})
+      .then(r => { const t = r?.thread !== undefined ? r.thread : r; return t?.id && !t.archived_at ? String(t.last_message_at || '') : ''; }).catch(() => ''),
+  ]);
+  return dm && dm > home ? 'dm' : 'home';
 }
 function botThreadStop() {
   if (!BOT?.thread) return;

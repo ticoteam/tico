@@ -110,21 +110,23 @@
 /* Library › Files: a table across the page on a computer (name, kind, made by, team, updated) and two lines a row on a
    phone. The search and the filter button share the top row; the filters sit in a popover (the Tasks popover's classes)
    and show as chips under the row. */
-.lf{padding:0 0 48px;--lf-grid:18px minmax(0,1fr) 112px minmax(150px,200px) minmax(96px,150px) 96px}
-.lf-head{display:flex;align-items:center;gap:12px;min-height:36px;padding:2px 0 12px}
-.lf-head h1{flex:none;margin:0;font-size:var(--t-lg);font-weight:600;letter-spacing:var(--track-tight)}
-.lf-search{flex:0 1 380px;min-width:0;margin-left:auto;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
+.lf{padding:0 0 48px}
+/* the header is the one page header (page-head.ts); the search box is its first tool, the shared filter icon (.tl-ib) the next */
+.lf-search{flex:0 1 380px;min-width:0;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
+.ph>.ph-tools>.lf-search{flex:0 1 280px;width:280px;box-sizing:border-box}
+.ph-menu>.ph-tools>.lf-search{flex:none;box-sizing:border-box;width:100%}   /* folded into ⋯: one row of the menu (its column would read 380px as height) */
 .lf-search:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .lf-search svg{flex:none}
-.lf-search input{flex:1;min-width:0;width:0;height:30px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
+.lf-search input{flex:1;min-width:0;width:0;height:calc(var(--ctl) - 2px);min-height:0;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
 .lf-search input:focus{outline:0;box-shadow:none}
 .lf-search input:placeholder-shown::-webkit-search-cancel-button{display:none}
-.lf-fbtn{position:relative;flex:none;display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted);cursor:pointer}
-.lf-fbtn:hover,.lf-fbtn[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
-.lf-fbtn.active{color:var(--ink)}
-.lf-fbtn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.lf-fbn{position:absolute;top:-6px;right:-6px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--ink);color:var(--bg);font:600 var(--t-2xs)/15px var(--sans);text-align:center}
 .lf-fbn[hidden]{display:none}
+.lf-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}   /* the count on the filter icon's top-right corner, clear of the icon */
+/* folded into ⋯ (page-head.ts): the filter is one of the menu's rows, its icon, its name, then its count */
+.lf-head .ph-fold-word{display:none}
+.lf-head>.ph-menu>.ph-tools>.tl-ib{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:auto;padding:6px 10px}
+.lf-head>.ph-menu>.ph-tools>.tl-ib .ph-fold-word{display:inline}
+.lf-head>.ph-menu>.ph-tools>.tl-ib .tl-fbadge{position:static;margin-left:auto}
 .lf-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-4px 0 12px}
 .lf-bar[hidden]{display:none}
 .lf-clear{font-size:var(--t-sm);margin-left:4px}
@@ -139,52 +141,53 @@
 .lf .lf-pop [aria-checked=false] .tl-mi-on{visibility:hidden}
 .lf-pop .lf-sec+.lf-sec{margin-top:2px}
 .lf-mi-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* the table: a card with a column head, one row per file (40px), a hairline between rows */
-.lf-table{border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
-.lf-cols,.lf-row{display:grid;grid-template-columns:var(--lf-grid);align-items:center;column-gap:16px;padding:0 14px}
-.lf-cols{height:34px;border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--t-sm);font-weight:500}
-.lf-cols[hidden]{display:none}
-.lf-h.lf-when{text-align:right}
-.lf-row{min-height:40px;padding-top:5px;padding-bottom:5px;color:var(--ink);text-decoration:none}
-.lf-row+.lf-row{border-top:1px solid var(--line)}
-.lf-row:hover{background:var(--surface2);text-decoration:none}
-.lf-row:hover *{text-decoration:none}
-.lf-row:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.lf-ico{width:18px;height:18px;font-size:18px;color:var(--muted)}
-.lf-name{display:flex;align-items:center;gap:14px;min-width:0}
+/* the table is the shared one (.tt-list, ui/styles/tools.css: small uppercase heads, flat rows, a hairline between
+   them, as Contacts and Skills); here only its columns are sized, and the name cell is the row's link */
+.lf-tbl{table-layout:fixed}
+.lf-tbl .lf-kind{width:112px}
+.lf-tbl .lf-by{width:200px}
+.lf-tbl .lf-team{width:150px}
+.lf-tbl .lf-when{width:96px;text-align:right}
+.lf-open{display:flex;align-items:center;gap:12px;min-width:0;color:var(--ink);text-decoration:none}
+.lf-open:hover,.lf-open:hover *{text-decoration:none}
+.lf-row:has(.lf-open:focus-visible){outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.lf-open:focus-visible{outline:0}
+.lf-ico{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
+.lf-text{flex:1;display:flex;align-items:center;gap:14px;min-width:0}
 .lf-line{display:flex;align-items:center;gap:8px;min-width:0;flex:0 1 auto}
-.lf-name:has(.lf-excerpt) .lf-line{max-width:55%}
+.lf-text:has(.lf-excerpt) .lf-line{max-width:55%}
 .lf-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .lf-excerpt{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
 .lf-meta{display:none}
-.lf-pins{flex:none;color:var(--muted);font-size:var(--t-xs);line-height:16px;padding:1px 7px;border:1px solid var(--line);border-radius:999px}
-.lf-kind,.lf-team,.lf-when{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
-.lf-when{text-align:right;font-variant-numeric:tabular-nums}
-.lf-by{min-width:0;display:flex;align-items:center;gap:8px}
+/* pinned and archived: a small muted mark after the name, never a pill */
+.lf-mark{flex:none;display:inline-grid;place-items:center;width:14px;height:14px;color:var(--muted)}
+.lf-mark.nav-icon{font-size:14px}
+.lf-tbl :is(td.lf-kind,td.lf-team,td.lf-when){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
+.lf-tbl td.lf-when{font-variant-numeric:tabular-nums}
+.lf-by-in{display:flex;align-items:center;gap:8px;min-width:0}
 .lf-by-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lf-more{display:block;margin:8px auto}
 .lf-pad{margin:0;padding:14px}
 /* a middle width (a narrow window, a tablet) drops the team column */
 @media (min-width:761px) and (max-width:1080px){
-  .lf{--lf-grid:18px minmax(0,1fr) 104px minmax(120px,160px) 88px}
-  .lf-team{display:none}
+  .lf-tbl .lf-kind{width:104px}
+  .lf-tbl .lf-by{width:160px}
+  .lf-tbl .lf-team{display:none}
 }
 
 @media (max-width:760px){
   .pg-view{padding:8px 16px 40px}
   .pg-row>.pg-open{min-height:44px}
-  .lf{padding:0 0 40px;--lf-grid:18px minmax(0,1fr)}   /* #main already keeps the 12px gutter */
-  .lf-head{gap:8px}
-  .lf-search{flex:1 1 auto;margin-left:0}
-  .lf-fbtn{width:40px;height:40px}
+  .lf{padding:0 0 40px}   /* #main already keeps the 12px gutter */
+  .ph>.ph-tools>.lf-search{flex:1 1 auto;width:auto}
   .lf .lf-pop{width:auto;max-height:72vh}
-  .lf-table{border:0;border-radius:0;background:none;overflow:visible}
-  .lf-cols,.lf-kind,.lf-by,.lf-team,.lf-when{display:none}
-  .lf-row{column-gap:10px;align-items:start;min-height:0;padding:9px 6px;border-radius:8px}
-  .lf-row+.lf-row{border-top:0}
+  /* the shared table stacks into rows on a phone (tools.css); a file's row is its name, then Kind · Bot · time */
+  .lf-tbl tr{grid-template-columns:minmax(0,1fr)}
+  .lf-tbl :is(.lf-kind,.lf-by,.lf-team,.lf-when){display:none}
+  .lf-open{align-items:start;gap:10px}
   .lf-ico{margin-top:1px}
-  .lf-name{flex-direction:column;align-items:stretch;gap:2px}
-  .lf-name:has(.lf-excerpt) .lf-line{max-width:none}
+  .lf-text{flex-direction:column;align-items:stretch;gap:2px}
+  .lf-text:has(.lf-excerpt) .lf-line{max-width:none}
   .lf-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
   .lf-excerpt{flex:none;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .lf-pad{padding:14px 6px}

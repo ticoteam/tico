@@ -121,7 +121,7 @@ const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: 
     assert.equal(await v.page.locator('#stale-banner').isVisible(), false, 'no banner while the version is unchanged');
     v.serve('0.3.0');
     await v.page.evaluate(() => get('/v2/config').then(applyConfig));
-    assert.equal((await v.page.locator('#stale-banner').innerText()).replace(/\s+/g, ' ').trim(), 'New version · Reload');
+    assert.equal((await v.page.locator('#stale-banner').innerText()).replace(/\s+/g, ' ').trim(), 'New version Reload');
     await v.page.locator('#stale-reload').waitFor();
     await v.page.evaluate(() => get('/v2/config').then(applyConfig));    // the next config poll answers the same
     assert.equal(await v.page.locator('#stale-banner').isVisible(), true, 'it stays until the person reloads');

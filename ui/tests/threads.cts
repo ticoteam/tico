@@ -1036,22 +1036,33 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     const tabs = page.locator('#btabs [data-bt]');
     await tabs.first().waitFor();
-    // The tabs are icons people know (#282): a chat bubble, the Tasks check and ⋯, each naming itself on hover and to a screen reader.
-    assert.deepEqual(await tabs.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, b.querySelector('.nav-icon')?.textContent ?? (b.querySelector('svg') ? 'svg' : '')])),
-      [['Chat', 'Chat', 'chat_bubble'], ['Tasks', 'Tasks', 'task_alt'], ['More', 'More', 'svg']]);
+    // The tabs are icons people know (#282): a chat bubble and the Tasks check, each naming itself on hover and to a
+    // screen reader; ⋯ (the details) is the line's last control.
+    assert.deepEqual(await tabs.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, b.querySelector('.nav-icon')?.textContent ?? ''])),
+      [['Chat', 'Chat', 'chat_bubble'], ['Tasks', 'Tasks', 'task_alt']]);
     assert.equal(await tabs.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join('')), '', 'no words in the tabs');
+    const lastInLine = () => page.locator('#bot-top').evaluate(top => [...top.querySelectorAll<HTMLElement>(':scope > :is(button, a), :scope > * :is(button, a)')]
+      .filter(b => b.getClientRects().length && !b.closest('[popover]')).sort((a, b) => a.getBoundingClientRect().right - b.getBoundingClientRect().right).at(-1)?.id);
     for (const width of [390, 320]) {
       await page.setViewportSize({width, height: 700});
-      for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
+      for (const box of await page.locator('#btabs [data-bt], #bot-more-btn').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 44, `a tab at ${width}: ` + JSON.stringify(box));
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, 'no sideways scroll at ' + width);
+      assert.equal(await lastInLine(), 'bot-more-btn', `⋯ is last at ${width}`);
+      assert.equal(await page.locator('#bot-incognito').isVisible(), false, `no lock in the line at ${width}: it is in ⋯`);
     }
     await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.locator('.bot-ident h1').evaluate(h => h.scrollWidth <= h.clientWidth), true, 'the name is whole at 390');
     await shot(page, 'bot-tabs-phone');
-    await page.locator('#bot-incognito').tap();
-    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'true');
-    assert.equal(await page.locator('#bot-incognito .bi-label').isVisible(), false, 'Incognito is the lock alone, raised when on');
-    await page.locator('#bot-incognito').tap();
-    await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'false');
+    // On a phone Incognito is ⋯'s first item, pressed while the private chat shows.
+    const incognitoItem = page.locator('#bot-more-menu [data-bot-incognito]');
+    await page.locator('#bot-more-btn').tap();
+    assert.equal(await incognitoItem.getAttribute('aria-pressed'), 'false');
+    await incognitoItem.tap();
+    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector<HTMLElement>('#bot-more-menu [data-bot-incognito]')!.getAttribute('aria-pressed') === 'true');
+    assert.equal(await page.locator('#bot-more-menu').isVisible(), false, 'the list closes once Incognito is picked');
+    await page.locator('#bot-more-btn').tap();
+    await incognitoItem.tap();
+    await page.waitForFunction(() => location.hash.endsWith('/home') && document.querySelector<HTMLElement>('#bot-more-menu [data-bot-incognito]')!.getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
 
     // A person's page starts a DM with them; your own does not offer one.
@@ -1297,22 +1308,31 @@ let browser: import('playwright').Browser | null = null;
     assert.deepEqual(await page.locator('#bot-top').evaluate(top => [...top.querySelectorAll<HTMLElement>('button, a')]
       .filter(b => b.offsetParent && !/\p{L}/u.test(b.innerText) && !b.getAttribute('aria-label')).map(b => b.outerHTML.slice(0, 160))), [],
       'a button with no word in the top line names itself');
-    await page.locator('#btabs [data-bt="info"]').click();
-    const row = page.locator('#bot-more-top #bot-dm-arch');
+    // Archive is ⋯'s last item, after a line, with the archive mark; picking it closes the list.
+    const said = () => page.evaluate(() => document.querySelector('#bot-dm-arch .bot-mi-w')?.textContent?.trim());
+    const arch = async () => {
+      if (!await page.locator('#bot-more-menu').isVisible()) await page.locator('#bot-more-btn').click();
+      await page.locator('#bot-more-menu #bot-dm-arch').click();
+    };
+    await page.locator('#bot-more-btn').click();
+    const row = page.locator('#bot-more-menu #bot-dm-arch');
     await row.waitFor();
-    assert.equal((await row.innerText()).trim(), 'Archive private chat');
-    await row.click();
+    assert.equal(await said(), 'Archive private chat');
+    assert.equal(await row.locator('.nav-icon').innerText(), 'archive');
+    assert.equal(await page.locator('#bot-more-menu > :last-child #bot-dm-arch').count(), 1, 'Archive is last in ⋯');
+    assert.notEqual(await page.locator('#bot-dm-arch-host').evaluate(el => getComputedStyle(el).borderTopStyle), 'none', 'a line above it');
+    await arch();
     await page.locator('.toast', {hasText: 'Archived'}).waitFor();
     assert.deepEqual(seen.patches.at(-1), {archived: true});
-    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
-    await page.locator('#bot-dm-arch').click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch .bot-mi-w')?.textContent?.trim() === 'Unarchive private chat');
+    await arch();
     assert.deepEqual(seen.patches.at(-1), {archived: false});
-    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch .bot-mi-w')?.textContent?.trim() === 'Archive private chat');
     // The toast's Undo puts the row back too.
-    await page.locator('#bot-dm-arch').click();
-    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
+    await arch();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch .bot-mi-w')?.textContent?.trim() === 'Unarchive private chat');
     await page.locator('.toast button', {hasText: 'Undo'}).last().click();
-    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch .bot-mi-w')?.textContent?.trim() === 'Archive private chat');
     assert.deepEqual(seen.patches.slice(-2), [{archived: true}, {archived: false}], 'Undo sent one unarchive');
     await shot(page, 'bot-more-archive-private-chat');
     assert.deepEqual(seen.errors, []);
@@ -1322,7 +1342,7 @@ let browser: import('playwright').Browser | null = null;
     const {page: none} = await open(browser, 'ana');
     await none.setViewportSize({width: 1000, height: 800});
     await none.goto('https://tico-ui.test/#/bot/ops/info');
-    await none.locator('#bot-more-top').waitFor({state: 'attached'});
+    await none.locator('#bot-more-menu').waitFor({state: 'attached'});
     await none.waitForTimeout(300);
     assert.equal(await none.locator('#bot-dm-arch').count(), 0, 'no private chat: no row');
     await none.close();
@@ -1330,7 +1350,9 @@ let browser: import('playwright').Browser | null = null;
   {
     const {page} = await open(browser, 'bob', {phone: true});
     await page.goto('https://tico-ui.test/#/bot/ops');
-    await page.locator('#btabs').waitFor();
+    // Bob may only see it: no chat or tasks to switch to, so the line is the bot and ⋯ (Info and Rules).
+    await page.locator('#bot-more-btn').waitFor();
+    assert.equal(await page.locator('#btabs').isVisible(), false, 'no empty switch');
     await page.waitForTimeout(300);
     await shot(page, 'bob-bot-phone');
     await page.close();

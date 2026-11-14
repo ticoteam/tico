@@ -1,6 +1,7 @@
 /* ui/styles/task-pipelines.css — One pipeline on the Tasks page (ui/app/task-pipelines.ts: columns, the list grouped
    by stage, the phone's stage tabs, the refused-move bar), the manager's rail beside it (ui/app/pipeline-rail.ts) and the
-   pipeline editor (ui/app/pipeline-editor.ts). Rows and boxes themselves are task-row.css. */
+   board's bots on a phone (ui/app/pipeline-ask.ts). The pipeline editor's styles are pipeline.css. Rows and boxes
+   themselves are task-row.css. */
 .pv{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0}
 
 /* A stage's header: its name and its count, a button for whoever may change the pipeline. */
@@ -24,19 +25,37 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
   #task-body > .pv:has(> .pv-cols){flex:1 1 auto}
   .pv > .pv-cols{flex:1 1 auto;overflow:auto}
 }
-.pv-col-body{display:flex;flex-direction:column;gap:8px;min-height:24px}
+/* A stage with no tasks is as tall as its header; while a task is held every column stretches to the tallest, so an empty
+   stage is as easy to drop on as a full one (task-board.ts). */
+.pv-col-body{display:flex;flex-direction:column;gap:8px}
+.pv-col-body:empty{display:none}
+body.board-holding .pv-cols{align-items:stretch}
+/* More stages beyond an edge: that edge fades (task-pipelines.ts pvEdges), and none fades where the columns (or a phone's
+   stage tabs) end. The fade is a mask on the scroller, so the strips its scrollbars take (--sb-v at the right, --sb-h at
+   the bottom, measured by pvEdges; 0 for overlay scrollbars) are masked in whole: a scrollbar that is always shown is
+   never faded. */
+:is(.pv-cols,.pv-tabs){--fade-l:0px;--fade-r:0px;--sb-v:0px;--sb-h:0px}
+:is(.pv-cols,.pv-tabs).fade-l{--fade-l:48px}
+:is(.pv-cols,.pv-tabs).fade-r{--fade-r:48px}
+:is(.pv-cols,.pv-tabs):is(.fade-l,.fade-r){
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 var(--fade-l),#000 calc(100% - var(--sb-v) - var(--fade-r)),transparent calc(100% - var(--sb-v))),linear-gradient(#000,#000),linear-gradient(#000,#000);
+  mask-image:linear-gradient(to right,transparent,#000 var(--fade-l),#000 calc(100% - var(--sb-v) - var(--fade-r)),transparent calc(100% - var(--sb-v))),linear-gradient(#000,#000),linear-gradient(#000,#000);
+  -webkit-mask-size:100% 100%,var(--sb-v) 100%,100% var(--sb-h);mask-size:100% 100%,var(--sb-v) 100%,100% var(--sb-h);
+  -webkit-mask-position:0 0,right top,left bottom;mask-position:0 0,right top,left bottom;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
 /* A phone's stage: the same cards as a column, one under the other. */
 .pv-phone{display:flex;flex-direction:column;gap:8px}
 /* A snoozed task, last in its stage: dimmed, with the day it wakes (or Snoozed) and the moon, its Unsnooze button: the
-   mark's size, a 40 px tap area on a phone. */
+   mark's size, a 44 px tap area on a phone (.tap-mark, forms.css). */
 .pv-snoozed{color:var(--muted)}
 .tk-card.pv-snoozed{flex-direction:row;align-items:center;gap:6px;padding:6px 8px;background:none;border-style:dashed}
 .tk-card.pv-snoozed .tk-title{display:block;flex:1 1 auto;min-width:0;white-space:nowrap;text-overflow:ellipsis}
+/* a phone: the card is as tall as the moon's 44 px tap area, so the area stays inside it and never meets the next moon's */
+.pv-is-phone .tk-card.pv-snoozed{box-sizing:border-box;min-height:44px}
 .pv-snoozed .tk-title{opacity:.75}
-.pv-sleep{position:relative;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);font:inherit;cursor:pointer}
+.pv-sleep{position:relative;min-height:0;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);font:inherit;cursor:pointer}
 .pv-sleep:hover{color:var(--ink)}
 .pv-sleep:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.pv-is-phone .pv-sleep::after{content:"";position:absolute;left:50%;top:50%;width:40px;height:40px;transform:translate(-50%,-50%)}
 .tk-card .pv-wake{min-width:0}
 .pv-blocked-by{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
 .pv-stop{display:inline-flex;color:var(--fail)}
@@ -52,8 +71,8 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-play:hover{filter:brightness(1.08)}
 .pv-play:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .pv-play-none{visibility:hidden}
-/* in the list, Rules stays beside the count and ▶ still takes the right edge, as in columns (stage-rules.css) */
-.pv-group-head .sr-btn + .pv-play{margin-left:auto}
+/* in the list, the rules mark stays beside the count and ▶ still takes the right edge, as in columns (stage-rules.css) */
+.pv-group-head .sr-mark + .pv-play{margin-left:auto}
 .pv-stage-n[title]{cursor:help}
 
 /* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
@@ -86,52 +105,11 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pm-chat > .thv-card .thv-scroll{max-height:none}
 .pm-chat > .thv-card .thv-composer{padding:0 10px 10px}
 
-/* The editor. */
-.pe-body{display:flex;flex-direction:column;gap:14px}
-.pe-fields{display:grid;gap:10px}
-.pe-f{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px;align-items:center}
-.pe-f>span:first-child{color:var(--muted);font-size:var(--t-sm)}
-.pe-f input,.pe-f select,.pe-pair input,.pe-pair select{min-width:0;height:32px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
-.pe-pair{display:flex;gap:6px}
-.pe-pair input{width:80px}
-.pe-check{display:flex;align-items:center;gap:8px}
-.pe-stages{display:flex;flex-direction:column;gap:6px}
-.pe-stage{border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.pe-stage>summary{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer}
-.pe-stage-name{flex:1;min-width:0;font-weight:600}
-.pe-tools{display:none;gap:2px}
-.pe-stage[open]>summary .pe-tools{display:flex}
-.pe-stage-body{display:grid;gap:10px;padding:4px 12px 12px}
-.pe-h{margin:6px 0 0;color:var(--muted);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-.pe-req{border-top:1px solid var(--line)}
-.pe-req>summary{display:flex;gap:8px;padding:6px 0;cursor:pointer}
-.pe-req-name{flex:1;min-width:0}
-.pe-req-body{display:grid;gap:8px;padding:0 0 10px 14px}
-.pe-req-x,.pe-add{justify-self:start}
-.pe-clash{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
-.pe-clash p{flex:1 1 260px;margin:0}
-.pe-clash-do{display:flex;gap:8px}
-.pe-foot{display:flex;justify-content:space-between;gap:8px}
-@media (max-width:600px){
-  .pe-f{grid-template-columns:1fr;gap:4px}
-}
-
-/* The board's bots on a phone and the chat they open over the board (ui/app/pipeline-ask.ts): the manager's face,
-   floating 12px from the right and 12px above the bottom bar, hidden while a keyboard is up; the list keeps 64px under
-   its last row for it. Every tap target is 44px. */
+/* The board's bots on a phone and the chat they open over the board (ui/app/pipeline-ask.ts). The face is the header's
+   (#task-manager); this host holds only its menu, fixed under the face (placed by paMenu). Every tap target is 44px. */
 .pa-host[hidden]{display:none}
-.pa-host{position:fixed;z-index:17;right:calc(12px + env(safe-area-inset-right));bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
-/* a keyboard is up: a chat box, the search, or a field on the board (the Why of a refused move) */
-body.mobile-composer-focus .pa-host,body:has(.tl-search:focus-within) .pa-host,body:has(#main input:focus, #main textarea:focus) .pa-host{display:none}
-/* the last row and More scroll clear of the face: the bottom bar, then 12 px + the 44 px face + 8 px */
-.tasks-page.has-ask .tasks-pane{padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 64px)}
-.pa-fab{position:relative;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.28);cursor:pointer;touch-action:manipulation}
-.pa-fab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.pa-fab>:first-child{border-radius:50%;overflow:hidden}
-/* a small chat mark on the face: it opens a chat, not the bot's page */
-.pa-fab-mark{position:absolute;right:-3px;bottom:-3px;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
-.pa-fab-mark svg{width:12px;height:12px}
-.pa-pop{position:absolute;right:0;bottom:52px;width:220px;box-sizing:border-box;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--raised, var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.28)}
+.pa-host{position:fixed;z-index:17;top:0;right:12px}
+.pa-pop{position:absolute;right:0;top:0;width:220px;box-sizing:border-box;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--raised, var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.28)}
 .pa-pop[hidden]{display:none}
 .pa-pick{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:6px 8px;border:0;border-radius:8px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .pa-pick:hover,.pa-pick:focus-visible{background:var(--surface2);outline:0}

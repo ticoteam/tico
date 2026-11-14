@@ -121,12 +121,24 @@ declare function settingsHistoryShow(view?: string): void;
     const waitForChanges = (scope: string, count: number) => page.waitForFunction(([sel, n]: [string, number]) =>
       document.querySelectorAll(`${sel} [data-settings-undo]`).length === n, [scope, count] as [string, number]);
 
+    // The Log's filters sit behind the filter icon (no row of bare selects): folded while none is applied, shown once
+    // the icon is pressed.
+    await page.goto('https://tico-ui.test/#/settings/history');
+    await page.locator('#log-filter').waitFor();
+    assert.equal(await page.locator('#log-filters').isHidden(), true, 'no filter applied: the selects are folded away');
+    await page.locator('#log-filter').click();
+    assert.equal(await page.locator('#log-filters').isVisible(), true, 'the filter icon shows them');
+    assert.equal(await page.locator('#log-filter').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#log-filter.on').count(), 0, 'nothing applied, nothing marked');
     // The Log, opened from a shared address: its filters are set and asked with; the CSV is of the same rows.
     await page.goto('https://tico-ui.test/#/settings/history?bot=ops&kind=decision');
+    await page.locator('#log-filter.on').waitFor();   // drawn for the address's filters, not the unfiltered Log above
     await page.waitForFunction(() => document.querySelectorAll('#set-log .log-row:not(.log-head)').length === 1);
     assert.deepEqual(logCalls.at(-1), {bot: 'ops', kind: 'decision'});
     assert.equal(await page.locator('#log-who').inputValue(), 'bot:ops');
     assert.equal(await page.locator('#log-kind').inputValue(), 'decision');
+    assert.equal(await page.locator('#log-filters').isVisible(), true, 'applied filters stay in view');
+    assert.equal(await page.locator('#log-filter.on').count(), 1, 'the filter icon is marked while one is applied');
     assert.equal(await page.locator('#set-log .log-row:not(.log-head) .log-result').innerText(), 'Send it Monday');
     assert.equal(await page.locator('#set-log .log-subject a').getAttribute('href'), '#/task/t1');
     assert.equal(await page.evaluate(() => location.hash), '#/settings/history?kind=decision&bot=ops');

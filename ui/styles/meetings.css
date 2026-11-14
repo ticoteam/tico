@@ -72,17 +72,20 @@
 #meet-live-now{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 #meet-live-now .pill{line-height:16px}   /* the Beta pill sits inside without growing the button */
 .ph #notes-search{width:240px;flex:0 1 240px}
-.ph #meet-ask{flex:none}
 /* Sources in the ⋯ menu carries a dot when a source needs a look; the closed ⋯ carries it too. */
 .ph-more.meet-src-trouble{position:relative}
 .ph-more.meet-src-trouble::after{content:"";position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--fail)}
 .ph-menu .meet-src-btn{display:flex;align-items:center;gap:6px}
 .notes{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .notes-list{min-width:0}
-.notes-filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 14px;border-bottom:1px solid var(--line)}
-.notes-filters[hidden]{display:none}
-.notes-filters select{flex:none;width:auto;max-width:220px;height:var(--ctl);font:inherit;font-size:var(--t-base);color:var(--ink);padding:0 26px 0 8px}
-.notes-filters .notes-count{margin-left:auto;padding-left:8px;font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* Filters in force: the Tasks chips (task-list.css .tl-bar, .tl-chip) under the header, and "N of M" after them. */
+.meet-filter-bar{padding:0 0 10px}
+.meet-filter-bar .notes-count{margin-left:auto;font-size:var(--t-sm);white-space:nowrap}
+.meet-mi-back .meet-back-chev{display:inline-flex;color:var(--muted)}
+.meet-mi-back .meet-back-chev svg{transform:scaleX(-1)}
+/* Select all sits over the rows' own boxes, in Pending with two or more rows. */
+.meet-list-head{display:flex;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
+.meet-list-head[hidden]{display:none}
 .notes-rows{overflow:auto}
 /* The viewer's own Granola account on Tools > Granola (ui/app/meetings-granola.ts mountGranolaTool). */
 .mg-row{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
@@ -211,6 +214,7 @@
 .meet-drop.over{border-color:var(--ink);background:color-mix(in srgb,var(--ink) 5%,var(--surface))}
 .import-form label.import-private{flex-direction:row;align-items:center;gap:8px}
 .import-form .row{display:flex;gap:8px;align-items:center}
+.import-form .row .spacer{flex:1}
 
 @media (max-width:900px){
   .notes{grid-template-columns:1fr;min-height:0}
@@ -261,8 +265,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-review-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 /* Shared / Pending / Dismissed are the header's .ph-tab; only Pending's count is the page's own. */
 .meet-review-tabs .meet-pending-n:empty{display:none}
-.meet-review-help{font-size:var(--t-base);margin:0 0 12px}
-.meet-review-help[hidden],.meet-review-bulk[hidden]{display:none}
+.meet-review-bulk[hidden]{display:none}
 .meet-review-bulk{display:flex;align-items:center;gap:8px;margin:0 0 8px;padding:4px 6px 4px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:var(--t-sm)}
 .meet-review-bulk .spacer{flex:1}
 .meet-review-bulk label{display:flex;align-items:center;gap:6px}
@@ -282,29 +285,30 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-review-bulk input,.meet-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--ink)}
 .meet-row.review-pending{grid-template-columns:16px auto minmax(0,1fr) auto}
 .meet-row .meet-side{display:flex;align-items:center;gap:6px}
-.meet-row [data-review-action]{font-size:var(--t-sm);padding:5px 10px}
+.meet-row .meet-act{flex:none}
 .meet-review-detail{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px;padding:12px 0 2px;border-top:1px solid var(--line)}
 .meet-review-detail .spacer{flex:1}
-.meet-settings-modal{width:460px;max-width:calc(100vw - 24px);padding:24px}
-.meet-settings-modal h2{margin:0 0 18px;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
+.meet-settings-modal{width:460px;max-width:calc(100vw - 24px);padding:20px 24px 24px}
+.meet-settings-modal .tmodal-head{padding:0;margin:0 0 4px;color:var(--ink)}
+.meet-settings-modal h2{flex:1;margin:0;font-size:var(--t-card);letter-spacing:var(--track-tight)}
 .meet-settings-modal label{display:grid;gap:6px;font-size:var(--t-base);margin-top:14px}
 .meet-settings-modal select{width:100%}
-.meet-settings-modal .row{flex-wrap:wrap;margin-top:20px;gap:8px}
+.meet-settings-modal .err:empty{display:none}
+.meet-settings-modal .hint{margin:4px 0 0;color:var(--muted);font-size:var(--t-xs)}
+.meet-settings-modal .tmodal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 .nav-badge.meet-pending-badge{background:var(--surface2);color:var(--muted)}
 @media(max-width:760px){
   .meet-review-bar{display:none}   /* the Recorder is for Mac: its links hide on a phone, and so does their bar */
   .mg-line .mg-count{display:none}
   #main:has(.meet-review-bar){padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px)}
-  .meet-row.review-pending .meet-main{grid-column:3 / -1}
   .meet-row.review-live .meet-side:not(:empty){grid-column:2 / -1;flex-wrap:wrap}
-  .notes-filters{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:6px 12px}
-  .notes-filters::-webkit-scrollbar{display:none}
-  .notes-filters select{height:32px;max-width:132px;font-size:16px;padding:0 24px 0 10px;border-radius:16px;text-overflow:ellipsis}
-  .notes-filters .notes-count{padding-left:4px}
+  .meet-filter-bar .notes-count{padding-left:4px}
+  .meet-list-head{padding:0 12px;min-height:44px}
+  .notes-head .tl-ib{height:44px}
   .meet-review-bulk{flex-wrap:wrap}
-  .meet-row.review-pending .meet-side,.meet-row.review-dismissed .meet-side{grid-column:2 / -1}
-  .meet-row [data-review-action]{min-height:36px}
+  .meet-row .meet-act{width:44px;height:44px}
   .meet-settings-modal select{font-size:16px}
+  .meet-settings-modal .tmodal-foot button,.import-form .row button{min-height:44px}
 }
 
 /* Live Meetings: the Transcript, Chat and Router share one room without sharing audio. */
@@ -448,6 +452,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .mp-prop-detail{font-size:var(--t-sm);color:var(--muted)}
 .mp-prop pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:var(--t-sm)}
 .mp-closed{display:block}
+.mp-closed-head{display:flex;align-items:center;gap:8px;justify-content:space-between}
 .mp-form-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
 .mp-form-row select,.mp-form-row input[type=date]{width:auto;max-width:200px;font-size:var(--t-sm);padding:4px 6px}
 .mp-form-row button{font-size:var(--t-sm);padding:5px 12px}

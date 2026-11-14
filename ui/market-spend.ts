@@ -68,6 +68,7 @@ interface MktDefinition {
   params?: unknown;
 }
 interface MktSpend {
+  name?: string | null;
   definition?: MktDefinition | null;
   year?: string | number | null;
   basis?: string | null;
@@ -280,6 +281,34 @@ interface MktCtx {
 }
 
 // `first` holds the page's first reads of both dimensions; the switch shows the ones that are sized.
+// A panel's head (its title, a crumb over it, ✕) and its parts, shared by the market's panels.
+const mktPanelHead = (title: string, crumb?: string | null): string => `<div class="tmodal-head"><div class="mkt-ph">${crumb ? `<small>${esc(crumb)}</small>` : ''}<h2>${esc(title)}</h2></div><span class="spacer"></span>
+    <button class="ghost tmodal-x" type="button" data-mkt-close aria-label="Close">✕</button></div>`;
+const mktKv = (rows: unknown[]): string => `<dl class="mkt-kv">${rows.filter((r): r is [string, string] => !!r).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+const mktBlock = (title: string, body: string): string => body ? `<section class="mkt-blk"><h3 class="strat-k">${title}</h3>${body}</section>` : '';
+const mktList = (items: string[] | null | undefined): string => items?.length ? `<ul class="mkt-list">${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+// The market's Definition: its name as the crumb, then what it counts. A market named but not yet defined says so.
+function mktDefinitionHtml(def: MktDefinition | null | undefined, name: string): string {
+  if (!def) return mktPanelHead('Definition', name) + '<div class="tmodal-body mkt-body"><p class="muted">Not defined yet.</p></div>';
+  const params = Object.entries(mktObject(def.params));
+  return mktPanelHead('Definition', name) + `<div class="tmodal-body mkt-body">
+      ${def.description ? `<p>${esc(def.description)}</p>` : ''}
+      ${mktKv([def.year && ['Year', esc(def.year)], def.geography && ['Where', esc(def.geography)], def.currency && ['Currency', esc(def.currency)]])}
+      ${mktBlock('Includes', mktList(def.includes))}${mktBlock('Excludes', mktList(def.excludes))}${mktBlock('Counting rules', mktList(def.counting_rules))}
+      ${mktBlock('Shared params', params.length ? `<ul class="mkt-list">${params.map(([key, p]) => { p = typeof p === 'object' && p ? p : {value: p};
+        return `<li><code>${esc(key)}</code> ${esc(p.value)}${p.judgement ? ' <span class="pill">Judgement</span>' : ''}${p.source ? '<br>' + mktLink(p.source) : ''}</li>`; }).join('')}</ul>` : '')}</div>`;
+}
+// The Definition on its own, for a market whose money is not drawn (not sized yet): a panel of its own, gone once closed.
+function mktDefinitionOpen(def: MktDefinition | null | undefined, name: string): void {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'tmodal mkt-panel'; dlg.setAttribute('aria-label', 'Definition');
+  dlg.innerHTML = mktDefinitionHtml(def, name);
+  dlg.addEventListener('click', ev => { if (ev.target === dlg || eventElement(ev)?.closest('[data-mkt-close]')) dlg.close(); });
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.appendChild(dlg);
+  dlg.showModal();
+}
+
 function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
   const dims = ([['offering', 'Offering'], ['buyer', 'Buyer']] satisfies Array<[string, string]>).filter(([key]) => mktSized(first[key]));
   // redesign-market.js calls this only when a dimension is sized, so dims is not empty.
@@ -346,8 +375,7 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
         `<button type="button" data-dim="${key}" aria-pressed="${key === ctx.dimension}">${label}</button>`).join('')}</div>` : ''}
       ${bases.length > 1 ? `<div class="mkt-seg" role="group" aria-label="Basis">${bases.map(b =>
         `<button type="button" data-basis="${esc(b)}" aria-pressed="${b === ctx.basis}">${esc(MKT_BASES[b] || b)}</button>`).join('')}</div>` : ''}
-      <span class="spacer"></span>
-      ${d.definition ? '<button class="ghost small" type="button" data-mkt-def>Definition</button>' : ''}</div>`;
+</div>`;
   }
 
   const unsizedHtml = (list: MktSegment[]): string => `<div class="mkt-sec"><h4 class="mkt-lab">Not sized yet</h4><div class="mkt-chips">${list.map(s =>
@@ -425,23 +453,15 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
     return dlg;
   }
 
-  const head = (title: string, crumb?: string | null): string => `<div class="tmodal-head"><div class="mkt-ph">${crumb ? `<small>${esc(crumb)}</small>` : ''}<h2>${esc(title)}</h2></div><span class="spacer"></span>
-    <button class="ghost tmodal-x" type="button" data-mkt-close aria-label="Close">✕</button></div>`;
-  const kv = (rows: unknown[]): string => `<dl class="mkt-kv">${rows.filter((r): r is [string, string] => !!r).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
-  const block = (title: string, body: string): string => body ? `<section class="mkt-blk"><h3 class="strat-k">${title}</h3>${body}</section>` : '';
-  const list = (items: string[] | null | undefined): string => items?.length ? `<ul class="mkt-list">${items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` : '';
+  const head = mktPanelHead, kv = mktKv, block = mktBlock;
 
-  function openDefinition(): void {
-    const def = ctx.data?.definition;
-    if (!def) return;
+  // Opened from the page header's ⋯ (ui/app/redesign-market.ts), which passes the market's name for the crumb. The
+  // dimension shown has its own definition; one without falls back to the other dimension's.
+  function openDefinition(name = ''): void {
+    const def = ctx.data?.definition || [...ctx.cache.values()].find(d => d?.definition)?.definition;
+    if (!def && !name) return;
     const dlg = dialog('def', 'Definition');
-    const params = Object.entries(mktObject(def.params));
-    dlg.innerHTML = head('Definition', '') + `<div class="tmodal-body mkt-body">
-      ${def.description ? `<p>${esc(def.description)}</p>` : ''}
-      ${kv([def.year && ['Year', esc(def.year)], def.geography && ['Where', esc(def.geography)], def.currency && ['Currency', esc(def.currency)]])}
-      ${block('Includes', list(def.includes))}${block('Excludes', list(def.excludes))}${block('Counting rules', list(def.counting_rules))}
-      ${block('Shared params', params.length ? `<ul class="mkt-list">${params.map(([name, p]) => { p = typeof p === 'object' && p ? p : {value: p};
-        return `<li><code>${esc(name)}</code> ${esc(p.value)}${p.judgement ? ' <span class="pill">Judgement</span>' : ''}${p.source ? '<br>' + mktLink(p.source) : ''}</li>`; }).join('')}</ul>` : '')}</div>`;
+    dlg.innerHTML = mktDefinitionHtml(def, name);
     if (!dlg.open) dlg.showModal();
   }
 
@@ -525,7 +545,6 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
     if (dim) { show(dim.dataset.dim!); return; }
     const basis = target?.closest<HTMLElement>('[data-basis]');
     if (basis) { if (basis.dataset.basis !== ctx.basis) { ctx.basis = basis.dataset.basis; void load(); } return; }
-    if (target?.closest('[data-mkt-def]')) { openDefinition(); return; }
     const pick = target?.closest<HTMLElement>('[data-seg]');
     if (pick) openPanel(segOf(pick));
   });
@@ -578,7 +597,7 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
   }
 
   void load();
-  return {show, stop() {
+  return {show, definition: openDefinition, stop() {
     ctx.dead = true; ctx.observer?.disconnect();
     Object.values(ctx.dialogs).forEach(d => { d.remove(); });
   }};

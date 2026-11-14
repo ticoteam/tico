@@ -58,9 +58,16 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
 
     // The headline, one decimal below 10; the Parity line dashed at 1×; the current week dotted, a hollow point.
     assert.equal(await card.locator('.ovh-head').innerText(), '6.1× bot hours per human hour · last 7 days');
-    assert.match(await card.innerText(), /Bot hours = time bots spent working \(pauses over 30 min left out\)\. Human hours =\s+people in your org chart × 40 h a week\./);
+    // No sentence explains the card (style guide "A great page"); how the hours are counted is under the table.
+    assert.doesNotMatch(await card.innerText(), /Bot hours =|Human hours =/);
+    assert.equal(await card.locator('.ovh-title').evaluate(t => getComputedStyle(t).textTransform), 'none', 'the name is not an uppercase eyebrow');
     assert.notEqual(await card.locator('.ovh-parity').evaluate(l => getComputedStyle(l).strokeDasharray), 'none');
     assert.equal(await card.locator('.ovh-parity-label').innerText(), 'Parity 1×');
+    // The label sits beside the line's end, clear of the chart, so the weekly line never runs through it.
+    const clear = await card.evaluate(el => { const l = el.querySelector('.ovh-parity-label')!.getBoundingClientRect(), c = el.querySelector('.ovh-chart')!.getBoundingClientRect(), b = el.getBoundingClientRect();
+      return l.left >= c.right && l.right <= b.right; });
+    assert.equal(clear, true, 'the parity label is beside the chart, inside the card');
+    assert.equal(await card.locator('.ovh-cross').getAttribute('visibility'), 'hidden', 'no week line until a week is shown');
     assert.equal(await card.locator('.ovh-line').count(), 2, 'finished weeks solid, then the week so far');
     assert.notEqual(await card.locator('.ovh-so-far').evaluate(l => getComputedStyle(l).strokeDasharray), 'none');
     assert.equal(await card.locator('.ovh-dot').count(), 3);
@@ -90,6 +97,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     assert.deepEqual(await dialog.locator('thead th').allTextContents(), ['Week', 'Bot hours', 'People', 'Human hours', 'Ratio']);
     const rows = await dialog.locator('tbody tr').evaluateAll((trs: HTMLTableRowElement[]) => trs.map(tr => [...(tr.cells as unknown as Iterable<HTMLTableCellElement>)].map(c => c.innerText.trim())));
     assert.deepEqual(rows, [['Oct 12 so far', '30', '1', '40', '0.8×'], ['Oct 5', '80', '1', '40', '2.0×'], ['Sep 28', '20', '1', '40', '0.5×']]);
+    assert.match(await dialog.locator('.ovh-note').innerText(), /Bot hours are the time bots spent working, with pauses over 30 min inside a run left\s+out\. Human hours are the people in your org chart × 40 h a week\./);
     await dialog.locator('[data-close]').click();
     // The keyboard opens it too.
     await card.focus(); await page.keyboard.press('Enter');
@@ -110,6 +118,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     const fit = await card.evaluate(el => ({card: el.scrollWidth <= el.clientWidth, doc: document.documentElement.scrollWidth <= innerWidth,
       plot: el.querySelector('.ovh-plot')!.getBoundingClientRect().right <= innerWidth}));
     assert.deepEqual(fit, {card: true, doc: true, plot: true});
+    assert.ok(await card.locator('.ovh-parity-label').evaluate(l => l.getBoundingClientRect().right <= innerWidth), 'the parity label fits a phone');
     const phone = (await plot.boundingBox())!;
     await plot.tap({position: {x: phone.width - 2, y: phone.height / 2}}).catch(() => plot.click({position: {x: phone.width - 2, y: phone.height / 2}}));
     assert.match(await card.locator('.ovh-tip').innerText(), /^Week of Oct 12 \(so far\): 100 bot hours · 120 human hours · 0\.8×$/);

@@ -52,7 +52,7 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
   const bots = await page.locator(phone ? '.lf-meta' : '.lf-by-n').allInnerTexts();
   assert.ok(bots.every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
-  assert.deepEqual(await page.locator('.lf-pins').allInnerTexts(), ['Pinned', 'Pinned'], `${tag}: one pin each, no count`);
+  assert.deepEqual(await page.locator('.lf-pin').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Pinned', 'Pinned'], `${tag}: one pin mark each, no count`);
   // The search and the filter button share the top row.
   const q = (await page.locator('.lf-q').boundingBox())!, f = (await page.locator('.lf-fbtn').boundingBox())!;
   assert.ok(Math.abs(q.y + q.height / 2 - (f.y + f.height / 2)) < 4, `${tag}: search and filter on one row`);
@@ -216,10 +216,10 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   // A page filed on the task is one row in its Pages (task #409), its icon and name; the old weekly, filed there too, is
   // left out as replaced. The row opens its page, which says where it is pinned.
   await go(page, '#/task/' + launch.task_id);
-  // A phone shows the pages in the Pages tab: wait for the window to draw before reading whether the tabs show.
-  const tab = page.locator('#task-modal[open] [data-task-tab="pages"]');
+  // The pages are the first part of the Details tab.
+  const tab = page.locator('#task-modal[open] [data-task-tab="details"]');
   await tab.waitFor({state: 'attached', timeout: t(10000)});
-  if (await tab.isVisible()) await tab.click();
+  await tab.click();
   const cards = page.locator('.task-pages .tp-row');
   await cards.first().waitFor({timeout: t(10000)})
     .catch(() => assert.fail(`${tag}: a page row on the task (${JSON.stringify(page.errors)})`));

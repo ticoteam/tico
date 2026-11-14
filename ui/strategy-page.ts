@@ -340,9 +340,10 @@ function strategyMetaHtml(data: StratData, view: StratView) {
   return `<p class="strat-meta">${head}${head && status ? ' · ' : ''}${status ? `<span class="strat-status" data-strat-status>${esc(status)}</span>` : ''}</p>`;
 }
 
-// The header's quiet tools (page-head.ts): Lenses, then Versions once there is a published strategy.
-function strategyToolsHtml(data: StratData) {
-  return `<a class="strat-sub" href="${LENSES_ROUTE}">Lenses</a>${data.current ? '<button class="ghost" type="button" data-strat-versions>Versions</button>' : ''}`;
+// The header's ⋯ (page-head.ts): Lenses, then Versions once there is a published strategy. Neither is daily, so neither
+// sits on the bar (style guide, "Top bars: one line").
+function strategyMoreHtml(data: StratData) {
+  return `<a href="${LENSES_ROUTE}" data-strat-lenses>Lenses</a>${data.current ? '<button type="button" data-strat-versions>Versions</button>' : ''}`;
 }
 // The header's filled button: Publish, for the owner.
 function strategyActionsHtml(data: StratData, view: StratView) {
@@ -356,7 +357,7 @@ function strategyActionsHtml(data: StratData, view: StratView) {
 function strategyPublishHtml() {
   return `<form class="strat-publish" data-strat-publish-form novalidate>
       <input type="text" name="note" maxlength="200" autocomplete="off" placeholder="What changed" aria-label="What changed" required>
-      <button class="primary" type="submit">Publish</button><button class="ghost" type="button" data-strat-publish-cancel>Cancel</button></form>`;
+      <button class="ghost" type="button" data-strat-publish-cancel>Cancel</button><button class="primary" type="submit">Publish</button></form>`;
 }
 
 // A goal's colour is its status (red, yellow, green); none yet is gray.
@@ -393,12 +394,12 @@ function strategyBetFormHtml(c: StratBetFormInput = {}) {
           <span class="strat-wrong-fields" data-wrong-kind="text"${kind === 'text' ? '' : ' hidden'}>
             <input type="text" name="wrong_text" maxlength="400" autocomplete="off" aria-label="Wrong if" placeholder="What would prove it wrong" value="${esc(w.text || '')}"></span>
         </div>
-        <label class="goal-f strat-wrong-by"><span>Check by</span><input type="date" name="check_by" value="${esc(w.check_by || '')}"></label>
+        <label class="goal-f strat-wrong-by"><span>Check by</span><input type="date" name="check_by" data-date-field value="${esc(w.check_by || '')}"></label>
       </fieldset>
       ${field('Status', `<select name="status">${Object.entries(STRAT_STATUS).map(([v, label]) =>
         `<option value="${v}"${v === status ? ' selected' : ''}>${label}</option>`).join('')}</select>`, ' strat-bet-status')}
       <p class="strat-form-why" data-bet-why-not hidden></p>
-      <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-bet-cancel>Cancel</button></div></form>`;
+      <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-bet-cancel>Cancel</button><button class="primary" type="submit">Save</button></div></form>`;
 }
 // The form's Wrong if, as the API takes it; null when nothing is filled in.
 function strategyWrongFromForm(el: StratWrongControls) {
@@ -432,15 +433,17 @@ function strategyBetHtml(c: StratBet, n: number, view: StratView, data: StratDat
     ? `<textarea class="strat-ed strat-bet-st" data-bet-st rows="1" maxlength="300" placeholder="A ${one.toLowerCase()}" aria-label="${one} ${n + 1}">${esc(c.statement)}</textarea>`
     : `<span class="strat-bet-st">${esc(c.statement)}</span>`;
   const num = view.owner
-    ? `<button type="button" class="strat-bet-n tnum" data-bet-drag aria-label="Move ${one.toLowerCase()} ${n + 1}" title="Drag to move">${n + 1}</button>`
+    ? `<button type="button" class="strat-bet-n tnum tap-mark" data-bet-drag aria-label="Move ${one.toLowerCase()} ${n + 1}" title="Drag to move">${n + 1}</button>`
     : `<span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>`;
   const pill = status === 'active' ? '' : view.owner
-    ? `<button type="button" class="pill strat-pill ${esc(status)}" data-bet-activate title="Make it active">${STRAT_STATUS[status] || status}</button>`
+    // A pill says the state and is never clickable (style guide, "Rows, pills and counts"): the owner's own button
+    // makes the bet active.
+    ? `<span class="pill strat-pill ${esc(status)}">${STRAT_STATUS[status] || status}</span><button type="button" class="ghost strat-mini" data-bet-activate aria-label="Make ${one.toLowerCase()} ${n + 1} active">Make active</button>`
     : `<span class="pill strat-pill ${esc(status)}">${STRAT_STATUS[status] || status}</span>`;
   return `<li class="strat-bet strat-${esc(status)}" data-bet="${esc(c.id)}">${num}
       <div class="strat-bet-main">${statement}${strategyGoalsHtml(goals)}</div>
       <span class="strat-bet-side">${health ? `<span class="strat-health" data-bet-health="${esc(health)}">${gdot(health, 'Health, from its KPI goals')}</span>` : ''}${pill}
-        ${view.owner ? `<button type="button" class="strat-x" data-bet-x aria-label="Remove ${one.toLowerCase()} ${n + 1}">${STRAT_X}</button>` : ''}</span></li>`;
+        ${view.owner ? `<button type="button" class="strat-x tap-mark" data-bet-x aria-label="Remove ${one.toLowerCase()} ${n + 1}">${STRAT_X}</button>` : ''}</span></li>`;
 }
 function strategyNewBetHtml(view: StratView, n: number) {
   return `<li class="strat-bet strat-bet-new" data-bet-new><span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>
@@ -448,7 +451,7 @@ function strategyNewBetHtml(view: StratView, n: number) {
 }
 function strategyBetsHead(view: StratView, live: StratBet[]) {
   const add = view.owner && !STRAT?.adding && live.length < 30
-    ? `<button type="button" class="strat-add" data-bet-add aria-label="Add ${esc(view.one)}">+ ${esc(view.one)}</button>` : '';
+    ? `<button type="button" class="ghost strat-mini strat-add-bet" data-bet-add aria-label="Add ${esc(view.one.toLowerCase())}">Add</button>` : '';
   return `<div class="strat-card-head"><h2 class="strat-k" id="strat-bets-h">${esc(view.label)}</h2>${add}</div>`;
 }
 function strategyBetRowsHtml(data: StratData, view: StratView) {
@@ -500,8 +503,8 @@ function strategySourceLine(urls: string[]) {
 function strategyWhereHtml(owner: boolean) {
   const spend = STRAT_MKT.spend;
   const segs = spend?.segments || [];
-  const hint = owner && segs.length ? '<span class="strat-hint">Click to target</span>' : '';
-  const head = `<div class="strat-card-head"><h2 class="strat-k">Where we play</h2>${hint}</div>`;
+  // No helper line: what a tile does is its name (aria-pressed, and its title on hover).
+  const head = '<div class="strat-card-head"><h2 class="strat-k">Where we play</h2></div>';
   if (spend === undefined) return head + stratSk();
   const add = owner ? strategyAddRowHtml('seg', 'Add a segment') : '';
   if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
@@ -550,7 +553,7 @@ function strategyRivalsHtml(owner: boolean) {
   if (list === undefined) return head + stratSk();
   const chips = (list || []).map(c => `<li class="strat-chip" data-rival="${esc(c.id)}">${/^https?:\/\//i.test(c.url || '')
     ? `<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.name)}</a>` : `<span>${esc(c.name)}</span>`}${owner
-    ? `<button type="button" class="strat-x" data-rival-x aria-label="Remove ${esc(c.name)}">${STRAT_X}</button>` : ''}</li>`).join('');
+    ? `<button type="button" class="strat-x tap-mark" data-rival-x aria-label="Remove ${esc(c.name)}">${STRAT_X}</button>` : ''}</li>`).join('');
   return `${head}${chips ? `<ul class="strat-chips">${chips}</ul>` : '<p class="strat-none-s">None yet.</p>'}${owner ? strategyAddRowHtml('rival', 'Add a competitor or its site') : ''}`;
 }
 // What Listening found: the posts routed to someone who reads them (GET /v2/listening/stats), and the posts setup filed
@@ -634,8 +637,8 @@ function strategySectionsHtml(view: StratView) {
       ? `<form class="strat-sec-form" data-section-form="${esc(sec.key)}" data-section-ed="${esc(ed)}"${sec.extra ? ' data-extra' : ''} novalidate>
           ${sec.extra ? `<input type="text" name="title" maxlength="80" autocomplete="off" value="${esc(sec.title)}" aria-label="Title" placeholder="Title">` : ''}
           <textarea name="text" rows="8" aria-label="${esc(sec.title)}" placeholder="${esc(sec.prompt)}">${esc(sec.text)}</textarea>
-          <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-section-cancel>Cancel</button>
-            ${sec.extra ? '<span class="spacer"></span><button class="ghost danger" type="button" data-section-remove>Remove</button>' : ''}</div></form>`
+          <div class="goal-actions">${sec.extra ? '<button class="ghost danger" type="button" data-section-remove>Remove</button>' : ''}<span class="spacer"></span>
+            <button class="ghost" type="button" data-section-cancel>Cancel</button><button class="primary" type="submit">Save</button></div></form>`
       : stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '<p class="muted strat-empty">Not written</p>';
     return `<section class="card strat-card strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}" data-section-ed="${esc(ed)}"${sec.extra ? ' data-extra' : ''}>
         <div class="strat-sec-head"><h2 class="strat-k">${esc(sec.title)}</h2>${owner && !editing ? `<button class="ghost strat-mini" type="button" data-section-edit>${stratText(sec.text) ? 'Edit' : 'Write'}</button>` : ''}</div>
@@ -645,7 +648,7 @@ function strategySectionsHtml(view: StratView) {
     ? `<section class="card strat-card strat-sec"><form class="strat-sec-form" data-section-new novalidate>
         <input type="text" name="title" maxlength="80" autocomplete="off" aria-label="Title" placeholder="Title" required>
         <textarea name="text" rows="6" aria-label="Section"></textarea>
-        <div class="goal-actions"><button class="primary" type="submit">Add</button><button class="ghost" type="button" data-section-cancel>Cancel</button></div></form></section>`
+        <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-section-cancel>Cancel</button><button class="primary" type="submit">Add</button></div></form></section>`
     : '';
   return rows + add;
 }
@@ -668,8 +671,9 @@ function strategyRender() {
   if (!body || !STRAT) return;
   const data = STRAT.data, view = strategyView(data);
   patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
-  const tools = $('.rd-strat-head > .ph-tools');
-  if (tools) patchHTML(tools, strategyToolsHtml(data));
+  // ⋯ is drawn again only when what it holds changes, so an open menu is left alone by a redraw.
+  const head = $('.rd-strat-head'), more = strategyMoreHtml(data);
+  if (head && head.dataset.stratMore !== more) { head.dataset.stratMore = more; pageHeadSet(head, 'more', more); }
   if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
   if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};
@@ -1000,10 +1004,14 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
   if (rivals) rivals.onclick = ev => {
     const x = eventElement(ev)?.closest('[data-rival-x]'), chip = x?.closest<HTMLElement>('[data-rival]');
     if (!chip) return;
-    const id = chip.dataset.rival;
+    const id = chip.dataset.rival, gone = (STRAT_MKT.rivals || []).find(c => c.id === id);
     STRAT_MKT.rivals = (STRAT_MKT.rivals || []).filter(c => c.id !== id);
     strategyPaintMarket('rivals');
-    post('/v2/market/competitors/remove', {id}).catch(error => failed('rivals', error));
+    // As a bet's ×: removed at once, with an Undo. Adding it back by its name finds the same company (strategy_market.py
+    // add_competitor resolves an existing one by name).
+    post('/v2/market/competitors/remove', {id}).then(() => {
+      if (gone) toast(`Removed ${gone.name}`, false, {label: 'Undo', run: () => post('/v2/market/competitors', {name: gone.name}).then(() => again('rivals'), error => failed('rivals', error))});
+    }, error => failed('rivals', error));
   };
   // The add rows sit in cards that are patched; a submit is caught on the card.
   for (const [box, kind] of [['#strat-where', 'seg'], ['#strat-rivals', 'rival']] as const) {

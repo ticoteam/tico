@@ -232,7 +232,7 @@ function goalReopenFormHtml(g: GkGoal, goals: GkGoal[]) {
       <div class="goal-f goal-colour"><span>Colour</span><div class="goal-colour-row">
         <select name="status" aria-label="Colour"><option value="">Choose…</option>${choices}<option value="auto">Let the Assistant set it</option></select>
         <input name="note" type="text" maxlength="300" autocomplete="off" placeholder="One line: why it is back" aria-label="Why it is back"></div></div>
-      <div class="goal-actions"><button class="primary" type="submit">Reopen</button><button class="ghost" type="button" data-fin-reopen-cancel>Cancel</button></div>
+      <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-fin-reopen-cancel>Cancel</button><button class="primary" type="submit">Reopen</button></div>
     </form>`;
 }
 function goalFinishedHtml(list: GkGoal[], goals: GkGoal[], F: GoalFinState) {
@@ -313,11 +313,16 @@ function goalFormHtml(g: GoalDraft, goals: GkGoal[], {owner = '', company = fals
       ${kids.length ? `<div class="goal-ed-kids"><span>Supported by</span>${kids.map(k =>
         `<a href="${GOALS}/${encodeURIComponent(k.id)}" data-goal-go="${esc(k.id)}">${esc(k.title)} <span class="muted">· ${esc(goalOwnerInfo(k.owner_id).name)}</span></a>`).join('')}</div>` : ''}
       ${may && g.id ? goalColourHtml(g) : ''}
-      <div class="goal-actions">
-        ${may ? '<button class="primary" type="submit">Save</button>' : ''}<button class="ghost" type="button" data-goal-cancel>${may ? 'Cancel' : 'Close'}</button>
-        <span class="spacer"></span>${may && g.id ? '<button class="ghost danger" type="button" data-goal-remove>Remove</button>' : ''}
-      </div>
+      ${goalActionsHtml(g, may, sheet)}
     </form>`;
+}
+// The form's actions, in the house order (style guide, Button order): Remove alone on the left for a saved goal, then
+// Cancel and Save on the right, Save last. A goal the viewer may not edit has nothing to save: in the sheet its ✕ closes
+// it, so there is no button at all; inline (the owner's panel) Back folds the goal again. Never a "Close" word.
+function goalActionsHtml(g: GoalDraft, may: boolean, sheet: boolean) {
+  if (!may) return sheet ? '' : '<div class="goal-actions"><button class="ghost" type="button" data-goal-cancel>Back</button></div>';
+  return `<div class="goal-actions">${g.id ? '<button class="ghost danger" type="button" data-goal-remove>Remove</button>' : ''}<span class="spacer"></span>
+        <button class="ghost" type="button" data-goal-cancel>Cancel</button><button class="primary" type="submit">Save</button></div>`;
 }
 // The goal's measure in the sheet: its first KPI, the number it should reach and the date it is due (an "improve"
 // target on the link, backend/kpis.py validate_target); a goal with none names a new one. A range is set in Details.
@@ -328,7 +333,7 @@ function goalMeasureHtml(g: GoalDraft, may: boolean) {
   return `<div class="goal-fs goal-measure">
       <label class="goal-f goal-metric"><span>Metric</span><input type="text" name="metric" maxlength="300" autocomplete="off" value="${esc(k?.name || '')}"${k || !may ? ' readonly' : ''} placeholder="Paying customers"></label>
       <label class="goal-f"><span>Target</span><input type="number" name="target" step="any" inputmode="decimal" value="${esc(range ? '' : n(link.target))}"${off}${range ? ' placeholder="Range"' : ''}></label>
-      <label class="goal-f"><span>Due</span><input type="date" name="due" value="${esc(range ? '' : link.deadline || '')}"${off}></label></div>`;
+      <label class="goal-f"><span>Due</span><input type="date" name="due" data-date-field value="${esc(range ? '' : link.deadline || '')}"${off}></label></div>`;
 }
 // What saving the measure posts, or the field to fill first: a target and its date go together, and a new one needs a name.
 function goalMeasurePlan(form: GoalForm, g: GoalDraft) {
@@ -351,7 +356,8 @@ function bindGoalForm(form: GoalForm, g: GoalDraft, goals: GkGoal[], {company = 
   const title = form.elements.title, ownerSel = form.elements.owner, parentSel = form.elements.parent, betSel = form.elements.bet;
   const save = form.querySelector<HTMLButtonElement>('[type=submit]');
   form.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
-  form.querySelector<HTMLElement>('[data-goal-cancel]')!.onclick = () => done();
+  const cancel = form.querySelector<HTMLElement>('[data-goal-cancel]');
+  if (cancel) cancel.onclick = () => done();
   if (ownerSel) ownerSel.onchange = () => {
     parentSel.innerHTML = goalSupportOptions(g, ownerSel.value, goals);
     if (!form.classList.contains('goal-sheet-f')) return;
@@ -420,12 +426,14 @@ function pageGoals() {
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   const actions = $('#strat-actions');
   if (actions && (mePerson() || S.me?.role === 'owner')) {
-    actions.innerHTML = '<button class="primary ph-go" type="button" id="goal-new">New goal</button>';
+    // Adding a goal is not the daily thing here, so it is the header's quiet + (style guide, "A great page": one filled
+    // button at most, for the daily action), named "New goal" for screen readers and on hover.
+    actions.innerHTML = pageHeadAdd('New goal', 'id="goal-new"');
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
   // Chat with the page's owner (page-chat.ts), the Strategy Owner by default: the goal last opened rides along. It is a
   // quiet tool, so it sits with the header's tools and "New goal" stays last (page-head.ts).
-  $('#main header.ph > .ph-tools')?.insertAdjacentHTML('beforeend', '<span class="goal-chat"></span>');
+  pageHeadTools($('#main header.ph'))?.insertAdjacentHTML('beforeend', '<span class="goal-chat"></span>');
   const chat = $('#main .goal-chat');
   if (chat) void pageChatMount({page: 'goals', label: 'Goals', button: chat, stays: r => rdUnder(r, goalsBase()), item: () => goalsPicked(state)});
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).

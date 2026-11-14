@@ -111,7 +111,8 @@ async function nothingMoves(browser: Browser) {
     await page.close();
   }
   {
-    // The stage's Rules count also arrives late, and differs in digits between stages (Spec 12, Review 1, Build 0).
+    // The stage's rules also arrive late, and differ between stages (Spec 12, Review 1, Build 0): the mark's name says so
+    // and the mark keeps one size, so the tabs do not move.
     let release = () => {}, rulesGo = () => {};
     const rulesHeld = new Promise<void>(r => { rulesGo = r; });
     const rule = (i: number, stages: string[]) => ({id: `r${i}`, scope: 'stage', stages});
@@ -124,7 +125,7 @@ async function nothingMoves(browser: Browser) {
     const before = await layoutOf(page);
     release(); rulesGo();
     await page.locator('.pv-tab-dot').first().waitFor();
-    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-btn .tnum')?.textContent === '0');
+    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-mark')?.getAttribute('aria-label') === 'Build: No rules');
     const after = await layoutOf(page);
     assert.deepEqual([after.tabs, after.strip], [before.tabs, before.strip], 'the tabs keep their widths when the dots arrive');
     assert.deepEqual(await page.locator('.pv-tab:has(.pv-tab-dot)').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.pvTab)), ['spec', 'review']);
@@ -133,7 +134,7 @@ async function nothingMoves(browser: Browser) {
       await page.locator(`.pv-tab[data-pv-tab="${id}"]`).click();
       const now = await layoutOf(page);
       assert.deepEqual([now.tabs, now.strip], [before.tabs, before.strip], `the tabs do not move on ${id}`);
-      if (id === 'spec') assert.equal((await page.locator('.pv-phone-head .sr-btn').textContent())?.trim(), 'Rules 12', 'a two-digit Rules count, same strip');
+      if (id === 'spec') assert.equal(await page.locator('.pv-phone-head .sr-mark').getAttribute('aria-label'), 'Spec: 12 rules', 'twelve rules, same strip');
     }
     assert.deepEqual(errors, []);
     await page.close();

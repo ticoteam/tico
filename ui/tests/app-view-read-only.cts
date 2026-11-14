@@ -38,6 +38,10 @@ const READS = [
   '.tl-mi', '#task-more button', '.tk-row', '[data-task]', '[data-reload]', '[data-dash-retry]',
   '.dash-tabs a', '.dash-tabs button', '[role="tab"]', '.tmodal [aria-label="Close"]', '.tmodal .x', '[data-modal-close]', '[data-task-earlier]', '[data-task-tab]',
   '[data-show-more]', '.linkish[data-open]', 'a[href]',
+  // The shared page header's ⋯ opens a menu: a read. What it holds is checked open (headerMenu below).
+  'header.ph > .ph-more', '.ph-menu > .ph-mtabs > .ph-mtab', '.ph-menu .ph-copy',
+  // A bot's ⋯ and its rail's ⋯ open lists of views (its detail tabs, Incognito, the task lists that did not fit).
+  '#bot-more-btn', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
 ];
 
 // Every visible, enabled control under the main page and any open dialog, as a short description, when it is not a read.
@@ -54,6 +58,19 @@ const writesShown = (page: Page) => page.evaluate((reads: string[]) => {
   return out;
 }, READS);
 
+// The header's ⋯, opened: it holds only views (a tab past the fifth) and Copy link; no Edit, nothing that writes.
+async function headerMenu(page: Page, where: string) {
+  const more = page.locator('#main header.ph > .ph-more');
+  assert.equal(await more.isEnabled(), true, `${where}: ⋯ opens in a view`);
+  await more.click();
+  const menu = page.locator('#main header.ph > .ph-menu');
+  await menu.waitFor({state: 'visible', timeout: t(15000)});
+  assert.equal(await menu.locator('[data-dash-mode]:visible').count(), 0, `${where}: no Edit in ⋯`);
+  assert.deepEqual(await writesShown(page), [], `${where}: its ⋯ offers nothing that writes`);
+  assert.ok(await menu.locator('.ph-copy').isVisible(), `${where}: Copy link is there`);
+  await page.keyboard.press('Escape');
+  await menu.waitFor({state: 'hidden', timeout: t(15000)});
+}
 const taskId = (r: {task?: {id?: string}; id?: string}) => String(r.task?.id ?? r.id ?? '');
 const go = async (page: Page, hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); };
 const ready = (page: Page) => page.waitForFunction(() => {
@@ -85,6 +102,12 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await ready(page);
     const name = await page.evaluate(() => S.me?.name || '');
     assert.ok(name, 'the view knows the bot by name');
+    // The account menu offers no Settings in a view (it changes nothing), and no Sign out (nothing to end).
+    await page.locator('#account').click();
+    await page.locator('#account-menu [data-nav="learnings"]').waitFor();
+    assert.equal(await page.locator('#account-settings').isVisible(), false, 'no Settings in a view');
+    assert.equal(await page.locator('#sign-out').isVisible(), false);
+    await page.keyboard.press('Escape');
 
     // Tasks: the bot's name with its count, the line about Needs you, and its open task under its stage.
     await page.locator('#task-body .tk-row', {hasText: OWN}).waitFor({timeout: t(15000)});
@@ -138,6 +161,8 @@ const ready = (page: Page) => page.waitForFunction(() => {
     // A task window: no Follow, no page +, no answer buttons, no box; the box is a grey "Read-only view" line.
     await page.locator('#task-body .tk-row', {hasText: OWN}).click();
     await page.locator('.tmodal[open]').waitFor({timeout: t(15000)});
+    // A task with nothing said yet opens on its Description; the box is on the Chat tab.
+    await page.locator('.tmodal[open] [data-task-tab="chat"]').click();
     await page.locator('.tmodal[open] .view-only-line').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('.tmodal[open] .view-only-line').innerText(), 'Read-only view');
     assert.deepEqual(await writesShown(page), [], 'the task window offers nothing that writes');
@@ -152,16 +177,24 @@ const ready = (page: Page) => page.waitForFunction(() => {
     const grid = await page.locator('#dash-grid').innerText();
     assert.ok(grid.includes(`${name}'s tasks`) && !/No such place/.test(grid), grid);
     assert.deepEqual(await writesShown(page), [], 'Company › Mine offers nothing that writes');
+    await headerMenu(page, 'Company › Mine');
 
     // Company › Dashboard.
     await go(page, '#/overview');
     await page.locator('#dash-grid .dash-pin, #dash-grid .dash-failed, #dash-grid .empty').first().waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'the Dashboard offers nothing that writes');
+    await headerMenu(page, 'the Dashboard');
 
     // A thread: the bot's own DM page.
     await go(page, `#/bot/${BOT}`);
     await page.locator('#main .view-only-line').waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'a thread offers nothing that writes');
+    // The bot's ⋯ opens in a view (its details are reads) and offers nothing that writes.
+    await page.locator('#bot-more-btn').click();
+    await page.locator('#bot-more-menu [data-bot-mtab="info"]').waitFor({state: 'visible', timeout: t(15000)});
+    assert.deepEqual(await writesShown(page), [], 'the bot\'s ⋯ offers nothing that writes');
+    await page.keyboard.press('Escape');
+    await page.locator('#bot-more-menu').waitFor({state: 'hidden', timeout: t(15000)});
     // A phone: the bottom bar moves between places (Team, Assistant, More), so none of it is greyed out.
     await page.setViewportSize({width: 390, height: 844});
     await go(page, '#/tasks');

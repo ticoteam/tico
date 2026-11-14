@@ -13,6 +13,7 @@ type PauseState = {revision: number; paused?: boolean; record?: {name: string; a
 declare const BOT: {pauseLoading: boolean; pauseState: {state: string; revision: number}; pauseLoadedAt: number | null; pauseBusy: boolean; slug: string};
 declare function botPauseLoad(): Promise<void>;
 declare function botAlertDraw(): void;
+declare function timeSaid(iso: string): string;
 
 
 async function open(browser: import('playwright').Browser, role: string, hash: string) {
@@ -132,7 +133,11 @@ async function staleReadAfterControl(browser: import('playwright').Browser, acti
     await page.keyboard.press('Enter');
     await strip.getByRole('button', {name: 'Unpause', exact: true}).waitFor();
     await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-control-host')!.textContent!.includes('Paused by Ana'));
-    assert.match(await strip.innerText(), /2026-10-28 12:30 UTC/);
+    // When, in the app's date words (month first, 12-hour), never an ISO stamp or a 24-hour time.
+    const said = await page.evaluate(() => `Paused by Ana, ${timeSaid('2026-10-28T12:30:00Z')}`);
+    assert.match(said, /^Paused by Ana, \w{3}, Oct 2[78], \d{1,2}:30 [AP]M$/);
+    assert.ok((await strip.innerText()).includes(said), 'the pause says who and when: ' + said);
+    assert.doesNotMatch(await strip.innerText(), /UTC|2026-10-28/);
     assert.equal(await page.locator('#bot-top #bot-paused .bot-paused-badge').innerText(), 'Paused');
     assert.equal(dialogs, 0);
     assert.equal(posts[0]!.action, 'pause');

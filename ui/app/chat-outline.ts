@@ -23,11 +23,14 @@ interface OutlinePrompt {
 interface OutlineResponse {
   prompts?: OutlinePrompt[] | undefined;
 }
+// The thread's scroller on the page, when a chat is drawn.
+const chatThreadEl = () => $('#conv-thread') as HTMLElement | null;
 let CHAT_JUMP: ChatJump | null = ENTRY_JUMP?.slug ? {slug: ENTRY_JUMP.slug, id: ENTRY_JUMP.id, conversation: ENTRY_JUMP.conversation} : null;
 
 function chatOutlineSync(state: ChatState) {
   const conv = $('#conv') as HTMLElement | null;
   if (!conv || V2C !== state) return;
+  chatIndexSync(state);
   let btn = $('#conv-outline-btn') as HTMLButtonElement | null;
   const prompts = state.messages.filter(m => actorPerson(m.sender_id) && !m.refs?.goal_action).length;
   const show = !!state.conv && (prompts >= OUTLINE_MIN || !!state.nextBefore);
@@ -91,6 +94,36 @@ async function chatOutlineOpen(state: ChatState, btn: HTMLButtonElement) {
   box.querySelector<HTMLElement>('.co-row:last-of-type')?.focus();
 }
 
+// Your messages on the thread's edge (ui/app/chat-index.ts). On a computer they are the one way to your prompts, so a
+// chat with older pages reads its outline once, and a tick can name a message not loaded yet (the jump pages back to
+// it); the messages on the page add what came since. A phone keeps the Outline instead (styles/chat.css).
+function chatIndexSync(state: ChatState) {
+  const thread = chatThreadEl();
+  if (!thread) return;
+  if (state.pidx && state.pidx.el.isConnected && state.thread === thread) { state.pidx.sync(); return; }
+  state.pidx?.destroy();
+  state.pidx = promptIndexMount({scroller: thread,
+    row: id => thread.querySelector<HTMLElement>(`.conv-run[data-message="${CSS.escape(id)}"]`),
+    go: id => chatJumpTo(state, id),
+    items: () => {
+      const loaded = state.messages.filter(m => m.id && m.sender_id === myActor() && !m.refs?.goal_action && !chatGoalControl(m))
+        .map(m => ({id: m.id!, text: pidxText(m.body, m.refs?.attachments || []), at: m.created_at}));
+      const have = new Set(loaded.map(i => i.id));
+      const outline = (state.outlineList || []).filter(p => !have.has(p.id)).map(p => ({id: p.id, text: pidxText(p.text), at: p.created_at}));
+      // In the feed's order: what is not loaded is older than everything on the page.
+      return [...outline, ...loaded];
+    }});
+  const cid = state.conv?.id;
+  if (cid && state.nextBefore && state.outlineFor !== cid) {
+    state.outlineFor = cid;
+    get<OutlineResponse>(`/v2/conversations/${encodeURIComponent(cid)}/outline`).then(r => {
+      if (V2C !== state || state.conv?.id !== cid) return;
+      state.outlineList = r.prompts || [];
+      state.pidx?.sync();
+    }, () => { if (state.outlineFor === cid) state.outlineFor = undefined; });
+  }
+}
+
 // Load older pages until the message is on the page, then bring it into view and mark it for a moment.
 async function chatJumpTo(state: ChatState, id: string | undefined) {
   let paged = false;
@@ -107,7 +140,7 @@ async function chatJumpTo(state: ChatState, id: string | undefined) {
     await new Promise(done => requestAnimationFrame(done));
     if (V2C !== state) return false;
   }
-  const thread = $('#conv-thread') as HTMLElement | null, el = thread?.querySelector<HTMLElement>(`[data-message="${CSS.escape(String(id))}"]`);
+  const thread = chatThreadEl(), el = thread?.querySelector<HTMLElement>(`[data-message="${CSS.escape(String(id))}"]`);
   if (!el) { toast('That message is hidden here', true); return false; }
   state.stick?.release();
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;

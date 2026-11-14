@@ -219,7 +219,7 @@ function auMaintSettingsHTML(m: MaintView): string {
   const rows = m.steps.map((st, i) => {
     const on = st.enabled, isOpen = open.has(st.key), always = st.key === 'collect';
     const pills = (AU_MAINT_BETA.has(st.key) ? '<span class="pill beta">Beta</span>' : '')
-      + (st.key === 'suggest' && st.consent === false ? `<a class="pill waiting" href="${AU_MAINT_PRIVACY}" data-mt-consent>Needs Privacy consent</a>` : '');
+      + (st.key === 'suggest' && st.consent === false ? '<span class="pill waiting" data-mt-needs>Needs Privacy consent</span>' : '');
     return `<li class="mt-step${on ? '' : ' off'}${isOpen ? ' open' : ''}" data-mt-step="${esc(st.key)}">
       <div class="mt-row">
         <span class="mt-n">${i + 1}</span>
@@ -253,8 +253,11 @@ function auMaintDetailHTML(st: MaintStep, off: boolean | undefined, opts: MaintO
     ? `<div class="mt-kv"><span class="mt-lb">${esc(AU_MAINT_BOTS[st.key] || 'Most bots per run')}</span>
       <input type="number" min="1" max="20" inputmode="numeric" data-mt-bots="${k}" aria-label="${esc(AU_MAINT_BOTS[st.key] || 'Most bots per run')}" value="${esc(st.max_bots ?? '')}"${off ? ' disabled' : ''}></div>` : '';
   const last = st.last_ran_at ? `<div class="mt-kv"><span class="mt-lb">Last ran</span><span title="${esc(fmt(st.last_ran_at))}">${esc(auRunTime(st.last_ran_at))}</span></div>` : '';
+  // Where consent is given: a link in the open step (a pill is never a link; style guide, "Rows, pills and counts").
+  const consent = st.key === 'suggest' && st.consent === false
+    ? `<div class="mt-kv"><span class="mt-lb">Privacy</span><a href="${AU_MAINT_PRIVACY}" data-mt-consent>Give consent in Settings</a></div>` : '';
   return `<div class="mt-detail">
-    <div class="mt-kv"><span class="mt-lb">How often</span><span class="mt-often">${often}</span></div>
+    ${consent}<div class="mt-kv"><span class="mt-lb">How often</span><span class="mt-often">${often}</span></div>
     ${bots}${last}${st.stats ? auMaintStatsHTML(st.stats) : ''}
   </div>`;
 }

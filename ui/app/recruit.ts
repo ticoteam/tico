@@ -329,9 +329,6 @@ function recruitAvatar(c: RecruitCandidate, size = 34) {
     ? `<span class="av-glyph" style="font-size:${Math.round(size * 0.58)}px">${esc(icon)}</span>` : esc(avInitials(c.name))}</span>`;
 }
 const recruitCanHire = (seat: RecruitSeatRow) => !!seat.can_edit && settingsCanCreateBots();
-function recruitSub(seat: RecruitSeatRow) {
-  return [recruitGroupName(seat.team), recruitPlaceName(seat.reports_to)].filter(Boolean).map(esc).join(' · ');
-}
 function recruitRow(c: RecruitCandidate, seat: RecruitSeatRow) {
   const href = recruitAddress(seat.id, c.template), hire = recruitCanHire(seat);
   return `<li class="rc-row" data-recruit-row="${esc(c.template)}" data-href="${esc(href)}">
@@ -363,16 +360,16 @@ const recruitItemRow = (item: RecruitItem, seat: RecruitSeatRow) => item.source 
 function recruitApplicants(main: HTMLElement, found: RecruitFound, arrive: boolean) {
   const seat = found.seat, list = found.candidates, all = recruitAll(found), cloud = typeof window.cloudAgentsTab === 'function';
   const tabs: [string, string, number | null][] = [['all', 'All', all.length], ['templates', 'Templates', list.length], ...(cloud ? [['cloud', 'Cloud agents', null] satisfies [string, string, null]] : [])];
+  // The one page header (ui/app/page-head.ts): the seat's team as its back link, the seat's title (the dot works there
+  // while applicants arrive), the applicant tabs with their counts, then Job post and Close job (the archive icon) for
+  // whoever may change the seat. Where it sits in the org is the team's page and the applicant's Reports to.
+  const back = seat.team ? {href: TEAM_PAGE + encodeURIComponent(seat.team), label: recruitGroupName(seat.team)} : undefined;
+  const tools = seat.can_edit ? '<button class="ghost" type="button" data-recruit-post>Job post</button>'
+    + '<button class="ghost tl-ib rc-close" type="button" data-recruit-close aria-label="Close job" title="Close job"><span class="nav-icon" aria-hidden="true">archive</span></button>' : '';
+  const head = pageHead({title: seat.title, hook: 'rc-head', back, after: `<span class="rc-hdot">${arrive ? ldotHTML({state: 'thinking', size: 20}) : ''}</span>`,
+    tabsHook: 'rc-tabs', tabsAttrs: 'aria-label="Applicants"', tools});
   main.innerHTML = `<div class="recruit-page rc-applicants">
-    <header class="rc-head">
-      ${seat.team ? `<a class="rc-back rc-phone" href="${TEAM_PAGE}${esc(encodeURIComponent(seat.team))}">← ${esc(recruitGroupName(seat.team))}</a>` : ''}
-      <div class="rc-titles"><h1>${esc(seat.title)}<span class="rc-hdot">${arrive ? ldotHTML({state: 'thinking', size: 20}) : ''}</span></h1>
-        <p class="muted">${recruitSub(seat)}</p></div>
-      ${seat.can_edit ? `<div class="rc-tools"><button class="ghost small" type="button" data-recruit-post>Job post</button>
-        <button class="ghost small" type="button" data-recruit-close>Close job</button></div>` : ''}
-    </header>
-    <div class="rc-tabs" role="tablist" aria-label="Applicants">${tabs.map(([key, label, n], i) =>
-      `<button type="button" role="tab" id="rc-tab-${key}" aria-selected="${i === 0}" aria-controls="rc-panel" data-recruit-tab="${key}">${label}${n === null ? '' : ` <span class="rc-n" data-count="${arrive ? 0 : n}" data-of="${key}">${arrive ? 0 : n}</span>`}</button>`).join('')}</div>
+    ${head}
     <div id="rc-panel" role="tabpanel" aria-labelledby="rc-tab-all">
       <ul class="rc-list" aria-live="polite"${all.length ? '' : ' hidden'}>${arrive ? '' : all.map(c => recruitItemRow(c, seat)).join('')}</ul>
       <p class="rc-empty muted"${all.length ? ' hidden' : ''}>No applicants yet. Widen the job description.</p>
@@ -381,8 +378,12 @@ function recruitApplicants(main: HTMLElement, found: RecruitFound, arrive: boole
     ${settingsCanCreateBots() ? '<p class="rc-foot"><button class="linkish" type="button" data-recruit-scratch>Build one from scratch</button></p>' : ''}
   </div>`;
   const page = main.querySelector<HTMLElement>('.rc-applicants')!, ul = page.querySelector<HTMLUListElement>('.rc-list')!;
+  // The tabs carry their counts (.rc-n ticks as applicants arrive), so they are drawn here rather than from labels.
+  const headEl = page.querySelector<HTMLElement>('header.rc-head');
+  if (headEl) pageHeadSet(headEl, 'tabs', tabs.map(([key, label, n], i) =>
+    `<button type="button" class="ph-tab${i === 0 ? ' cur' : ''}" role="tab" id="rc-tab-${key}" aria-selected="${i === 0}" aria-controls="rc-panel" data-recruit-tab="${key}">${label}${n === null ? '' : `<span class="ph-n rc-n" data-count="${arrive ? 0 : n}" data-of="${key}">${arrive ? 0 : n}</span>`}</button>`).join(''));
   page.querySelectorAll<HTMLButtonElement>('[data-recruit-tab]').forEach(tab => { tab.onclick = () => {
-    page.querySelectorAll('[data-recruit-tab]').forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+    page.querySelectorAll('[data-recruit-tab]').forEach(t => { t.setAttribute('aria-selected', String(t === tab)); t.classList.toggle('cur', t === tab); });
     page.querySelector('#rc-panel')!.setAttribute('aria-labelledby', tab.id);
     const cloudTab = tab.dataset.recruitTab === 'cloud', box = page.querySelector<HTMLElement>('.rc-cloud')!;
     // Templates shows the templates alone; All has the cloud agents among them.
@@ -462,10 +463,11 @@ function recruitApplicant(main: HTMLElement, found: RecruitFound, c: RecruitCand
     c.never?.length ? `<h3>Never</h3><ul>${c.never.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '',
     c.onboarding?.length ? `<h3>Asks you on day one</h3><ul>${c.onboarding.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '',
     `<h3>Model</h3><p>${esc(c.model_name || '')}</p>`].join('');
+  // A sub-page of the seat: the shared header reads "Seat › Applicant" (ui/app/page-head.ts).
   main.innerHTML = `<div class="recruit-page rc-applicant${hire ? ' can-hire' : ''}">
-    <a class="rc-back" href="${esc(recruitAddress(seat.id))}">← ${esc(seat.title)} · ${recruitAll(found).length}</a>
+    ${pageHead({title: c.name, hook: 'rc-app-head', back: {href: recruitAddress(seat.id), label: seat.title}})}
     <div class="rc-cols"><article class="rc-main">
-      <header class="rc-who-big">${recruitAvatar(c, 48)}<div><h1>${esc(c.name)}</h1><p class="muted">Template · runs on your computer</p></div></header>
+      <div class="rc-who-big">${recruitAvatar(c, 36)}<p class="muted">Template · runs on your computer</p></div>
       ${c.tags?.length ? `<div class="rc-chips">${c.tags.slice(0, 6).map(t => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
       ${days.length ? `<section><h2>Day one</h2><ul class="rc-days">${days.map(x => `<li>${esc(x)}</li>`).join('')}</ul></section>` : ''}
       ${needs.length ? `<section><h2>Needs</h2><div class="rc-needs">${needs.map(n => `<div class="rc-need ${esc(n.state)}"><b>${esc(n.label)}</b><span>${RECRUIT_NEED[n.state] || ''}</span></div>`).join('')}</div></section>` : ''}
@@ -613,12 +615,13 @@ function recruitJobPost(found: RecruitFound) {
 // waiting or moving away puts it back.
 async function recruitClose(seat: RecruitSeatRow, button: HTMLButtonElement) {
   if (!button.dataset.armed) {
-    const label = button.textContent;
-    button.dataset.armed = '1'; button.textContent = 'Close job?'; button.classList.add('danger');
+    // Asked on the same button: the archive icon gives way to the question until it is answered or the focus leaves.
+    const face = button.innerHTML;
+    button.dataset.armed = '1'; button.textContent = 'Close job?'; button.classList.add('danger', 'armed');
     const disarm = () => {
       clearTimeout(timer); button.removeEventListener('blur', disarm);
       if (!button.dataset.armed) return;
-      delete button.dataset.armed; button.textContent = label; button.classList.remove('danger');
+      delete button.dataset.armed; button.innerHTML = face; button.classList.remove('danger', 'armed');
     };
     const timer = setTimeout(disarm, RECRUIT_ARM);
     button.addEventListener('blur', disarm);

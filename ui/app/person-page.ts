@@ -46,15 +46,18 @@ const PERSON_TABS = ['profile', 'slack'];
 // Assistant page (ui/app/assistant-page.ts), the owner's too. The old #/person/<you>/assistant link lands there too.
 const personTabs = (p: RosterPerson) => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
 const PERSON_TAB_LABELS: Record<string, string> = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
+// A card's edit is a quiet icon button in its header (an action, not an underlined link); its form's row is the status,
+// then Cancel, then Save last at the right (style guide, Button order).
+const personEditHTML = (attrs: string, label: string, icon = 'edit') =>
+  `<button class="bp-ico" type="button" ${attrs} aria-label="${esc(label)}" title="${esc(label)}"><span class="nav-icon" aria-hidden="true">${icon}</span></button>`;
+const PERSON_FORM_ACTS = '<div class="row person-form-acts"><span class="muted" data-status></span><button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save</button></div>';
 function fieldEditor(label: string, value: string | null | undefined, {placeholder, rows, save}: {placeholder?: string; rows?: number; save: boolean}) {
   const current = String(value || '');
   return `<section class="card"><header><h2>${esc(label)}</h2>
-      ${save ? `<button class="linkish" type="button" data-edit>Edit</button>` : ''}</header>
+      ${save ? personEditHTML('data-edit', 'Edit ' + label) : ''}</header>
     <div data-view><p>${current ? esc(current).replace(/\n/g, '<br>') : '<span class="muted">None set.</span>'}</p></div>
-    ${save ? `<form data-edit-form hidden><textarea rows="${rows || 5}" placeholder="${esc(placeholder || '')}">${esc(current)}</textarea>
-      <div class="row"><button class="primary" type="submit">Save</button>
-        <button class="ghost" type="button" data-cancel>Cancel</button>
-        <span class="muted" data-status></span></div></form>` : ''}</section>`;
+    ${save ? `<form data-edit-form hidden><textarea rows="${rows || 5}" aria-label="${esc(label)}" placeholder="${esc(placeholder || '')}">${esc(current)}</textarea>
+      ${PERSON_FORM_ACTS}</form>` : ''}</section>`;
 }
 function bindFieldEditor(root: HTMLElement, onSave: (text: string) => Promise<unknown>) {
   const view = root.querySelector<HTMLElement>('[data-view]');
@@ -64,8 +67,10 @@ function bindFieldEditor(root: HTMLElement, onSave: (text: string) => Promise<un
   const edit = root.querySelector<HTMLButtonElement>('[data-edit]');
   const cancel = form.querySelector<HTMLButtonElement>('[data-cancel]');
   if (!view || !area || !edit || !cancel) return;
-  edit.onclick = () => { form.hidden = false; view.hidden = true; area.focus(); };
-  cancel.onclick = () => { form.hidden = true; view.hidden = false; };
+  edit.onclick = () => { form.hidden = false; view.hidden = true; edit.hidden = true; area.focus(); };
+  // Done or cancelled, the focus goes back to the Edit it came from.
+  const shut = () => { form.hidden = true; view.hidden = false; edit.hidden = false; edit.focus(); };
+  cancel.onclick = shut;
   form.onsubmit = async ev => {
     ev.preventDefault();
     const status = form.querySelector<HTMLElement>('[data-status]');
@@ -74,7 +79,9 @@ function bindFieldEditor(root: HTMLElement, onSave: (text: string) => Promise<un
     status.textContent = 'Saving…';
     try {
       await onSave(area.value);
-      form.hidden = true; view.hidden = false;
+      // A save that drew the page again leaves the focus on the new card's Edit.
+      if (edit.isConnected) shut();
+      else document.querySelector<HTMLElement>(`[data-edit][aria-label="${CSS.escape(edit.getAttribute('aria-label') || '')}"]`)?.focus();
     } catch (e) { status.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; }
     finally { form.querySelectorAll('button').forEach(b => b.disabled = false); if (form.hidden) status.textContent = ''; }
   };
@@ -95,14 +102,15 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   const boss = (S.people || []).find(row => row.id === p.reports_to);
   const edit = personCanEdit(p);
   const about = goalParts(p.about || '');
-  $('#main').innerHTML = `<div class="bothead">${personAvatar(p, 36)}
-    <div class="botid"><h1>${esc(p.name || p.id)}</h1>
-      <ul class="goal-lines head-goals" id="head-goals" aria-label="Goals"></ul>
-      ${String(p.goals || '').trim() ? `<div class="role" id="head-standing">${esc(String(p.goals).trim())}</div>` : ''}
-    </div>${S.me?.id !== p.id && THREADS.on !== false && p.my_access?.write !== false ? '<button type="button" class="ghost small" id="person-dm">DM</button>' : ''}</div>
-  <div class="tabs bottabs" id="ptabs" role="tablist">
-    ${tabs.map(t => `<button data-pt="${t}" role="tab" class="${t === tab ? 'cur' : ''}">${t === 'assistant' ? esc(myChatName()) : PERSON_TAB_LABELS[t]}</button>`).join('')}
-  </div>
+  // The shared page header (page-head.ts): their face and name, the tabs, Message for someone else, ⋯ last. Their live
+  // goals are one quiet list under it; the standing goal text is the Goals card's.
+  const dm = S.me?.id !== p.id && THREADS.on !== false && p.my_access?.write !== false;
+  $('#main').innerHTML = `${pageHead({title: p.name || p.id, hook: 'person-ph',
+      tabs: tabs.map(t => ({label: t === 'assistant' ? myChatName() : PERSON_TAB_LABELS[t] || t, cur: t === tab, attrs: `data-pt="${t}"`})),
+      tabsAttrs: `id="ptabs" aria-label="${esc(p.name || p.id)}"`,
+      tools: dm ? '<button type="button" class="ghost" id="person-dm"><span class="nav-icon" aria-hidden="true">chat_bubble</span>Message</button>' : '',
+      more: PAGE_HEAD_COPY})}
+  <ul class="goal-lines head-goals person-goals" id="head-goals" aria-label="Goals" hidden></ul>
   <div id="pane-profile" ${tab === 'profile' ? '' : 'hidden'}>
     <section class="card"><header><h2>Contact</h2></header>
       <dl class="bot-setup">
@@ -114,13 +122,13 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
         ${p.bot ? `<dt>Notes go to</dt><dd>${empChip(p.bot)}</dd>` : ''}
       </dl></section>
     ${p.title || p.team || p.about || edit ? `<section class="card" id="person-about"><header><h2>About</h2>
-        ${edit ? '<button class="linkish person-edit-btn" type="button" id="person-edit">Edit</button>' : ''}</header>
+        ${edit ? personEditHTML('id="person-edit"', 'Edit About') : ''}</header>
       <div id="person-id">${p.title || p.team ? `<div class="meta">${esc([...new Set([p.title, p.team ? teamLabel(p.team) : ''].filter(Boolean))].join(' · '))}</div>` : ''}
         ${p.about ? `<div class="role">${esc(about.lead)}${about.rest ? `<span id="goal-rest" hidden> ${esc(about.rest)}</span> <button class="linkish" type="button" id="goal-more" aria-expanded="false">more</button>` : ''}</div>`
           : edit && !p.title ? '<div class="muted">No title or description yet.</div>' : ''}</div></section>` : ''}
     <section class="card home-card" id="person-home"><header><h2>Home</h2><div class="home-card-acts" id="person-home-acts"></div></header><div id="person-home-thread"></div></section>
     <section class="card tasks" id="person-tasks-card"><header><h2>Tasks</h2>
-        <button class="ghost" type="button" id="person-task-add" aria-haspopup="dialog">+ Add task</button></header>
+        ${personEditHTML('id="person-task-add" aria-haspopup="dialog"', 'Add task', 'add')}</header>
       <div id="person-tasks">Loading…</div></section>
     ${fieldEditor('Goals', p.goals, {placeholder: 'What they are trying to get done.', save: edit})}
     ${fieldEditor('Notes', p.notes, {placeholder: 'Working notes about this human. Visible to humans who can open this profile.', rows: 8, save: edit})}
@@ -129,7 +137,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
       <div class="chip-list">${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span></a>`).join('')}</div></section>` : ''}
     <section class="card" id="person-access" hidden><header><h2>Access</h2>
-        <button class="linkish person-edit-btn" type="button" id="person-access-edit">Edit</button></header>
+        ${personEditHTML('id="person-access-edit"', 'Edit access')}</header>
       <div class="muted" id="person-access-text"></div></section>
     ${edit ? `<section class="card" id="person-notify"><header><h2>Notifications</h2></header>
       <label class="person-notify" title="A Slack DM when a task they asked for is finished or declined">
@@ -154,6 +162,9 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     <section class="card conv"><header><h2>Tico in Slack</h2></header>
       <div id="person-slack">Loading…</div></section>
   </div>`;
+  // Their face before the name, in the header's title (pageHeadSet keeps the header as it is).
+  const head = $('#main > header.person-ph');
+  if (head) pageHeadSet(head, 'title', `${personAvatar(p, 28)}<span class="person-name">${esc(p.name || p.id)}</span>`);
   void headGoalsLoad('human:' + p.id);
   void personAccessLoad(p);
   const dmButton = $('#person-dm');
@@ -230,25 +241,25 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   };
   mutedPaint();
   // The GitHub login a review request names: it puts them on the task linked to that pull request.
-  const githubPaint = (editing: boolean) => {
+  const githubPaint = (editing: boolean, focus = false) => {
     const box = $('#person-github');
     if (!box) return;
     if (!editing) {
       box.innerHTML = `${p.github ? `<a href="https://github.com/${encodeURIComponent(p.github)}" target="_blank" rel="noopener">@${esc(p.github)}</a>`
           : '<span class="muted">None set.</span>'}
-        ${edit ? `<button class="linkish person-edit-btn" type="button" data-github-edit>${p.github ? 'Edit' : 'Add'}</button>` : ''}`;
+        ${edit ? personEditHTML('data-github-edit', p.github ? 'Edit GitHub login' : 'Add GitHub login', p.github ? 'edit' : 'add') : ''}`;
       const open = box.querySelector('[data-github-edit]');
       if (open) open.onclick = () => githubPaint(true);
+      if (focus) (open as HTMLElement | null)?.focus();
       return;
     }
     box.innerHTML = `<form class="person-github-form">
         <input type="text" name="github" maxlength="40" aria-label="GitHub login" placeholder="GitHub login" value="${esc(p.github || '')}"
           pattern="@?[A-Za-z0-9][A-Za-z0-9\\-]{0,38}" autocomplete="off" spellcheck="false">
-        <button class="primary" type="submit">Save</button><button class="ghost" type="button" data-cancel>Cancel</button>
-        <span class="muted" data-status></span></form>`;
+        <span class="muted" data-status></span><button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save</button></form>`;
     const form = box.querySelector('form');
     form.github.focus();
-    form.querySelector('[data-cancel]').onclick = () => githubPaint(false);
+    form.querySelector('[data-cancel]').onclick = () => githubPaint(false, true);
     form.onsubmit = async (ev: Event) => {
       ev.preventDefault();
       const status = form.querySelector('[data-status]');
@@ -256,7 +267,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
       status.textContent = 'Saving…';
       try {
         p.github = (await post(`/v2/humans/${encodeURIComponent(p.id)}`, {github: form.github.value.trim()})).github;
-        githubPaint(false);
+        githubPaint(false, true);
       } catch (e) {
         status.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`;
         form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = false);
@@ -287,11 +298,10 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     host.innerHTML = `<form class="task person-head-form">
         <input type="text" name="title" maxlength="120" aria-label="Title" placeholder="Title, e.g. Frontend engineer" value="${esc(p.title || '')}">
         <textarea name="about" rows="3" maxlength="2000" aria-label="Description" placeholder="What they do, in a sentence or two.">${esc(p.about || '')}</textarea>
-        <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-cancel>Cancel</button>
-          <span class="muted" data-status></span></div></form>`;
+        ${PERSON_FORM_ACTS}</form>`;
     const form = host.querySelector('form');
     form.about.focus();
-    form.querySelector('[data-cancel]').onclick = () => pagePerson(p.id, tab);
+    form.querySelector('[data-cancel]').onclick = () => { pagePerson(p.id, tab); $('#person-edit')?.focus(); };
     form.onsubmit = async (ev: Event) => {
       ev.preventDefault();
       form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = true);
@@ -300,6 +310,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
         const row = await post(`/v2/humans/${encodeURIComponent(p.id)}`, {title: form.title.value, about: form.about.value});
         p.title = row.title; p.about = row.about;
         pagePerson(p.id, tab);
+        $('#person-edit')?.focus();
       } catch (e) {
         form.querySelector('[data-status]').innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`;
         form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = false);
@@ -346,7 +357,11 @@ function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
   const active = all.filter(t => t.status === 'open');
   const finished = all.filter(t => t.status !== 'open');
   const first = firstName(p.name) || p.id;
-  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(t)).join('')}</div>`
+  // On their own page a task waiting on them is the rule, not the exception: its row has no amber "!" (a mark on every
+  // row says nothing). A row waiting on someone else, a bot at work or one that can't run keeps its mark.
+  const theirs = (t: TaskBriefV3) => taskMark(t) === 'person' && (!t.turn?.who || t.turn.who === 'human:' + p.id)
+    ? {...t, turn: {...t.turn, state: 'theirs'}} as unknown as TaskBriefV3 : t;
+  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(theirs(t))).join('')}</div>`
       : `<div class="empty">No active tasks. <a href="#" data-person-task-add>Give ${esc(first)} a task</a>.</div>`)
     + (finished.length ? `<details class="person-tasks-done"><summary class="muted">Finished <span class="cnt">${finished.length}</span></summary>${
         finished.map(t => taskRowHTML(t, {look: 'archive'})).join('')}</details>` : '');
@@ -406,16 +421,19 @@ function personTaskModal(p: RosterPerson) {
     d.addEventListener('click', (ev: Event) => { if (ev.target === d) d.close(); });
     document.body.appendChild(d);
   }
-  d.innerHTML = `<div class="tmodal-head"><span class="who">Give a task</span><span class="spacer"></span>
-      <span>assigned to ${esc(firstName(p.name) || p.id)}, added by you</span>
-      <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
-    <div class="tmodal-body">
-      <form class="task" id="person-task">
-        <div class="r1" style="grid-template-columns:1fr"><input type="text" name="title" required aria-label="Title" placeholder="Start with a verb: Email, Ask, Send…"></div>
+  // The house dialog (style guide, Overlays): the title and ✕ on top, the form, then Cancel and Create task last at the
+  // right. Create task is the form's one submit button, so Enter in the title still creates it.
+  d.className = 'tmodal tmodal-shell person-task-dlg';
+  d.innerHTML = `<div class="tmodal-head"><h2 id="person-task-title">Task for ${esc(firstName(p.name) || p.id)}</h2>
+      <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div>
+    <form class="task" id="person-task">
+      <div class="tmodal-body">
+        <input type="text" name="title" required aria-label="Title" placeholder="Start with a verb: Email, Ask, Send…">
         <textarea name="body" required aria-label="Details" placeholder="The ask in the first line, then any details."></textarea>
-        <div class="r3"><button class="primary" type="submit">Create task</button>
-          <button class="ghost" type="button" data-modal-close>Cancel</button><span class="muted" id="person-task-msg"></span></div>
-      </form></div>`;
+      </div>
+      <div class="tmodal-foot"><span class="muted" id="person-task-msg" role="status"></span>
+        <button class="ghost" type="button" data-modal-close>Cancel</button><button class="primary" type="submit">Create task</button></div>
+    </form>`;
   d.querySelectorAll('[data-modal-close]').forEach((b: HTMLButtonElement) => b.onclick = () => d.close());
   const form = $('#person-task', d);
   form.onsubmit = async (ev: Event) => {

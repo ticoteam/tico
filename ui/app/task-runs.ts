@@ -84,7 +84,7 @@ function runReportHTML(a: TrAttempt): string {
 }
 function runAttemptHTML(a: TrAttempt, open: boolean): string {
   const model = ranOn(a.ran_on);
-  const took = a.took_s != null ? durationWords(a.took_s) : a.started_at ? 'for ' + ago(a.started_at).replace(/ ago$/, '') : '';
+  const took = a.took_s != null ? durationWords(a.took_s) : a.started_at ? (w => /^\d+[mh]$/.test(w) ? 'for ' + w : w === 'now' ? '' : 'since ' + w)(ago(a.started_at)) : '';
   const decided = runDecisionWords(a);
   const decision = a.decision;
   const head = [`Try ${a.try} of ${a.tries}`, runStateWord(a), decided, took, model].filter(Boolean).join(' · ');
@@ -97,7 +97,7 @@ function runAttemptHTML(a: TrAttempt, open: boolean): string {
   // What woke the turn, the bot's profile then (the preset on runs from before profiles), and until when it was held
   // (backend/wake_presets.py record).
   const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc([a.wake.reason, a.wake.profile_label || a.wake.preset_label].filter(Boolean).join(' · '))}${a.wake.held_until
-    ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>${runReleaseHTML(a)}` : '';
+    ? ` · held until ${esc(timeSaid(a.wake.held_until))}` : ''}</p>${runReleaseHTML(a)}` : '';
   const background = a.background || [];
   const shells = background.length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${background.map(runShellHTML).join('')}</ul></div>` : '';
   return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.id)}">

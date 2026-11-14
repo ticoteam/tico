@@ -1,14 +1,18 @@
-/* A stage's rules (ui/app/stage-rules.ts): the Rules button on a stage header and the panel it opens. The panel reuses
+/* A stage's rules (ui/app/stage-rules.ts): the quiet rules mark on a stage header and the panel it opens. The panel reuses
    the Rules page's dialog (.ru-modal, .ru-form) from org-rules.css. */
-.sr-btn{flex:none;display:inline-flex;align-items:center;gap:4px;height:24px;margin-left:auto;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
-.sr-btn:hover{color:var(--ink);background:var(--surface2)}
-.sr-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.sr-btn .tnum:empty{display:none}
-.sr-btn + .pv-play{margin-left:0}
-.pv-group-head .sr-btn{margin-left:4px}
-/* One width on a phone: the count arrives late and differs in digits between stages, and the tabs must not move
-   (fits "Rules 999"). */
-.pv-phone-head .sr-btn{box-sizing:border-box;width:96px;height:44px;margin:0 0 4px;padding:0;justify-content:center;white-space:nowrap}
+/* The mark (style guide, Pipeline stage: "a quiet rules mark"): a muted gavel, struck through and fainter when no rule
+   applies at the stage. No word and no count; its name says how many. */
+.sr-mark{position:relative;flex:none;display:inline-grid;place-items:center;width:24px;height:24px;min-height:0;margin-left:auto;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.sr-mark .nav-icon{font-size:15px;opacity:.7}
+.sr-mark:hover{background:var(--hover);color:var(--ink)}
+.sr-mark:hover .nav-icon{opacity:1}
+.sr-mark:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.sr-mark-none .nav-icon{opacity:.4}
+.sr-mark-none::after{content:"";position:absolute;left:50%;top:50%;width:17px;height:1.5px;border-radius:1px;background:currentColor;opacity:.6;transform:translate(-50%,-50%) rotate(-45deg);pointer-events:none}
+.sr-mark + .pv-play{margin-left:0}
+.pv-group-head .sr-mark{margin-left:0}
+/* A phone: the mark sits at the end of the stage tabs' row for the stage shown, a whole 44 px target there. */
+.pv-phone-head .sr-mark{width:44px;height:44px;margin:0 0 4px}
 
 .sr-modal{width:min(600px,calc(100vw - 32px))}
 /* The panel has no padding of its own, so the shared dialog head sits flush rather than pulled out over it. */
@@ -26,6 +30,19 @@
 .sr-cost{flex:none;padding:1px 8px;border-radius:999px;background:var(--surface2);color:var(--muted);font-size:var(--t-label)}
 .sr-cost-jev{background:var(--wait-bg);color:var(--wait-ink)}
 .sr-acts{flex:none;display:flex;gap:2px}
+/* A rule the person may change (stage-rules.ts srRowHTML): the whole row opens it for editing (its name is the button,
+   reaching over the row), with the focus ring on the row; a quiet ⋯ at its end, above that reach, holds Edit and Retire. */
+.sr-rule-edit{position:relative}
+@media (hover:hover){.sr-rule-edit:hover{background:var(--hover)}}
+.sr-rule-edit:has(.sr-open:focus-visible){outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.sr-open{flex:1;min-width:0;display:flex;align-items:center;min-height:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.sr-open::after{content:"";position:absolute;inset:0;border-radius:inherit}
+.sr-open:focus-visible{outline:none}
+.sr-more{position:relative;z-index:1;flex:none;display:inline-grid;place-items:center;width:28px;height:28px;min-height:0;margin:-4px -4px -4px 0;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.sr-more .nav-icon{font-size:18px}
+.sr-more:hover,.sr-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.sr-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.sr-pop .sr-mi-danger{color:var(--fail)}
 .sr-what,.sr-says{margin-top:3px;font-size:var(--t-sm)}
 .sr-idle{margin-top:3px;font-size:var(--t-sm);color:var(--wait-ink)}
 .sr-none{margin:0;font-size:var(--t-sm)}
@@ -39,11 +56,12 @@
 .sr-timer[hidden]{display:none}
 @media (max-width:640px){
   .sr-modal{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0}
-  .sr-act{min-height:40px}
   /* A rule's name gets its own line; its cost and buttons wrap under it. */
   .sr-rule .sr-line{flex-wrap:wrap}
   .sr-rule .sr-name{flex-basis:100%;white-space:normal}
   .sr-rule .sr-acts{margin-left:auto}
+  /* ⋯ is a whole 44 px target on a phone, as every control */
+  .sr-more{width:44px;height:44px;margin:-8px -8px -8px 0}
 }
 /* A suggested change on Rules › Suggested: what differs, old struck through. */
 .sr-diff{margin:4px 0 0;padding:0 0 0 16px;font-size:var(--t-sm)}

@@ -153,6 +153,14 @@ function gcOriginHint(ch: ChannelRef, month: string, field: string, c: Partial<G
 // source; growth_sync.live_owner). A remap that drops the number hands it back to typing. Only
 // the numbers changed are sent, so a month with synced numbers still saves its typed ones.
 const GC_NUMBERS = ['spend', 'bot_cost', 'new_customers', 'kept_d30', 'kept_d90', 'kept_d180', 'revenue_month', 'margin_pct'] as const;
+// A new month's choices: this month back three years, newest first, as "Oct 2026" (one select look, style guide Fields;
+// a month input drew the browser's own field), and the month asked for wherever it is.
+function gcMonthOptions(month: string | null | undefined) {
+  const now = new Date(), out: string[] = [];
+  for (let i = 0; i < 36; i++) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
+  if (month && GR_MONTH_RE.test(month) && !out.includes(month)) out.push(month);
+  return out.sort().reverse().map(m => `<option value="${m}"${m === month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('');
+}
 function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCohort>, fresh = false, live: Map<string, string[]> = new Map()) {
   const origins = c.origins || {}, month = c.month ?? '';
   const locked = (name: string) => { const o = origins[name]; return !!o && o.origin === 'synced' && !!o.source_id && !!live.get(o.source_id)?.includes(name); };
@@ -160,7 +168,7 @@ function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCoh
     ? ` disabled title="${esc(`${origins[name]?.source || 'A source'} syncs this number: change it there, or retire that source to type it`)}"` : ''}>${fresh ? '' : gcOriginHint(ch, month, name, c, origins[name])}`);
   const srcs: GrowthCohortSources = c.sources || {};
   const dlg = grDialog([ch.name, fresh ? 'New month' : grMonth(c.month)].join(' · '),
-    `${fresh ? grField('Month', `<input name="month" type="month" required value="${esc(c.month)}">`) : ''}
+    `${fresh ? grField('Month', `<select name="month" required>${gcMonthOptions(c.month)}</select>`) : ''}
     <div class="gr-pair">${n('spend', 'Spend', c.spend)}${n('bot_cost', 'Bot cost', c.bot_cost)}</div>
     <div class="gr-pair">${n('new_customers', 'New', c.new_customers)}${grField('Data', `<select name="quality">${grOpts([['actual', 'Actual'], ['estimate', 'Estimate']], c.quality || 'estimate', null)}</select>`)}</div>
     <div class="gr-trio">${GC_KEPT.map(([f, d]) => n(f, `Kept ${d} days %`, c[f])).join('')}</div>

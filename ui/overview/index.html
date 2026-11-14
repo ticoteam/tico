@@ -11,7 +11,7 @@
 <body class="night">
 <div id="world" aria-label="Interactive company campus"></div>
 <div class="vignette" aria-hidden="true"></div>
-<header class="campus-heading"><span class="campus-eyebrow">YOUR LITTLE WORLD OF WORK</span><h1 id="campus-company"></h1><p id="campus-summary"></p></header>
+<header class="campus-heading"><h1 id="campus-company"></h1><p id="campus-summary" hidden></p></header>
 <div id="loading"><span class="loader" aria-hidden="true"></span><p>Loading your team…</p></div>
 <div id="fallback" hidden><h1>Overview</h1><p>The 3D view is unavailable. Your teammates are still accessible below.</p><div id="fallback-team"></div></div>
 <div id="connection-status" role="status" hidden>Status unavailable · Reconnecting…</div>
@@ -29,6 +29,6 @@
 <div id="floor-heading" hidden><div><span id="floor-number"></span><h1 id="floor-title"></h1><p id="floor-subtitle"></p></div><div id="floor-step"><button id="floor-up" aria-label="Floor above">▲</button><button id="floor-down" aria-label="Floor below">▼</button></div></div>
 <div id="hover-label" hidden></div>
 <div id="speech" role="status" hidden><button id="speech-close" aria-label="Close teammate bubble">×</button><span id="speech-type"></span><strong id="speech-name"></strong><p id="speech-message"></p><button id="speech-open" class="speech-open">Open teammate →</button></div>
-<footer class="campus-footer"><span id="campus-hint">Select a floor to look inside</span><span class="campus-legend"><i class="human-dot"></i> People <i class="bot-dot"></i> Bots</span></footer>
+<footer class="campus-footer"><span class="campus-legend"><i class="human-dot"></i> People <i class="bot-dot"></i> Bots</span></footer>
 <script type="module" src="bridge.ts"></script>
 </body></html>

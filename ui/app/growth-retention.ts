@@ -34,7 +34,8 @@ let GRX_SHOWN: GrxView | null = null;
 let GRX_TYPED: {month: string | null; rows: GrxTyped[]} = {month: null, rows: []};
 let GRX_READ = 0;
 
-const grxDay = (iso: string | null | undefined) => { const [, m, d] = String(iso || '').split('-').map(Number); return m && d ? `${d} ${GR_MON[m - 1]}` : ''; };
+// A bare day, month first ("Sep 28"; style guide "Dates and times").
+const grxDay = (iso: string | null | undefined) => { const [, m, d] = String(iso || '').split('-').map(Number); return m && d ? `${GR_MON[m - 1]} ${d}` : ''; };
 // A cohort's name: its channel's, segment or plan; a customer with none is in "No segment" or "No plan".
 function grxName(by: string, value: string | null) {
   if (by === 'channel') return value === 'unknown' || !value ? 'Unknown' : grChannelName(value, undefined);
@@ -64,13 +65,14 @@ function grxKept(f: GrxFigure, at: number, field: GrxWindow, days: number, c?: G
   return `<td class="grc-k" ${shade(f.value)}>${open(grPct(f.value), `Open the customers kept to day ${days}`)}${beside}</td>`;
 }
 const GRX_SAID: Record<string, string> = {too_few: 'too few', not_yet: 'not yet', not_split: 'not split', spend_monthly: 'monthly'};
-const grxMoney = (f: GrxFigure) => `<td class="grc-n${f.status === 'ok' ? '' : ' muted'}">${f.status === 'ok' && f.value != null ? esc(grUsd(f.value)) : esc(GRX_SAID[f.status] || '—')}</td>`;
-// "loaded 13 Nov 06:00 from an upload in Growth": the newest load.
+// An empty cell shows nothing (style guide tables); a figure held back says why in a word.
+const grxMoney = (f: GrxFigure) => `<td class="grc-n${f.status === 'ok' ? '' : ' muted'}">${f.status === 'ok' && f.value != null ? esc(grUsd(f.value)) : esc(GRX_SAID[f.status] || '')}</td>`;
+// "loaded Nov 13, 6:00 AM from an upload in Growth": the newest load, in the guide's words inside a sentence (format.ts
+// timeSaid: month first, 12-hour, "today" for today).
 function grxLoaded(loads: GrxLoad[]) {
   const last = loads[0];
   if (!last) return '';
-  const at = new Date(last.loaded_at);
-  const when = Number.isNaN(at.valueOf()) ? '' : `${at.getDate()} ${GR_MON[at.getMonth()]} ${at.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', hour12: false})} `;
+  const said = timeSaid(last.loaded_at), when = said ? `${said.replace(/^[A-Z][a-z]{2}, (?=[A-Z])/, '')} ` : '';
   return ` · loaded ${when}from ${last.source === 'upload' ? 'an upload in Growth' : `“${last.source}”`}`;
 }
 const GRX_NOTE: Record<string, string> = {
@@ -116,10 +118,10 @@ function grxCard(v: GrxView) {
 
 // A typed channel's month: its new customers and each day's typed share, shaded as computed ones are; nothing to open.
 function grxTypedRow(t: GrxTyped) {
-  const kept = (v: number | null | undefined) => v == null ? '<td class="grx-not muted">—</td>'
+  const kept = (v: number | null | undefined) => v == null ? '<td class="grx-not muted"></td>'
     : `<td class="grc-k" style="--k:${Math.max(0, Math.min(100, Math.round(Number(v))))}">${esc(grPct(v))}</td>`;
   return `<tr data-grx-row="${esc(t.value)}" data-origin="typed"><th scope="row">${esc(grxName('channel', t.value))} <span class="muted grx-tag">typed</span></th>
-    <td class="grc-n">${t.new_customers == null ? '—' : esc(grX(t.new_customers, 0))}</td>${[0, 1, 2].map(i => kept(t.kept[i])).join('')}<td class="grc-n muted">—</td><td class="grc-n muted">—</td></tr>`;
+    <td class="grc-n">${t.new_customers == null ? '' : esc(grX(t.new_customers, 0))}</td>${[0, 1, 2].map(i => kept(t.kept[i])).join('')}<td class="grc-n muted"></td><td class="grc-n muted"></td></tr>`;
 }
 
 // Reads the picked cut and grain for the month and draws every computed Retention card on the page again.

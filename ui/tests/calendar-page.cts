@@ -1,9 +1,11 @@
 // The Calendar (ui/app/calendar.ts, ui/app/calendar-row.ts): the page opens on the viewer's week with her events and a
 // due pill and no bot runs, under one header line with no title; Add ticks a bot (its runs show, × takes them away) and
 // "Bots that report to me" adds every one; short runs that touch draw as one block that opens their list; no block is an
-// outline and each one's text meets AA; Runs under Show hides runs and is kept after a reload; search is an icon that
-// "/" opens; a calendar found in the search joins the view as a chip; 3 days moves by three days; a phone header takes
-// two lines; and the sidebar row shows the next event with its time, its name opening the event. Fixtures only, no
+// outline and each one's text meets AA; Runs under Show hides runs and is kept after a reload; search is a field (the
+// style guide's "Find a person, event or question") that "/" focuses; a calendar found in the search joins the view as a
+// chip; Week shows all seven days; 3 days moves by three days; a phone header takes two lines with the search field on
+// its own line under them, and its week strip marks today with a filled circle and the selected day with a quiet pill;
+// and the sidebar row shows the next event with its time, its name opening the event. Fixtures only, no
 // network, at a fixed Wednesday 10:00 (spec calendar-page-cleanup AC-1 to AC-9).
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -176,17 +178,20 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await page.locator('[data-cal-view="week"]').getAttribute('aria-checked'), 'true', `${where}: Week`);
       assert.deepEqual(await page.locator('[data-cal-view]').allInnerTexts(), ['Day', '3 days', 'Week', 'Month', 'List'], `${where}: the view switch`);
       assert.equal(await page.locator('[data-cal-range]').innerText(), 'Nov 9 – 15', `${where}: this week`);
-      assert.equal(await page.locator('.cal-chd').count(), 5, `${where}: the working days`);
+      // Every day of the week, an empty weekend too: a skipped Saturday read as a missing day.
+      assert.deepEqual(await page.locator('.cal-chd').evaluateAll(els => els.map(e => (e.textContent || '').replace(/\s+/g, ' ').trim())),
+        ['Mon 9', 'Tue 10', 'Wed 11', 'Thu 12', 'Fri 13', 'Sat 14', 'Sun 15'], `${where}: all seven days`);
       assert.deepEqual(await page.locator('[data-cal-chip]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.calChip)), ['human:ana'], `${where}: her calendar`);
       for (const title of ['Standup', 'Pricing review', 'Planning'])
         assert.equal(await page.locator('.cal-ev.event', {hasText: title}).count(), 1, `${where}: ${title}`);
       assert.equal(await page.locator('.cal-pill.due', {hasText: 'Send the quote'}).count(), 1, `${where}: due in the top row`);
       assert.equal(await page.locator('#cal-root .cal-ev.run').count(), 0, `${where}: only her: no run of the bot that reports to her`);
       assert.equal(w.reads.at(-1)?.get('who'), 'me', `${where}: read as just her`);
-      // One header line, no title (AC-7); the tab still says Calendar; search is an icon.
+      // One header line, no title (AC-7); the tab still says Calendar; search is the guide's field, open.
       assert.equal(await page.locator('#cal-root h1').count(), 0, `${where}: no "Calendar" heading`);
       assert.match(await page.title(), /Calendar/, `${where}: the tab says Calendar`);
-      assert.equal(await page.locator('#cal-q').isVisible(), false, `${where}: search folded to an icon`);
+      assert.equal(await page.locator('#cal-q').isVisible(), true, `${where}: search is a field`);
+      assert.equal(await headerLines(page), 1, `${where}: one header line with the search field in it`);
       await shot(page, `page-week-${theme}`);
 
       // Add: two quick choices with how many, people and bots with a tick, and what to show. Ticking Ops adds its chip
@@ -258,16 +263,18 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await page.locator('#cal-root .cal-ev.run').count(), 3, `${where}: runs back`);
       await page.keyboard.press('Escape');
 
-      // Search: an icon that "/" and a click open with the cursor in it (AC-9); a calendar first, then events, Ask Tico
-      // last; Enter adds the calendar as a chip.
+      // Search: a field that stays open, with the guide's placeholder; "/" and a click put the cursor in it (AC-9); a
+      // calendar first, then events, Ask Tico last; Enter adds the calendar as a chip.
       const q = page.locator('#cal-q');
+      assert.equal(await q.isVisible(), true, `${where}: the search is a field, not an icon`);
+      assert.equal(await q.getAttribute('placeholder'), 'Find a person, event or question', `${where}: the guide's placeholder`);
       await page.locator('[data-cal-range]').click();
       await page.keyboard.press('/');
-      assert.equal(await q.evaluate(el => el === document.activeElement), true, `${where}: "/" opens the search`);
+      assert.equal(await q.evaluate(el => el === document.activeElement), true, `${where}: "/" focuses the search`);
       await page.locator('[data-cal-range]').click();
-      await page.waitForFunction(() => !document.querySelector('#cal-root .cal-sr.open'));
-      await page.locator('[data-cal-find]').click();
-      assert.equal(await q.evaluate(el => el === document.activeElement), true, `${where}: the icon opens the search`);
+      assert.equal(await q.isVisible(), true, `${where}: the field stays open when it loses focus`);
+      await q.click();
+      assert.equal(await q.evaluate(el => el === document.activeElement), true, `${where}: a click puts the cursor in it`);
       await q.fill('be');
       await page.locator('#cal-dd [data-dd-cal="human:ben"]').waitFor();
       const rows = await page.locator('#cal-dd button').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.ddCal ? 'cal' : (e as HTMLElement).dataset.ddEv ? 'event' : 'ddAsk' in (e as HTMLElement).dataset ? 'ask' : 'word'));
@@ -285,11 +292,10 @@ async function shot(page: Page, name: string, clip?: string) {
       const pricing = page.locator('.cal-ev.event', {hasText: 'Pricing review'});
       assert.equal(await pricing.count(), 1, `${where}: a shared event once`);
       assert.equal(await pricing.locator('.cal-dots i').count(), 1, `${where}: with a dot for Ben`);
-      // Three chips at 1280px: still one header line (AC-7).
+      // Three chips at 1280px: still one header line (AC-7), the search field beside them.
       await page.locator('[data-cal-range]').click();
-      await page.waitForFunction(() => !document.querySelector('#cal-root .cal-sr.open'));
       assert.equal(await headerLines(page), 1, `${where}: Today, arrows, range, chips, Add, search, views and ⋯ on one line`);
-      assert.equal(await page.locator('[data-cal-chip="human:ben"]').isVisible(), true, `${where}: three chips fit once search folds`);
+      assert.equal(await page.locator('[data-cal-chip="human:ben"]').isVisible(), true, `${where}: three chips fit beside the search field`);
       await shot(page, `page-header-${theme}`, '#cal-root .cal-h');
 
       // 3 days: today and the next two on one hour grid; › moves by three days (AC-6).
@@ -340,11 +346,32 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await page.locator('[data-cal-view="list"]').getAttribute('aria-checked'), 'true', `phone-${theme}: List first`);
       assert.equal(await page.locator('.cal-strip button').count(), 7, `phone-${theme}: the week strip`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `phone-${theme}: no sideways scroll`);
-      assert.ok(await headerLines(page) <= 2, `phone-${theme}: the header takes at most two lines`);
+      // Two lines of controls: search is a 44px icon on the first, and a tap opens the field on a full-width line of
+      // its own, which closes again when it is left empty.
+      assert.ok(await headerLines(page) <= 2, `phone-${theme}: the header takes two lines`);
+      const head = await page.locator('#cal-root .cal-h').boundingBox(), icon = await page.locator('#cal-root .cal-sr').boundingBox();
+      assert.ok(icon && icon.width === 44 && icon.height === 44, `phone-${theme}: search is a 44px icon (${JSON.stringify(icon)})`);
+      await page.locator('#cal-root [data-cal-find]').click();
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'cal-q', `phone-${theme}: the tap puts the cursor in the field`);
+      const sr = await page.locator('#cal-root .cal-sr').boundingBox();
+      assert.ok(sr && head && sr.height >= 44 && sr.width > head.width - 2, `phone-${theme}: the open search field is a full-width 44px line`);
+      await page.locator('#cal-q').press('Escape');
+      await page.locator('#cal-q').evaluate(el => (el as HTMLElement).blur());
+      assert.ok(await headerLines(page) <= 2, `phone-${theme}: left empty, the field closes`);
+      // The strip: today (Wed 11, selected too) is a filled circle; another selected day is a quiet pill, not a circle.
+      const look = (sel: string) => page.locator(sel).evaluate(el => {
+        const b = el.querySelector('b')!, sb = getComputedStyle(b), st = getComputedStyle(el);
+        return {circle: sb.borderRadius === '50%' && sb.backgroundColor !== 'rgba(0, 0, 0, 0)', underline: sb.textDecorationLine.includes('underline'), pill: st.backgroundColor !== 'rgba(0, 0, 0, 0)'};
+      });
+      assert.deepEqual(await look('.cal-strip button.today'), {circle: true, underline: false, pill: true}, `phone-${theme}: today is a filled circle`);
+      await page.locator('.cal-strip [data-cal-date="2026-11-13"]').click();
+      await page.waitForFunction(() => document.querySelector('.cal-strip [data-cal-date="2026-11-13"]')?.getAttribute('aria-pressed') === 'true');
+      assert.deepEqual(await look('.cal-strip [data-cal-date="2026-11-13"]'), {circle: false, underline: false, pill: true}, `phone-${theme}: the selected day is a quiet pill`);
+      assert.deepEqual(await look('.cal-strip button.today'), {circle: true, underline: false, pill: false}, `phone-${theme}: today keeps its circle`);
       await page.goto('https://tico-ui.test/#/calendar?who=me,bot:ops,human:ben&view=3day');
       await page.locator('[data-cal-chip="human:ben"]').waitFor();
       await page.locator('.cal-chd').first().waitFor();
-      assert.ok(await headerLines(page) <= 2, `phone-${theme}: two lines with three chips`);
+      assert.ok(await headerLines(page) <= 3, `phone-${theme}: two lines and the search field with three chips`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `phone-${theme}: no sideways scroll with three chips`);
       await shot(page, `phone-${theme}`);
       assert.deepEqual(errors, [], `phone-${theme}`);
@@ -368,7 +395,6 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await more.innerText(), `+${WHO_MAX - shown}`, 'many: +N counts the hidden chips');
       await shot(page, 'page-chips-more-light', '#cal-root .cal-h');
       // At 20, search still finds a calendar but says it cannot add it, and Enter leaves the view as it is.
-      await page.locator('[data-cal-find]').click();
       await page.locator('#cal-q').fill('person 2');
       await page.locator('#cal-dd [data-dd-cal="human:p21"]').waitFor();
       assert.match(await page.locator('#cal-dd [data-dd-cal="human:p21"]').innerText(), /at most 20/i, 'many: search says why it cannot add');

@@ -50,6 +50,9 @@ const KNOWN: Record<string, {states: string[]; what: string}> = {
     what: 'setup cannot be closed until it is finished (ui/app/welcome.ts reopens it): by design today'},
   // Small tap targets that are the only control of their row or card.
   '6 | a "BotOps"': {states: ['sign-off', 'bot-waiting'], what: 'Settings > Computers: an agent row\'s bot link is 16 px'},
+  // Reported Nov 14 (foundations: 44 px phone targets made Settings' header taller, moving this button to the fold).
+  '7 | button.primary "New token"': {states: ['sign-off', 'bot-waiting'],
+    what: 'Settings > Computers: New token opens half under the tab bar (a scroll brings it up); goes when Settings\' own header moves onto pageHead (package E)'},
 };
 
 function startHub(state: string): Promise<Hub> {

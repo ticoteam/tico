@@ -50,7 +50,7 @@ async function start(browser: import('playwright').Browser, {width = 1280, admin
   const saved: Saved[] = [], sent: Sent[] = [], grants: unknown[] = [];
   let failures = failSaves;
   const threads = threadsFake({bot: OWNER, me: 'human:ana', sent, messages: card ? [CARD] : []});
-  const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools', width, height: width < 500 ? 780 : 860, ready: '.tt-row, [data-tl-empty], .tt-table',
+  const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools', width, height: width < 500 ? 780 : 860, ready: '[data-tl-table]',
     extra: (p, method, body, url) => {
       if (p === '/api/v2/tool-index') return {rows: ROWS, counts: null};
       if (p === '/api/v2/page-owners') return {pages: {tools: {bot: 'bot:' + OWNER, name: 'Tools'}}};

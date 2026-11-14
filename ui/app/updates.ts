@@ -320,8 +320,8 @@ function updMenuOpen(state: UpdState, btn: HTMLElement, id: string): void {
 }
 // Bots often write Blocked: and Suggestion: lines with no bullet; markdown would fold each into the bullet above it.
 const updNormalizeBody = (body: string | null | undefined): string => String(body ?? '').replace(/^[ \t]*(Blocked|Suggestion):/gm, '- $1:');
-// `kids` is the tree's toggle for the cards of this card's reports, on the name's line right of Archive (outside the
-// corner, so it never fades). The row under the update holds Edit on your own card and is gone without it.
+// `kids` is the tree's toggle for the cards of this card's reports ("8 reports >"): on a line of its own under the update
+// (style guide, "Updates card with its reports"), so ⋯ stays the last control on the name's line.
 function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
   const who = updAuthor(u.bot);
   const open = state.open.has(u.id);
@@ -333,7 +333,7 @@ function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
       <div class="upd-meta"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
-        <span class="upd-corner">${who.person ? (u.own && updCanWrite(state) ? updWriteBtn(u) : '') : updReplyBtn(u)}${updMoreBtn()}</span>${kids}</div>
+        <span class="upd-corner">${who.person ? (u.own && updCanWrite(state) ? updWriteBtn(u) : '') : updReplyBtn(u)}${updMoreBtn()}</span></div>
       ${u.slides ? updDeck(u, state) : body ? messageMd('upd-body md', updNormalizeBody(body), who.person ? '' : `bot:${u.bot}`, {shortLinks: true}) : ''}
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? messageMd('md', m.body || '', m.sender_id, {shortLinks: true}) : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
@@ -341,6 +341,7 @@ function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
         <form class="upd-reply" data-upd-form><textarea rows="1" placeholder="Reply to ${esc(who.label)}…" aria-label="Reply">${esc(UPD_DRAFTS.get(u.id) || '')}</textarea>
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
         <div class="muted upd-hint">Goes to ${esc(who.label)}'s chat too.</div></div>` : ''}
+      ${kids ? `<div class="upd-meta upd-kids-row">${kids}</div>` : ''}
     </div></article>`;
 }
 // A week in review is five slides, swiped left to right (scroll-snap), with arrows and dots for a mouse
@@ -493,7 +494,7 @@ function updEditor(u: UpdUpdate | null, n: UpdTreeNode, state: UpdState, kids = 
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
-      <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
+      <div class="upd-actions">${kids}<span class="spacer"></span><button type="button" class="ghost" data-upd-cancel>Cancel</button><button class="primary" type="submit">Post</button></div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }
 // The editor's slides: bullets one per line, and KPIs as "Name: value", keeping a KPI's chart and note when

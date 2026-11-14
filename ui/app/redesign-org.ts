@@ -1,8 +1,10 @@
 /* ui/app/redesign-org.ts — Strategy › Org (redesign PLAN §6 wave 6): the org chart, top down, the same chart on a phone
    (pinch and pan) and a desktop. The owner on top; under them the teammates outside groups and every top-level group,
-   a group a dashed outline with its name on a tab that folds it. Inside a group the lead comes first and teammates hang
-   under whoever they report to. The built-in bots sit in a Built-in group, folded until someone opens it; explicitly
-   marked helpers are off the chart.
+   a group a dashed outline with its name and count on a tab that folds it. Inside a group the lead comes first and
+   teammates hang under whoever they report to. The built-in bots (the Assistant and the General Manager too) sit in the
+   Built-in group, folded until someone opens it; explicitly marked helpers are off the chart. A computer opens the chart
+   at a readable size from its left edge; a phone shows one team at a time, picked above the frame, at full size (style
+   guide, Org chart: "the chart never shrinks to fit").
    Tapping a teammate opens a sheet: their home group, and Move to… for the owner (any group) and a lead (the
    groups it leads), which moves them at once (PATCH /api/v2/groups/{id}). A built-in bot has no Move to… (the server
    refuses it). Anyone else sees the group only; org changes beyond that are asked of the person's Assistant, in words
@@ -28,6 +30,9 @@ interface RdoPose { x: number; y: number; s: number }
 type RdoCtx = {seen: Set<string>; group?: typeof rdoGroupBlock};
 
 const RDO_FOLDED_KEY = 'tico.org.chart.folded.v2';
+// The team a phone shows (rdoTeams), kept for the next visit; '' is the whole chart.
+const RDO_TEAM_KEY = 'tico.org.chart.team';
+const rdoPhone = (): boolean => matchMedia('(max-width:760px)').matches;
              // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids, manual: zoomed or panned by hand}
 let RDO_SEQ = 0;
 // The General group starts folded. A chart saved under the key before it (v1) keeps the folds it had, plus this one.
@@ -74,10 +79,12 @@ function rdoMoveTargets(from: string): string[] | null {
 // top-level group under the one it answers to (orgGroupHead), so a department sits under the person who runs it.
 // The top person's own group is the top of the chart, not an outline: whoever is in it hangs from them. `leadOf` gives a
 // group's lead (Rules › Internal reads the groups itself).
-function rdoTree(leadOf: (id: string) => string = id => rdoGroup(id)?.lead || ''): OrgByParent {
+// `tray`: the Strategy chart, where every built-in bot sits in the Built-in group (Rules › Internal keeps them where
+// they report).
+function rdoTree(leadOf: (id: string) => string = id => rdoGroup(id)?.lead || '', tray = false): OrgByParent {
   const by: OrgByParent = {};
   for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
-  rdoMembers(by);
+  rdoMembers(by, tray);
   orgChartShape(by, rdoKey, leadOf);
   by[''] = by[''] || [];
   return by;
@@ -85,7 +92,7 @@ function rdoTree(leadOf: (id: string) => string = id => rdoGroup(id)?.lead || ''
 // The members the server lists for each group (GET /v2/groups `bots`) that the chart's own rules left out: the built-in
 // bots (the General Manager's team), which orgTreeWithHelpers takes off the tree, and a group the roster does not carry yet. A bot already on the chart
 // stays where it is, and a bot the caller may not see is left out here as it is in the tree.
-function rdoMembers(by: OrgByParent): void {
+function rdoMembers(by: OrgByParent, tray = false): void {
   const kidsOf = (key: string): OrgNode[] => {
     const kids = by[key] || [];
     by[key] = kids;
@@ -107,11 +114,13 @@ function rdoMembers(by: OrgByParent): void {
       kidsOf(boss.startsWith('b:') && boss !== 'b:' + id && (g.bots || []).includes(boss.slice(2)) ? boss : 'g:' + g.id).push({kind: 'bot', ...e});
     }
   }
-  // A built-in in no group (the Assistant) hangs from the person it reports to.
+  // A built-in in no group (the Assistant, the General Manager) hangs from the person it reports to; on the Strategy
+  // chart it joins the Built-in group instead, folded with the rest (style guide: "Built-in bots folded by default").
+  const home = tray && groups.has(BUILT_IN_GROUP) ? 'g:' + BUILT_IN_GROUP : '';
   for (const e of S.emps) {
     if (placed.has(e.id) || !isBuiltInBot(e.id) || e.team || !orgBranchVisible(e) || !orgMineKeep(e)) continue;
     const boss = orgBossKey({kind: 'bot', ...e});
-    if (boss.startsWith('p:')) { placed.add(e.id); kidsOf(boss).push({kind: 'bot', ...e}); }
+    if (home || boss.startsWith('p:')) { placed.add(e.id); kidsOf(home || boss).push({kind: 'bot', ...e}); }
   }
 }
 // The server keeps the built-in bots in their group and refuses to move one (422), so the sheet offers no Move to….
@@ -168,7 +177,7 @@ function rdoGroupBlock(by: OrgByParent, g: OrgGroup, ctx: RdoCtx, depth: number)
     <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(g.name)}"><span class="rdo-cx" aria-hidden="true">›</span><span class="rdo-tn">${esc(g.name)}</span><span class="rdo-n">${count}</span></button>
     <div class="rdo-gb">${body}</div></section>`;
 }
-function rdoChartHtml(by: OrgByParent = rdoTree(), ctx: RdoCtx = {seen: new Set<string>()}): string {
+function rdoChartHtml(by: OrgByParent = rdoTree(undefined, true), ctx: RdoCtx = {seen: new Set<string>()}): string {
   const top = rdoTop(by);
   const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => rdoKey(n) !== rdoKey(top))] : (by[''] || []);
   if (top) ctx.seen.add(rdoKey(top));
@@ -184,10 +193,50 @@ function rdoChartHtml(by: OrgByParent = rdoTree(), ctx: RdoCtx = {seen: new Set<
     + (cols.length ? `<ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul>` : '')
     + (under ? `<ul class="rdo-tray"><li>${under}</li></ul>` : '');
 }
+// ----------------------------------------------------------------- a phone: one team at a time
+// The teams a phone picks from: the top-level groups that hold someone, in the chart's order, then the whole chart.
+function rdoTeams(by: OrgByParent): {id: string; name: string; n: number}[] {
+  return rdoGroups().filter(g => !g.parent).sort((a, b) => (a.order || 0) - (b.order || 0) || String(a.name).localeCompare(String(b.name)))
+    .map(g => ({id: g.id, name: String(g.name || g.id), n: rdoCount(by, 'g:' + g.id)})).filter(t => t.n > 0)
+    // Built-in last, as the chart draws it under the row.
+    .sort((a, b) => Number(a.id === BUILT_IN_GROUP) - Number(b.id === BUILT_IN_GROUP));
+}
+function rdoTeamPick(teams: {id: string}[]): string {
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(RDO_TEAM_KEY); } catch { /* the first team */ }
+  return saved === '' || (saved && teams.some(t => t.id === saved)) ? saved : teams[0]?.id || '';
+}
+// The picker above the frame, in the zoom bar's place: a team, or the whole chart.
+function rdoTeamBar(teams: {id: string; name: string; n: number}[], pick: string): string {
+  return `<label class="rdo-team"><span class="sr-only">Team</span><select id="rdo-team">${teams.map(t =>
+    `<option value="${esc(t.id)}"${t.id === pick ? ' selected' : ''}>${esc(t.name)} · ${t.n}</option>`).join('')}<option value=""${pick ? '' : ' selected'}>Whole chart</option></select></label>`;
+}
+const RDO_ZOOM_BAR = `<button type="button" class="ghost" data-rdo-zoom="out" aria-label="Zoom out">−</button>
+  <span class="rdo-pct" id="rdo-pct" aria-hidden="true">100%</span>
+  <button type="button" class="ghost" data-rdo-zoom="in" aria-label="Zoom in">+</button>
+  <button type="button" class="ghost rdo-fit" data-rdo-zoom="fit" title="Fit the chart to the frame">Fit</button>`;
+
 function rdoDraw({refit = false}: {refit?: boolean} = {}): void {
-  const cv = $('#rdo-cv'), pane = $('#rdo-pane');
+  const cv = $('#rdo-cv'), pane = $('#rdo-pane'), bar: HTMLElement | null = $('#rdo-bar');
   if (!cv || !pane || !RDO) return;
-  cv.innerHTML = rdoChartHtml();
+  const phone = rdoPhone(), by = rdoTree(undefined, true);
+  const teams = phone ? rdoTeams(by) : [], team = phone ? rdoTeamPick(teams) : '';
+  const node = team ? Object.values(by).flat().find(n => n.kind === 'group' && n.id === team) : null;
+  // A phone's team is drawn on its own; the whole chart (or a computer) is the chart as it is.
+  cv.innerHTML = node ? rdoNode(by, node, {seen: new Set<string>()}, 0) : rdoChartHtml(by);
+  cv.classList.toggle('rdo-one', !!node);
+  if (bar && bar.dataset.phone !== String(phone)) {
+    bar.dataset.phone = String(phone); bar.dataset.teams = '';
+    bar.innerHTML = phone ? '' : RDO_ZOOM_BAR;
+    bar.setAttribute('aria-label', phone ? 'Team' : 'Zoom');
+  }
+  if (bar && phone) {
+    // The picker is drawn again only when the teams change; a new pick only moves its value, so the select keeps the
+    // focus (a screen reader stays on it).
+    const sig = teams.map(t => `${t.id}\u0001${t.name}\u0001${t.n}`).join('\u0002'), pick = bar.querySelector<HTMLSelectElement>('#rdo-team');
+    if (bar.dataset.teams !== sig || !pick) { bar.dataset.teams = sig; bar.innerHTML = rdoTeamBar(teams, team); }
+    else if (pick.value !== team) pick.value = team;
+  }
   // The roster has no leads: sheets need the viewer and the full groups before deciding who may move whom.
   if (!rdoReady()) cv.querySelectorAll('[data-rdo-ref]').forEach((card: HTMLButtonElement) => { card.disabled = true; });
   rdoFitHeight();
@@ -195,12 +244,18 @@ function rdoDraw({refit = false}: {refit?: boolean} = {}): void {
   else rdoSize();
 }
 // On a phone the chart's frame runs down to the tab bar, so the page itself does not scroll.
+// One team (rdoDraw) takes the height it needs, up to that, so a small team is not a short list in a tall empty box; a
+// team taller than the room scrolls inside the frame. The whole chart always has the room.
+const RDO_ONE_MIN = 120;
 function rdoFitHeight(): void {
-  const pane = $('#rdo-pane');
+  const pane: HTMLElement | null = $('#rdo-pane'), cv: HTMLElement | null = $('#rdo-cv');
   if (!pane) return;
   if (!matchMedia('(max-width:760px)').matches) { pane.style.height = ''; return; }
   const bar = $('#mobile-nav'), bottom = bar && bar.getClientRects().length ? bar.getBoundingClientRect().top : innerHeight;
-  pane.style.height = Math.max(240, Math.floor(bottom - pane.getBoundingClientRect().top - 12)) + 'px';
+  const room = Math.max(240, Math.floor(bottom - pane.getBoundingClientRect().top - 12));
+  const one = !!cv?.classList.contains('rdo-one');
+  const need = one && cv ? Math.ceil(cv.offsetHeight * (RDO?.zoom || 1)) + pane.offsetHeight - pane.clientHeight : room;
+  pane.style.height = (one ? Math.max(RDO_ONE_MIN, Math.min(room, need)) : room) + 'px';
 }
 
 // The chart is scaled with a transform, which leaves its layout box alone, so a sizer under it holds the scaled size for
@@ -239,10 +294,12 @@ function rdoPaint(at: RdoPose, from?: RdoPose | null): void {
 // The chart changed size (a fold, a redraw) or the pane did: lay it out again at the same zoom.
 function rdoSize(): void {
   if (RDO?.zoom == null || !$('#rdo-cv')) return;
+  if ($('#rdo-cv').classList.contains('rdo-one')) rdoFitHeight();   // a fold changes one team's height
   rdoPaint(rdoLayout(RDO.zoom));
 }
 // The whole width when it fits with names still readable (12px or more), the owner then over the middle of its row; else
-// readable and the owner in the middle of the frame, the rest a drag away.
+// readable from the chart's left edge, the rest a drag away, so it never opens cut on the left. A phone never shrinks
+// the chart: one team at full size (rdoDraw).
 function rdoFit({animate = false}: {animate?: boolean} = {}): void {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
   if (!cv || !pane || !RDO) return;
@@ -250,9 +307,10 @@ function rdoFit({animate = false}: {animate?: boolean} = {}): void {
   const fit = (pane.clientWidth - 2 * RDO_PAD) / Math.max(1, cv.offsetWidth);
   const readable = Math.ceil(12 / name * 1000) / 1000;
   RDO.manual = false;
-  rdoZoom(fit >= readable ? Math.min(1, fit) : readable, {animate, centre: true});
+  if (rdoPhone()) { rdoZoom(1, {animate, start: true}); return; }
+  rdoZoom(fit >= readable ? Math.min(1, fit) : readable, {animate, centre: fit >= readable, start: fit < readable});
 }
-function rdoZoom(z: number, {at, animate = false, centre = false}: {at?: {x: number; y: number}; animate?: boolean; centre?: boolean} = {}): void {
+function rdoZoom(z: number, {at, animate = false, centre = false, start = false}: {at?: {x: number; y: number}; animate?: boolean; centre?: boolean; start?: boolean} = {}): void {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
   if (!cv || !pane || !RDO) return;
   z = Math.max(0.35, Math.min(1.6, z));
@@ -261,7 +319,8 @@ function rdoZoom(z: number, {at, animate = false, centre = false}: {at?: {x: num
   const owner = centre && cv.querySelector('.rdo-card.top');
   RDO.zoom = z;
   const lay = rdoLayout(z);
-  if (centre) {
+  if (start) { pane.scrollLeft = 0; pane.scrollTop = 0; }
+  else if (centre) {
     // The owner's middle in the chart's own (unscaled) pixels.
     let x = cv.offsetWidth / 2;
     if (owner) { x = owner.offsetWidth / 2; for (let el = owner; el && el !== cv; el = el.offsetParent) x += el.offsetLeft; }
@@ -303,14 +362,13 @@ async function pageRdOrg(): Promise<void> {
   RDO ||= {groups: null, zoom: null, folded: rdoFoldedLoad()};
   RDO.zoom = null; RDO.manual = false;
   main.innerHTML = strategyHeadHtml('org') + `<div class="rdo-wrap">
-      <div class="rdo-bar" role="toolbar" aria-label="Zoom"><button type="button" class="ghost" data-rdo-zoom="out" aria-label="Zoom out">−</button>
-        <span class="rdo-pct" id="rdo-pct" aria-hidden="true">100%</span>
-        <button type="button" class="ghost" data-rdo-zoom="in" aria-label="Zoom in">+</button>
-        <button type="button" class="ghost rdo-fit" data-rdo-zoom="fit" title="Fit the chart to the frame">Fit</button></div>
+      <div class="rdo-bar" id="rdo-bar" role="toolbar" aria-label="Zoom"></div>
       <div class="rdo-pane" id="rdo-pane"><div class="rdo-sz" id="rdo-sz"><div class="rdo-cv rd-org" id="rdo-cv"></div></div></div></div>
       <div class="org-fac-host" id="org-fac-host"></div>`;
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
+  // Crossing the phone width swaps the zoom bar and the team picker: draw again, fitted.
+  RDO_PHONE_MQ.onchange = () => { if ($('#rdo-cv') && RDO) { RDO.manual = false; rdoDraw({refit: true}); } };
   rdoDraw();
   // The locked Factories section below the chart (ui/app/org-factories.ts).
   void orgFactoriesMount($('#org-fac-host'));
@@ -383,6 +441,17 @@ function rdoWire(pane: HTMLElement): void {
   }, {passive: false});
 }
 
+const RDO_PHONE_MQ = matchMedia('(max-width:760px)');
+// A phone's team picker: the chart draws that team (or the whole chart) at full size, from its top left.
+document.addEventListener('change', ev => {
+  const pick = eventElement(ev)?.closest<HTMLSelectElement>('#rdo-team');
+  if (!pick || !RDO) return;
+  try { localStorage.setItem(RDO_TEAM_KEY, pick.value); } catch { /* kept for this visit only */ }
+  // Picking a team is asking to see it: it opens, Built-in too (folded by default).
+  if (pick.value && RDO.folded.delete(pick.value)) rdoFoldedSave();
+  RDO.manual = false;
+  rdoDraw({refit: true});
+});
 document.addEventListener('click', ev => {
   const target = eventElement(ev);
   if (!target?.closest('.rd-org-layout') || !RDO) return;

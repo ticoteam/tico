@@ -259,6 +259,24 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
     assert.match((await links.first().getAttribute('href'))!, /#\/docs\/source%3Alink-/);
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
+    // A recent row is the title and its age: no folder line (the list already groups by it) and no name after the age;
+    // who changed it and when are the age's tooltip.
+    const recent = page.locator('.docs-recent-row', {hasText: 'Refund policy'});
+    assert.equal(await recent.locator('.docs-recent-folder').count(), 0, 'recent row: no folder subtitle');
+    const age = await recent.locator('.docs-recent-when').innerText();
+    assert.doesNotMatch(age, /·|ago/, 'recent row: the age alone');
+    assert.match((await recent.locator('.docs-recent-when').getAttribute('title'))!, /\d{1,2}:\d{2} [AP]M/, 'recent row: the time is the tooltip');
+    assert.equal(await recent.getAttribute('title'), 'Support', 'recent row: the folder is the tooltip');
+    assert.equal(await recent.locator('.docs-recent-in').count(), 0, 'recent row: a title seen once shows no folder');
+    {
+      // Two docs with one title in different folders: each says its folder after the title.
+      add('doc-000000000099', 'sales/refund-policy.md', 'Refund policy', 'Sales refunds.');
+      const twice = await open('#/docs');
+      await twice.locator('.docs-recent-row').nth(1).waitFor();
+      assert.deepEqual((await twice.locator('.docs-recent-row', {hasText: 'Refund policy'}).locator('.docs-recent-in').allInnerTexts()).sort(), ['Sales', 'Support'], 'recent rows: a repeated title says its folder');
+      await twice.close();
+      docs.delete('doc-000000000099'); versions.delete('doc-000000000099');
+    }
     await shot(page, 'list');
     // Ask opens the Ask panel with this page; nothing of the Librarian: no rail, settings link or sidebar gear.
     assert.equal(await page.locator('#docs-ask').getAttribute('aria-label'), 'Ask');
@@ -287,7 +305,10 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
     assert.equal(asked.instructions, 'Add how other stores handle refunds');
     assert.equal(asked.section, '');
     assert.equal(await research.locator('a', {hasText: 'View task'}).getAttribute('href'), '#/task/task-research');
-    await research.locator('button', {hasText: 'Close'}).click();
+    // Filed: View task is the one action; the header's ✕ dismisses it (no "Close" word).
+    assert.equal(await research.locator('button', {hasText: 'Close'}).count(), 0, 'research filed: no Close word button');
+    await research.locator('.tmodal-x').click();
+    await page.locator('form[data-research-form]').waitFor({state: 'detached'});
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();
 
@@ -382,7 +403,10 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
 
     // ---- linked docs: add (kind detected), open at the source, edit, remove
     page = await open('#/docs');
-    await page.locator('#docs-add-source').click();
+    // Add source lives in ⋯ only (style guide "Top bars: one line": nothing sits in both the row and ⋯).
+    assert.equal(await page.locator('header.ph button', {hasText: /^Add source$/}).count(), 0, 'no Add source button in the bar');
+    await page.locator('#docs-more').click();
+    await page.locator('#docs-link').click();
     await page.locator('form[data-link-form] input[name=url]').fill('www.notion.so/Acme-Handbook');
     assert.match((await page.locator('[data-detected]').textContent())!, /Link only/);
     await page.locator('form[data-link-form] input[name=description]').fill('The company handbook');

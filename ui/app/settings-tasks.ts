@@ -29,22 +29,20 @@ function askFilterSettingsPaint(): void {
   const team = ASK_FILTER.editing === 'team', v = team && ASK_FILTER.team ? ASK_FILTER.team : ASK_FILTER.settings;
   const mine = ASK_FILTER.settings;
   el.innerHTML = `<form class="ask-filter">
-    ${ASK_FILTER.may_edit_team ? `<div class="theme-seg" role="radiogroup" aria-label="Whose settings">
+    ${ASK_FILTER.may_edit_team ? `<div class="ph-seg" role="radiogroup" aria-label="Whose settings">
       <button type="button" role="radio" aria-checked="${!team}" data-ask-filter-edit="mine">Yours</button>
       <button type="button" role="radio" aria-checked="${team}" data-ask-filter-edit="team">Team default</button></div>` : ''}
-    <p class="settings-cell-note">${team ? 'Everyone without their own settings uses these.'
-      : mine.own ? 'Your own settings.' : 'You use the team default until you save your own.'}</p>
+    ${team || !mine.own ? `<p class="settings-cell-note">${team ? 'Everyone without their own settings uses these.' : 'You use the team default until you save your own.'}</p>` : ''}
     <fieldset class="ask-filter-modes"><legend>Mode</legend>${ASK_FILTER_MODES.map(([k, label, help]) =>
       `<label><input type="radio" name="mode" value="${k}"${v.mode === k ? ' checked' : ''}> <b>${esc(label)}</b> <span class="muted">${esc(help)}</span></label>`).join('')}</fieldset>
     <label>Open items before it tightens <input type="number" name="budget" min="1" max="200" value="${esc(v.budget)}" required></label>
     <label>What you want to be asked about, one per line (up to 10)
       <textarea name="criteria" rows="6">${esc((v.criteria || []).join('\n'))}</textarea></label>
-    <div class="row"><button class="primary" type="submit">Save</button>
-      ${!team && mine.own ? '<button type="button" class="ghost" data-ask-filter-reset>Use the team default</button>' : ''}
-      <span class="muted" data-ask-filter-msg></span></div></form>
+    <div class="onb-actions">${!team && mine.own ? '<button type="button" class="ghost" data-ask-filter-reset>Use the team default</button>' : ''}
+      <span class="spacer"></span><span class="muted" data-ask-filter-msg></span><button class="primary" type="submit">Save</button></div></form>
     ${team ? '' : `<form class="ask-filter-replay" aria-label="Replay a day">
       <p class="settings-cell-note">Before you turn it On: see what On would have done with one day of bots’ items, with these settings. Nothing moves.</p>
-      <div class="row"><input type="date" name="day" required value="${esc(new Date().toISOString().slice(0, 10))}" aria-label="Day">
+      <div class="row"><input type="date" data-date-field name="day" required value="${esc(dfIso(new Date()))}" aria-label="Day">
         <button type="submit" class="ghost">Replay a day</button><span class="muted" data-ask-replay-msg></span></div>
       <div class="ask-filter-replay-rows" role="list"></div></form>`}`;
   // The form, its message line and the mode buttons are drawn just above, so each lookup is present.
@@ -95,7 +93,8 @@ async function askFilterReplay(form: HTMLFormElement): Promise<void> {
   const msg = form.querySelector<HTMLElement>('[data-ask-replay-msg]')!;
   const list = form.querySelector<HTMLElement>('.ask-filter-replay-rows')!;
   const button = form.querySelector<HTMLButtonElement>('button')!;
-  const day = new FormData(form).get('day');
+  // The field's value, not FormData's: the date field (format.ts dateField) shows words and keeps YYYY-MM-DD in .value.
+  const day = form.querySelector<HTMLInputElement>('input[name="day"]')!.value;
   const rows: SettingsAskReplayRow[] = [];
   button.disabled = true; list.innerHTML = '';
   try {

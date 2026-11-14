@@ -8,7 +8,8 @@
 /* "+" adds a goal for the line's owner (a group's: its lead), always in its own column: quiet, and plain under a
    pointer on the line. */
 .gt-row,.gt-group{position:relative}
-.gt-add{grid-area:add;align-self:center;justify-self:end;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-height:0;padding:0;border:1px solid transparent;border-radius:6px;background:none;color:var(--muted);font-size:var(--t-md);font-weight:400;line-height:var(--lh-none);cursor:pointer;opacity:.8}
+/* A small mark on a phone too (.tap-mark, forms.css, gives it a 44px target around it), so it is positioned. */
+.gt-add{position:relative;grid-area:add;align-self:center;justify-self:end;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-height:0;padding:0;border:1px solid transparent;border-radius:6px;background:none;color:var(--muted);font-size:var(--t-md);font-weight:400;line-height:var(--lh-none);cursor:pointer;opacity:.8}
 .gt-add:hover,.gt-add:focus-visible{border-color:var(--muted);color:var(--ink);background:var(--surface);opacity:1}
 .gt-row:hover>.gt-add,.gt-row:focus-within>.gt-add,.gt-group:hover>.gt-add{border-color:var(--line);opacity:1}
 .gt-row>.gt-goal{cursor:pointer}
@@ -49,29 +50,32 @@
   .gt{--gt-pad:8px;--gt-el:var(--tree-r);--gt-line:22px;padding:2px 0}
   .gt-row{grid-template-columns:calc(var(--d,0) * var(--ind)) 26px minmax(0,1fr) auto 32px;grid-template-areas:"ind av name kpis add" "ind . goal goal add";min-height:44px;padding:0 var(--gt-pad)}
   .gt-row.gt-cont{grid-template-areas:"ind . goal kpis add"}
-  .gt-add{width:30px;height:30px;opacity:1;border-color:var(--line)}
+  /* A quiet mark, as on a computer: no box and no fill until pressed (a box on every line is louder than the goals);
+     .tap-mark keeps its 44px target. A touch screen's sticky hover draws no box either. */
+  .gt-add,.gt-row:is(:hover,:focus-within)>.gt-add,.gt-group:hover>.gt-add{width:30px;height:30px;opacity:1;border-color:transparent;background:none}
+  .gt-add:active{background:var(--surface2);color:var(--ink)}
   /* a line with no goal is one row, its avatar in the middle; with one, the avatar's row is a fixed line, for its elbow */
   .gt-row:not(.gt-cont):not(:has(>.gt-goal)){grid-template-areas:"ind av name kpis add"}
   .gt-row:not(.gt-cont):has(>.gt-goal){grid-template-rows:var(--gt-line) auto}
   .gt-row:has(>.gt-goal)>.gt-ind{--tree-y:calc(var(--gt-line) / 2)}
   .gt-row>.gt-goal{padding-bottom:6px}.gt-row.gt-cont>.gt-goal{padding-bottom:0}
-  .gt-group{grid-template-columns:calc(var(--d,0) * var(--ind)) minmax(0,1fr) 32px;grid-template-areas:"ind name add"}
+  /* a group's line is 44px too, so its "+" target stays inside its own line */
+  .gt-group{grid-template-columns:calc(var(--d,0) * var(--ind)) minmax(0,1fr) 32px;grid-template-areas:"ind name add";min-height:44px}
   .gt-chip,.gt-kmore{display:none}.gt-kn{display:inline-flex}
 }
 .goal-form{display:grid;gap:var(--s3);max-width:640px}
 .goal-fs{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3)}
 .goal-f{display:grid;gap:4px;min-width:0}
 .goal-f>span{font-size:var(--t-sm);color:var(--muted)}
-.goal-f input,.goal-f select{box-sizing:border-box;width:100%;height:36px;padding:0 9px;font-size:var(--t-md);text-overflow:ellipsis}
+.goal-f input,.goal-f select{box-sizing:border-box;width:100%;height:var(--ctl);padding:0 9px;font-size:var(--t-md);text-overflow:ellipsis}
 .goal-f input[readonly]{color:var(--muted)}
 .goal-actions{display:flex;align-items:center;gap:var(--s2)}
 .goal-actions .spacer{flex:1}
-.goal-actions button{height:36px;padding-top:0;padding-bottom:0}
+.goal-actions button{height:var(--ctl);padding-top:0;padding-bottom:0}
+/* A phone: --ctl is 44px there (tokens.css), so the fields and buttons above are 44px targets with no rule of their own. */
 @media (max-width:760px){
   .goal-fs{grid-template-columns:1fr}
-  .goal-f input,.goal-f select{height:44px;font-size:16px}
   .gp-signal-row label{min-height:44px}
-  .goal-actions button{height:44px}
   .goal-actions .primary{flex:1}
 }
 /* the bot page's Goals card: a goal edited in place */
@@ -89,7 +93,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-ed-pick{margin-top:4px;max-width:100%;font-size:var(--t-sm)}
 .goal-ed-change{display:block;width:100%;text-align:left;border:0;background:none;padding:2px 0;font:inherit;font-size:var(--t-sm);color:var(--muted);cursor:pointer}
 .goal-ed-change u{text-underline-offset:2px}
-@media (max-width:760px){.goal-ed-change{padding:10px 0;font-size:var(--t-md)}.goal-ed-pick{font-size:var(--t-lg);width:100%;min-height:40px}}
+@media (max-width:760px){.goal-ed-change{min-height:44px;padding:0;font-size:var(--t-md)}.goal-ed-pick{width:100%}.goal-ed-link{width:44px;height:44px}}
 .goal-ed-kids{display:flex;flex-direction:column;gap:1px;font-size:var(--t-sm)}
 .goal-ed-kids>span{font-size:var(--t-sm);color:var(--muted)}.goal-ed-kids a{color:var(--ink)}
 /* goals: status dots, a goal's note, its KPI lines, the KPI panel, Needs you */
@@ -121,22 +125,22 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-auto{font-size:var(--t-sm)}
 .kpi-add-host{margin:4px 0 10px 19px}
 .goal-colour-row{display:grid;grid-template-columns:150px 1fr;gap:8px}
-.goal-colour-row input{box-sizing:border-box;width:100%;height:36px;padding:0 9px;font-size:var(--t-md)}
+.goal-colour-row input{box-sizing:border-box;width:100%;height:var(--ctl);padding:0 9px;font-size:var(--t-md)}
 .goal-f textarea{box-sizing:border-box;width:100%;padding:7px 9px;font:inherit;font-size:var(--t-md);resize:vertical}
 .goal-form [hidden],.kpi-panel [hidden]{display:none!important}
 .need-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:4px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:var(--lh-tight)}
 .need-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .need-task{margin-left:auto;flex:none;font-size:var(--t-sm)}
-.gt-needs .kpi-prop{padding:4px 0;font-size:var(--t-base)}.gt-needs .kpi-prop-main{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:0 8px}.gt-needs .kpi-prop-do button{height:28px}
+.gt-needs .kpi-prop{padding:4px 0;font-size:var(--t-base)}.gt-needs .kpi-prop-main{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:0 8px}.gt-needs .kpi-prop-do button{height:var(--ctl-sm)}
 .kpi-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:var(--t-md)}
 .kpi-prop:first-child{border-top:0}
 .kpi-prop-main{display:flex;flex-direction:column;gap:2px;min-width:0}.kpi-prop-detail{overflow-wrap:anywhere}.kpi-prop-why{font-size:var(--t-sm)}
-.gt-needs .rec-opts{margin:4px 0 0;padding-left:20px;list-style:decimal;display:flex;flex-direction:column;gap:6px}.gt-needs .rec-acts{margin:2px 0 4px;padding-left:16px;list-style:disc;font-size:var(--t-sm)}.gt-needs .rec-opts button{height:28px}
-.kpi-prop-do{display:flex;gap:8px;flex:none}.kpi-prop-do button{height:34px;padding-top:0;padding-bottom:0}
+.gt-needs .rec-opts{margin:4px 0 0;padding-left:20px;list-style:decimal;display:flex;flex-direction:column;gap:6px}.gt-needs .rec-acts{margin:2px 0 4px;padding-left:16px;list-style:disc;font-size:var(--t-sm)}.gt-needs .rec-opts button{height:var(--ctl-sm)}
+.kpi-prop-do{display:flex;gap:8px;flex:none}.kpi-prop-do button{height:var(--ctl);padding-top:0;padding-bottom:0}
 .kpi-props{list-style:none;margin:0;padding:0}
 /* After "No, leave it": one line asking why, a one-line box and Send (ui/goals-kpis.ts propLeftHtml). */
 .kpi-prop-left{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;width:100%}.kpi-prop-left-k{color:var(--muted)}
-.kpi-prop-left input{flex:1 1 220px;min-width:0;box-sizing:border-box;height:30px;padding:0 9px;font:inherit}.kpi-prop-left button{height:30px}
+.kpi-prop-left input{flex:1 1 220px;min-width:0;box-sizing:border-box;height:var(--ctl);padding:0 9px;font:inherit}.kpi-prop-left button{height:var(--ctl)}
 .kpi-prop-left-err{flex-basis:100%;font-size:var(--t-sm);overflow-wrap:anywhere}
 .kpi-panel{width:min(600px,calc(100vw - 24px))}
 .kpi-panel .tmodal-body{max-height:calc(88vh - 56px)}
@@ -203,14 +207,12 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .kpi-lines,.kpi-add-host,.goal-note{margin-left:19px}
   .kpi-line{flex-wrap:wrap;gap:2px 10px;min-height:44px;padding:8px 6px}
   .kpi-name{flex:1 1 calc(100% - 20px)}.kpi-name+*{margin-left:19px}
-  .goal-auto,.gp-goal>.linkish,.kpi-r .linkish,.kpi-used .linkish{min-height:36px;padding:0 6px;margin:0 -6px}
+  .goal-auto,.gp-goal>.linkish,.kpi-r .linkish,.kpi-used .linkish{min-height:44px;padding:0 6px;margin:0 -6px}
   .gp-goal>.linkish{margin-left:13px}
-  .gt-needs-line{min-height:40px}.gt-needs-line button.linkish{padding:10px 4px;margin:-10px -4px}
+  .gt-needs-line{min-height:44px}.gt-needs-line button.linkish{min-height:44px;padding:0 4px;margin:0 -4px}
   .need-row{min-height:44px}.need-text{white-space:normal;overflow-wrap:anywhere}
-  .kpi-prop{flex-direction:column;align-items:stretch}.kpi-prop-do button{flex:1;height:44px}
-  .kpi-prop-left input,.kpi-prop-left button{height:44px;font-size:16px}
-  .goal-colour-row{grid-template-columns:1fr}.goal-colour-row input{height:44px;font-size:16px}
-  .goal-f textarea{font-size:16px}
+  .kpi-prop{flex-direction:column;align-items:stretch}.kpi-prop-do button{flex:1}
+  .goal-colour-row{grid-template-columns:1fr}
   .gp-actions .ghost{flex:1;height:44px}.gp-gline{min-height:44px}
   .kpi-panel{margin:auto 0 0;width:100%;max-width:100%;max-height:90vh;border-radius:14px 14px 0 0}
   .kpi-panel .tmodal-body{max-height:calc(90vh - 56px)}
@@ -272,8 +274,6 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 @media (max-width:760px){
   .goal-measure{grid-template-columns:1fr 1fr}.goal-measure .goal-metric{grid-column:1 / -1}
   .gsheet .goal-fs:not(.goal-measure){grid-template-columns:1fr}
-  .gsheet .goal-f input,.gsheet .goal-f select{height:44px;font-size:16px}
-  .gsheet .goal-actions button{min-height:44px}
   #main.rd-goals .rd-strat-head h1{flex:1 1 0}
   #main.rd-goals .rd-strat-head .strat-actions{order:1;flex:none}
 }

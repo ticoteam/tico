@@ -1,10 +1,19 @@
-.page-tags { max-width: 900px; margin: 0 auto; }
-.tag-notes { padding: 16px; overflow-wrap: anywhere; }
-.page-tags h1 { overflow-wrap: anywhere; min-width: 0; }
+/* ui/styles/tags.css — Tags (ui/app/tags.ts): the Tags page and a tag's page, at the content's left edge under the shared
+   header like every other page, and the same list in Settings › Tasks. */
+.page-tags { max-width: 900px; margin: 0; }
+.tag-notes { overflow-wrap: anywhere; }
 .tag-notes label { cursor: pointer; }
 .tag-notes input[type=checkbox] { width: 20px; height: 20px; margin-right: 8px; vertical-align: middle; }
-.tag-task { display: block; padding: 12px 16px; overflow-wrap: anywhere; }
-.tag-form { display: grid; gap: 12px; padding: 16px; }
+/* A list of tags or tasks: one row each, title only, flush with the card's heading, a line between rows. */
+.tag-list { display: flex; flex-direction: column; margin: 0 calc(-1 * var(--s2)); }
+.tag-task { display: block; padding: var(--s2); border-radius: 6px; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.tag-task + .tag-task { border-top: 1px solid var(--line); border-radius: 0; }
+.tag-task:hover { background: var(--hover); }
+.tag-task .muted { margin-left: var(--s1); }
+section.card > header .ph-add, section.card > header .tag-edit { margin-left: auto; }
+.tag-more { margin-top: var(--s2); }
+.tag-form { display: grid; gap: 12px; }
+.tag-form-btns { display: flex; gap: var(--s2); }
 .tag-form label { display: grid; gap: 6px; }
 .tag-form input:not([type=checkbox]), .tag-form textarea { width: 100%; min-width: 0; }
 .tag-form label:has(input[type=checkbox]) { display: flex; align-items: center; }

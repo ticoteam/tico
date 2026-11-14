@@ -134,8 +134,8 @@ async function docsSetup(slot: HTMLElement, {asked, current, openImport, reload}
     slot.innerHTML = `<section class="docs-setup" role="status" aria-labelledby="docs-setup-h">
         <h2 id="docs-setup-h">Setting up your Docs</h2>
         <p class="muted">${sent.count ? `${sent.count} ${sent.count === 1 ? 'source is' : 'sources are'} in Docs now. ` : ''}Reading them and mapping your docs, so anyone can find things. This usually takes 10–15 minutes.</p>
-        <div class="gs-card-actions"><a class="docs-new" role="button" href="#/task/${esc(sent.task)}">View task</a>
-          <button class="ghost" type="button" data-setup-close>Close</button></div></section>`;
+        <div class="gs-card-actions"><a class="docs-new" role="button" href="#/task/${esc(sent.task)}">View task</a></div>
+        <button class="ghost tmodal-x docs-setup-x" type="button" data-setup-close aria-label="Dismiss" title="Dismiss">✕</button></section>`;
     slot.querySelector<HTMLButtonElement>('[data-setup-close]')!.onclick = () => { DOCS_SETUP_SENT = null; slot.innerHTML = ''; }; // `!`: drawn by the template above
     return;
   }
@@ -220,11 +220,11 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const current = () => load === DOC_LOAD && S.route.startsWith(DOCS);
   $('#main').classList.toggle('docs-reading', !!selected);
 
-  // The one page header (ui/app/page-head.ts): search, Ask and Add source as tools, today's menu in its ⋯, New doc last.
+  // The one page header (ui/app/page-head.ts): search and Ask as tools, New doc the one filled button, ⋯ last with
+  // Import and Add source (used less than daily, so they live in ⋯ only: style guide "Top bars: one line").
   $('#main').innerHTML = pageHead({title: 'Docs', hook: 'docs-heading', moreId: 'docs-more', menuId: 'docs-menu',
     tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder=" " value="${esc(DOC_QUERY)}" autocomplete="off"><span class="docs-search-hint docs-search-hint-long" aria-hidden="true">Search docs</span><span class="docs-search-hint docs-search-hint-short" aria-hidden="true">Search</span><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`
-      + `<button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`
-      + '<button class="ghost" id="docs-add-source" type="button">Add source</button>',
+      + `<button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`,
     more: '<button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>'
       + (docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: '1'})}">Set up Docs…</a>` : '')
       + `<a id="docs-archived" href="${docsHref('', archived ? {} : {archived: '1'})}">${archived ? 'Active' : 'Archived'}</a>`,
@@ -242,7 +242,6 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
     const target = docsHref(source ? 'source:' + source.id : 'sources');
     if (location.hash === target) reload(); else location.hash = target;
   }});
-  $('#docs-add-source').onclick = () => openLink(null);
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
   // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.ts); what it sends carries this page.
@@ -366,14 +365,19 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
     if (back) docsLeaveDirty(event, back);
   });
   const back = `<a class="docs-back" href="${docsHref('', archived ? {archived: '1'} : {})}">‹ Docs</a>`;
-  // No doc open: the docs changed most recently, so the page opens on something to read.
+  // No doc open: the docs changed most recently, so the page opens on something to read. A row is the title and its
+  // age (style guide: "A row is a title and marks"); the folder is already the list's grouping, and who changed it and
+  // when exactly are the age's tooltip.
   function drawLanding(): void {
     if (!docs.length && !linked.length) { reader.innerHTML = ''; return; }   // the list says so, and the header has New doc
     const recent = [...docs].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))).slice(0, 12);
+    // Recent is flat, by date: a title that repeats in it says its folder after it, so two "README"s tell apart. The
+    // folder is always the row's tooltip.
+    const named = new Map<string, number>();
+    for (const d of recent) named.set(d.title, (named.get(d.title) || 0) + 1);
     reader.innerHTML = `<div class="docs-welcome docs-recent"><h2 class="docs-recent-head">${archived ? 'Archived' : 'Recent'}</h2>${recent.map(d =>
-      `<a class="docs-recent-row" href="${docsHref(d.id, archived ? {archived: '1'} : {})}"><span class="docs-recent-title">${esc(d.title)}</span>
-        <span class="docs-recent-folder">${esc(docsFolderWords(docsDir(d.path)))}</span>
-        <span class="docs-recent-when" title="${esc(fmt(d.updated_at))}">${esc(ago(d.updated_at))}${d.updated_by_name ? ' · ' + esc(d.updated_by_name) : ''}</span></a>`).join('')
+      `<a class="docs-recent-row" href="${docsHref(d.id, archived ? {archived: '1'} : {})}" title="${esc(docsFolderWords(docsDir(d.path)) || 'Docs')}"><span class="docs-recent-title">${esc(d.title)}${(named.get(d.title) || 0) > 1 ? ` <span class="muted docs-recent-in">${esc(docsFolderWords(docsDir(d.path)) || 'Docs')}</span>` : ''}</span>
+        <span class="docs-recent-when" title="${esc(fmt(d.updated_at) + (d.updated_by_name ? ', ' + d.updated_by_name : ''))}">${esc(ago(d.updated_at))}</span></a>`).join('')
       || '<p class="muted">Nothing here.</p>'}</div>`;
   }
   const pollSources = (): void => {
@@ -449,7 +453,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   if (!current()) return;
   const canChange = admin || !doc.locked;
   const crumb = `<p class="muted docs-crumb" title="${esc(doc.path)}">${esc(docsFolderWords(docsDir(doc.path)))}</p>`;
-  const meta = `Version ${doc.version} · Updated ${esc(ago(doc.updated_at))} by ${esc(doc.updated_by_name || doc.updated_by_id)}`;
+  const meta = `Version ${doc.version} · Updated ${esc(agoSaid(doc.updated_at))} by ${esc(doc.updated_by_name || doc.updated_by_id)}`;
   if (editing && canChange) {
     reader.innerHTML = back + `<header class="docs-reader-head docs-edit-head"><div class="docs-reader-title">${crumb}<h2>Edit</h2><p class="docs-meta">${meta}</p></div></header>`;
     reader.append(DocsEditor.editor({doc, onSaved: saved => { location.hash = docsHref(saved.id); }, onCancel: () => { location.hash = docsHref(doc.id); },

@@ -1,7 +1,7 @@
 // Ad campaigns under each ad account on a Google Ads tool's Finance card (ui/app/finance-campaigns.ts, tools-api.js) over a
 // fake API in backend/finance_ads_routes.py's and backend/finance/campaigns.py's shapes. Covers: the campaigns of one
 // account under it (Campaign, Spend, Clicks, Conv., Per conv., Owner) with an account that has none showing no rows; a
-// campaign with no conversions reads "—" per conversion; the owner picker shows the saved owner, blank is the account's
+// campaign with no conversions leaves its cost per conversion empty; the owner picker shows the saved owner, blank is the account's
 // owner; a change posts campaign_owner_set with team or teammate (blank posts none) and the card reads its campaigns
 // again; desktop and 390px with no sideways scroll (the table scrolls in its container).
 // TICO_UI_SHOTS=<dir> saves screenshots.
@@ -104,7 +104,7 @@ async function pick(page: import('playwright').Page, f: ReturnType<typeof fake>,
       const one = card.locator('tr[data-fc-campaign="camp-1"] td');
       assert.deepEqual([await one.nth(0).innerText(), await one.nth(1).innerText(), await one.nth(2).innerText(), await one.nth(3).innerText(), await one.nth(4).innerText()],
         ['Brand search', '$500.00', '420', '12.5', '$40.00'], `${tag}: campaign figures`);
-      assert.equal(await card.locator('tr[data-fc-campaign="camp-2"] td').nth(4).innerText(), '—', `${tag}: no conversions, no cost per conversion`);
+      assert.equal(await card.locator('tr[data-fc-campaign="camp-2"] td').nth(4).innerText(), '', `${tag}: no conversions, no cost per conversion (an empty cell)`);
       // The picker: blank is the account's owner; a teammate that owns the campaign is picked.
       assert.equal(await card.locator('select[data-fc-owner="camp-1"]').inputValue(), '', `${tag}: inherited owner is blank`);
       assert.equal(await card.locator('select[data-fc-owner="camp-1"] option').first().innerText(), 'Account owner', `${tag}: blank label`);

@@ -127,8 +127,8 @@ function settingsAgentCell(e: DeviceBot) {
   const name = agentKind(a);
   const manage = settingsCanManageBot(e);
   if (a.synced) return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
-    <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${ago(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span>${settingsAppDeliveryNote(e)}</div>`;
-  const seen = a.last_seen_at ? `last seen ${ago(a.last_seen_at)}` : a.credential ? 'credential issued · no heartbeat yet' : 'no credential yet';
+    <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${agoSaid(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span>${settingsAppDeliveryNote(e)}</div>`;
+  const seen = a.last_seen_at ? `last seen ${agoSaid(a.last_seen_at)}` : a.credential ? 'credential issued · no heartbeat yet' : 'no credential yet';
   return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
     <span class="settings-cell-note">${esc(seen)}</span>
     ${manage ? `<span class="settings-agent-actions">${agentPairButton(e)}<button class="ghost" type="button" data-agent-credential="${esc(e.id)}">${a.credential ? 'Rotate credential' : 'Create credential'}</button>${a.credential ? `<button class="ghost" type="button" data-agent-revoke="${esc(e.id)}">Revoke</button>` : ''}</span>` : ''}</div>`;
@@ -144,17 +144,17 @@ const agentPairButton = (e: DeviceBot) => ['hermes', 'openclaw'].includes(String
 function settingsAgentPair(slug: string) {
   const e: DeviceBot | undefined = S.emps.find(row => row.id === slug); if (!e) return;
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell agent-credential';
-  dialog.innerHTML = `<form method="dialog"><header><h2>Pair ${esc(e.display_name)}</h2><button class="ghost" type="button" data-close>Close</button></header>
+  dialog.innerHTML = `<form method="dialog"><header class="tmodal-head"><h2>Pair ${esc(e.display_name)}</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="tmodal-body agent-credential-body">
       <label>Code<input name="code" type="text" required autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="K7QM-4F2P"></label>
       <p class="muted">Printed by <code>hermes_agent.py pair</code> on the profile's computer (Hermes or OpenClaw).</p>
       <p class="muted" data-pair-preview></p>
-      <div class="row"><button class="primary" type="submit">Pair</button><span class="muted" data-pair-status></span></div>
-    </div></form>`;
+    </div>
+    <div class="tmodal-foot onb-actions"><button class="ghost" type="button" data-close>Cancel</button><span class="spacer"></span><span class="muted" data-pair-status></span><button class="primary" type="submit">Pair</button></div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-pair-status]');
-  const close = dialog.querySelector<HTMLElement>('[data-close]');
-  if (!form || !status || !close) return;
-  close.onclick = () => dialog.close();
+  const close = dialog.querySelectorAll<HTMLElement>('[data-close]');
+  if (!form || !status || !close.length) return;
+  close.forEach(button => { button.onclick = () => dialog.close(); });
   const preview = dialog.querySelector('[data-pair-preview]');
   if (!preview) return;
   // The same phases as Upload statement (finance-statement-upload.ts): Pair approves only the code whose preview is shown
@@ -218,7 +218,7 @@ async function settingsAgentCredential(slug: string) {
   catch (error) { toast(errorMessage(error, ''), true); return; }
   const setup = issued.setup, yaml = agentConfigYaml(setup);
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell agent-credential';
-  dialog.innerHTML = `<header><h2>${rotating ? 'New agent credential' : 'Agent credential'} for ${esc(e.display_name)}</h2><button class="ghost" type="button" data-close>Close</button></header>
+  dialog.innerHTML = `<header class="tmodal-head"><h2>${rotating ? 'New agent credential' : 'Agent credential'} for ${esc(e.display_name)}</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="tmodal-body agent-credential-body">
       <p>Shown once. It is this bot's identity; revoking it stops the bot at once.</p>
       <label>Token<div class="row"><code class="agent-token" data-token>${esc(issued.token)}</code><button class="ghost" type="button" data-copy-token>Copy</button></div></label>
@@ -278,9 +278,9 @@ async function renderSettingsTokens() {
 }
 function settingsTokenShow(issued: PersonalTokenIssued) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell agent-credential';
-  dialog.innerHTML = `<header><h2>Token ${esc(issued.label)}</h2><button class="ghost" type="button" data-close>Close</button></header>
+  dialog.innerHTML = `<header class="tmodal-head"><h2>Token ${esc(issued.label)}</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="tmodal-body agent-credential-body">
-      <p>Shown once. It acts as you, and expires ${esc(new Date(issued.expires_at).toLocaleDateString())}.</p>
+      <p>Shown once. It acts as you, and expires ${esc(lowerDay(dayWords(issued.expires_at)))}.</p>
       <label>Token<div class="row"><code class="agent-token" data-token>${esc(issued.token)}</code><button class="ghost" type="button" data-copy-token>Copy</button></div></label>
       <label>In a shell, for the <code>hub</code> command line and scripts:<div class="row"><code data-command>export HUB_API_URL=${esc(location.origin)} HUB_TOKEN=${esc(issued.token)}</code><button class="ghost" type="button" data-copy-command>Copy</button></div></label>
     </div>`;
@@ -395,7 +395,7 @@ function machineAccountHTML(account: MachineAccount | null | undefined, runtime:
     : harnessCaps(runtime).account ? '· account not reported yet' : '· account unavailable';
   const checked = Date.parse(String(account?.checked_at));
   const old = who && Number.isFinite(checked) && Date.now() - checked > MACHINE_ACCOUNT_FRESH_MS
-    ? ` <span class="muted" data-account-checked>account last checked ${esc(ago(account!.checked_at))}</span>` : '';
+    ? ` <span class="muted" data-account-checked>account last checked ${esc(agoSaid(account!.checked_at))}</span>` : '';
   const tip = [account?.org, machinePlanName(account?.plan)].filter(Boolean).join(' · ');
   return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${tip ? ` title="${esc(tip)}"` : ''}>${esc(rest)}</span>${old}`;
 }
@@ -409,8 +409,8 @@ function machineWindowHTML(label: string, reading: MachineUsageWindow | null | u
   const stale = Number.isFinite(reported) && Date.now() - reported > 86400000;
   const left = percent === null ? null : Math.round(100 - percent);
   const value = expired ? 'previous window; refresh needed' : left === null ? 'percentage unavailable' : `${left}% left`;
-  const notes = [Number.isFinite(reset) && !expired ? `resets ${new Date(reset).toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'})}` : '',
-    stale ? `from ${ago(reading.reported_at)}` : ''].filter(Boolean);
+  const notes = [Number.isFinite(reset) && !expired ? `resets ${timeSaid(reset)}` : '',
+    stale ? `from ${agoSaid(reading.reported_at)}` : ''].filter(Boolean);
   const bar = left !== null && !expired
     ? `<meter class="machine-usage-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-label="${esc(name)} ${esc(label)}: ${left}% left"></meter>` : '';
   return `<span class="machine-usage-line${stale || expired ? ' stale' : ''}" data-usage-window="${esc(label)}">${bar}<span>${esc(label)} ${esc(value)}</span>${notes.length ? `<span class="muted">${esc(notes.join(' · '))}</span>` : ''}</span>`;
@@ -429,7 +429,7 @@ function machineUsageHTML(runtime: string, state: MachineUsageState | null | und
 // The sign-in cell: signed in as <account>, signed out, login expired or rejected, checking, or couldn't check (with
 // when the computer last reported).
 function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string, auth: string | undefined, value: {account?: MachineAccount | null; detail?: string}) {
-  const checked = machine.last_seen_at ? ` · last checked ${ago(machine.last_seen_at)}` : '';
+  const checked = machine.last_seen_at ? ` · last checked ${agoSaid(machine.last_seen_at)}` : '';
   if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was cleared from Tico: the company\'s shared key does not sign it back in by itself">No key</span>';
   if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
   if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
@@ -623,10 +623,10 @@ function renderSettingsMachines() {
     const now = machineNowWords(machine), support = cloudSupportWords(machine);
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
       <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span>${support ? `<span class="settings-cell-note" data-machine-support>${esc(support)}</span>` : ''}</td>
-      <td class="num tnum machine-bot-count">${(machine.bots || []).length}</td>
+      <td class="num tnum machine-bot-count" data-label="Bots">${(machine.bots || []).length}</td>
       ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
-      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
+      <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-label="Now" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
   const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
   // A cloud machine not enrolled yet: its name and what it is doing (being made, starting, out of credit, failed), with
@@ -758,7 +758,7 @@ function renderSettingsMachines() {
   const agents = (SETTINGS_DATA.agents || []).map(agent => `<tr class="machine-card" data-agent-row="${esc(agent.bot)}"><td><strong><a href="#/bot/${esc(encodeURIComponent(agent.bot))}">${esc(agent.display_name || botSlug(agent.bot))}</a></strong><span class="settings-cell-note">${esc(agentKind(agent))}${agent.profile ? ` · profile ${esc(agent.profile)}` : ''}${agent.version ? ` · ${esc(agent.version)}` : ''}${agent.platform ? ` · ${esc(agent.platform)}` : ''}</span></td>
       <td>${esc(settingsPersonName(botRow(agent.bot)?.owner_id))}</td>
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
-      <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen_at ? `<span class="muted"> · ${esc(ago(agent.last_seen_at))}</span>` : ''}</span></td></tr>`).join('');
+      <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen_at ? `<span class="muted"> · ${esc(agoSaid(agent.last_seen_at))}</span>` : ''}</span></td></tr>`).join('');
   const empty = !SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.';
   const rows = coming + cards;
   const list = `${rows ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
@@ -766,16 +766,16 @@ function renderSettingsMachines() {
     ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
   // Only the list is redrawn; the Add computer dialog (and the code it shows) keeps what was typed.
   if (!el.querySelector('#machine-add-dialog')) el.innerHTML = `<div data-machines-list></div><p class="settings-cell-note" id="machine-note" role="status"></p>
-    <dialog class="tmodal tmodal-shell machine-add" id="machine-add-dialog" aria-label="Add computer"><header><h2>Add computer</h2><button class="ghost" type="button" data-machine-add-close>Close</button></header>
+    <dialog class="tmodal tmodal-shell machine-add" id="machine-add-dialog" aria-label="Add computer"><header class="tmodal-head"><h2>Add computer</h2><button class="ghost tmodal-x" type="button" data-machine-add-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="tmodal-body machine-enroll subs-form">
       <label class="subs-field" data-machine-operator-field><span class="k">Owner</span><select class="settings-inline-select" id="machine-operator">
         ${people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select></label>
       <label class="subs-field"><span class="k">Kind</span><select class="settings-inline-select" id="machine-kind">${S.config?.hosted ? '<option value="hosted">Hosted computer</option>' : ''}<option value="mac" selected>Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select></label>
       <label class="subs-field" data-machine-label-field><span class="k">Name</span><input id="machine-label" type="text" autocomplete="off" placeholder="Chris's Mac" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}"></label>
-      <div class="onb-actions"><span class="spacer"></span><button class="primary" type="button" id="register-machine">Get code</button></div>
-      <div class="machine-enroll-status" id="machine-enroll-status"></div></div></dialog>`;
+      <div class="machine-enroll-status" id="machine-enroll-status"></div></div>
+    <div class="tmodal-foot onb-actions"><button class="ghost" type="button" data-machine-add-close>Cancel</button><span class="spacer"></span><button class="primary" type="button" id="register-machine">Get code</button></div></dialog>`;
   const addDialog = $('#machine-add-dialog');
-  addDialog.querySelector('[data-machine-add-close]').onclick = () => addDialog.close();
+  addDialog.querySelectorAll('[data-machine-add-close]').forEach((button: HTMLElement) => { button.onclick = () => addDialog.close(); });
   const addOpen = $('#machine-add-open');
   if (addOpen) addOpen.onclick = () => { if (!addDialog.open) addDialog.showModal(); $('#machine-kind').focus(); };
   const listRoot = el.querySelector('[data-machines-list]'), restoreFocus = computerFocusRestore(listRoot);
@@ -784,6 +784,13 @@ function renderSettingsMachines() {
   computerDetailPaint();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
     : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'} as Record<string, string>)[$('#machine-kind').value] || 'Mac'}`;
+  // The dialog is drawn once, and the first draw can come before the people are read: its Owner list was then empty and
+  // the name read "Unassigned's Mac". Fill both once the people are known, unless someone has the dialog open.
+  const operatorPick = $('#machine-operator');
+  if (operatorPick && !operatorPick.options.length && people.length && !addDialog.open) {
+    operatorPick.innerHTML = people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('');
+    $('#machine-label').value = machineDefaultLabel();
+  }
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
   // A hosted computer is named and sized on app.tico.dev, so the owner and name fields step aside.
   const machineKindPaint = () => { const hosted = $('#machine-kind').value === 'hosted';

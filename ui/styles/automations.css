@@ -16,8 +16,26 @@
 .au:not(.ed-open) .au-side{display:none}
 .au [hidden]{display:none!important}
 
-/* the range: 5m, 1h, 24h, 7d, on the Automations | Runs row; its look is .ph-seg (page-head.css) */
+/* the range: 5m, 1h, 24h, 7d, in the header's tools; its look is .ph-seg (page-head.css). A phone picks it in ⋯
+   (.au-mrange), so its header keeps the search and the filter button on their row. An open automation has no range. */
 .au-range button{font-variant-numeric:tabular-nums}
+/* An open automation has its own Flow | Runs and a way back (‹ Automations): the list's views and range step aside, so
+   the screen has one Runs. */
+.au[data-screen="detail"]>.ph :is(.au-range,.ph-tabs),.ph-menu .au-mrange{display:none}
+/* ⋯'s choices (automations-overview.ts auCtlDraw): a small heading over each group, the picked one checked */
+.ph-menu .au-mh{padding:6px 10px 2px;color:var(--muted);font-size:var(--t-xs);font-weight:600}
+.ph-menu div[role="group"]+div[role="group"],.ph-menu div[role="group"]+.ph-copy{margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
+.ph-menu .au-mi{display:flex;align-items:center;gap:8px}
+.ph-menu .au-mi .nav-icon{flex:none;width:18px;font-size:16px;color:var(--ink)}
+.ph-menu .au-mi:not([aria-pressed="true"]) .nav-icon{visibility:hidden}
+/* an open automation's items in ⋯ (automations.ts auMoreHead): icon and word; Delete last, red, after a separator. On a
+   computer they are the header's ⋯, so the automation's own ⋯ (.au-hd-more) is a phone's. */
+.ph-menu [data-mi]{display:flex;align-items:center;gap:8px}
+.ph-menu [data-mi] .nav-icon{flex:none;width:18px;font-size:17px;color:var(--muted)}
+.ph-menu [data-mi]:disabled{opacity:.5;cursor:default}
+:is(.ph-menu,.au-menu) .au-mdel,:is(.ph-menu,.au-menu) .au-mdel .nav-icon{color:var(--fail)}
+.au-msep{height:1px;margin:4px 2px;background:var(--line)}
+@media (min-width:761px){.au-hd .au-hd-more{display:none}}
 
 /* the filters */
 .au-rail{display:flex;flex-direction:column;min-height:0;overflow-y:auto;border-right:1px solid var(--line)}
@@ -37,24 +55,18 @@
 /* the list: every automation, or every run (the Runs tab) */
 .au-ov{display:flex;flex-direction:column;flex:1;min-height:0}
 .au[data-screen="detail"] .au-ov,.au:not([data-screen="detail"]) :is(.au-crumb,.au-hd,.au-pane){display:none}
-.au-ctl{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:8px 16px;border-bottom:1px solid var(--line)}
-.au-tabs{display:flex;gap:2px}
-/* .ph-tab's look (page-head.css scopes .ph-tab under .ph, and this row sits below the header) */
-.au-tabs .ph-tab{padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font:inherit;font-size:var(--t-base);font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer}
-.au-tabs .ph-tab:hover{background:var(--surface2);color:var(--ink)}
-.au-tabs .ph-tab[aria-selected="true"]{background:var(--surface2);color:var(--ink);font-weight:600}
-.au-sels{display:contents}
-.au-sel{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-sm)}
-.au-sel select{width:auto;height:28px;padding:0 6px;font-size:var(--t-sm)}
 .au-tbl{flex:1;min-height:0;overflow:auto;container-type:inline-size}
 /* fixed columns: long names and triggers end in "…" so the counts on the right always show */
 .au-tbl-t{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--t-base)}
 .au-tbl-t th{position:sticky;top:0;z-index:1;padding:7px 10px;border-bottom:1px solid var(--line);background:var(--bg);color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left;white-space:nowrap;font-size:var(--t-label);font-weight:600}
 .au-tbl-t td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;overflow:hidden;text-overflow:ellipsis}
-.au-tbl-t th.au-tt{width:15%}
+#au-root .au-tbl-t :is(th,td):first-child{padding-left:16px}
+#au-root .au-tbl-t :is(th,td):last-child{padding-right:16px}
+/* a schedule's words ("Weekdays at 7:30 AM", cronWords) fit whole; an inbox or a long due date ends in "…" */
+.au-tbl-t th.au-tt{width:176px}
 .au-tbl-t th.au-to{width:64px}
-.au-tbl-t th.au-cl{width:78px}
-.au-tbl-t th.au-cx{width:104px}
+.au-tbl-t th.au-cl{width:100px}   /* "Nov 13, 2025" with its dot: a last run from another year fits */
+.au-tbl-t th.au-cx{width:144px}   /* "opens Feb 7, 2027" fits whole */
 .au-tbl-t th.au-cs{width:104px;padding-right:0}
 .au-tbl-t th.au-n{width:58px}
 .au-tbl-t th.au-cc{width:74px}
@@ -390,10 +402,16 @@ button.au-chip:hover{background:var(--surface2)}
 @media (max-width:760px){
   #main.au-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .au{height:auto;min-height:0}
-  /* the header's tools: the search (moved there by auPlace) and the filter button */
+  /* the header's tools: the search (moved there by auPlace) and the filter button, on a row of their own under the
+     title (order: the header's fit reads a part moved to a later row as meant there, not as overflow to fold into ⋯).
+     Tools (ui/app/tools.ts) shares this. */
+  .au>.ph>.ph-tools{order:1;flex:1 1 100%}
   .ph-tools>.au-s{flex:1;min-width:0;padding:0}
   .ph-tools .au-q{width:100%;min-width:0}
-  .au-fbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);cursor:pointer}
+  .au-fbtn{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--ctl);height:var(--ctl);padding:0;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);cursor:pointer}
+  /* the range is picked in ⋯ on a phone (.au-mrange) */
+  .au>.ph .au-range{display:none}
+  .ph-menu .au-mrange{display:block}
   .au-fbtn[aria-expanded="true"]{background:var(--surface2)}
   .au-fbtn .nav-icon{font-size:18px;width:18px;height:18px}
   .au-fbn{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:var(--t-2xs);font-weight:600;line-height:16px;font-variant-numeric:tabular-nums;text-align:center}
@@ -410,33 +428,55 @@ button.au-chip:hover{background:var(--surface2)}
   .au-fhn{min-width:18px;padding:0 6px;border-radius:999px;background:var(--surface2);color:var(--ink);font-size:var(--t-xs);font-weight:600;line-height:18px;font-variant-numeric:tabular-nums;text-align:center}
   .au-fh .au-chev{margin-left:auto;font-size:18px;width:18px;height:18px;color:var(--muted)}
   .au-fh[aria-expanded="true"] .au-chev{transform:var(--chev-open)}
-  .au-fb{min-height:40px}
-  /* the bar keeps Automations | Runs and the range; its Group and Sort are a computer's */
-  .au-ctl{padding:4px 12px}
-  .au-sels{display:none}
-  .au-tabs .ph-tab{min-height:40px}
-  .au-ctl .au-range button{min-height:36px}
-  /* the table scrolls sideways in its own box; the page scrolls down */
-  .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:24px}
-  .au-tbl-t{min-width:min(820px, calc(var(--au-cols, 9) * 92px))}
-  .au-crumb{padding:8px 12px 0}
+  .au-fb{min-height:44px}
+  /* the list and the runs: a table does not fit, so each is a row, its name over its facts (auRowsHTML); nothing
+     scrolls sideways, the page scrolls down */
+  .au-tbl{flex:none;overflow:visible;padding-bottom:24px}
+  .au-rows{display:flex;flex-direction:column}
+  .au-r{display:flex;flex-direction:column;gap:3px;min-height:44px;box-sizing:border-box;padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none;cursor:pointer}
+  .au-r:hover,.au-r:focus-visible{background:var(--surface2);text-decoration:none}
+  .au-r1{display:flex;align-items:center;gap:8px;min-width:0}
+  .au-r-a{display:flex;align-items:center;gap:8px;min-width:0;color:var(--ink);text-decoration:none}
+  .au-r-a:hover{text-decoration:none}
+  :is(.au-r-a,.au-r1)>.nav-icon{flex:none;font-size:17px;width:18px;height:18px;color:var(--muted)}
+  .au-r1 .au-nm{flex:0 1 auto;font-weight:500}
+  .au-r1 .pill{flex:none}
+  .au-r-own{flex:none;display:inline-flex;margin-left:auto}
+  .au-r.off .au-nm{color:var(--muted)}
+  /* the facts read as one line of text, " · " between them; a run's (which ends with who started it) stops at two lines */
+  .au-r2{display:block;padding-left:26px;color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  .au-r2>span+span::before{content:" · "}
+  .au-arow .au-r2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .au-r2 .au-lr{display:inline-flex}
+  .au-r .au-warn{padding-left:26px}
+  .au-rg{display:flex;align-items:center;gap:6px;width:100%;min-height:44px;padding:0 12px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;text-align:left;cursor:pointer}
+  .au-rg>.nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+  .au-rg.closed .au-chev{transform:rotate(-90deg)}
+  .au-rg .au-fn{margin-left:4px}
+  .au-chart{padding:12px 12px 6px}
+  .au-crumb{padding:4px 12px 0}
+  .au-up{min-height:44px}
   .au-hd{padding:8px 12px;border:0;flex-wrap:wrap}
   .au-own,.au-hd>.au-sp{display:none}
   .au-name{flex:1 1 0}
   .au-hd2{order:10;flex-basis:100%}
   .au-sp-phone{display:block;flex:1}
-  .au-icon{width:40px;height:40px}
+  .au-icon{width:var(--ctl);height:var(--ctl)}
+  button.au-chip{border-radius:var(--r-ctl)}   /* a 44px target reads as a button, not a stretched pill */
+  /* the "?" keeps its 44px hit area (.tap-mark) clear of the spend chip beside it */
+  .au-hd2 .au-help{margin-inline:6px}
   .au-pane{padding:4px 12px 24px;overflow:visible}
   .au-paths{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:none}
   .au-paths::-webkit-scrollbar{display:none}
   .au-pth{flex:0 0 84%;scroll-snap-align:start}
   .au-dots{display:flex;justify-content:center;gap:2px;margin-top:6px}
-  .au-dots button{position:relative;width:22px;height:22px;padding:0;border:0;background:none;cursor:pointer}
-  .au-dots button::before{content:"";position:absolute;top:8px;left:7px;width:7px;height:7px;border-radius:4px;background:var(--g4)}
+  .au-dots button{position:relative;width:22px;height:44px;min-height:0;padding:0;border:0;background:none;cursor:pointer}
+  .au-dots button::before{content:"";position:absolute;top:18px;left:7px;width:7px;height:7px;border-radius:4px;background:var(--g4)}
   .au-dots button[aria-selected="true"]::before{left:3px;width:16px;background:var(--ink)}
-  .au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}
-  .au-ln:not(.au-ln-end){height:32px}
-  .au-add-end{height:40px;padding:0 16px 0 14px}
+  /* the "+" between steps stays a small mark; its hit area (::after) is 44px */
+  .au-add:not(.au-add-end){width:28px;height:28px;min-height:0;line-height:25px}
+  .au-ln:not(.au-ln-end){height:44px}
+  .au-add-end{height:var(--ctl);padding:0 16px 0 14px}
   .au-menu,.au-newm{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
   .au-menu button,.au-newm button{min-height:44px}
   /* an editor: a sheet over the flow */
@@ -451,13 +491,8 @@ button.au-chip:hover{background:var(--surface2)}
   .au-cond-row>:first-child{grid-column:1/-1}
   .au-cond-row.nomin{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
   .au-runs thead{display:none}
-  .au-runs td{padding:10px 6px}
+  .au-runs td{height:44px;box-sizing:border-box;padding:10px 6px}
   .au-rx td{padding:2px 6px 10px 22px}
-}
-/* a small phone: the tabs and the range tighten to share their row */
-@media (max-width:360px){
-  .au-tabs .ph-tab{padding:0 8px}
-  .au-ctl .au-range button{padding:0 6px}
 }
 .au-mono textarea{font-family:var(--mono,ui-monospace,monospace);font-size:var(--t-sm)}
 
@@ -497,9 +532,7 @@ button.au-chip:hover{background:var(--surface2)}
   .au-ndb select{height:auto}
   .au-tps{grid-template-columns:minmax(0,1fr)}
   .au-tp{padding:10px 12px;min-height:44px}
-  .au-nd-seg button{min-height:36px}
   .au-nd .au-ndf{padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
-  .au-ndf>button{min-height:40px}
 }
 
 /* Maintenance (automations-maintenance.js): the run's settings, one numbered row per step, a tap opens its details */
@@ -558,15 +591,15 @@ button.au-chip:hover{background:var(--surface2)}
   .mt-set select{flex:1;min-width:0}
   .mt-set>.mt-lb{min-width:0;flex-basis:100%}
   .mt-row{gap:10px;padding:10px 12px}
+  .mt-main{display:flex;flex-direction:column;justify-content:center;min-height:44px}
   .mt-when{display:none}
   .mt-when-p{display:inline}
   .au-hd>.mt-meta{order:5;flex-basis:100%;white-space:normal}
   .mt-detail{padding:10px 12px 14px}
   .mt-kv>.mt-lb{min-width:0;flex-basis:100%}
-  .mt-kv select{height:36px}
-  .mt-kv input[type="number"]{height:36px}
+  .mt-kv select{height:var(--ctl)}
+  .mt-kv input[type="number"]{height:var(--ctl)}
   .mt-runs .mt-by{display:none}
-  .mt-now{min-height:36px}
   .hb-every-p{display:inline}
   .mt-step .mt-row:has(.hb-cells){flex-wrap:wrap}
   .hb-cells{order:3;flex-basis:100%;justify-content:flex-start;padding-left:0}

@@ -6,7 +6,7 @@
 //    "From Goals › <title>"; drawing Goals again (a goal's own address) keeps the chat as it was;
 //  - AC-4 ⌘J opens the chat with the cursor in its composer and, pressed again with the focus on the page, closes it;
 //    on Threads ⌘J opens Ask;
-//  - AC-5 opening Ask closes the chat, and opening the chat closes Ask;
+//  - the Assistant opens in the sidebar beside the open chat: both at once, at 1440 and at 1190, nothing overlapping;
 //  - leaving Goals for another Strategy tab closes the chat with its page;
 //  - AC-2 1680×1050: the column sits beside the page, which narrows by its width;
 //  - AC-11 a 390 px phone: the owner's face opens the chat full screen, as on Listening.
@@ -68,10 +68,12 @@ async function openGoals(viewport: {width: number; height: number}, sent: Sent[]
       const chat = page.locator('.goal-chat [data-pgc-open]');
       assert.equal(await chat.getAttribute('aria-label'), 'Chat with Strategy Owner');
       assert.equal(await chat.locator('.pgc-word').innerText(), 'Chat');
-      // Chat is a quiet tool of the shared page header: on the title line, last of its tools, and "New goal" stays last.
+      // Chat is a quiet tool of the shared page header: on the title line, last of its tools, then "New goal", then
+      // the header's ⋯ (Strategy's tabs past the fifth live there), which is always the last control.
       const head = await box(page, '.rd-strat-head'), btn = await box(page, '.goal-chat [data-pgc-open]'), go = await box(page, '#goal-new');
-      assert.ok(btn.y < head.bottom && btn.right <= go.x && go.right >= head.right - 4,
-        `Chat on the head's line, just before New goal: ${JSON.stringify({btn, go, head})}`);
+      const more = await box(page, '.rd-strat-head > .ph-more');
+      assert.ok(btn.y < head.bottom && btn.right <= go.x && go.right <= more.x && more.right >= head.right - 4,
+        `Chat on the head's line, just before New goal, ⋯ last: ${JSON.stringify({btn, go, more, head})}`);
       assert.ok(await page.locator('.rd-strat-head > .ph-tools > .goal-chat').count(), 'Chat sits in the header\'s tools');
       assert.equal(await chatShown(page), false, 'closed until opened');
       const before = await box(page, '#main'), tree = await box(page, '#goal-tree');
@@ -153,16 +155,33 @@ async function openGoals(viewport: {width: number; height: number}, sent: Sent[]
       await page.waitForFunction(() => document.querySelector<HTMLElement>('aside.pgc')!.hidden);
       assert.equal(await askShown(page), false);
 
-      // AC-5: Ask and the page's chat are never open together.
+      // The Assistant opens in the sidebar and the page's chat stays on the right: two bots, two places, both open at
+      // once and nothing overlapping, at 1440 and at a narrow 1190. Closing one leaves the other.
       await chat.click();
       await page.locator('aside.pgc .pgc-name').waitFor();
       await page.locator('#ask-row').click();
       await page.waitForFunction(() => document.querySelector('#ask-panel')?.classList.contains('ask-shown'));
-      assert.equal(await chatShown(page), false, 'opening Ask closes the chat');
-      await chat.click();
-      await page.locator('aside.pgc .pgc-name').waitFor();
+      assert.equal(await chatShown(page), true, 'opening Ask leaves the chat open');
+      for (const width of [1440, 1190]) {
+        await page.setViewportSize({width, height: 900});
+        await page.waitForFunction(() => document.querySelector('#ask-panel')!.getAnimations().length === 0);
+        const ask = await box(page, '#ask-panel'), side = await box(page, '#side'), main = await box(page, '#main'), col = await box(page, 'aside.pgc');
+        assert.ok(ask.x >= side.x && ask.right <= side.right + 1, `${width}: the Assistant is inside the sidebar: ${JSON.stringify({ask, side})}`);
+        assert.ok(ask.right <= main.x + 1, `${width}: it never covers the page: ${JSON.stringify({ask, main})}`);
+        assert.ok(ask.right <= col.x, `${width}: nor the page's chat: ${JSON.stringify({ask, col})}`);
+        assert.ok(main.w >= 480, `${width}: the page keeps room: ${JSON.stringify(main)}`);
+      }
+      await page.setViewportSize({width: 1440, height: 900});
+      await page.locator('#ask-row').click();
       await page.waitForFunction(() => !document.querySelector('#ask-panel')?.classList.contains('ask-shown'));
-      assert.equal(await chatShown(page), true, 'opening the chat closes Ask');
+      assert.equal(await chatShown(page), true, 'closing Ask leaves the chat');
+      await page.locator('#ask-row').click();
+      await page.waitForFunction(() => document.querySelector('#ask-panel')?.classList.contains('ask-shown'));
+      await page.locator('aside.pgc [data-pgc-close]').click();
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('aside.pgc')!.hidden);
+      assert.equal(await askShown(page), true, 'closing the chat leaves Ask');
+      await page.locator('#ask-row').click();
+      await page.waitForFunction(() => !document.querySelector('#ask-panel')?.classList.contains('ask-shown'));
 
       // Another Strategy tab is another page: the chat closes with Goals.
       await page.locator('.strat-tabs a[data-strat-tab="org"]').click();

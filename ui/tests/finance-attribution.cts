@@ -225,7 +225,7 @@ async function shot(page: Page, name: string) {
       const {page, errors, writes} = await open(browser, {hash: '#/finance/attribution'});
       await page.locator('[data-fin-rule-row="0"]').waitFor();
       const names = await tabs(page);
-      assert.deepEqual(names.slice(names.indexOf('Budgets'), names.indexOf('Budgets') + 2), ['Budgets', 'Attribution'], tag + ': after Budgets');
+      assert.deepEqual(names.slice(names.indexOf('Tax'), names.indexOf('Tax') + 2), ['Tax', 'Attribution'], tag + ': after the five daily tabs (in ⋯)');
       assert.deepEqual(await page.locator('tr[data-fin-rule-row] td:first-child').allInnerTexts(), ['Google Ads to Rental', 'Card 0001 split'], tag + ': the rules');
       assert.equal((await page.locator('[data-fin-rule-row="1"] td').nth(1).innerText()).replace(/\s+/g, ' ').trim(), 'Card Checking ••0001', tag + ': the kind word and the match');
       assert.equal((await page.locator('[data-fin-rule-row="0"] td').nth(1).innerText()).replace(/\s+/g, ' ').trim(), 'Vendor Google Ads', tag + ': a vendor rule');

@@ -147,17 +147,30 @@ function settingsLogRowsHTML(items: HistoryLogItem[], names: Record<string, stri
       <span class="log-result" title="${esc(item.result)}">${esc(item.result)}</span></div>`;
   }).join('');
 }
+// The Log's filters sit behind the shared filter icon (style guide: never a row of bare selects); they show while open,
+// and always while one is applied, so what narrows the list is never hidden. The icon is marked while one is applied.
+let SETTINGS_LOG_FILTERS_OPEN = false;
 async function renderSettingsLog() {
   const el = $('#set-log'); if (!el) return;
   const filters = settingsLogFilters();
-  el.innerHTML = `<div class="log-filters">
+  const applied = !!(SETTINGS_LOG.scope || SETTINGS_LOG.kind), open = SETTINGS_LOG_FILTERS_OPEN || applied;
+  el.innerHTML = `<div class="log-tools"><button class="ghost log-filter${applied ? ' on' : ''}" id="log-filter" type="button" aria-label="Filters${applied ? ', applied' : ''}" title="Filters" aria-expanded="${open}" aria-controls="log-filters">${filterIcon(16)}</button>
+      <span class="spacer"></span>${settingsIsAdmin() ? `<button class="ghost log-csv" id="log-csv" type="button">Export CSV</button>` : ''}</div>
+    <div class="log-filters" id="log-filters"${open ? '' : ' hidden'}>
       <select id="log-who" aria-label="Who">${replayScopeOptions(SETTINGS_LOG.scope)}</select>
       <select id="log-kind" aria-label="Kind"><option value="">Everything</option>${HISTORY_KINDS.map(([k, label]) =>
         `<option value="${k}"${k === SETTINGS_LOG.kind ? ' selected' : ''}>${label}</option>`).join('')}</select>
-      ${settingsIsAdmin() ? `<button class="linkish log-csv" id="log-csv" type="button">Export CSV</button>` : ''}
     </div><div id="log-rows">${skelRows(3, {card: true, dot: false})}</div>`;
+  $('#log-filter').onclick = () => {
+    if (applied) { $('#log-who').focus(); return; }   // an applied filter stays in view; clearing it lets the row fold
+    const box = $('#log-filters'), show = box.hidden;
+    SETTINGS_LOG_FILTERS_OPEN = show; box.hidden = !show;
+    $('#log-filter').setAttribute('aria-expanded', String(show));
+    if (show) $('#log-who').focus();
+  };
   const change = () => {
     SETTINGS_LOG = {scope: $('#log-who').value, kind: $('#log-kind').value};
+    SETTINGS_LOG_FILTERS_OPEN = true;
     settingsAddress(); void renderSettingsLog();
   };
   $('#log-who').onchange = change; $('#log-kind').onchange = change;
@@ -317,7 +330,7 @@ function renderSettingsHistory(el = $('#set-history'), history: SettingsHistoryD
     // A manager bot's change says so: it acted for the bot, as its manager (backend/report_managers.py).
     const by = change.via === 'report_manager' ? `${actorLabel(change.actor)}, as its manager` : actorLabel(change.actor);
     return `<div class="settings-history-row"><span>${avatar(change.bot, 24, stateOf(change.bot))}</span><div><strong>${esc(settingsBotName(change.bot))} · ${esc(field)}</strong>
-      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
+      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(agoSaid(change.undone_at))}` : ''}</p></div>
       <div class="history-action">${change.can_undo && e ? `<button class="ghost" type="button" data-settings-undo="${esc(change.id)}" data-bot="${esc(change.bot)}" data-revision="${e.revision}">Undo</button>` : ''}</div>
       ${settingsCheckpointDetails(transition)}</div>`;
   }).join('');

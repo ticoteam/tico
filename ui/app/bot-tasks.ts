@@ -281,12 +281,71 @@ function botTaskTabShow(slug: string, key: string | undefined, picked = false) {
     button.tabIndex = k === key ? 0 : -1;
   }
   if (key === 'done') botDonePaint(slug);
+  botTaskTabsFit(slug);
   const tab = $('#bot-tab-t-' + key);
   if (!picked || !bar || bar.hidden || !tab) return;
   // By what is on screen: the bar is not the tabs' offset parent, so their offsetLeft counts from further out.
   const at = tab.getBoundingClientRect(), shown = bar.getBoundingClientRect();
   if (at.left < shown.left) bar.scrollLeft -= shown.left - at.left;
   else if (at.right > shown.right) bar.scrollLeft += at.right - shown.right;
+}
+// The tab bar keeps to one line in the rail (style guide: tabs that fit, or ⋯): the tabs that fit show in their order,
+// the current one always among them, and the rest wait behind a ⋯ at the bar's end, listed in the shared popover
+// (task-list-menus.ts tasksMenu). While the sidebar is edited every tab shows and the bar scrolls, so each can be dragged.
+function botTaskTabsFit(slug: string) {
+  const bar: HTMLElement | null = $('#pane-tasks .bot-task-tabs');
+  if (!bar || BOT?.slug !== slug) return;
+  const tabs = [...bar.querySelectorAll<HTMLElement>('[data-bot-task-tab]')];
+  let more = bar.querySelector<HTMLElement>(':scope > .bot-tab-more');
+  for (const tab of tabs) tab.classList.remove('bot-tab-over');
+  const room = () => bar.scrollWidth <= bar.clientWidth + 1;
+  if (bar.hidden || BOT_EDIT?.slug === slug || !bar.clientWidth || room()) {
+    if (more?.contains(document.activeElement)) tabs.find(t => t.classList.contains('cur'))?.focus({preventScroll: true});
+    more?.remove();
+    return;
+  }
+  if (!more) {
+    bar.insertAdjacentHTML('beforeend', '<button type="button" class="bot-tab-more" aria-label="More lists" title="More lists" aria-haspopup="true" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>');
+    more = bar.lastElementChild as HTMLElement;
+  }
+  // From the last tab back, each but the current one leaves the line until the rest fit beside ⋯.
+  for (const tab of [...tabs].reverse()) {
+    if (room()) break;
+    if (!tab.classList.contains('cur')) tab.classList.add('bot-tab-over');
+  }
+}
+// ⋯'s list: the tabs that did not fit, each with its count; picking one shows it (it joins the line, another leaves).
+const BOT_TAB_MENU: TasksMenuHost = {};
+function botTaskTabsMore(slug: string, anchor: HTMLElement) {
+  const over = [...document.querySelectorAll<HTMLElement>('#pane-tasks .bot-task-tabs > .bot-tab-over')];
+  const html = `<div class="tl-menu" role="group" aria-label="More lists">${over.map(tab => {
+    const key = tab.dataset.botTaskTab || '', count = tab.querySelector('.cnt')?.textContent?.trim() || '';
+    const name = botTaskTabList(slug).find(t => t.key === key)?.name || key;
+    return `<button type="button" class="tl-mi" data-bot-tab-pick="${esc(key)}">${esc(name)}${count && !tab.classList.contains('no-cnt') ? ` <span class="cnt tnum">${esc(count)}</span>` : ''}</button>`;
+  }).join('')}</div>`;
+  tasksMenu(BOT_TAB_MENU, anchor, html, pop => {
+    pop.onclick = (ev: MouseEvent) => {
+      const key = eventElement(ev)?.closest<HTMLElement>('[data-bot-tab-pick]')?.dataset.botTabPick;
+      if (key === undefined) return;
+      BOT_TASK_TAB.set(slug, key);
+      BOT_TAB_MENU.menuAnchor = null;   // the picked tab takes the focus, not ⋯
+      tasksMenuClose();
+      botTaskTabShow(slug, key, true);
+      $('#bot-tab-t-' + key)?.focus({preventScroll: true});
+    };
+  });
+  anchor.setAttribute('aria-expanded', String(!!$('#task-filter-pop')?.matches(':popover-open')));
+}
+// Once per page: the popover's keys, and on closing ⋯ is told so and has the focus back (Esc, a click outside).
+function botTaskTabsMoreWire(pop: HTMLElement | null) {
+  if (!pop) return;
+  pop.addEventListener('keydown', tasksMenuKeys);
+  pop.addEventListener('toggle', (ev: Event) => {
+    if ((ev as Event & {newState?: string}).newState !== 'closed') return;
+    const anchor = BOT_TAB_MENU.menuAnchor; BOT_TAB_MENU.menuAnchor = null;
+    anchor?.setAttribute('aria-expanded', 'false');
+    if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
+  });
 }
 // Arrow keys, Home and End move between the tabs, as in any tab list.
 function botTaskTabKey(slug: string, ev: KeyboardEvent) {
@@ -385,7 +444,7 @@ function botTaskFilterPaint(slug: string) {
     if (!counted || counted.name !== tab.name) continue;
     botTaskCount('cnt-' + tab.key, counted.count);
     const rows = counted.ids.map(id => got.tasks.get(String(id))).filter((t): t is TaskAny => !!t);
-    if (list) botTaskList(list, rows.map(botTaskRowHTML), '<div class="rail-empty">None</div>',
+    if (list) botTaskList(list, rows.map(t => botRailRowHTML(t)), '<div class="rail-empty">None</div>',
       counted.next ? `<button type="button" class="ghost bot-done-more" data-bot-filter-more="${tab.key}">Show more</button>` : '');
   }
   const needed = botNeedsPaint(slug);
@@ -427,7 +486,7 @@ function botNeedsPaint(slug: string): Set<string> {
   botTaskCount('cnt-needs', counted ? Math.max(0, Number(counted.count) - gone.size) + rest.size : Math.max(items.length, needsMeCount(slug)));
   const list = $('#t-needs');
   const more = (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
-  list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
+  botTaskList(list, items.map(t => botRailRowHTML(t, true)), '<div class="rail-empty">Nothing needs you.</div>', more);
   return new Set(items.map(t => String(t.id)));
 }
 // Needs you changed: the Needs you tab is drawn again from the list the app holds (botNeedsPaint adds this bot's items
@@ -454,12 +513,19 @@ function botTasksRender(slug: string, owned: {tasks: BotListTask[]}) {
   botTaskCount('cnt-active', active.length);
   botTaskCount('cnt-blocked', waiting.length);
   botTaskCount('cnt-done', finished.length);
-  botTaskList($('#t-open'), active.map(botTaskRowHTML), '<div class="rail-empty">None</div>');
-  botTaskList($('#t-blocked'), waiting.map(botTaskRowHTML), '<div class="rail-empty">None</div>');
+  botTaskList($('#t-open'), active.map(t => botRailRowHTML(t)), '<div class="rail-empty">None</div>');
+  botTaskList($('#t-blocked'), waiting.map(t => botRailRowHTML(t)), '<div class="rail-empty">None</div>');
   const done = BOT_DONE.get(slug);
   BOT_DONE.set(slug, {rows: finished, shown: done?.shown || BOT_DONE_PAGE});
   botTaskFilterPaint(slug);
   botTaskTabShow(slug, botTaskTabFirst(slug, needed.size));
+}
+// A rail row (style guide, Bot page parts: "task rows, one per task, with its mark, age and owner"): no stage word, which
+// read "To do" on nearly every row. In Needs you every row is the viewer's to act on, so a row waiting on them has no
+// "!" there: a mark on every row says nothing. Elsewhere the "!" is the exception it marks.
+function botRailRowHTML(t: TaskAny, needs = false): string {
+  const me = myActor(), mine = needs && taskMark(t) === 'person' && (!t.turn?.who || t.turn.who === me);
+  return taskRowHTML(mine ? {...t, turn: {...t.turn, state: 'yours'}} as unknown as TaskAny : t);
 }
 // A pane's list, patched row by row (patchHTML on the list itself): a poll that moved one task redraws that row, not the
 // pane. `empty` stands in for no rows; `tail` follows the list (Done's Show more).
@@ -488,7 +554,7 @@ function botDonePaint(slug: string) {
   const host = $('#t-done'), done = BOT_DONE.get(slug);
   if (!host || !done || BOT?.slug !== slug || $('#bot-done')?.hidden) return;
   const rows = done.rows.slice(0, done.shown), more = done.rows.length - rows.length;
-  botTaskList(host, rows.map(botTaskRowHTML), '<div class="rail-empty">Nothing done in the last two weeks.</div>',
+  botTaskList(host, rows.map(t => botRailRowHTML(t)), '<div class="rail-empty">Nothing done in the last two weeks.</div>',
     more > 0 ? `<button type="button" class="ghost bot-done-more" data-bot-done-more>Show ${Math.min(more, BOT_DONE_PAGE)} more</button>` : '');
 }
 document.addEventListener('click', ev => {

@@ -60,7 +60,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     const dialog = page.locator('#pe-dialog');
     const at = (ri: number, rf: string) => dialog.locator(`[data-pe-si="0"][data-pe-ri="${ri}"][data-pe-rf="${rf}"]`);
     await page.locator('[data-pv-settings="spec"]').click();
-    await dialog.locator('[data-pe-pf="goal"]').waitFor();
+    // The stage's header opens that stage's editor alone (style guide, Pipeline stage).
+    await dialog.locator('.pe-stage[open][data-pe-si="0"]').waitFor();
 
     // A number answer: Answer sits under Responses; the name follows the title.
     await dialog.locator('[data-pe-req-add]').click();
@@ -98,7 +99,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-pe-close]').click();
     await dialog.waitFor({state: 'detached'});
     await page.locator('[data-pv-settings="spec"]').click();
-    await dialog.locator('[data-pe-pf="goal"]').waitFor();
+    // The stage's header opens that stage's editor alone (style guide, Pipeline stage).
+    await dialog.locator('.pe-stage[open][data-pe-si="0"]').waitFor();
     assert.equal(await at(1, 'kind').inputValue(), 'answer');
     assert.equal(await at(1, 'line').inputValue(), 'Confidence');
     assert.equal(await at(1, 'answer_name').inputValue(), 'confidence');

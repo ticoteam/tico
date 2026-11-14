@@ -122,14 +122,21 @@ function settingsMachineSelect(e: SettingsBot) {
   const cloud = e.cloud_machine, current = cloudMachineValue(e) || e.machine?.runner_id || '';
   const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && !machine.cloud_machine &&
     (S.me?.role === 'owner' || machine.owner_id === S.me?.id));
-  const unassigned = `Not assigned · ${settingsPersonName(e.owner_id)}`;
-  const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.owner_id)}` : unassigned;
-  const seen = e.machine?.last_seen_at ? `last seen ${ago(e.machine.last_seen_at)}` : e.machine ? 'waiting for its first heartbeat' : 'register a computer first';
+  const unassigned = 'Not assigned';
+  const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.owner_id)}` : `${unassigned} · ${settingsPersonName(e.owner_id)}`;
+  // A computer reads as its name, as text in the cell (style guide, "The Bots table"); its owner is added only where the
+  // name alone could mean another person's computer: it is not yours, or another listed computer has the same name.
+  const named = (machine: SettingsMachine) => {
+    const label = machine.label || machine.id;
+    const twin = machines.some(other => other !== machine && (other.label || other.id) === label);
+    return machine.owner_id && (machine.owner_id !== S.me?.id || twin) ? `${label} · ${settingsPersonName(machine.owner_id)}` : label;
+  };
+  const seen = e.machine?.last_seen_at ? `last seen ${agoSaid(e.machine.last_seen_at)}` : e.machine ? 'waiting for its first heartbeat' : 'register a computer first';
   return `<select class="settings-inline-select" data-bot-machine="${esc(e.id)}" data-current="${esc(current)}"
     aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && (machines.length || cloud) ? '' : 'disabled'}>
       ${current ? '' : `<option value="" selected disabled>${esc(unassigned)}</option>`}
       ${cloud ? cloudMachineOptionsHTML(current) : ''}
-      ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(machine.label)} · ${esc(settingsPersonName(machine.owner_id))}</option>`).join('')}
+      ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(named(machine))}</option>`).join('')}
     </select>`;
 }
 // A problem worth a badge on the bot's row; a bot that is fine shows nothing.
@@ -237,7 +244,9 @@ function renderSettingsBots() {
     const problem = settingsBotProblem(e);
     // Access shows only when it is narrower than open: a full-access bot says nothing.
     const word = settingsAccessWord(e), access = word === 'Open' || word === 'You: See · Read · Write' ? '' : `<span class="sb-cell-access" aria-label="Access: ${esc(word)}">${settingsAccessCell(e)}</span>`;
-    const under = [e.team ? esc(teamLabel(e.team)) : '', access, problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''].filter(Boolean).join(' · ');
+    // Under the name only what differs (style guide, "A table of things you manage"): narrower access, or trouble in red.
+    // The team is not repeated on every row; search still finds a bot by its team.
+    const under = [access, problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''].filter(Boolean).join(' · ');
     const badges = `${botPausedBadge(e.id, true) || (e.status && e.status !== 'active' ? `<span class="pill">${esc(statusWord(e.status))}</span>` : '')}`;
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.id)}"><td class="settings-pick">${pick(e)}</td>
@@ -380,7 +389,7 @@ async function settingsCatalogPicker() {
     document.body.append(dialog);
   }
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="catalog-picker-title">Add from template</h2><span class="spacer"></span>
-      <button class="ghost" type="button" data-catalog-close aria-label="Close">✕</button></div>
+      <button class="ghost" type="button" data-catalog-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="bot-editor-body" id="catalog-picker-body"><div class="empty">Loading templates…</div></div></form>`;
   const leave = () => dialog.close();
   window.addEventListener('hashchange', leave);

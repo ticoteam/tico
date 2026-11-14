@@ -30,7 +30,7 @@ async function renderSettingsStrategyBot(): Promise<void> {
   const keep = pick?.level === v.level;
   const now = v.levels.find(lv => lv.level === v.level);
   const history = v.level_history!;
-  const last = v.level_changed_at ? `${esc(now?.name || 'Level ' + v.level)} since ${esc(fmt(v.level_changed_at))}, chosen by ${esc(v.level_changed_by_name || v.level_changed_by)}.`
+  const last = v.level_changed_at ? `${esc(now?.name || 'Level ' + v.level)} since ${esc(timeSaid(v.level_changed_at))}, chosen by ${esc(v.level_changed_by_name || v.level_changed_by)}.`
     : `${esc(now?.name || 'Level ' + v.level)}, where every company starts.`;
   host.innerHTML = `<h3>Regular checks</h3>
     <label class="row strategy-checks"><input type="checkbox" data-strategy-checks${v.regular_checks ? ' checked' : ''}>

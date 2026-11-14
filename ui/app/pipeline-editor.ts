@@ -32,6 +32,9 @@ interface PeState {
   clash: {theirs: PipelineRec; changed: string[]} | null;
   error: string;
   saving: boolean;
+  /** The stage, by id, the editor was opened for from its header on the board: only that stage is shown (style guide,
+   * Pipeline stage: "The name opens that stage's editor, and only that stage"). '' is the whole pipeline. */
+  only: string;
 }
 
 let PE: PeState | null = null;
@@ -273,16 +276,32 @@ function peBodyHTML(state: PeState): string {
     + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short')
     // Hours an active task's session is kept warm after its last work (backend/keep_warm.py); 0 is off.
     + peF('Keep warm (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 8}">`, 'short'));
-  const stages = d.stages.map((s, i) => peStageHTML(state, s, i, d.stages.length)).join('');
-  return `${peClashHTML(state)}<div class="pe-fields">${fields}</div><div class="pe-stages">${stages}</div>`
+  // One stage's editor (opened from its header): that stage alone, with no pipeline fields, + Stage or moves.
+  const one = state.only ? d.stages.findIndex(s => s.id === state.only) : -1;
+  const stages = one >= 0 ? peStageHTML(state, d.stages[one]!, one, d.stages.length)
+    : d.stages.map((s, i) => peStageHTML(state, s, i, d.stages.length)).join('');
+  return `${peClashHTML(state)}${one >= 0 ? '' : `<div class="pe-fields">${fields}</div>`}<div class="pe-stages${one >= 0 ? ' pe-one' : ''}">${stages}</div>`
     + `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>`
-    + `<div class="pe-foot"><button type="button" class="ghost" data-pe-stage-add>+ Stage</button>`
-    + `<button type="button" class="primary" data-pe-save${state.saving ? ' disabled' : ''}>Save</button></div>`;
+    + `<div class="pe-foot">${one >= 0 ? '<span></span>' : '<button type="button" class="ghost" data-pe-stage-add>+ Stage</button>'}`
+    // While a clash is shown, Save mine is the one filled button; Save stays, quiet.
+    + `<button type="button" class="${state.clash ? 'ghost' : 'primary'}" data-pe-save${state.saving ? ' disabled' : ''}>Save</button></div>`;
+}
+
+/** Their record in place of this person's draft (Load theirs): one stage's editor stays on that stage, open; a stage
+ * they removed leaves it for the whole pipeline. */
+function peTakeTheirs(state: PeState, theirs: PipelineRec): void {
+  state.base = theirs; state.draft = peCopy(theirs); state.clash = null; state.error = '';
+  state.open = new WeakSet(); state.reqOpen = new WeakSet();
+  const one = state.only ? state.draft.stages.find(x => x.id === state.only) : undefined;
+  if (one) state.open.add(one); else state.only = '';
 }
 
 function peDraw(state: PeState): void {
   const body = document.getElementById('pe-body');
   if (PE !== state || !body) return;
+  // The title is the pipeline's name, and the stage's as it is now in one stage's editor.
+  const title = document.getElementById('pe-title'), one = state.only ? state.draft.stages.find(x => x.id === state.only) : undefined;
+  if (title) title.textContent = one ? `${state.draft.name} › ${one.name || 'New stage'}` : state.draft.name;
   const scroll = body.scrollTop;
   body.innerHTML = peBodyHTML(state);
   body.scrollTop = scroll;
@@ -431,12 +450,25 @@ function peClick(state: PeState, target: Element): void {
   const d = state.draft, si = peIndex(el, 'peSi'), ri = peIndex(el, 'peRi'), stage = d.stages[si], req = stage?.requirements[ri];
   if (el.hasAttribute('data-pe-save')) { void peSave(state); return; }
   if (el.hasAttribute('data-pe-theirs') && state.clash) {
-    state.base = state.clash.theirs; state.draft = peCopy(state.clash.theirs); state.clash = null; state.error = '';
-    state.open = new WeakSet(); state.reqOpen = new WeakSet();
+    peTakeTheirs(state, state.clash.theirs);
     peDraw(state); return;
   }
   if (el.hasAttribute('data-pe-mine') && state.clash) {
-    state.base = state.clash.theirs; state.clash = null;
+    const theirs = state.clash.theirs;
+    if (state.only) {
+      // One stage's editor saves that stage alone over their record: the rest (their Goal, the other stages) is
+      // theirs, which this person never saw and must not undo. A stage they removed meanwhile is not put back.
+      const mine = state.draft.stages.find(x => x.id === state.only), next = peCopy(theirs);
+      const at = next.stages.findIndex(x => x.id === state.only);
+      if (!mine || at < 0) {
+        peTakeTheirs(state, theirs);
+        state.error = 'Someone removed this stage while you had it open.';
+        peDraw(state); return;
+      }
+      next.stages[at] = mine;
+      state.draft = next;
+    }
+    state.base = theirs; state.clash = null;
     void peSave(state); return;
   }
   if (el.hasAttribute('data-pe-stage-add')) {
@@ -572,7 +604,7 @@ function peSegKey(ev: KeyboardEvent): void {
 
 // ---------------------------------------------------------------- opening
 
-/** Opens the editor for a pipeline; with a stage id, that stage's panel is open and in view. */
+/** Opens the editor for a pipeline; with a stage id (a stage's header), it shows that stage alone, open. */
 async function openPipelineEditor(pipelineId: string, stageId = ''): Promise<void> {
   document.getElementById('pe-dialog')?.remove();
   const dialog = document.createElement('dialog');
@@ -593,17 +625,21 @@ async function openPipelineEditor(pipelineId: string, stageId = ''): Promise<voi
     if (PE) peClick(PE, t);
   });
   // A stage's panel, and a requirement's, stays open or closed across redraws.
-  dialog.addEventListener('toggle', ev => {
-    const panel = ev.target instanceof HTMLDetailsElement ? ev.target : null;
-    const stage = panel && PE ? PE.draft.stages[peIndex(panel, 'peSi')] : undefined;
-    if (!PE || !panel || !stage) return;
+  const note = (panel: HTMLDetailsElement): void => {
+    const stage = PE ? PE.draft.stages[peIndex(panel, 'peSi')] : undefined;
+    if (!PE || !stage) return;
     if (panel.classList.contains('pe-stage')) { if (panel.open) PE.open.add(stage); else PE.open.delete(stage); return; }
     const req = panel.classList.contains('pe-req') ? stage.requirements[peIndex(panel, 'peRi')] : undefined;
     if (req) { if (panel.open) PE.reqOpen.add(req); else PE.reqOpen.delete(req); }
-  }, true);
+  };
+  dialog.addEventListener('toggle', ev => { if (ev.target instanceof HTMLDetailsElement) note(ev.target); }, true);
   const onField = (ev: Event): void => {
     const t = ev.target;
-    if (PE && (t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) peInput(PE, t);
+    if (!PE || !(t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) return;
+    // The browser reports a panel opening a moment after it opens: a choice made straight away would redraw it shut,
+    // so the panels are read as they stand before the change is taken.
+    dialog.querySelectorAll<HTMLDetailsElement>('details.pe-stage, details.pe-req').forEach(note);
+    peInput(PE, t);
   };
   // Typing follows each key; a choice or a switch follows its change.
   const choice = (t: EventTarget | null): boolean => t instanceof HTMLSelectElement || (t instanceof HTMLInputElement && t.type === 'checkbox');
@@ -619,12 +655,10 @@ async function openPipelineEditor(pipelineId: string, stageId = ''): Promise<voi
     ]);
     if (!dialog.isConnected) return;
     const pipelines = all.filter(p => !p.retired_at).map(p => ({id: p.id, name: p.name}));
-    const state: PeState = {id: pipelineId, base: rec, draft: peCopy(rec), open: new WeakSet(), reqOpen: new WeakSet(), factories, pipelines, clash: null, error: '', saving: false};
+    const state: PeState = {id: pipelineId, base: rec, draft: peCopy(rec), open: new WeakSet(), reqOpen: new WeakSet(), factories, pipelines, clash: null, error: '', saving: false, only: ''};
     const opened = state.draft.stages.find(s => s.id === stageId);
-    if (opened) state.open.add(opened);
+    if (opened) { state.open.add(opened); state.only = opened.id ?? ''; }
     PE = state;
-    const title = dialog.querySelector('#pe-title');
-    if (title) title.textContent = rec.name;
     peDraw(state);
     if (opened) dialog.querySelector('.pe-stage[open]')?.scrollIntoView({block: 'nearest'});
   } catch (error) {

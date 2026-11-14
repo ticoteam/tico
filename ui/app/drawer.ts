@@ -1,4 +1,6 @@
 /* ui/app/drawer.ts — Account menu and the phone drawer
+   The account menu opens upward from your picture at the end of the sidebar's foot: a menu (role menu), its items moved
+   through with the arrow keys, Home and End; Esc closes it and gives focus back to the picture.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -18,18 +20,29 @@ function renderAdministration(): void {
 function setAccountMenu(open: boolean, returnFocus = false): void {
   const menu: HTMLElement | null = $('#account-menu'), account: HTMLElement | null = $('#account');
   if (menu && menu.hidden === open) {
-    if (open) renderAdministration();
+    if (open) {
+      renderAdministration();
+      // The status lines' own fixes (Retry, a link) are items of the menu too.
+      for (const el of menu.querySelectorAll('#account-status :is(a, button)')) el.setAttribute('role', 'menuitem');
+    }
     menu.hidden = !open;
     account?.setAttribute('aria-expanded', String(open));
   }
   if (returnFocus) account?.focus();
 }
+// The items shown now, in order: the status lines' fixes, then the places.
+function accountItems(): HTMLElement[] {
+  const menu: HTMLElement | null = $('#account-menu');
+  return [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])].filter(el => !el.hidden && el.getClientRects().length > 0);
+}
 (() => {
   const account: HTMLElement | null = $('#account');
-  if (account) account.onclick = () => {
+  if (account) account.onclick = (ev: MouseEvent) => {
     const menu: HTMLElement | null = $('#account-menu');
-    if (menu?.hidden) nativeOrgMenu();
-    setAccountMenu(!!menu?.hidden);
+    const open = !!menu?.hidden;
+    if (open) nativeOrgMenu();
+    setAccountMenu(open);
+    if (open && ev.detail === 0) accountItems()[0]?.focus();   // Enter or Space: into the menu, at its first item
   };
 })();
 document.addEventListener('click', ev => {
@@ -49,9 +62,18 @@ document.addEventListener('focusin', ev => {
     }
     if (eventElement(ev)?.id === 'account' && ['ArrowDown', 'ArrowUp'].includes(ev.key)) {
       ev.preventDefault(); setAccountMenu(true);
-      const shown = [...(menu?.querySelectorAll<HTMLElement>(':is(a, button):not([hidden])') ?? [])];
+      const shown = accountItems();
       shown[ev.key === 'ArrowDown' ? 0 : shown.length - 1]?.focus();
+      return;
     }
+    // Inside the menu the arrows move from item to item, round the ends; Home and End jump to them.
+    if (!menu || menu.hidden || !eventElement(ev)?.closest('#account-menu')) return;
+    const items = accountItems(), at = items.indexOf(document.activeElement as HTMLElement);
+    const to = ev.key === 'ArrowDown' ? (at + 1) % items.length : ev.key === 'ArrowUp' ? (at - 1 + items.length) % items.length
+      : ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1 : -1;
+    if (to < 0 || !items.length) return;
+    ev.preventDefault();
+    items[to]?.focus();
   });
 })();
 // phone drawer

@@ -19,6 +19,8 @@ const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 // Shapes the tests read from the page and build for the fake hub.
 declare const S: {me: {id: string} | null; emps?: unknown[]};
+declare const FIN: {bud: {rows: {id: string; warn_pct: number}[]}};
+declare function finBudDraw(): void;
 type Body = Record<string, unknown>;
 type Write = [string, string, Body];
 interface Hub {connFail: number; indexFail: boolean; hold: {at: string; wait: Promise<unknown>} | null}
@@ -210,9 +212,17 @@ async function shot(page: Page, name: string) {
       // Used: green, amber at warn, red at the amount.
       assert.equal(await row(page, 'b-consumer-g').locator('.fin-bar-m.warn').count(), 1, tag + ': used past warn at is amber');
       assert.equal(await row(page, 'b-rental-g').locator('.fin-bar-m:not(.warn):not(.bad)').count(), 1, tag + ': used under warn at is green');
-      assert.equal((await cell(page, 'b-rental-g', 6).innerText()).trim(), '80%', tag + ': warn at on a leaf');
+      // Warn at shows only where it differs from the one most budgets use (style guide tables: "show the exception"):
+      // every budget here warns at 80%, so there is no Warn at column; one at 90% brings it, saying only that one.
+      const heads = async () => (await page.locator('.fin-bud-t thead th').allInnerTexts()).map(t => t.toUpperCase());
+      assert.ok(!(await heads()).includes('WARN AT'), tag + ': every budget at 80%: no Warn at column');
+      await page.evaluate(() => { const b = FIN.bud.rows.find(x => x.id === 'b-rental-g')!; b.warn_pct = 90; finBudDraw(); });
+      assert.ok((await heads()).includes('WARN AT'), tag + ': one at 90%: the column');
+      assert.equal((await cell(page, 'b-rental-g', 6).innerText()).trim(), '90%', tag + ': warn at where it differs');
+      assert.equal((await cell(page, 'b-rental-m', 6).innerText()).trim(), '', tag + ': the usual 80% says nothing');
       assert.equal((await cell(page, 'b-mkt', 6).innerText()).trim(), '', tag + ': no warn at on a row with children');
       assert.equal((await cell(page, 'b-video', 6).innerText()).trim(), '', tag + ': nor on one with no amount');
+      await page.evaluate(() => { FIN.bud.rows.find(x => x.id === 'b-rental-g')!.warn_pct = 80; finBudDraw(); });
       // Search keeps the matches and the budgets above them.
       await page.locator('[data-fin-q]').fill('social');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Rental Marketing Manager', 'Rental Social Ads Owner'], tag + ': search keeps the path');
@@ -256,7 +266,7 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(sent(writes).at(-1), {kind: 'budget_create', payload: {name: 'Consumer Google Ad Owner', period: 'month', account_id: 'a-6400', amount: 120000,
         warn_pct: 90, effective_from: thisMonth + '-01', parent_id: 'b-mkt', teammate: 'bot:consumer-google', vendor: 'Meta Ads'}}, tag + ': + Budget sends budget_create');
       // Another month: the table empties at once, read as of its first day; a past month's amounts don't edit.
-      const month = async (m: string) => { await page.locator('[data-fin-month]').fill(m); await page.locator('[data-fin-month]').dispatchEvent('change'); };
+      const month = async (m: string) => { await page.locator('[data-fin-month]').selectOption(m); };   // a select of months
       let release!: (value?: unknown) => void;
       hub.hold = {at: lastMonth + '-01', wait: new Promise(r => { release = r; })};
       await month(lastMonth);
@@ -285,7 +295,8 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.locator('#fin-bud .pill').count(), 0, tag + ': no pace pills');
       assert.equal((await cell(page, 'b-rental-g', 1).innerText()).trim(), '', tag + ': no platform');
       assert.equal((await cell(page, 'b-rental', 1).innerText()).trim(), 'team', tag + ': a team row still says team');
-      assert.equal((await cell(page, 'b-rental-g', 5).innerText()).trim(), '', tag + ': no pace');
+      // No budget has a pace without the platform fields: the Pace column is left out, not drawn empty on every row.
+      assert.ok(!(await page.locator('.fin-bud-t thead th').allInnerTexts()).some(h => /^pace/i.test(h)), tag + ': no pace column');
       assert.equal(await cell(page, 'b-rental-g', 3).getAttribute('title'), null, tag + ': no platform time');
       assert.equal(await page.locator('[data-fin-bud-reported]').count(), 0, tag + ': no platform figure beside Spent');
       assert.equal(await page.locator('td[data-fin-bud-amt]').count() > 0, true, tag + ': amounts still edit');

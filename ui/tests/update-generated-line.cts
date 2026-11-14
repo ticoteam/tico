@@ -83,7 +83,7 @@ let browser: import('playwright').Browser | null = null;
     await row(page, 'a4').waitFor();
 
     // An ordinary bot reply, before any request and after a person's message, renders as it always did.
-    for (const id of ['a2', 'a4']) assert.equal(await row(page, id).locator('.th-head .th-bot').count(), 1, id + ' keeps its header and bot tag');
+    for (const id of ['a2', 'a4']) assert.equal(await row(page, id).locator('.th-head .th-who').count(), 1, id + ' keeps its header');
     assert.match((await row(page, 'a2').locator('.th-body').textContent())!, /Yes, I will check them now/);
     assert.match((await row(page, 'a4').locator('.th-body').textContent())!, /Anything else/);
     assert.equal(await row(page, 'a1').count(), 1);
@@ -93,7 +93,7 @@ let browser: import('playwright').Browser | null = null;
     await line(page).waitFor();
     assert.equal(await page.locator('.th-upd-btn').count(), 1, 'one line for the pair');
     assert.equal(await row(page, 'b1').count(), 1, 'a second turn of the same bot is drawn');
-    assert.equal(await row(page, 'b1').locator('.th-head .th-bot').count(), 1, 'it keeps its header and bot tag');
+    assert.equal(await row(page, 'b1').locator('.th-head .th-who').count(), 1, 'it keeps its header');
     assert.equal(await line(page).textContent(), '› Update generated');
     assert.equal(await line(page).getAttribute('aria-expanded'), 'false');
     assert.equal(await row(page, 'u1').count(), 0, 'the request is hidden');

@@ -1,5 +1,6 @@
-/* ui/app/stage-rules.ts — A stage's rules (Stage rules spec, step 1, part 3): the Rules button with its count on every
-   stage header of a pipeline board, and the panel it opens: every rule that applies to the stage, grouped (this stage,
+/* ui/app/stage-rules.ts — A stage's rules (Stage rules spec, step 1, part 3): a quiet rules mark on every stage header
+   of a pipeline board (style guide, Pipeline stage: a gavel when rules apply there, the gavel struck through when none
+   do; no word, no count on the board: its name is the stage and the count, "Build: 3 rules"), and the panel it opens: every rule that applies to the stage, grouped (this stage,
    the whole pipeline, company, built in), each with what it costs (free, or one Jev call per event). Whoever may change
    the pipeline adds a rule (On starts as this stage), edits it and retires it; Built in is read-only.
    Read from and written to backend/stage_rules_api.py: GET /api/v2/stage-rules?pipeline=<id> once per board for the
@@ -70,23 +71,28 @@ function srBoardLoad(pipelineId: string, fresh = false): void {
 
 function srCountsPaint(pipelineId: string): void {
   document.querySelectorAll<HTMLElement>(`[data-sr-open][data-sr-pipeline="${CSS.escape(pipelineId)}"]`).forEach(b => {
-    const n = srCount(pipelineId, b.dataset['srOpen'] ?? '');
-    const num = b.querySelector('.tnum');
-    if (num) num.textContent = n === null ? '' : String(n);
-    b.setAttribute('aria-label', srButtonLabel(b.dataset['srName'] ?? '', n));
+    const n = srCount(pipelineId, b.dataset['srOpen'] ?? ''), words = srCountWords(n);
+    b.classList.toggle('sr-mark-none', n === 0);
+    b.dataset['srCount'] = n === null ? '' : String(n);
+    b.setAttribute('aria-label', `${b.dataset['srName'] ?? ''}: ${words}`);
+    b.title = words;
   });
 }
 
-const srButtonLabel = (stageName: string, n: number | null) => `Rules for ${stageName}${n === null ? '' : `: ${n}`}`;
+/** The mark's name, the count in words: "3 rules", "1 rule", "No rules"; "Rules" while the board's read is out (or it
+ * failed: the mark still opens the panel, which reads them itself). */
+const srCountWords = (n: number | null): string => n === null ? 'Rules' : n ? `${n} rule${n === 1 ? '' : 's'}` : 'No rules';
 
-/** "Rules 3": the stage's Rules button, for a stage header. Its count fills in when the board's rules are read. */
+/** The stage's rules mark, for a stage header: a gavel, struck through when no rule applies there. One click opens the
+ * stage's rules. Its count fills in when the board's rules are read. */
 function stageRulesButtonHTML(pipelineId: string, stage: {id?: string | null; name: string}): string {
   const id = stage.id ?? '';
   if (!id) return '';
   srBoardLoad(pipelineId);
-  const n = srCount(pipelineId, id);
-  return `<button type="button" class="sr-btn" data-sr-open="${esc(id)}" data-sr-pipeline="${esc(pipelineId)}" data-sr-name="${esc(stage.name)}"`
-    + ` aria-label="${esc(srButtonLabel(stage.name, n))}" title="Rules">Rules <span class="tnum">${n === null ? '' : n}</span></button>`;
+  const n = srCount(pipelineId, id), words = srCountWords(n);
+  return `<button type="button" class="sr-mark${n === 0 ? ' sr-mark-none' : ''}" data-sr-open="${esc(id)}" data-sr-pipeline="${esc(pipelineId)}"`
+    + ` data-sr-name="${esc(stage.name)}" data-sr-count="${n === null ? '' : n}" aria-label="${esc(`${stage.name}: ${words}`)}" title="${esc(words)}">`
+    + '<span class="nav-icon" aria-hidden="true">gavel</span></button>';
 }
 
 // ---------------------------------------------------------------- the panel
@@ -171,14 +177,51 @@ function srParts(r: StageRuleCore): {when: string; ifs: string; act: string} {
 /** "Not acting: …": a rule saved before Tell and Move back needed a timer; it never acts until it is changed. */
 const srIdleHTML = (r: StageRule) => r.not_acting ? `<div class="sr-idle" data-sr-idle>Not acting: ${esc(r.not_acting)}</div>` : '';
 
+/** A rule's row: its name, a pill only for a rule that costs (a free one has none: pills are for what is of interest),
+ * then what it does. One the person may change opens for editing from anywhere on the row (its name is the button), with
+ * a quiet ⋯ at the end holding Edit and, last and red, Retire (srMenuOpen). Others are read only, with no ⋯. */
 function srRowHTML(r: StageRule): string {
-  const cost = r.cost === SR_FREE ? 'Free' : r.cost.charAt(0).toUpperCase() + r.cost.slice(1);
-  const acts = r.can_edit
-    ? `<span class="sr-acts"><button type="button" class="ghost sr-act" data-sr-edit="${esc(r.id)}">Edit</button>`
-      + `<button type="button" class="ghost sr-act" data-sr-retire="${esc(r.id)}">Retire</button></span>` : '';
-  return `<li class="sr-rule" data-sr-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
-    + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}" data-sr-cost>${esc(cost)}</span>${acts}</div>`
+  const cost = r.cost === SR_FREE ? '' : `<span class="sr-cost sr-cost-jev" data-sr-cost>${esc(r.cost.charAt(0).toUpperCase() + r.cost.slice(1))}</span>`;
+  const name = `<span class="sr-name">${esc(r.name)}</span>`;
+  const head = r.can_edit
+    ? `<button type="button" class="sr-open" data-sr-edit="${esc(r.id)}" aria-label="${esc(`Edit ${r.name}`)}">${name}</button>${cost}`
+      + `<button type="button" class="sr-more" data-sr-more="${esc(r.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(`More for ${r.name}`)}" title="More">`
+      + '<span class="nav-icon" aria-hidden="true">more_horiz</span></button>'
+    : name + cost;
+  return `<li class="sr-rule${r.can_edit ? ' sr-rule-edit' : ''}" data-sr-rule="${esc(r.id)}"><div class="sr-line">${head}</div>`
     + `<div class="sr-what muted">${esc(srSentence(r))}</div>${srIdleHTML(r)}${r.reason ? `<div class="sr-says muted">“${esc(r.reason)}”</div>` : ''}</li>`;
+}
+
+/** A rule's ⋯: Edit, then after a line, red and last, Retire. The menu lives in the panel (the page behind a modal
+ * dialog takes no clicks), in the shared menu look (.tl-pop, .tl-menu); arrow keys move, Esc closes it and the focus goes
+ * back to ⋯. */
+function srMenuOpen(button: HTMLElement): void {
+  const dlg = srDialog(), id = button.dataset['srMore'] ?? '', r = SR?.list?.items.find(x => x.id === id);
+  if (!r) return;
+  let pop = dlg.querySelector<HTMLElement>(':scope > #sr-menu');
+  if (pop?.matches(':popover-open') && pop.dataset['for'] === id) { pop.hidePopover(); return; }
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = 'sr-menu'; pop.className = 'tl-pop sr-pop'; pop.popover = 'auto';
+    pop.addEventListener('keydown', tasksMenuKeys);
+    pop.addEventListener('toggle', ev => {
+      if ((ev as Event & {newState?: string}).newState !== 'closed') return;
+      const from = dlg.querySelector<HTMLElement>(`[data-sr-more="${CSS.escape(pop!.dataset['for'] ?? '')}"]`);
+      from?.setAttribute('aria-expanded', 'false');
+      if (from && (!document.activeElement || document.activeElement === document.body || pop!.contains(document.activeElement))) from.focus();
+    });
+    dlg.append(pop);
+  }
+  pop.dataset['for'] = id;
+  pop.innerHTML = `<div class="tl-menu" role="menu" aria-label="${esc(r.name)}"><button type="button" class="tl-mi" role="menuitem" data-sr-edit="${esc(id)}">Edit</button>`
+    + `<div class="tl-menu-sep" role="separator"></div><button type="button" class="tl-mi sr-mi-danger" role="menuitem" data-sr-retire="${esc(id)}">Retire</button></div>`;
+  pop.showPopover();
+  button.setAttribute('aria-expanded', 'true');
+  tasksMenuPlace(pop, button);
+  // right-aligned to ⋯, the last control on its row
+  const b = button.getBoundingClientRect();
+  if (!matchMedia(PHONE).matches) pop.style.left = `${Math.max(8, Math.round(b.right - pop.offsetWidth))}px`;
+  pop.querySelector<HTMLElement>('.tl-mi')?.focus();
 }
 
 function srDraw(): void {
@@ -342,13 +385,18 @@ async function srRetire(id: string, from?: Element | null): Promise<void> {
 }
 
 async function srClick(ev: MouseEvent): Promise<void> {
-  const el = srTarget(ev).closest<HTMLElement>('[data-sr-close],[data-sr-back],[data-sr-add],[data-sr-edit],[data-sr-retire]');
+  const el = srTarget(ev).closest<HTMLElement>('[data-sr-close],[data-sr-back],[data-sr-add],[data-sr-edit],[data-sr-retire],[data-sr-more]');
   if (!el || !SR) return;
+  if (el.matches('[data-sr-more]')) { srMenuOpen(el); return; }
+  // A pick in a rule's ⋯ closes it first; Retire's confirm then hands the focus back to that ⋯.
+  const menu = el.closest<HTMLElement>('#sr-menu'), from = menu
+    ? srDialog().querySelector<HTMLElement>(`[data-sr-more="${CSS.escape(menu.dataset['for'] ?? '')}"]`) : el;
+  if (menu?.matches(':popover-open')) menu.hidePopover();
   if (el.matches('[data-sr-close]')) { srDialog().close(); return; }
   if (el.matches('[data-sr-back]')) { srDraw(); return; }
   if (el.matches('[data-sr-add]')) { srFormOpen(null); return; }
   const editId = el.dataset['srEdit'];
   if (editId) { srFormOpen(SR.list?.items.find(r => r.id === editId) ?? null); return; }
   const retireId = el.dataset['srRetire'];
-  if (retireId) await srRetire(retireId, el);
+  if (retireId) await srRetire(retireId, from);
 }

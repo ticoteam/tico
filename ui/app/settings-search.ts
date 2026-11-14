@@ -54,6 +54,10 @@ function settingsSearchClear() {
 function settingsSearchOpen(hit: SettingsSearchHit | undefined) {
   const hash = hit && settingsSearchHash(hit.card);
   if (!hash) return;
+  // Folded into the header's ⋯ (a narrow header), the search's menu closes on a pick: the list is redrawn below before
+  // the header's own close-on-pick could find the link, and Enter is not a click at all.
+  const menu = document.getElementById('settings-search')?.closest<HTMLElement>('.ph-menu');
+  if (menu?.matches(':popover-open')) menu.hidePopover();
   settingsSearchClear();
   $('#settings-search-q')?.blur();
   location.hash = hash;

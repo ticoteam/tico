@@ -1,10 +1,11 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of a stage's rules (ui/app/stage-rules.ts; Stage rules spec, acceptance 8): every stage header
-// on a pipeline board has a Rules button with the number of rules that apply there; clicking Build's opens its panel
+// on a pipeline board has a quiet rules mark, a gavel with no word and no count, named for how many rules apply there
+// ("3 rules"), struck through and named "No rules" where none do (style guide, Pipeline stage); clicking Build's opens its panel
 // with every rule that applies, grouped (this stage, the whole pipeline, company, built in), each with its cost. Add
 // rule starts with On = Build and sends it; Edit sends the rule's revision; Retire asks first and sends it; Built in has
 // no controls. A member who may not change the pipeline reads the same panel with no Add, Edit or Retire. On a phone
-// the button sits beside the stage tabs and the panel fills the screen. Rules › Suggested says what accepting each of a
+// the mark sits at the end of the stage tabs, a 44 px target that nothing else covers, and the panel fills the screen. Rules › Suggested says what accepting each of a
 // bot's stage rules does: a new rule, a change listing what differs from the rule it rewrites, or a retire with the
 // bot's reason and a Retire button; Retire and Skip send their decision. The fake server answers as
 // backend/stage_rules_api.py does.
@@ -119,10 +120,11 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
   return state;
 }
 
-const count = async (page: Page, sid: string) => (await page.locator(`[data-sr-open="${sid}"] .tnum`).first().innerText()).trim();
+// A stage's count is the mark's tip, "3 rules", "No rules"; its name adds the stage, "Build: 3 rules".
+const count = async (page: Page, sid: string) => (await page.locator(`[data-sr-open="${sid}"]`).first().getAttribute('title'))?.trim();
 const groupNames = (page: Page, group: string) => page.locator(`#sr-panel [data-sr-group="${group}"] .sr-name`).allInnerTexts();
 const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction(([s, want]) =>
-  (document.querySelector(`[data-sr-open="${s}"] .tnum`)?.textContent ?? '').trim() === want, [sid, n] as const);
+  (document.querySelector(`[data-sr-open="${s}"]`)?.getAttribute('title') ?? '').trim() === want, [sid, n] as const);
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
@@ -132,9 +134,16 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     const served = await serve(desk, errors, true);
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=columns');
     // Each stage's count: its own rules, the whole pipeline's and the company's.
-    await waitCount(desk, 'build', '3');
-    assert.equal(await count(desk, 'spec'), '3', 'Spec counts its own rule, the pipeline\'s and the company\'s');
-    assert.equal(await desk.locator('[data-pv-col="build"] [data-sr-open]').getAttribute('aria-label'), 'Rules for Build: 3');
+    await waitCount(desk, 'build', '3 rules');
+    assert.equal(await count(desk, 'spec'), '3 rules', 'Spec counts its own rule, the pipeline\'s and the company\'s');
+    // The mark: the gavel alone, no word and no count on the board; its name and tip say how many.
+    const mark = desk.locator('[data-pv-col="build"] [data-sr-open]');
+    assert.deepEqual(await mark.evaluate(el => ({kids: [...el.childNodes].map(n => n.nodeType === 1 ? (n as Element).className : '#text'),
+      icon: el.querySelector('.nav-icon')?.textContent, title: (el as HTMLElement).title, none: el.classList.contains('sr-mark-none')})),
+      {kids: ['nav-icon'], icon: 'gavel', title: '3 rules', none: false});
+    // A screen reader hears whose rules: the stage, then the count (each column has one).
+    assert.equal(await mark.getAttribute('aria-label'), 'Build: 3 rules');
+    assert.equal(await desk.locator('[data-pv-col="spec"] [data-sr-open]').getAttribute('aria-label'), 'Spec: 3 rules');
 
     await desk.locator('[data-pv-col="build"] [data-sr-open]').click();
     await desk.locator('#sr-panel [data-sr-group="stage"] .sr-name').first().waitFor();
@@ -145,9 +154,27 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await desk.locator('#sr-panel [data-sr-group="builtin"] button').count(), 0, 'Built in is read-only');
     assert.deepEqual((await desk.locator('#sr-panel .sr-group h3').allTextContents()).map(x => x.replace(/\s+/g, ' ').trim()),
       ['This stage 1', 'The whole pipeline 1', 'Company 1', 'Built in 1 in code, read-only']);
-    // Each rule shows its cost.
-    assert.equal(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] [data-sr-cost]').innerText(), 'Free');
+    // A pill only for a rule that costs: a free rule has none.
+    assert.equal(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] [data-sr-cost]').count(), 0, 'no Free pill');
     assert.equal(await desk.locator('#sr-panel [data-sr-rule="sr_snooze"] [data-sr-cost]').innerText(), 'One Jev call per event');
+    // A row is its name and marks, no word buttons: the row opens the rule, a quiet ⋯ ends it; Built in has no ⋯.
+    assert.equal(await desk.locator('#sr-panel .sr-rule > .sr-line > button:not(.sr-open, .sr-more)').count(), 0, 'no Edit or Retire words on a row');
+    assert.equal(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] .sr-line > :last-child').getAttribute('data-sr-more'), 'sr_owner', '⋯ is last');
+    assert.equal(await desk.locator('#sr-panel .sr-builtin [data-sr-more]').count(), 0);
+    // ⋯: Edit, then after a line, last and red, Retire; Esc closes it and gives ⋯ the focus back.
+    const more = desk.locator('#sr-panel [data-sr-rule="sr_owner"] [data-sr-more]');
+    await more.click();
+    const pop = desk.locator('#sr-menu:popover-open');
+    await pop.waitFor();
+    assert.deepEqual(await pop.locator('.tl-menu > *').evaluateAll(els => els.map(e => e.getAttribute('role') === 'separator' ? '—' : (e.textContent || '').trim())), ['Edit', '—', 'Retire']);
+    const red = await desk.evaluate(() => { const p = document.createElement('i'); p.style.color = 'var(--fail)'; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; });
+    assert.equal(await pop.locator('[data-sr-retire]').evaluate(el => getComputedStyle(el).color), red, 'Retire is red');
+    assert.equal(await more.getAttribute('aria-expanded'), 'true');
+    await desk.keyboard.press('Escape');
+    await desk.locator('#sr-menu:popover-open').waitFor({state: 'detached'}).catch(() => {});
+    await desk.waitForFunction(() => !document.querySelector('#sr-menu:popover-open'));
+    await desk.waitForFunction(() => document.activeElement?.getAttribute('data-sr-more') === 'sr_owner');
+    assert.equal(await desk.locator('#sr-panel').isVisible(), true, 'Esc closed the menu, not the panel');
     assert.match(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] .sr-what').innerText(), /^The owner changes → owner not on engineering → Block$/);
     assert.match(await desk.locator('#sr-panel [data-sr-rule="sr_quiet"] .sr-what').innerText(), /^6 h quiet → Tell the manager$/);
 
@@ -180,11 +207,13 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.deepEqual([added.body['pipeline'], added.body['stages'], added.body['then'], added.body['name']], ['eng', ['build'], 'tell_owner', 'Sent back twice']);
     assert.deepEqual(added.body['cond'], {owner_not_on_team: ''});
     assert.deepEqual(await groupNames(desk, 'stage'), ['Owner on the team', 'Sent back twice']);
-    await waitCount(desk, 'build', '4');
-    assert.equal(await count(desk, 'spec'), '3', 'a rule on Build is not counted on Spec');
+    await waitCount(desk, 'build', '4 rules');
+    assert.equal(await count(desk, 'spec'), '3 rules', 'a rule on Build is not counted on Spec');
 
-    // Edit sends the revision read.
-    await desk.locator('#sr-panel [data-sr-rule="sr_new"] [data-sr-edit]').click();
+    // A click anywhere on the row opens it for editing; Edit sends the revision read.
+    const newRow = desk.locator('#sr-panel [data-sr-rule="sr_new"]'), rowBox = (await newRow.boundingBox())!;
+    // a point on its sentence, under the name: the row's button reaches it
+    await newRow.click({position: {x: rowBox.width / 2, y: rowBox.height - 6}});
     await form.locator('[name=name]').fill('Sent back twice or more');
     await form.locator('[type=submit]').click();
     await desk.locator('#sr-panel [data-sr-rule="sr_new"] .sr-name', {hasText: 'or more'}).waitFor();
@@ -192,18 +221,20 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(edited.path, '/api/v2/stage-rules/sr_new');
     assert.equal(edited.body['revision'], 1);
 
-    // Retire asks first (accepted here) and sends the revision read.
-    await desk.locator('#sr-panel [data-sr-rule="sr_new"] [data-sr-retire]').click();
+    // Retire, in ⋯, asks first (accepted here) and sends the revision read.
+    await desk.locator('#sr-panel [data-sr-rule="sr_new"] [data-sr-more]').click();
+    await desk.locator('#sr-menu:popover-open [data-sr-retire]').click();
     await desk.locator('#sr-panel [data-sr-rule="sr_new"]').waitFor({state: 'detached'});
     assert.deepEqual(served.writes.at(-1), {path: '/api/v2/stage-rules/sr_new/retire', body: {revision: 2}});
-    await waitCount(desk, 'build', '3');
+    await waitCount(desk, 'build', '3 rules');
     await desk.locator('#sr-panel [data-sr-close]').click();
     assert.equal(await desk.locator('#sr-panel').isVisible(), false);
 
     // Edit on an old rule that never acts (A task enters → Tell the manager) keeps no Then picked: Save sends nothing
     // until the person picks, so a rename never turns it into a Block that clears every entering task's owner.
     await desk.locator('[data-sr-open="spec"]').first().click();
-    await desk.locator('#sr-panel [data-sr-rule="sr_spec"] [data-sr-edit]').click();
+    await desk.locator('#sr-panel [data-sr-rule="sr_spec"] [data-sr-more]').click();
+    await desk.locator('#sr-menu:popover-open [data-sr-edit]').click();
     assert.equal(await form.locator('[name=then]').inputValue(), '', 'no Then is picked for the person');
     assert.deepEqual(await form.locator('[name=then] option:not([disabled])').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['block']);
     const writes = served.writes.length;
@@ -246,14 +277,30 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await row('sr_sg_change').waitFor({state: 'detached'});
     assert.equal(served.writes.at(-1)?.path, '/api/v2/stage-rules/sr_sg_change/skip');
 
+    // No rule applies anywhere: each stage's mark is the struck-through gavel, named "No rules", and still opens the
+    // stage's panel in one click (where a rule is added).
+    for (const r of served.rules) r.retired = true;
+    await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=columns');
+    await desk.reload();
+    await waitCount(desk, 'build', 'No rules');
+    assert.equal(await count(desk, 'spec'), 'No rules');
+    assert.deepEqual(await desk.locator('[data-pv-col="build"] [data-sr-open]').evaluate(el =>
+      ({none: el.classList.contains('sr-mark-none'), title: (el as HTMLElement).title, text: el.querySelector('.nav-icon')?.textContent})),
+      {none: true, title: 'No rules', text: 'gavel'});
+    assert.equal(await desk.locator('[data-pv-col="build"] [data-sr-open]').getAttribute('aria-label'), 'Build: No rules');
+    await desk.locator('[data-pv-col="build"] [data-sr-open]').click();
+    await desk.locator('#sr-panel [data-sr-group="stage"] .sr-none').waitFor();
+    assert.equal(await desk.locator('#sr-panel [data-sr-add]').count(), 1, 'a rule can be added from there');
+    await desk.locator('#sr-panel [data-sr-close]').click();
+
     // A member reads the same rules and changes none.
     const member = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block', locale: 'en-US', timezoneId: 'UTC'});
     await serve(member, errors, false);
     await member.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=list');
-    await waitCount(member, 'build', '3');
+    await waitCount(member, 'build', '3 rules');
     await member.locator('.pv-group[aria-label="Build"] [data-sr-open]').click();
     await member.locator('#sr-panel [data-sr-group="stage"] .sr-name').first().waitFor();
-    assert.equal(await member.locator('#sr-panel [data-sr-add], #sr-panel [data-sr-edit], #sr-panel [data-sr-retire]').count(), 0);
+    assert.equal(await member.locator('#sr-panel [data-sr-add], #sr-panel [data-sr-edit], #sr-panel [data-sr-retire], #sr-panel [data-sr-more]').count(), 0);
     assert.match(await member.locator('#sr-panel .sr-who').innerText(), /owner, its manager and Admins/);
 
     // A phone: the button beside the stage tabs, and the panel fills the screen.
@@ -263,9 +310,16 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     await phone.goto('http://tico-ui.test/#/tasks?pipeline=eng');
     await phone.locator('.pv-is-phone').waitFor();
     await phone.locator('[data-pv-tab="build"]').click();
-    await waitCount(phone, 'build', '3');
+    await waitCount(phone, 'build', '3 rules');
     const button = await phone.locator('.pv-phone-head [data-sr-open="build"]').boundingBox();
-    assert.ok(button && button.height >= 44, 'the phone button is a 44 px target');
+    assert.ok(button && button.height >= 44 && button.width >= 44, 'the phone mark is a 44 px target');
+    // Its whole target is its own: a tap near each corner (inside its rounding) and at the centre lands on the mark, not
+    // on a stage tab beside it.
+    assert.deepEqual(await phone.locator('.pv-phone-head [data-sr-open="build"]').evaluate(el => {
+      const r = el.getBoundingClientRect();
+      return [[r.left + 6, r.top + 6], [r.right - 6, r.top + 6], [r.left + 6, r.bottom - 6], [r.right - 6, r.bottom - 6], [r.left + r.width / 2, r.top + r.height / 2]]
+        .map(([x, y]) => el.contains(document.elementFromPoint(x!, y!)));
+    }), [true, true, true, true, true]);
     await phone.locator('.pv-phone-head [data-sr-open="build"]').click();
     await phone.locator('#sr-panel [data-sr-group="stage"] .sr-name').first().waitFor();
     const box = await phone.locator('#sr-panel').boundingBox();

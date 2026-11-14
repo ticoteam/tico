@@ -1,7 +1,7 @@
 /* ui/app/finance-budgets.ts — Finance › Budgets: every budget the viewer sees in one month, as a tree (each budget's
    children under it, the top level grouped by P&L line), with its platform, amount, spend, how much is used, its pace
    to the month's end and where it warns. A double-click on an amount changes it from the month shown (budget_update,
-   dry run first, as on the P&L); "+ Budget" adds one under a line, for a teammate or a vendor (budget_create). A row
+   dry run first, as on the P&L); the header's quiet + adds one under a line, for a teammate or a vendor (budget_create). A row
    opens the rail: amount by month, warn at, at limit, owner. Shown to the owner and whoever holds finance.budgets
    (finTabShown). Platform, pace_end, spent_from, as_of and reported come from ad platform imports; a read without them draws
    those cells blank.
@@ -47,6 +47,16 @@ const FIN_BUD_HISTORY = 6;   // months of amounts in the rail
 const FIN_BUD_PER_NAME: Record<string, string> = {month: 'month', quarter: 'quarter', year: 'year', once: 'once'};
 const FIN_BUD_SHOWN_FROM: (string | undefined)[] = ['platform', 'mixed'];   // spent_from values that show platform spend
 
+// The month picker's choices: two years back to a year ahead, newest first, and the month shown wherever it is. A month
+// reads "Nov 2026", the year always said (style guide "Dates and times": a date field always shows it).
+function finMonthOptions(month: string) {
+  const now = new Date(), months = new Set<string>([month]);
+  for (let i = -24; i <= 12; i++) { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); months.add(finIso(d).slice(0, 7)); }
+  return [...months].filter(m => /^\d{4}-\d{2}$/.test(m)).sort().reverse().map(m => {
+    const [y, n] = finBudYm(m);
+    return `<option value="${m}"${m === month ? ' selected' : ''}>${FIN_MON[n - 1]} ${y}</option>`;
+  }).join('');
+}
 // A YYYY-MM month as its year and month number (NaN parts for a value that is not one).
 const finBudYm = (ym: string): [number, number] => { const [y = NaN, m = NaN] = ym.split('-').map(Number); return [y, m]; };
 
@@ -56,12 +66,13 @@ function finBudgetsPage(mine = false) {
   if (!B.month) B.month = finToday().slice(0, 7);
   if (mine) B.q = '';
   finNeed(FIN, 'the Finance page').bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
-  $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><input type="month" data-fin-month value="${B.month}" aria-label="Month"></label>
-      ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}
-      <span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
+  $('#fin-body').innerHTML = `<div class="fin-bar"><select class="fin-month" data-fin-month aria-label="Month">${finMonthOptions(B.month)}</select>
+      ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bud">${skelRows(6, {dot: false})}</div>`, '', 'Selected budget');
+  // Adding a budget is rare: a quiet + in the header (style guide "Top bars: one line").
+  finHeadAct(!mine && caps.may('finance.budgets') ? pageHeadAdd('New budget', 'data-fin-bud-add') : '');
   const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
-  const monthIn = finNeed(body.querySelector<HTMLInputElement>('[data-fin-month]'), 'the month input');
+  const monthIn = finNeed(body.querySelector<HTMLSelectElement>('[data-fin-month]'), 'the month picker');
   monthIn.onchange = () => {
     if (!monthIn.value || monthIn.value === B.month) return;
     B.month = monthIn.value; finBudReset(); void finBudLoad();
@@ -191,7 +202,12 @@ function finBudDraw() {
     shown = order.filter((r, i) => r.b ? keep.has(r.b.id) : order.slice(i + 1).find(n => !n.b || keep.has(n.b.id))?.b);
   }
   const [y, m] = finBudYm(B.month), last = new Date(y, m, 0).getDate();
-  const rows = shown.map(r => {
+  // Warn at shows only where it differs from the one most budgets use (style guide tables: "show the exception"; the
+  // rail always says it). Worked out from every budget, not the ones a search leaves, so it never changes while typing.
+  const warns = new Map<number, number>();
+  for (const b of state.rows) if (b.state?.amount != null) warns.set(b.warn_pct, (warns.get(b.warn_pct) || 0) + 1);
+  const usual = [...warns].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const rowHtml = (r: FinBudRow) => {
     if (!r.b) return `<tr class="fin-grp"><td colspan="7">${esc(r.group)}</td></tr>`;
     const b = r.b, s: Partial<FinBudState> = b.state || {}, pct = finBudPct(b), kids = (state.kids.get(b.id) || []).length;
     const platform = finBudPlatform(b) ? esc(finBudPlatform(b)) : finBudTeamRow(b) ? '<span class="muted">team</span>' : '';
@@ -199,14 +215,18 @@ function finBudDraw() {
     const pace = s.pace_end == null ? '' : s.amount != null && s.pace_end > s.amount ? `<span class="pill waiting">${finUsd(s.pace_end)}</span>` : finUsd(s.pace_end);
     const asOf = finBudAsOf(b);
     return `<tr data-fin-bud="${esc(b.id)}" style="--d:${r.depth}"${B.sel === b.id ? ' class="fin-on"' : ''}><td>${esc(b.name)}</td><td>${platform}</td>
-      <td class="fin-n${edit ? ' fin-edit' : ''}"${edit ? ` data-fin-bud-amt="${esc(b.id)}" tabindex="0" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[m - 1])}"` : ''}>${finBudAmount(b)}</td>
-      <td class="fin-n"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '<span class="muted">—</span>' : finUsd(s.actual)}${finBudReported(b)}</td>
+      <td class="fin-n${edit ? ' fin-edit' : ''}" data-k="Budget"${edit ? ` data-fin-bud-amt="${esc(b.id)}" tabindex="0" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[m - 1])}"` : ''}>${finBudAmount(b)}</td>
+      <td class="fin-n" data-k="Spent"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '' : finUsd(s.actual)}${finBudReported(b)}</td>
       <td>${pct == null ? '' : `<span class="fin-bar-m${finBudMeterCls(b, pct)}" role="img" aria-label="${pct}% used"><i style="width:${Math.min(100, pct)}%"></i></span>`}</td>
-      <td class="fin-n">${pace}</td><td class="fin-n">${kids || s.amount == null ? '' : esc(b.warn_pct + '%')}</td></tr>`;
-  }).join('');
-  const head = `<tr><th>Budget</th><th>Platform</th><th class="fin-n">Budget / mo${finExcl(state.read)}</th><th class="fin-n">Spent</th><th>Used</th><th class="fin-n">Pace by ${FIN_MON[m - 1]} ${last}</th><th class="fin-n">Warn at</th></tr>`;
+      <td class="fin-n" data-k="Pace">${pace}</td><td class="fin-n" data-k="Warn at">${kids || s.amount == null || b.warn_pct === usual ? '' : esc(b.warn_pct + '%')}</td></tr>`;
+  };
+  const rows = shown.map(rowHtml).join('');
+  const head = `<tr><th>Budget</th><th>Platform</th><th class="fin-n" data-fin-keep>Budget / mo${finExcl(state.read)}</th><th class="fin-n" data-fin-keep>Spent</th><th>Used</th><th class="fin-n">Pace by ${FIN_MON[m - 1]} ${last}</th><th class="fin-n">Warn at</th></tr>`;
   box.innerHTML = !state.rows.length ? finNote(state.mine ? 'No budget yet.' : 'No budgets yet.') : !rows ? finNote('No budgets match.')
-    : `<table class="fin-t fin-bud-t"><thead>${head}</thead><tbody>${rows}</tbody></table>${state.read.more ? finNote(`Showing the first ${FIN_BUD_LIMIT}`) : ''}`;
+    : `<table class="fin-t fin-bud-t fin-rows"><thead>${head}</thead><tbody>${rows}</tbody></table>${state.read.more ? finNote(`Showing the first ${FIN_BUD_LIMIT}`) : ''}`;
+  // The columns are every budget's, searched or not: a search draws fewer rows, never fewer columns.
+  if (B.q && rows) { const all = document.createElement('table'); all.innerHTML = `<thead>${head}</thead><tbody>${order.map(rowHtml).join('')}</tbody>`; finTrim(all, 'budgets'); }
+  finTrim(box.querySelector('table'), 'budgets');
 }
 
 function finBudRail() {
@@ -283,7 +303,7 @@ function finBudAdd() {
     .sort((x: string, y: string) => finWho(x).localeCompare(finWho(y)));
   const vendors = [...new Set(['Google Ads', 'Meta Ads', ...state.rows.map(b => b.vendor).filter(Boolean)])];
   const opt = (v: string, l: string, on = false): string => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(l)}</option>`;
-  const dlg = finDecideDialog('Budget', `<label>Line<select name="account_id">${lines.map((l, i) => opt(l.account_id, l.name, i === 0)).join('')}</select></label>
+  const dlg = finDecideDialog('New budget', `<label>Line<select name="account_id">${lines.map((l, i) => opt(l.account_id, l.name, i === 0)).join('')}</select></label>
     <label>Under<select name="parent_id"></select></label>
     <label>Teammate<select name="teammate">${opt('', '—')}${mates.map(t => opt(t, finWho(t))).join('')}</select></label>
     <label>Vendor<input name="vendor" maxlength="80" autocomplete="off" list="fin-bud-vendors"><datalist id="fin-bud-vendors">${vendors.map(v => `<option value="${esc(v)}">`).join('')}</datalist></label>

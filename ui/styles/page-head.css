@@ -10,6 +10,8 @@
 .ph>.ph-tabs{display:flex;gap:2px;margin:0;padding:0;border:0;background:none;overflow-x:auto;scrollbar-width:none;min-width:0;flex:0 1 auto}
 .ph>.ph-tabs::-webkit-scrollbar{display:none}
 .ph>.ph-tabs:empty{display:none}
+/* a tab past the fifth, or past the room, waits in ⋯ (page-head.ts pageHeadTabsShow) */
+.ph>.ph-tabs>.ph-over{display:none}
 /* one selected look for tabs and every single-choice filter (.ph-seg) on these screens: no track, no raised shadow */
 .ph .ph-tab,.ph-seg>:is(button,a){box-sizing:border-box;height:auto;min-height:0;margin:0;padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;box-shadow:none;color:var(--muted);font:inherit;font-size:var(--t-base);font-weight:400;line-height:20px;text-decoration:none;white-space:nowrap;cursor:pointer}
 .ph .ph-tab:hover,.ph-seg>:is(button,a):hover{background:var(--surface2);color:var(--ink);text-decoration:none}
@@ -20,11 +22,24 @@
 .ph>.ph-tools{flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:8px}
 .ph>.ph-tools:empty{display:none}
 .ph>.ph-tools input[type=search]{min-width:160px}
-/* a control's words never wrap: a narrow row folds the tools into ⋯ instead (page-head.ts pageHeadFit) */
+/* a control's words never wrap: a narrow row shows the tools as icons, then folds them into ⋯ (page-head.ts pageHeadFit) */
 .ph>.ph-tools>:is(button,a){flex:none;white-space:nowrap}
-/* tools folded into ⋯: above the menu's own items, a hairline between */
-.ph-menu>.ph-tools{display:flex;flex-direction:column;align-items:stretch;gap:2px}
-.ph-menu>.ph-tools:not(:last-child){margin:0 0 4px;padding:0 0 4px;border-bottom:1px solid var(--line)}
+/* A tool's word becomes its icon (.ph-icons): a tool that carries a .nav-icon or an svg shows that, at least a square
+   the row's height, and hides its words: bare words (page-head.ts wraps them in .ph-w) and a word span. Counts and
+   badges stay: .ph-keep, or a class that says so (-n, badge, count, .tnum). The words stay its name for a screen reader. */
+.ph.ph-icons>.ph-tools>:is(button,a):is(:has(>.nav-icon),:has(>svg)){display:inline-flex;align-items:center;justify-content:center;gap:2px;box-sizing:border-box;min-width:var(--ctl);height:var(--ctl);padding:0 6px}
+.ph.ph-icons>.ph-tools>:is(button,a):is(:has(>.nav-icon),:has(>svg))>:not(.nav-icon,svg,.ph-keep,.tnum,.au-fbn,[class*="badge"],[class*="count"],[class$="-n"],[class*="-n "]){display:none}
+/* At most one filled button, and it is the .ph-act one: a filled button among the tools is drawn as a ghost. */
+.ph>.ph-tools :is(button,a).primary{background:transparent;color:var(--ink);border-color:var(--line);font-weight:400}
+/* the quiet + (pageHeadAdd): a ghost square at the row's height, its + muted until hovered */
+.ph .ph-add{display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);min-width:var(--ctl);height:var(--ctl);padding:0}
+.ph .ph-add .nav-icon{font-size:20px;color:var(--muted)}
+.ph .ph-add:hover .nav-icon{color:var(--ink)}
+/* tabs and tools folded into ⋯: above the menu's own items, tabs first, a hairline after each group */
+.ph-menu>:is(.ph-tools,.ph-mtabs){display:flex;flex-direction:column;align-items:stretch;gap:2px}
+.ph-menu>:is(.ph-tools,.ph-mtabs):not(:last-child){margin:0 0 4px;padding:0 0 4px;border-bottom:1px solid var(--line)}
+.ph-menu .ph-mtab{display:flex;align-items:center}
+.ph-menu .ph-mtab.cur{background:var(--surface2);font-weight:600}
 .ph-menu>.ph-tools input[type=search]{box-sizing:border-box;width:100%;min-width:240px}
 .ph>.ph-more{flex:none;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .ph>.ph-more:hover,.ph>.ph-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
@@ -32,30 +47,31 @@
 .ph>.ph-more.ph-held{position:relative}
 .ph>.ph-more.ph-held::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
 .ph-menu[popover]{position:fixed;inset:auto;margin:0;width:max-content;min-width:160px;max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 12px 32px #0005;color:var(--ink)}
-.ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
+.ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;min-height:0;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
 .ph-menu :is(button,a):hover{background:var(--surface2);text-decoration:none}
 .ph-menu [hidden]{display:none}
 .ph>.ph-act{flex:none;display:flex;align-items:center;gap:8px}
 .ph>.ph-act:empty{display:none}
 .ph>.ph-act .primary{box-sizing:border-box;height:var(--ctl);white-space:nowrap}
 .ph [hidden]{display:none!important}
-/* Too narrow for one row (page-head.ts pageHeadFit): tabs keep their width; once the tools are in ⋯ (.ph-fold), the
-   tabs take a second row (.ph-wrap), wrapping inside it, with the tools at its right where they fit. The title, ⋯ and
-   the filled button keep the first row. Each row is a control high, so the title stays put whatever the row holds. */
+/* One row on a computer (page-head.ts pageHeadFit gives way in the guide's order; there is no second row). The title
+   stands a control high, so it sits at the same height on every page whatever the row holds. */
 @media (min-width:761px){
   .ph>.ph-tabs{flex:none}
   .ph>:is(.ph-t,.ph-back){line-height:var(--ctl)}
-  .ph.ph-wrap{flex-wrap:wrap;row-gap:0}
-  .ph.ph-wrap::after{content:"";order:7;flex:1 1 100%;height:0}
-  .ph.ph-wrap>.ph-tabs{order:8;flex:0 1 auto;min-width:0;flex-wrap:wrap;overflow:visible;margin-top:6px}
-  .ph.ph-wrap>.ph-tools{order:9;margin:6px 0 0 auto}
 }
+/* A phone: the title line holds the title, the tools, the filled button and ⋯ (44px controls); the tabs take the row
+   under it. Each row gives way like the computer's one (page-head.ts): the title is never cut while a tool could fold. */
 @media (max-width:760px){
   .ph{flex-wrap:wrap;row-gap:6px}
-  .ph.ph-pad{padding:8px 12px}
+  /* #main's phone padding is 18px on top; a padded header stands where it would, so no title moves between pages */
+  .ph.ph-pad{padding:18px 12px 8px}
+  .ph>:is(.ph-t,.ph-back){line-height:var(--ctl)}
   .ph>.ph-t{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .ph>.ph-sp{display:none}
   .ph>.ph-tabs{order:8;flex:1 1 100%}
-  .ph .ph-tab{min-height:40px;display:inline-flex;align-items:center}
-  .ph>.ph-tools{order:9;flex:1 1 100%;flex-wrap:wrap}
+  .ph .ph-tab,.ph-seg>:is(button,a){min-height:44px;display:inline-flex;align-items:center}
+  .ph>.ph-tools{flex:0 1 auto;flex-wrap:nowrap}
+  .ph>.ph-tools input[type=search]{min-width:120px}
+  .ph-menu :is(button,a){min-height:44px;padding:10px 12px}
 }

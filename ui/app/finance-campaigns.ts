@@ -1,6 +1,6 @@
 // Ad campaigns under each ad account on a Google Ads or Meta Ads tool's page (tools-api.js taFinanceCard): the month's
 // campaigns of that account with their spend, clicks, conversions and cost per conversion, and an owner picker. Blank
-// is the account's owner. A change posts campaign_owner_set and the card reads its campaigns again. Phone width: the
+// is the account's owner. No conversions leaves Per conv. empty (style guide tables: an empty cell shows nothing). A change posts campaign_owner_set and the card reads its campaigns again. Phone width: the
 // table scrolls in its container.
 
 'use strict';
@@ -30,7 +30,7 @@ function finCampaignRows(accountId: string, campaigns: FcCampaign[], currency: s
       <td class="tnum">${esc(tafMoney(c.month.spend, currency))}</td>
       <td class="tnum">${c.month.clicks.toLocaleString('en-US')}</td>
       <td class="tnum">${c.month.conversions.toLocaleString('en-US', {maximumFractionDigits: 2})}</td>
-      <td class="tnum">${c.month.per_conversion == null ? '—' : esc(tafMoney(c.month.per_conversion, currency))}</td>
+      <td class="tnum">${c.month.per_conversion == null ? '' : esc(tafMoney(c.month.per_conversion, currency))}</td>
       <td><select data-fc-owner="${esc(c.id)}" aria-label="Campaign owner">${finShareOpts(fcOwnerValue(c), 'Account owner')}</select></td></tr>`).join('');
   return `<tr class="fc-campaigns"><td colspan="3"><div class="scroll"><table class="taf-table fc-table"><thead><tr><th>Campaign</th><th>Spend</th><th>Clicks</th><th>Conv.</th><th>Per conv.</th><th>Owner</th></tr></thead><tbody>${body}</tbody></table></div></td></tr>`;
 }

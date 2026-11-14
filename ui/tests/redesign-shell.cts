@@ -32,7 +32,7 @@ declare function post(path: string, body: unknown): Promise<unknown>;
 declare function v2MessageHTML(m: {id: string; sender_id: string; body: string; created_at: string; [k: string]: unknown}): string;
 
 
-const PHONE_BAR = ['Team', 'Search', 'Assistant', 'Tasks', 'Updates', 'More'];   // Assistant: the Liquid Dot in the centre slot
+const PHONE_BAR = ['Team', 'Search', 'Assistant', 'Tasks', 'More'];   // five slots, the Liquid Dot in the centre; Updates is in More
 // The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
 const railKeys = (page: import('playwright').Page) => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => (els as HTMLElement[]).map(el =>
   el.dataset.nav || (el.classList.contains('nav-row') && (el.querySelector(':scope > [data-nav]') as HTMLElement | null)?.dataset.nav) || el.id || el.className.split(' ')[0]));

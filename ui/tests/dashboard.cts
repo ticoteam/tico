@@ -3,8 +3,9 @@
 // opens with its default cards and the Campus tab beside it; the first change saves the defaults, then the order goes
 // by pin ids (keys and a pointer drag); a card is added from its form, sized from its menu and removed; a page is
 // pinned from Add page; a team opens from its name in the sidebar while its arrow still folds it; a member sees the
-// cards and no way to arrange them; a phone has one column and no sideways scroll. Arranging is in edit mode only: Edit
-// shows the grips, the menus and + Card / + Page, a redraw keeps it, and Done, Escape or leaving the page ends it. The app opens on My dashboard
+// cards and no way to arrange them; a phone has one column and no sideways scroll. The header is the shared one (five
+// tabs, Share in ⋯). Arranging is in edit mode only: Edit, in ⋯, shows the grips, the menus and + Card / + Page, a
+// redraw keeps it, and Done, Escape or leaving the page ends it. The app opens on My dashboard
 // (person:me, Overview › Mine) with its own defaults.
 // TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Page, Route} from 'playwright';
@@ -22,12 +23,18 @@ interface Person { id: string; name: string; email: string; role: string; compan
 type Settings = {team: string; weeks?: number};
 // App global: the signed-in person, and the employee list the page loads before it draws.
 declare const S: {me: Person | null; emps?: unknown[]};
+// App global: a task's due day as My tasks says it (ui/app/dashboard.ts).
+declare function dashDue(due: string | null | undefined): string;
+declare function dayWords(value: string, opts?: {weekday?: boolean}): string;
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900}, LAPTOP = {width: 1280, height: 800};
 const OWNER: Person = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
 const MEMBER: Person = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
+// A bare due day `n` days from today (local), as the server stores one; relative, so no test turns stale on a new year.
+const dueDay = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const LATE = dueDay(-11);
 const NAMES: Record<string, string> = {tasks_by_status: 'Tasks by status', done_per_week: 'Done per week', needs_you: 'Needs you', latest_pages: 'Latest pages',
-  spend: 'Spend', kpi: 'KPI', automation_runs: 'Automation runs', needs_attention: 'Needs attention', unread_threads: 'Unread threads',
+  spend: 'Spend', kpi: 'KPI', automation_runs: 'Automation runs', needs_attention: 'Needs you', unread_threads: 'Unread threads',
   my_tasks: 'My tasks', updates: 'Updates'};
 const weeks = (n: number) => Array.from({length: n}, (_, i) => ({week: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + i % 4 * 7).padStart(2, '0')}`, done: [3, 5, 2, 8, 6, 4, 9, 7][i % 8]!}));
 const DATA: Record<string, (s?: Settings) => unknown> = {
@@ -39,7 +46,7 @@ const DATA: Record<string, (s?: Settings) => unknown> = {
   latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated_at: ago(90), archived: false}]}),
   needs_attention: () => DATA.needs_you!(),
   unread_threads: () => ({count: 0, threads: []}),
-  my_tasks: () => ({count: 2, tasks: [{id: 't7', title: 'Send the Acme renewal quote', status: 'open', due_at: '2026-11-03', updated_at: ago(40)},
+  my_tasks: () => ({count: 2, tasks: [{id: 't7', title: 'Send the Acme renewal quote', status: 'open', due_at: LATE, updated_at: ago(40)},
     {id: 't8', title: 'Review the onboarding checklist', status: 'doing', due_at: null, updated_at: ago(300)}]}),
   updates: () => ({unread: 1, updates: [{id: 'u1', author: 'eng-lead', kind: 'daily', day: '2026-11-01', headline: 'Shipped the billing fix',
     created_at: ago(60), read: false}]}),
@@ -158,9 +165,16 @@ const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').al
 // How many of `sel` are on screen; the edit controls are in the page while viewing, just not shown.
 const shown = (page: Page, sel: string) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
 const EDIT_CONTROLS = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
-// Every control on the dashboard shown now that is under 40 px tall: on a phone each is the only way to what it does.
+// Edit is in the shared header's ⋯ (arranging is not a daily thing): how many ⋯ holds, and choosing it.
+const EDIT_ITEM = '#main header.ph > .ph-menu [data-dash-mode="edit"]';
+const editItems = (page: Page) => page.locator(EDIT_ITEM).count();
+async function startEditing(page: Page) {
+  await page.locator('#main header.ph > .ph-more').click();
+  await page.locator(EDIT_ITEM).click();
+}
+// Every control on the dashboard shown now that is under 44 px tall: on a phone each is the only way to what it does.
 const smallTaps = (page: Page) => page.locator('#dash-root :is(a[href], button, [role="button"], [role="menuitem"], [role="menuitemradio"])')
-  .evaluateAll(els => els.filter(el => el.checkVisibility() && el.getBoundingClientRect().height < 40)
+  .evaluateAll(els => els.filter(el => el.checkVisibility() && el.getBoundingClientRect().height < 43.5)
     .map(el => `${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30)}: ${Math.round(el.getBoundingClientRect().height)} px`));
 async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
@@ -184,15 +198,26 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.locator('#dash-grid a[href="#/page/f1"]').count(), 1, 'Latest pages links each page');
       await shot(page, 'desktop-dashboard');
 
-      // Viewing shows only Edit; Edit shows the grips, the menus, + Card, + Page and Done.
+      // The shared header (style guide "Top bars: one line"): Company at the page title's size, five tabs on the row with
+      // Share, the sixth, in ⋯, and ⋯ last. One line.
+      const head = page.locator('#main header.ph');
+      assert.equal(await head.locator('h1').evaluate(h => getComputedStyle(h).fontSize), '17px', 'the page title size');
+      assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
+      assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Share'], 'Share waits in ⋯');
+      assert.ok((await head.boundingBox())!.height < 60, 'one line');
+      assert.equal(await head.evaluate(h => h.querySelector(':scope > .ph-menu')!.previousElementSibling!.matches('.ph-more')), true, '⋯ last');
+
+      // Viewing shows no edit controls, Edit waits in ⋯; Edit shows the grips, the menus, + Card, + Page and Done.
       assert.equal(await shown(page, EDIT_CONTROLS), 0, 'nothing to arrange until Edit');
-      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1);
-      await page.locator('[data-dash-mode="edit"]').click();
+      assert.equal(await editItems(page), 1);
+      await startEditing(page);
       assert.equal(await shown(page, '[data-dash-grip]'), 4);
       assert.equal(await shown(page, '[data-dash-menu]'), 4);
       assert.equal(await shown(page, '[data-dash-add]'), 2, '+ Card and + Page');
-      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 0);
+      assert.equal(await editItems(page), 0, 'no Edit while editing');
+      assert.equal(await page.locator('#main header.ph > .ph-menu:popover-open').count(), 0, '⋯ closes once Edit is chosen');
       assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.dashMode), 'done', 'focus goes to Done');
+      assert.equal(await head.locator('.ph-act > .primary').innerText(), 'Done', 'Done is the one filled button, before ⋯');
       await shot(page, 'desktop-dashboard-editing');
 
       // The first change saves the defaults, then sends the order by pin ids.
@@ -218,6 +243,11 @@ async function shot(page: Page, name: string) {
       // Add a card from its form: Done per week over 12 weeks, large.
       await page.locator('[data-dash-add="card"]').click();
       const dlg = page.locator('#dash-dialog[open]');
+      // One name for one thing: the picker never lists "Needs you" twice (needs_attention and needs_you are the same list).
+      await dlg.locator('[name="template"] option').first().waitFor({state: 'attached'});
+      const names = await dlg.locator('[name="template"] option').allTextContents();
+      assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], `no card named twice: ${names}`);
+      assert.equal(names.filter(n => n === 'Needs you').length, 1, `one Needs you: ${names}`);
       await dlg.locator('[name="template"]').selectOption('done_per_week');
       await dlg.locator('[name="weeks"]').fill('12');
       await dlg.locator('[name="size"]').selectOption('large');
@@ -253,9 +283,10 @@ async function shot(page: Page, name: string) {
       assert.equal(await shown(page, '[data-dash-grip]'), 5);
       await page.locator('[data-dash-mode="done"]').click();
       assert.equal(await shown(page, EDIT_CONTROLS), 0, 'Done hides them again');
-      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1);
+      assert.equal(await editItems(page), 1);
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('#main header.ph > .ph-more')), true, 'focus goes back to ⋯');
       // Escape leaves edit mode, but first closes an open menu.
-      await page.locator('[data-dash-mode="edit"]').click();
+      await startEditing(page);
       await page.locator('#dash-grid .dash-pin').nth(0).locator('[data-dash-menu]').click();
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('.dash-menu').count(), 0, 'the menu closes');
@@ -263,7 +294,7 @@ async function shot(page: Page, name: string) {
       await page.keyboard.press('Escape');
       assert.equal(await shown(page, EDIT_CONTROLS), 0, 'Escape leaves edit mode');
       // Leaving the page ends it too.
-      await page.locator('[data-dash-mode="edit"]').click();
+      await startEditing(page);
 
       // Campus: the 3D view as it was, Overview still current.
       await page.locator('.dash-tabs a', {hasText: 'Campus'}).click();
@@ -281,7 +312,10 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you'], 'its own team goes unsaid');
       assert.match(await page.locator('[data-dash-audience]').innerText(), /Seen by Everyone$/);
       assert.equal(await shown(page, EDIT_CONTROLS), 0, 'a new page opens viewing');
-      assert.equal(await shown(page, '[data-dash-mode="edit"]'), 1, 'its leads arrange it with Edit');
+      assert.equal(await editItems(page), 1, 'its leads arrange it with Edit, in ⋯');
+      // Its header: the team's name, "Seen by" as a tool, then ⋯ (no second row, no tabs).
+      assert.equal(await page.locator('#main header.ph .ph-tools [data-dash-audience]').count(), 1);
+      assert.equal(await page.locator('#main header.ph .ph-tabs').count(), 0);
       assert.equal(await page.locator('#tree a.dept-label.cur').count(), 1);
       const kids = page.locator('#tree li.org-group:has(> .noderow a.dept-label.cur) > ul');
       const wasOpen = await kids.isVisible();
@@ -313,19 +347,23 @@ async function shot(page: Page, name: string) {
       const {page, errors} = await open(browser, {viewport, hash: '', me: MEMBER});
       await page.waitForFunction(() => location.hash === '#/home');
       await page.locator('#dash-grid .dash-pin').nth(4).waitFor();
-      assert.deepEqual(await headings(page), ['Needs attention', 'Unread threads', 'My tasks', 'Updates', 'Latest pages']);
+      assert.deepEqual(await headings(page), ['Needs you', 'Unread threads', 'My tasks', 'Updates', 'Latest pages']);
       assert.equal(await page.locator('.dash-tabs a.cur').getAttribute('href'), '#/home');
-      assert.equal(await page.locator('.dash-actions').isVisible(), true, 'a member arranges their own');
+      assert.equal(await editItems(page), 1, 'a member arranges their own');
       assert.equal(await shown(page, EDIT_CONTROLS), 0);
-      if (viewport === PHONE) assert.deepEqual(await smallTaps(page), [], 'every Home control is at least 40 px tall on a phone');
-      await page.locator('[data-dash-mode="edit"]').click();
+      if (viewport === PHONE) assert.deepEqual(await smallTaps(page), [], 'every Home control is at least 44 px tall on a phone');
+      await startEditing(page);
       assert.equal(await shown(page, '[data-dash-grip]'), 5);
       assert.equal(await sideways(page), false, 'edit mode fits');
       if (viewport === PHONE) {
-        assert.deepEqual(await smallTaps(page), [], 'every Home edit control is at least 40 px tall on a phone');
+        assert.deepEqual(await smallTaps(page), [], 'every Home edit control is at least 44 px tall on a phone');
+        // The header stays one title line over one tab row: the title, + Card, + Page, Done and ⋯ fit 390 px.
+        const line = await page.locator('#main header.ph').evaluate(h => [...h.children].filter(c => !c.matches('[popover], .ph-tabs') && (c as HTMLElement).checkVisibility())
+          .map(c => Math.round(c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2)));
+        assert.ok(Math.max(...line) - Math.min(...line) <= 3, `one title line on a phone ${line}`);
         await page.locator('#dash-grid .dash-pin').first().locator('[data-dash-menu]').click();
         await page.locator('.dash-menu [data-dash-remove]').waitFor();
-        assert.deepEqual(await smallTaps(page), [], 'every card menu item is at least 40 px tall on a phone');
+        assert.deepEqual(await smallTaps(page), [], 'every card menu item is at least 44 px tall on a phone');
         assert.equal(await sideways(page), false, 'the card menu fits');
         await page.keyboard.press('Escape');
         await page.locator('.dash-menu').waitFor({state: 'detached'});
@@ -333,7 +371,28 @@ async function shot(page: Page, name: string) {
       await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-my-dashboard-editing');
       await page.locator('[data-dash-mode="done"]').click();
       assert.equal(await page.locator('#dash-grid a[href="#/task/t7"]').count(), 1, 'My tasks links each task');
-      assert.equal(await page.locator('#dash-grid a[href="#/task/t1"]').count(), 1, 'Needs attention links its top items');
+      // A due day in the guide's words (month first, Today/Tomorrow), a past one in the failure colour; never "11-03".
+      const due = page.locator('#dash-grid li:has(> a[href="#/task/t7"]) > span');
+      // The day as the app's date words say it (dayWords: month first, the year only when it is not this year).
+      assert.equal(await due.innerText(), 'Overdue ' + await page.evaluate((d: string) => dayWords(d), LATE));
+      assert.match(await due.innerText(), /^Overdue [A-Z][a-z]{2} \d{1,2}(, \d{4})?$/);
+      assert.equal(await due.getAttribute('class'), 'dash-bad');
+      if (viewport === DESKTOP) {
+        const words = await page.evaluate(() => {
+          const day = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+          const text = (html: string) => { const el = document.createElement('div'); el.innerHTML = html; return [el.textContent, el.firstElementChild?.className]; };
+          const later = new Date(); later.setDate(later.getDate() + 20);
+          return {today: text(dashDue(day(0))), tomorrow: text(dashDue(day(1))), later: text(dashDue(day(20))), past: text(dashDue(day(-1))), none: dashDue(null),
+            laterWords: later.toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: later.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'})};
+        });
+        assert.deepEqual(words.today, ['Due today', 'muted']);
+        assert.deepEqual(words.tomorrow, ['Due tomorrow', 'muted']);
+        assert.deepEqual(words.later, ['Due ' + words.laterWords, 'muted']);
+        assert.equal(words.past[1], 'dash-bad');
+        assert.match(String(words.past[0]), /^Overdue [A-Z][a-z]{2} \d{1,2}/);
+        assert.equal(words.none, '');
+      }
+      assert.equal(await page.locator('#dash-grid a[href="#/task/t1"]').count(), 1, 'Needs you links its top items');
       assert.equal(await sideways(page), false);
       await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-my-dashboard');
       await page.locator('.dash-tabs a[href="#/overview"]').click();
@@ -346,9 +405,10 @@ async function shot(page: Page, name: string) {
       // A member reads the cards and has nothing to arrange.
       const {page, errors, fake} = await open(browser, {me: MEMBER});
       await page.locator('#dash-grid .dash-pin').first().waitFor();
-      assert.equal(await page.locator('.dash-actions').isVisible(), false);
+      assert.equal(await editItems(page), 0, 'no Edit in ⋯');
       assert.equal(await page.locator('[data-dash-grip], [data-dash-menu]').count(), 0);
       assert.equal(await shown(page, '[data-dash-mode]'), 0, 'no Edit');
+      assert.equal(await page.locator('#main header.ph > .ph-more').count(), 1, '⋯ is still there, last');
       assert.deepEqual(fake.writes, []);
       assert.deepEqual(errors, []);
       await page.close();
@@ -362,18 +422,26 @@ async function shot(page: Page, name: string) {
       assert.ok(widths[0]! >= 340, 'the full width');
       assert.equal(await sideways(page), false, 'no sideways scroll');
       const actionHeights = await page.locator('.dash-list a').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().height)));
-      assert.ok(actionHeights.length > 0 && actionHeights.every(height => height >= 40), 'dashboard task and question links are at least 40 px tall');
+      assert.ok(actionHeights.length > 0 && actionHeights.every(height => height >= 44), 'dashboard task and question links are at least 44 px tall');
       await shot(page, 'phone-dashboard');
-      await page.locator('[data-dash-mode="edit"]').click();
+      await startEditing(page);
       await page.locator('#dash-grid .dash-pin').nth(1).locator('[data-dash-menu]').click();
       assert.equal(await sideways(page), false, 'the menu stays on screen');
       await shot(page, 'phone-dashboard-menu');
       await page.evaluate(() => { location.hash = '#/team/eng'; });
       await page.waitForFunction(() => document.querySelector('.dash-head h1')?.textContent === 'Engineering');
       assert.equal(await sideways(page), false);
+      // "Seen by" is a quiet tool (no border) whose words give way to its icon: a long team name is never cut first.
+      const audience = page.locator('#main header.ph [data-dash-audience]');
+      assert.equal(await audience.evaluate(b => getComputedStyle(b).borderTopColor), 'rgba(0, 0, 0, 0)', 'no border');
+      await page.locator('#main header.ph h1').evaluate(h => { h.textContent = 'Customer Success and Support'; });
+      await page.waitForTimeout(200);
+      const fit = await page.locator('#main header.ph').evaluate(h => { const t = h.querySelector<HTMLElement>('.ph-t')!; return {whole: t.scrollWidth <= t.clientWidth, icons: h.classList.contains('ph-icons') || h.classList.contains('ph-fold')}; });
+      assert.deepEqual(fit, {whole: true, icons: true}, 'the long name is whole; Seen by is its icon (or in ⋯)');
+      assert.equal(await sideways(page), false);
       await shot(page, 'phone-team');
       await page.evaluate(() => { location.hash = '#/overview/campus'; });
-      await page.locator('.overview-tabs .dash-tabs').waitFor();
+      await page.locator('.overview-page .dash-tabs').waitFor();
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-campus');
       assert.deepEqual(errors, []);
@@ -398,7 +466,8 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Needs attention: each row by its task's title with the word for what it needs at the right, the ask as its tooltip;
+    // Needs you: each row by its task's title with a mark for what it needs at the right (named, not a word), the ask
+    // as its tooltip;
     // a Paused cause and a mention outside a task by their own line. The count sits on the header line (backend/cards.py needs_brief).
     {
       const done = 'Say when the work is done', was = DATA.needs_attention!;
@@ -412,27 +481,30 @@ async function shot(page: Page, name: string) {
       DATA.needs_attention = () => ({count: 13, items: rows});
       for (const viewport of [DESKTOP, PHONE]) {
         const {page, errors} = await open(browser, {viewport, hash: '#/home', me: MEMBER});
-        const pin = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Needs attention'})});
+        const pin = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Needs you'})});
         await pin.locator('.dash-needs li').nth(4).waitFor();
         const where = 'at ' + viewport.width;
         assert.deepEqual(await pin.locator('.dash-needs-t').allInnerTexts(), rows.map(r => r.title), 'titles, not the ask, ' + where);
-        assert.deepEqual(await pin.locator('.dash-needs li > a > .muted').allInnerTexts(), ['Done', 'Done', 'OK', 'Answer', 'Reply'], 'the words, ' + where);
+        const marks = pin.locator('.dash-needs li > a > .dash-act');
+        assert.deepEqual(await marks.evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['Done', 'Done', 'OK', 'Answer', 'Reply'], 'the marks, named, ' + where);
+        assert.deepEqual(await marks.evaluateAll(els => els.map(el => [el.getAttribute('role'), el.getAttribute('title')])), ['Done', 'Done', 'OK', 'Answer', 'Reply'].map(w => ['img', w]), 'a mark says its word on hover');
+        assert.deepEqual(await marks.evaluateAll(els => els.map(el => getComputedStyle(el).fontFamily.includes('Material Symbols'))), [true, true, true, true, true], 'an icon, not a word');
         assert.deepEqual(await pin.locator('.dash-needs li > a').evaluateAll(els => els.map(a => a.getAttribute('title'))), rows.map(r => r.line), 'the ask is the tooltip');
-        assert.equal(await pin.locator('.dash-needs li > a').first().getAttribute('href'), '#/task/n1', 'the word is inside the link to the task');
-        // A screen reader hears the title and the word apart, not run together.
-        assert.equal(await pin.getByRole('link', {name: 'Fix the invoice export Done', exact: true}).count(), 1, 'the link reads its title, then its word');
+        assert.equal(await pin.locator('.dash-needs li > a').first().getAttribute('href'), '#/task/n1', 'the mark is inside the link to the task');
+        // A screen reader hears the title and the mark's name apart, not run together.
+        assert.equal(await pin.getByRole('link', {name: 'Fix the invoice export Done', exact: true}).count(), 1, 'the link reads its title, then its mark');
         // The spec's measure: no row's first line repeats another's while their tasks' titles differ.
         const firsts = await pin.locator('.dash-needs-t').allInnerTexts(), byTitle = rows.map(r => r.title);
         assert.equal(firsts.filter((t, i) => firsts.indexOf(t) !== i && byTitle.indexOf(byTitle[i]!) === i).length, 0, 'no repeated first line unless the titles repeat');
         assert.equal(await pin.locator('.dash-big').count(), 0, 'no big figure');
-        assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention', 'the heading keeps its own text');
+        assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs you', 'the heading keeps its own text');
         const n = pin.locator('.dash-pin-head > .dash-head-n');
         assert.equal(await n.innerText(), '13', 'the count on the header line');
         assert.equal(await n.getAttribute('href'), '#/tasks?view=foryou', 'the count opens Tasks > You');
         assert.equal(await n.evaluate(el => getComputedStyle(el).fontSize), '13px', 'the count at 13px');
-        assert.equal(await n.evaluate(el => getComputedStyle(el).color), await pin.locator('.dash-needs li > a > .muted').first().evaluate(el => getComputedStyle(el).color), 'the count muted');
-        const words = await pin.locator('.dash-needs li > a > .muted').evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right <= window.innerWidth; }));
-        assert.ok(words.every(Boolean), 'every word stays on screen, ' + where);
+        assert.equal(await n.evaluate(el => getComputedStyle(el).color), await marks.first().evaluate(el => getComputedStyle(el).color), 'the count muted');
+        const onScreen = await marks.evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right <= window.innerWidth; }));
+        assert.ok(onScreen.every(Boolean), 'every mark stays on screen, ' + where);
         assert.equal(await sideways(page), false, 'nothing scrolls sideways, ' + where);
         await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-needs-attention');
         assert.deepEqual(errors, []);
@@ -441,12 +513,12 @@ async function shot(page: Page, name: string) {
       // At 0 the header shows no count and the body says so.
       DATA.needs_attention = () => ({count: 0, items: []});
       const {page, errors, fake} = await open(browser, {hash: '#/home', me: MEMBER});
-      const pin = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Needs attention'})});
+      const pin = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Needs you'})});
       await pin.locator('.dash-none').waitFor();
       assert.equal(await pin.locator('.dash-none').innerText(), 'Nothing waiting on you');
       assert.equal(await pin.locator('.dash-none a').getAttribute('href'), '#/tasks?view=foryou', 'the empty card still leads to Tasks > You');
       assert.equal(await pin.locator('.dash-pin-head > .dash-head-n').isVisible(), false, 'no count at 0');
-      assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs attention');
+      assert.equal((await pin.locator('h2').innerText()).trim(), 'Needs you');
       // A team's Needs you card on another page: the team in the heading, the count beside it.
       fake.places.dashboard!.pins = defaults(['needs_you'], 'eng');
       await page.evaluate(() => { location.hash = '#/overview'; });
@@ -498,8 +570,8 @@ async function shot(page: Page, name: string) {
         assert.equal(await card('Quiet runs').locator('.dash-sub').count(), 0, 'no line with nothing failed or running');
         assert.equal(await count('Team updates').isVisible(), false, 'a count of 0 is hidden');
         assert.equal(await card('Team updates').locator('.dash-pin-body').innerText(), 'No updates');
-        assert.equal(await count('Needs attention').isVisible(), false);
-        assert.equal(await card('Needs attention').locator('.dash-pin-body').innerText(), 'Nothing waiting on you');
+        assert.equal(await count('Needs you').isVisible(), false);
+        assert.equal(await card('Needs you').locator('.dash-pin-body').innerText(), 'Nothing waiting on you');
         // Totals are 16px/600 beside their label; Tasks by status has no filled boxes.
         for (const name of ['Spend', 'KPI', 'Done per week']) {
           assert.deepEqual(await card(name).locator('.dash-big strong').evaluate(el => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight]), ['16px', '600'], `${name} ${where}`);
@@ -512,9 +584,9 @@ async function shot(page: Page, name: string) {
         const [head, n] = await Promise.all([card(LONG).locator('.dash-pin-head').boundingBox(), longCount.boundingBox()]);
         assert.ok(n && head && n.x + n.width <= head.x + head.width + 0.5, `the count is inside the header ${where}`);
         assert.equal(await longCount.evaluate(el => el.scrollWidth <= el.clientWidth), true, `the count is shown whole ${where}`);
-        if (viewport === PHONE) assert.ok(n!.height >= 40, `the count is a finger-sized target on a phone: ${n!.height}px`);
-        // Nothing in the main area above 16px, icon glyphs aside.
-        assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => el instanceof HTMLElement && el.checkVisibility()
+        if (viewport === PHONE) assert.ok(n!.height >= 44, `the count is a finger-sized target on a phone: ${n!.height}px`);
+        // Nothing in the main area above 16px, icon glyphs and the page title (17px, the shared header's) aside.
+        assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => el instanceof HTMLElement && el.checkVisibility() && !el.matches('header.ph > .ph-t')
           && [...el.childNodes].some(c => c.nodeType === 3 && c.textContent!.trim()) && parseFloat(getComputedStyle(el).fontSize) > 16
           && !/Material Symbols/i.test(getComputedStyle(el).fontFamily)).map(el => el.className + ': ' + el.textContent!.trim().slice(0, 30))), [], where);
         await shot(page, `counts-${viewport.width}`);
@@ -522,6 +594,6 @@ async function shot(page: Page, name: string) {
         await page.close();
       }
     }
-    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns, Needs attention rows by title with the count on the header line, header counts and no billboard figures');
+    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns, Needs you rows by title with the count on the header line, header counts and no billboard figures');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

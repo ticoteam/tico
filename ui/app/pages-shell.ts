@@ -253,14 +253,14 @@ function toolsRoute(r: string): boolean {
   for (const old of ['#/library/tools', INTEGRATIONS]) {
     if (!rdUnder(path, old)) continue;
     const rest = path.slice(old.length).replace(/^\/+/, '');
-    if (!rest) return go(new URLSearchParams(query).has('who') ? TOOLS_KEYS + q : TOOLS_ROUTE);
-    return go((rest.startsWith('credentials/') ? TOOLS_KEYS + '/' : TOOLS_ROUTE + '/') + rest + q);
+    if (!rest) return go(TOOLS_ROUTE + toolsKeysQuery(query));
+    return go(rest.startsWith('credentials/') ? TOOLS_ROUTE + '/key/' + rest.slice(12) : TOOLS_ROUTE + '/' + rest + q);
   }
   if (rdUnder(path, '#/library/connections')) {
     const rest = path.slice('#/library/connections'.length).replace(/^\/+/, '');
     return go(rest ? TOOLS_ROUTE + '/' + rest : TOOLS_ROUTE);
   }
-  if (rdUnder(path, CREDENTIALS)) return go(TOOLS_KEYS + '?show=credentials');
+  if (rdUnder(path, CREDENTIALS)) return go(TOOLS_ROUTE + '?show=keys');
   // The kinds and views of inbox register themselves as Tools' inbox code runs (ui/app/inboxes*.ts, the connect page
   // part), and Tools' pages and its Add tool menu read them: an address there waits for it, then routes again (or shows
   // Retry where the page would be).
@@ -280,7 +280,12 @@ function toolsRoute(r: string): boolean {
   if (!parts.length) { pageTools(); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'website' && parts[1]) { void pageToolWebsite(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
-  if (parts[0] === 'keys') { pageRdTools(); return true; }
+  // Keys was its own page; a tool's keys are on the tool's page now: the list with Keys' filters, a tool, or a key.
+  if (parts[0] === 'keys') {
+    const [, a, b] = parts.map(encodeURIComponent);
+    return go(a === 'credentials' && b ? TOOLS_ROUTE + '/key/' + b : a ? TOOLS_ROUTE + '/' + a : TOOLS_ROUTE + toolsKeysQuery(query));
+  }
+  if (parts[0] === 'key' && parts[1]) { void pageToolKey(parts[1]); return true; }
   if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
   const view = inboxesRoute(parts);
   if (view !== null) { toolsInboxPage(view); return true; }
@@ -507,7 +512,15 @@ function inboxesRoute(parts: string[]): string | null {
 }
 
 // app/tools.ts
-const TOOLS_KEYS = '#/tools/keys';
+// The old Keys list's filters (who, issues=1, q, show=credentials) as the Tools list's (ui/app/tools.ts toolsParams).
+function toolsKeysQuery(query: string): string {
+  const old = new URLSearchParams(query), q = new URLSearchParams();
+  if (old.get('show') === 'credentials') q.set('show', 'keys');
+  if (old.get('issues') === '1') q.set('needs', '1');
+  for (const k of ['who', 'q']) { const v = old.get(k); if (v) q.set(k, v); }
+  const text = q.toString();
+  return text ? '?' + text : '';
+}
 // An old Settings › Inboxes address (what follows #/settings/inboxes/) at its home under Tools.
 function toolsFromInboxes(rest: string): string {
   const [head = '', id = ''] = rest.split('/');

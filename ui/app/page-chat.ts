@@ -7,7 +7,7 @@
    width; from 1600 px body.pgc-docked gives #main a right margin of its width, so the page sits beside it. Close at its
    left, the owner's face and name, then the chat. Its left edge drags it 260–560 px wide; the width and whether it is
    open are kept in this browser (open per page). Esc inside it closes it. ⌘J (Ctrl+J) opens it with the cursor in its
-   composer and closes it again (ask-panel.ts asks pageChatKey first); Ask and a page chat are never open together.
+   composer and closes it again (ask-panel.ts asks pageChatKey first). Ask opens in the sidebar, so both may be open.
    A page may hold the column (pageChatHold): Listening's editor takes its place while open.
    Phone (≤760 px, the pages' own phone layout): the owner's face opens the chat full screen over the page and the tab
    bar: ‹ at left, the name in the middle, the composer at the bottom. ‹ or the phone's back returns to the page as it
@@ -162,7 +162,7 @@ function pgcDraw(state: PageChatState, open: boolean): void {
   panel.classList.toggle('pgc-full', state.full);
   document.body.classList.toggle('pgc-open', shows && !state.full);
   pgcDock();
-  if (shows && !state.full) { pgcPlace(); if (ASK?.open) askToggle(false, false); }
+  if (shows && !state.full) pgcPlace();
   state.button.querySelector('[data-pgc-open]')?.setAttribute('aria-pressed', String(shows));
   if (!open) { threadUnmount(state.chat); state.chat = null; panel.replaceChildren(); return; }
   if (!panel.querySelector(':scope > .pgc-shell')) {

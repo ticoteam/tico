@@ -193,7 +193,7 @@
 <div class="rv-f3-page"><b>Tasks</b><i></i><i></i><i></i><i class="s"></i></div>
 <div class="rv-f3-chat"><b>Tasks Owner</b><i></i><i class="s"></i><span class="rv-f3-box">Message</span></div>
 </div>
-<p class="rv-note">The Assistant row opens the Assistant in the sidebar, in place of the list, and the row's dot becomes the close mark. The page and its chat do not move. On a phone the bar's dot opens the Assistant full screen.</p>
+<p class="rv-note">The Assistant row opens the Assistant in the sidebar, in place of the list, and the row's dot becomes the close mark. The sidebar widens to 340px while the Assistant is open, so a reply has room; the page moves over by the difference and is never covered, and its own chat stays on the right. On a phone the bar's dot opens the Assistant full screen.</p>
     </div>
   </div>
 
@@ -363,9 +363,9 @@
 </div>
 <div class="rv-full">
 <h3>Pipeline stage</h3>
-<p class="rv-note">A stage is a column: its name and count, a quiet rules mark when it has rules, and its ▶ when something waits on you. The name opens that stage's editor, and only that stage.</p>
-<div class="rv-stagecol"><section class="pv-col"><header class="pv-col-head"><button type="button" class="pv-stage-h"><span class="pv-stage-name">Build</span><span class="pv-stage-n tnum">2/3</span></button><span class="rv-rulemark nav-icon" role="img" aria-label="Has rules" title="Rules">gavel</span><button type="button" class="pv-play" aria-label="Review Build: 1 waits on you" title="Review Build"><svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tnum">1</span></button></header><div class="pv-col-body"><div class="tk-card" role="button" tabindex="0"><span class="tk-title">Fix the export timeout</span><span class="tk-meta"><span class="tk-sp"></span><span class="tk-age">1h</span><span class="tk-owner"><span class="av av-initials" style="width:16px;height:16px;--hue:200;font-size:7px" aria-hidden="true">AD</span></span></span></div><div class="tk-card" role="button" tabindex="0"><span class="tk-title">Approve the staging deploy</span><span class="tk-meta"><span class="tk-sp"></span><span class="tk-age">35m</span><span class="tk-owner"><span class="av av-initials" style="width:16px;height:16px;--hue:140;font-size:7px" aria-hidden="true">BB</span></span></span></div></div></section>
-<section class="pv-col"><header class="pv-col-head"><button type="button" class="pv-stage-h"><span class="pv-stage-name">QA</span><span class="pv-stage-n tnum">1</span></button></header><div class="pv-col-body"><div class="tk-card" role="button" tabindex="0"><span class="tk-title">Update the release notes</span><span class="tk-meta"><span class="tk-sp"></span><span class="tk-age">3h</span><span class="tk-owner"><span class="av av-initials" style="width:16px;height:16px;--hue:30;font-size:7px" aria-hidden="true">SM</span></span></span></div></div></section></div>
+<p class="rv-note">A stage is a column: its name and count, a quiet rules mark (struck through when the stage has no rules), and its ▶ when something waits on you. The name opens that stage's editor, and only that stage.</p>
+<div class="rv-stagecol"><section class="pv-col"><header class="pv-col-head"><button type="button" class="pv-stage-h"><span class="pv-stage-name">Build</span><span class="pv-stage-n tnum">2/3</span></button><button type="button" class="sr-mark" aria-label="2 rules" title="2 rules"><span class="nav-icon" aria-hidden="true">gavel</span></button><button type="button" class="pv-play" aria-label="Review Build: 1 waits on you" title="Review Build"><svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tnum">1</span></button></header><div class="pv-col-body"><div class="tk-card" role="button" tabindex="0"><span class="tk-title">Fix the export timeout</span><span class="tk-meta"><span class="tk-sp"></span><span class="tk-age">1h</span><span class="tk-owner"><span class="av av-initials" style="width:16px;height:16px;--hue:200;font-size:7px" aria-hidden="true">AD</span></span></span></div><div class="tk-card" role="button" tabindex="0"><span class="tk-title">Approve the staging deploy</span><span class="tk-meta"><span class="tk-sp"></span><span class="tk-age">35m</span><span class="tk-owner"><span class="av av-initials" style="width:16px;height:16px;--hue:140;font-size:7px" aria-hidden="true">BB</span></span></span></div></div></section>
+<section class="pv-col"><header class="pv-col-head"><button type="button" class="pv-stage-h"><span class="pv-stage-name">QA</span><span class="pv-stage-n tnum">1</span></button><button type="button" class="sr-mark sr-mark-none" aria-label="No rules" title="No rules"><span class="nav-icon" aria-hidden="true">gavel</span></button></header><div class="pv-col-body"><div class="tk-card" role="button" tabindex="0"><span class="tk-title">Update the release notes</span><span class="tk-meta"><span class="tk-sp"></span><span class="tk-age">3h</span><span class="tk-owner"><span class="av av-initials" style="width:16px;height:16px;--hue:30;font-size:7px" aria-hidden="true">SM</span></span></span></div></div></section></div>
 </div>
 </div>
 </section>
@@ -884,12 +884,12 @@
   </div>
   <div class="rv-full">
     <h3>Directory detail card and key-value table</h3>
-    <p class="rv-note">The Details card on a directory entry: a key-value table with the value and, at the right, where it came from and how long ago it changed. The Works at row is a related entity: a link that spans the value and source columns, as the Email row does.</p>
+    <p class="rv-note">The Details card on a directory entry: a key-value table with the value and, at the right in one muted line, where it came from and how long ago it changed (the age opens the history). No pill: where a value came from is not a warning. The Works at row is a related entity: a link that spans the value and source columns, as the Email row does.</p>
     <section class="card dir-card">
       <header><h2>Details</h2></header>
       <table class="dir-kv">
-        <tr><th scope="row">Role</th><td>Head of finance</td><td class="dir-meta"><span class="pill dir-src">Chat</span><button type="button" class="dir-age" aria-label="History of Role" title="History">3d</button></td></tr>
-        <tr><th scope="row">Team</th><td>Finance</td><td class="dir-meta"><span class="pill dir-src">Email</span><button type="button" class="dir-age" aria-label="History of Team" title="History">2w</button></td></tr>
+        <tr><th scope="row">Role</th><td>Head of finance</td><td class="dir-meta"><span class="dir-src">Chat</span><span aria-hidden="true"> · </span><button type="button" class="dir-age" aria-label="History of Role" title="History">3d</button></td></tr>
+        <tr><th scope="row">Team</th><td>Finance</td><td class="dir-meta"><span class="dir-src">Email</span><span aria-hidden="true"> · </span><button type="button" class="dir-age" aria-label="History of Team" title="History">2w</button></td></tr>
         <tr><th scope="row">Works at</th><td colspan="2"><a href="#sg-records">Acme Books</a></td></tr>
       </table>
     </section>
@@ -908,7 +908,7 @@
           </li>
           <li class="learned-item">
             <div class="learned-text">Short summaries, three lines at most.</div>
-            <div class="learned-meta"><span class="muted">Added by you · 3d ago</span><button type="button" class="ghost">Edit</button><button type="button" class="ghost">Delete</button></div>
+            <div class="learned-meta"><span class="muted">Added by you · Nov 10</span><button type="button" class="ghost">Edit</button><button type="button" class="ghost">Delete</button></div>
           </li>
         </ul>
       </section>
@@ -1252,11 +1252,34 @@
             <h3>Sortable head, one rule</h3>
             <p class="rv-note">The sortable head is the same in every table: a button in the label, a chevron that turns, and aria-sort.</p>
             <table class="rv-tbl"><thead><tr><th aria-sort="ascending"><button type="button" class="rv-sort">Due<span class="nav-icon" aria-hidden="true">expand_more</span></button></th><th aria-sort="none"><button type="button" class="rv-sort">Owner</button></th><th aria-sort="none"><button type="button" class="rv-sort">State</button></th></tr></thead><tbody>
-              <tr><td>Release notes</td><td>Ada</td><td>In progress</td></tr>
-              <tr><td>Budget review</td><td>Ana</td><td>Waiting</td></tr>
+              <tr><td>Release notes</td><td>Ada</td><td>Build</td></tr>
+              <tr><td>Budget review</td><td>Ana</td><td>Review</td></tr>
             </tbody></table>
           </div>
         </div>
+    </div>
+  </div>
+
+  <div class="rv-pair">
+    <div class="rv-col">
+      <h3>A table of things you manage <span class="rv-tag rule">Rule</span></h3>
+      <ul class="rv-rules">
+        <li><b>The name opens it</b><span>No Edit column and no Open button. The name is the link.</span></li>
+        <li><b>Only what differs</b><span>No column that says the same thing on every row. Access shows under the name only when it is narrower than open.</span></li>
+        <li><b>Trouble is one red line</b><span>Under the name, in a few words. No badge, no icon column.</span></li>
+        <li><b>A second setting that usually matches</b><span>One faint line beside the first: "Tasks: same". When it differs it names the value. Clicking opens the row under it with every related setting.</span></li>
+        <li><b>Adding is a quiet +</b><span>Beside the title. A second way to add is a plain word button next to it.</span></li>
+        <li><b>No built-in mark</b><span>A bot that came with the product looks like any other.</span></li>
+      </ul>
+    </div>
+    <div class="rv-col">
+      <h3>The Bots table</h3>
+      <div class="rv-mt-head"><b>Bots</b><button class="ghost rv-mt-plus" type="button" aria-label="Add bot" title="Add bot"><span class="nav-icon" aria-hidden="true">add</span></button><button class="ghost" type="button">Add from template</button></div>
+      <div class="rv-mt-scroll"><table class="rv-tbl rv-mt"><thead><tr><th>Bot</th><th>Model</th><th>Owners</th><th>Computer</th><th class="num">Limit</th></tr></thead><tbody>
+        <tr><td><a class="rv-mt-name" href="javascript:void 0"><span class="av av-initials" style="width:22px;height:22px;--hue:200;font-size:9px" aria-hidden="true">AD</span><span><b>Ada</b></span></a></td><td><button type="button" class="rv-mt-pick">Haiku 5.5 XHIGH<span class="nav-icon" aria-hidden="true">expand_more</span></button><button type="button" class="rv-mt-sub">Tasks: same</button></td><td><span class="av av-initials" style="width:16px;height:16px;--hue:210;font-size:9px" aria-hidden="true">AR</span></td><td>Mac mini</td><td class="num">$20 a day</td></tr>
+        <tr><td><a class="rv-mt-name" href="javascript:void 0"><span class="av av-initials" style="width:22px;height:22px;--hue:250;font-size:9px" aria-hidden="true">B2</span><span><b>Builder 2</b><span class="rv-mt-bad">Not signed in to its model</span></span></a></td><td><button type="button" class="rv-mt-pick">Haiku 5.5 XHIGH<span class="nav-icon" aria-hidden="true">expand_more</span></button><button type="button" class="rv-mt-sub on">Tasks: Opus 5.5 MED</button></td><td><span class="av av-initials" style="width:16px;height:16px;--hue:210;font-size:9px" aria-hidden="true">AR</span></td><td>Mac mini</td><td class="num"></td></tr>
+        <tr><td><a class="rv-mt-name" href="javascript:void 0"><span class="av av-initials" style="width:22px;height:22px;--hue:30;font-size:9px" aria-hidden="true">LG</span><span><b>Legal Owner</b><span class="muted">Requests only</span></span></a></td><td><button type="button" class="rv-mt-pick">Opus 5.5 HIGH<span class="nav-icon" aria-hidden="true">expand_more</span></button><button type="button" class="rv-mt-sub">Tasks: same</button></td><td><span class="av av-initials" style="width:16px;height:16px;--hue:210;font-size:9px" aria-hidden="true">CM</span></td><td>Runner 1</td><td class="num">$50 a day</td></tr>
+      </tbody></table></div>
     </div>
   </div>
 
@@ -1400,23 +1423,22 @@
 
   <div class="rv-full">
     <h3>Toolbar</h3>
-    <p class="rv-note">A period switch (7 days, 30 days, This month), a search box, Near limit (a toggle that shows only the rows near or over their limit), and Expand all.</p>
+    <p class="rv-note">A period switch (7 days, 30 days, This month), a search box and the filter icon. Near limit (only the rows near or over their limit) is a choice inside the filter; Expand all is in the page's ⋯.</p>
     <div class="rv-row">
       <div class="use-seg bt-seg ph-seg" role="tablist" aria-label="Period"><button type="button" role="tab" aria-selected="true">7 days</button><button type="button" role="tab" aria-selected="false">30 days</button><button type="button" role="tab" aria-selected="false">This month</button></div>
       <input type="search" class="bt-q" placeholder="Search" aria-label="Search the budget">
-      <button type="button" class="ghost bt-hot" aria-pressed="false">Near limit<span class="bt-hot-n">2</span></button>
-      <button type="button" class="ghost bt-all">Expand all</button>
+      <button class="ghost small" type="button" aria-label="Filter"><span class="nav-icon" aria-hidden="true">filter_list</span></button>
     </div>
   </div>
 
   <div class="rv-full">
     <h3>Rows</h3>
-    <p class="rv-note">A group row shows its count and a chevron to fold it. A person row shows an avatar and no count. Each row shows its spend on the right, a limit in use (with the total after a dot), and a bar. Indent is one step per level.</p>
+    <p class="rv-note">A group row shows its count and a chevron to fold it. A person row shows an avatar and no count. Each row shows its spend on the right, a limit in use as “$184 of $200 a month”, and a bar. Indent is one step per level.</p>
     <ul class="bt" aria-label="Budget, sample">
       <li class="bt-r is-g" style="--d:0"><button type="button" class="bt-fold" aria-expanded="true" aria-label="Fold Tico Team"><span class="nav-icon" aria-hidden="true">chevron_right</span></button><button type="button" class="bt-main"><span class="nav-icon" aria-hidden="true">groups</span><span class="bt-name">Tico Team</span><span class="bt-n">94</span><span class="bt-amt">$2,847</span></button></li>
       <li class="bt-r is-g" style="--d:1"><button type="button" class="bt-fold" aria-expanded="false" aria-label="Open Product"><span class="nav-icon" aria-hidden="true">chevron_right</span></button><button type="button" class="bt-main"><span class="nav-icon" aria-hidden="true">groups</span><span class="bt-name">Product</span><span class="bt-n">32</span><span class="bt-amt">$0.00</span></button></li>
-      <li class="bt-r warn" style="--d:2"><span class="bt-fold" aria-hidden="true"></span><button type="button" class="bt-main"><span class="av av-initials" style="width:16px;height:16px;--hue:200;font-size:7px" aria-hidden="true">AN</span><span class="bt-name">Ana</span><span class="bt-lim">$184<span class="bt-of"> · $200 a month</span></span><span class="bt-amt">$184.00</span><span class="bt-bar" aria-hidden="true"><i style="width:92%"></i></span></button></li>
-      <li class="bt-r bad" style="--d:1"><span class="bt-fold" aria-hidden="true"></span><button type="button" class="bt-main"><span class="pill fail bt-paused">Paused</span><span class="bt-name">Helpers</span><span class="bt-n">10</span><span class="bt-lim">$5<span class="bt-of"> · $5 a day</span></span><span class="bt-amt">$66.96</span><span class="bt-bar" aria-hidden="true"><i style="width:100%"></i></span></button></li>
+      <li class="bt-r warn" style="--d:2"><span class="bt-fold" aria-hidden="true"></span><button type="button" class="bt-main"><span class="av av-initials" style="width:16px;height:16px;--hue:200;font-size:7px" aria-hidden="true">AN</span><span class="bt-name">Ana</span><span class="bt-lim">$184<span class="bt-of"> of $200 a month</span></span><span class="bt-amt">$184.00</span><span class="bt-bar" aria-hidden="true"><i style="width:92%"></i></span></button></li>
+      <li class="bt-r bad" style="--d:1"><span class="bt-fold" aria-hidden="true"></span><button type="button" class="bt-main"><span class="pill fail bt-paused">Paused</span><span class="bt-name">Helpers</span><span class="bt-n">10</span><span class="bt-lim">$5<span class="bt-of"> of $5 a day</span></span><span class="bt-amt">$66.96</span><span class="bt-bar" aria-hidden="true"><i style="width:100%"></i></span></button></li>
       <li class="bt-r is-g" style="--d:0"><button type="button" class="bt-fold" aria-expanded="false" aria-label="Open General"><span class="nav-icon" aria-hidden="true">chevron_right</span></button><button type="button" class="bt-main"><span class="nav-icon" aria-hidden="true">account_balance</span><span class="bt-name">General</span><span class="bt-amt">$0.00</span></button></li>
     </ul>
   </div>
@@ -1424,9 +1446,9 @@
   <div class="rv-states">
     <div class="rv-full">
       <h3>States</h3>
-      <p class="rv-note">A row near its limit turns amber (warn); a row over it, or paused, turns red (bad). Paused and task caps are chips in the row, the same pill as elsewhere.</p>
+      <p class="rv-note">A row near its limit turns amber (warn); a row over it, or paused, turns red (bad). The colour carries the warning: a row shows no percentage. Paused and task caps are chips in the row, the same pill as elsewhere.</p>
       <div class="rv-stack">
-        <div class="rv-row"><span class="rv-lbl" style="width:70px">Near</span><span class="pill waiting">86%</span><span class="pill bt-chip" title="Task caps">2 caps</span></div>
+        <div class="rv-row"><span class="rv-lbl" style="width:70px">Near</span><span class="pill bt-chip" title="Task caps">2 caps</span></div>
         <div class="rv-row"><span class="rv-lbl" style="width:70px">Over</span><span class="pill fail bt-paused">Paused</span></div>
       </div>
     </div>
@@ -1466,7 +1488,7 @@
       <p class="rv-note">The person's own update: their name, how long ago, and New update (Edit when it is today's). The reports under it fold away behind a count.</p>
       <article class="upd-card" tabindex="-1">
         <div class="upd-main">
-          <div class="upd-meta"><span class="upd-av"><span class="av av-initials" style="width:22px;height:22px;--hue:200;font-size:9px" aria-hidden="true">AN</span></span><a href="#sg-updates" class="upd-name">Ana</a><span class="muted">· 1d ago</span>
+          <div class="upd-meta"><span class="upd-av"><span class="av av-initials" style="width:22px;height:22px;--hue:200;font-size:9px" aria-hidden="true">AN</span></span><a href="#sg-updates" class="upd-name">Ana</a><span class="muted">· Nov 12</span>
             <span class="upd-corner"><button type="button" class="upd-act upd-word">New update</button><button type="button" class="upd-act upd-dots" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></span></div>
           <div class="upd-body md"><ul><li>Shipped the org chart's folds, saved per browser.</li><li>Two items need a person before Friday.</li></ul></div>
           <div class="upd-meta"><button type="button" class="upd-act upd-kids" aria-expanded="false" aria-label="Show 9 reports" title="Show 9 reports"><span class="upd-n">9<span class="upd-n-w"> reports</span></span><span class="nav-icon" aria-hidden="true">chevron_right</span></button></div>
@@ -1871,10 +1893,10 @@
     </div>
     <div class="rv-full">
       <h3>Goal form, read only</h3>
-      <p class="rv-note">The same field for a goal the viewer may not edit: the input is read only and the only action is Close.</p>
+      <p class="rv-note">The same field for a goal the viewer may not edit: the input is read only and the form has no button of its own. In a sheet the ✕ dismisses it; in the side panel the only action is Back.</p>
       <form class="goal-form" novalidate>
         <label class="goal-f"><span>Goal</span><input type="text" name="title" maxlength="300" autocomplete="off" value="Answer every ticket the same day" readonly></label>
-        <div class="goal-actions"><button class="ghost" type="button">Close</button></div>
+        <div class="goal-actions"><button class="ghost" type="button">Back</button></div>
       </form>
     </div>
   </div>
@@ -2017,7 +2039,7 @@
         <label class="dash-pick-row"><input type="radio" name="page" value="weekly-digest" checked required>
           <span><strong>Weekly digest</strong> <span class="muted">Build bot · 2h ago</span></span></label>
         <label class="dash-pick-row"><input type="radio" name="page" value="vendor-list" required>
-          <span><strong>Vendor list</strong> <span class="muted">Jo · 1d ago</span></span></label>
+          <span><strong>Vendor list</strong> <span class="muted">Jo · Nov 12</span></span></label>
       </fieldset>
     </div>
     <div class="rv-full">
@@ -2063,7 +2085,7 @@
   <div class="rv-states">
     <div class="rv-full">
       <h3>Bot hours vs human hours</h3>
-      <p class="rv-note">The Overview card: one line of bot hours per human hour, week by week, against a dashed parity line at 1×. The week still going is dotted and hollow. Hovering or tapping a week shows its numbers.</p>
+      <p class="rv-note">The Overview card: one line of bot hours per human hour, week by week, against a dashed parity line at 1×. The week still going is dotted and hollow. Hovering or tapping a week shows its numbers. The card carries no caption: what counts as a bot hour and a human hour is said in the table the card opens.</p>
       <div class="overview-hours has-plot">
         <span class="ovh-title">Bot hours vs human hours</span>
         <p class="ovh-head"><strong class="tnum">2.8×</strong> bot hours per human hour · last 7 days</p>
@@ -2079,7 +2101,6 @@
           <span class="ovh-parity-label" style="top:64.73%">Parity 1×</span>
           <div class="ovh-tip" role="status" hidden></div>
         </div>
-        <p class="ovh-note">Bot hours = time bots spent working (pauses over 30 min left out). Human hours = people in your org chart × 40 h a week.</p>
       </div>
     </div>
     <div class="rv-full">

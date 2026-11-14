@@ -81,7 +81,7 @@ function rdqTilesHtml(data: MktSpend | null | undefined, revenue: RdqMoney): str
   const tops = mktGrowthPts(mktTree(data)).map(g => g.seg);
   const weight = tops.reduce((a, s) => a + s.size.spend_usd, 0);
   const growth = weight ? tops.reduce((a, s) => a + s.size.spend_usd * s.size.growth_pct, 0) / weight : null;
-  if (total) out.push(rdqTile('Yearly spend', mktMoney(total), `${growth == null ? '' : rdqGrowth(growth) + ' a year '}${mktSureHtml(data)}`));
+  if (total) out.push(rdqTile('Yearly spend', mktMoney(total), `${growth == null ? '' : rdqGrowth(growth) + ' a year · '}${mktSureHtml(data)}`));
   const fast = (data.segments || []).filter((s): s is MktGrowthGroup['seg'] => s.size?.spend_usd != null && Number.isFinite(s.size.growth_pct))
     .sort((a, b) => b.size.growth_pct - a.size.growth_pct)[0];
   if (fast) out.push(rdqTile('Fastest growing', esc(fast.name), `${rdqGrowth(fast.size.growth_pct)} · ${mktMoney(fast.size.spend_usd)}`));
@@ -204,11 +204,20 @@ async function mountMarketPage(shell: HTMLElement) {
       settingsIsAdmin() ? `<a class="linkish" href="${RD_LISTENING}">Listening</a>` : '', rdqSayingHtml(stats, heard)),
   ].filter(Boolean);
   const tiles = rdqTilesHtml(offering, revenue);
-  shell.innerHTML = `<div class="mkt-pg"><header class="mkt-top"><h2>Market</h2>${name ? `<span class="mkt-name">${esc(name)}</span>` : ''}
-      <span class="spacer"></span><a class="ghost" href="${MARKET_MAP}">Open map</a></header>
-    ${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
+  // One title: the Strategy header's. Open map and the market's Definition (which names the market) are in its ⋯.
+  shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
   const moneyEl = shell.querySelector<HTMLElement>('#mkt-money');
   const money = sized && moneyEl ? mktSpend(moneyEl, {offering, buyer}) : null;
+  // The header beside this shell, only while it is still in the page: a slow read that lands after the person left
+  // Market must not write Market's ⋯ into the next page's header.
+  const head = marketPageHead(shell);
+  if (head) {
+    // The Definition names the market, so it is offered whenever there is a name or a definition, sized or not.
+    const def = offering?.definition || buyer?.definition || null;
+    pageHeadSet(head, 'more', `<a href="${MARKET_MAP}" data-market-map>Open map</a>${def || name ? '<button type="button" data-mkt-def>Definition</button>' : ''}`);
+    const open = head.querySelector<HTMLElement>('.ph-menu [data-mkt-def]');
+    if (open) open.onclick = () => { if (money) money.definition(name); else mktDefinitionOpen(def, name); };
+  }
   if (sizing && moneyEl) mktSizeForm(moneyEl, offering?.definition?.description);
   const chainEl = shell.querySelector<HTMLElement>('.mkt-chain');
   if (chainEl && chain) mktChainBind(chainEl, chain.edges);

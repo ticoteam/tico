@@ -23,11 +23,20 @@ const scrolledTo = (page: Page, key: string) => page.evaluate((k: string) => {
 async function onePage(page: Page, tag: string) {
   await page.locator('.mkt-pg').waitFor();
   await page.locator('.mkt-map .mkt-box').first().waitFor();
-  assert.ok(await page.evaluate(() => document.querySelector<HTMLElement>('.strat-tabs')!.getBoundingClientRect().bottom <= document.querySelector<HTMLElement>('.mkt-top')!.getBoundingClientRect().top + document.querySelector<HTMLElement>('#market-shell')!.scrollTop + 1), tag + ': the tabs, then the page');
-  assert.equal(await page.locator('.mkt-top h2').innerText(), 'Market');
-  assert.equal(await page.locator('.mkt-name').innerText(), 'Release tooling, Global', tag + ': the market\'s name');
-  assert.equal(await page.locator('.mkt-top a', {hasText: 'Open map'}).getAttribute('href'), '#/strategy/market/map');
-  assert.deepEqual(await texts(page, '.mkt-tile-k .mkt-lab'), ['YEARLY SPEND', 'FASTEST GROWING', 'ACME SHARE'], tag + ': three tiles');
+  // One title, the Strategy header's: no second "Market" heading over the page. What was beside it lives in the
+  // header's ⋯, last on the line: Open map, and the Definition, which names the market.
+  assert.equal(await page.locator('#main h1, #main .mkt-top').count(), 1, tag + ': one title');
+  assert.ok(await page.evaluate(() => document.querySelector<HTMLElement>('.strat-tabs')!.getBoundingClientRect().bottom <= document.querySelector<HTMLElement>('.mkt-pg')!.getBoundingClientRect().top + document.querySelector<HTMLElement>('#market-shell')!.scrollTop + 1), tag + ': the tabs, then the page');
+  await page.locator('.rd-strat-head > .ph-more').click();
+  const menu = page.locator('.rd-strat-head > .ph-menu');
+  assert.equal(await menu.locator('[data-market-map]').getAttribute('href'), '#/strategy/market/map', tag + ': Open map in ⋯');
+  await menu.locator('[data-mkt-def]').click();
+  const def = page.locator('.mkt-panel[open]');
+  await def.waitFor();
+  assert.equal(await def.locator('.mkt-ph small').innerText(), 'Release tooling, Global', tag + ': the Definition names the market');
+  await page.keyboard.press('Escape');
+  await def.waitFor({state: 'hidden'});
+  assert.deepEqual(await texts(page, '.mkt-tile-k .mkt-lab'), ['Yearly spend', 'Fastest growing', 'Acme share'], tag + ': three tiles, named in sentence case');
   assert.deepEqual(await texts(page, '.mkt-tile-k .mkt-big'), ['$1.2B', 'Release checks', '0.5%']);
   assert.deepEqual(await texts(page, '.mkt-q h3'), QUESTIONS, tag + ': the five questions in order');
   // Answer lines: the briefing answers two; the other three have none.
@@ -36,7 +45,7 @@ async function onePage(page: Page, tag: string) {
   for (const key of ['money', 'reach', 'saying']) assert.equal(await page.locator(`#mkt-q-${key} .mkt-ans`).count(), 0, `${tag}: no ${key} line`);
   // What changed?
   assert.equal(await page.locator('.mkt-items li').count(), 5, tag + ': every item');
-  assert.deepEqual(await texts(page, '.mkt-items .mkt-kind'), ['CHANGE', 'CHANGE', 'SIGNAL', 'THEME', 'SIZE']);
+  assert.deepEqual(await texts(page, '.mkt-items .mkt-kind'), ['Change', 'Change', 'Signal', 'Theme', 'Size']);
   assert.equal(await page.locator('.mkt-items li').first().locator('.mkt-bet').innerText(), 'Bet 1', tag + ': the item tags its bet');
   assert.equal(await page.locator('.mkt-items .mkt-bet').count(), 1, tag + ': only that item');
   assert.equal(await page.locator('.mkt-bet').getAttribute('href'), '#/strategy');
@@ -46,7 +55,7 @@ async function onePage(page: Page, tag: string) {
   assert.match(await page.locator('.mkt-pl tbody tr').first().innerText(), /\$70M[\s\S]*Northwind bundled release checks/, tag + ': revenue over both segments, the last move');
   assert.equal(await page.locator('#mkt-q-players .mkt-more').innerText(), '3 tracked');
   // How does it reach buyers? Empty layers are left out; a buyer segment carries its spend.
-  assert.deepEqual(await texts(page, '.mkt-layer h4'), ['SUPPLIERS', 'PLATFORMS', 'US AND RIVALS', 'BUYERS']);
+  assert.deepEqual(await texts(page, '.mkt-layer h4'), ['Suppliers', 'Platforms', 'Us and rivals', 'Buyers']);
   assert.equal(await page.locator('.mkt-node[data-node="segment/large-teams"] b').innerText(), '$700M');
   // What are buyers saying?
   assert.equal(await page.locator('.rdm-bars .rdm-col').count(), 14, tag + ': two weeks of days');
@@ -111,6 +120,49 @@ async function onePage(page: Page, tag: string) {
       assert.equal(await page.locator('.mkt-ans').count(), 0, 'no briefing, no answer lines');
       assert.equal(await page.locator('.mkt-pl .mkt-move').count(), 0, 'no last moves without a briefing');
       assert.deepEqual(errors, [], 'no briefing: no page errors');
+      await page.close();
+    }
+    // A slow Market left for Strategy before its reads come back: when they land, Market's ⋯ (Open map, Definition) is
+    // not written into Strategy's header, and Strategy's own ⋯ (Lenses) stays.
+    {
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/org'});
+      let release!: (value?: unknown) => void;
+      const gate = new Promise(resolve => { release = resolve; });
+      let held = 0;
+      await page.route('**/api/v2/market/spend*', async route => { held++; await gate; await route.fallback(); });
+      await page.evaluate(() => { location.hash = '#/strategy/market'; });
+      await page.waitForFunction(() => document.querySelector('#market-shell'));
+      for (let i = 0; i < 100 && !held; i++) await page.waitForTimeout(20);
+      assert.ok(held > 0, 'the market reads are held');
+      await page.evaluate(() => { location.hash = '#/strategy'; });
+      await page.locator('#strat-body').waitFor();
+      release();
+      await page.waitForTimeout(600);   // the held reads land and the old Market mount finishes
+      await page.locator('.rd-strat-head > .ph-more').click();
+      const menu = page.locator('.rd-strat-head > .ph-menu');
+      assert.equal(await menu.locator('[data-strat-lenses]').count(), 1, 'Strategy keeps its own ⋯ items');
+      assert.equal(await menu.locator('[data-market-map], [data-mkt-def]').count(), 0, 'nothing of Market\'s in it');
+      assert.equal(await page.locator('.mkt-pg').count(), 0, 'and no market page drawn over Strategy');
+      assert.deepEqual(errors, [], 'slow market: no page errors');
+      await page.close();
+    }
+    // A market not sized yet still names itself: Definition is in ⋯ and its panel says the market's name.
+    {
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/org'});
+      await page.route('**/api/v2/market/spend*', route => route.fulfill({contentType: 'application/json',
+        body: JSON.stringify({name: 'Release tooling', definition: {geography: 'Global', description: 'What teams spend on release checks'}, segments: []})}));
+      await page.evaluate(() => { location.hash = '#/strategy/market'; });
+      await page.locator('.mkt-pg').waitFor();
+      assert.equal(await page.locator('.mkt-map').count(), 0, 'nothing sized, no treemap');
+      await page.locator('.rd-strat-head > .ph-more').click();
+      await page.locator('.rd-strat-head > .ph-menu [data-mkt-def]').click();
+      const def = page.locator('.mkt-panel[open]');
+      await def.waitFor();
+      assert.equal(await def.locator('.mkt-ph small').innerText(), 'Release tooling, Global', 'the name, with no money drawn');
+      assert.match(await def.innerText(), /What teams spend on release checks/);
+      await def.locator('.tmodal-x').click();
+      await def.waitFor({state: 'detached'});
+      assert.deepEqual(errors, [], 'unsized: no page errors');
       await page.close();
     }
     // An empty market keeps its empty state.

@@ -107,12 +107,15 @@ function pageTasks(openId = '') {
           + '<button type="button" class="tl-review none" id="task-play" aria-label="Review: nothing waits on you" title="Review"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tl-review-n tnum"></span></button>'
           + `<button type="button" class="tl-ib" id="task-manager" aria-pressed="false" aria-label="Manager" title="Manager" hidden>${TL_ICON.chat}</button>`,
         moreId: 'task-menu', menuId: 'task-menu-pop',
-        more: '<button type="button" id="task-mi-new" class="tl-mi-k" data-key="C" aria-keyshortcuts="c">New task</button>'
+        // Search: on a phone under 340 px the search's icon folds into ⋯ (task-list.css), so a long pipeline's name keeps
+        // its room on the row; the item opens the search over the row as the icon does.
+        more: '<button type="button" id="task-mi-search">Search</button>'
+          + '<button type="button" id="task-mi-new" class="tl-mi-k" data-key="C" aria-keyshortcuts="c">New task</button>'
           + '<button type="button" id="task-mi-archive">Archived</button>'
           + '<button type="button" id="task-mi-edit" hidden>Edit pipeline</button>'
           + '<div class="tl-mi-layout" id="task-mi-layout" role="group" aria-label="View" hidden><hr>'
-          + '<button type="button" role="menuitemradio" data-layout="list" aria-checked="false">List</button>'
-          + '<button type="button" role="menuitemradio" data-layout="columns" aria-checked="false">Columns</button></div>'})}
+          + '<button type="button" data-layout="list" aria-pressed="false">List</button>'
+          + '<button type="button" data-layout="columns" aria-pressed="false">Columns</button></div>'})}
       <div class="tl-bar" id="task-bar" hidden>
         <button type="button" class="tl-ib" id="task-archive-x" aria-label="Leave Archived" title="Leave Archived" hidden>${TL_ICON.x}</button>
         <div class="tl-pair ph-seg" id="task-archives" role="group" aria-label="Archive" hidden>${TASK_ARCHIVES.map(([k, label]) =>
@@ -127,9 +130,13 @@ function pageTasks(openId = '') {
   const signal = state.abort.signal;
   const anchorOf = (ev: Event) => ev.currentTarget as HTMLElement;
   $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, anchorOf(ev));
-  $('#task-manager').onclick = () => pipelineRailToggle();
+  // The manager's face: on a computer it opens and closes the manager's rail; on a phone it is the page's chat mark and
+  // opens the board's bots (pipeline-ask.ts), as nothing floats over the board.
+  $('#task-manager').onclick = () => { if (matchMedia(PHONE).matches) pipelineAskOpen(); else pipelineRailToggle(); };
   // ⋯: each item does what its button on the row did (the shared header closes the menu on a pick).
   $('#task-mi-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
+  // after the header has closed ⋯ (its own click, page-head.ts), so the focus is not handed back to ⋯
+  $('#task-mi-search').onclick = () => setTimeout(() => $('#task-q')?.focus());
   $('#task-mi-archive').onclick = () => tasksShow(state, {archive: state.archive ? '' : 'snoozed'});
   $('#task-mi-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
   $('#task-mi-layout').onclick = (ev: MouseEvent) => {
@@ -452,22 +459,25 @@ function tasksHeadPaint(state: TasksPageState) {
   play.classList.toggle('none', !n);
   play.querySelector('.tl-review-n')!.textContent = n ? (n > 99 ? '99+' : String(n)) : '';
   play.setAttribute('aria-label', n ? `Review: ${n} wait${n === 1 ? 's' : ''} on you` : 'Review: nothing waits on you');
-  // The manager's own face opens its panel, where a generic chat icon did.
+  // The manager's own face opens its panel, where a generic chat icon did. On a phone the board's bots show it once the
+  // board is drawn (pipeline-ask.ts pipelineAskPaint, right after this): the face of whom it opens, none with no bot.
   const manager = $('#task-manager');
-  manager.hidden = !p || !!state.archive || !TASK_PAGE_HOOKS.pipeline?.rail || !pipelineRailFor(p);
-  const who = p?.manager_id ? prActor(p.manager_id) : '', face = who ? actorFace(who, 20) : TL_ICON.chat;
-  if (manager.dataset.face !== face) {      // drawn again only when the face changes (its name or picture arrives)
-    manager.dataset.face = face;
-    manager.innerHTML = face;
+  if (matchMedia(PHONE).matches) manager.hidden = true;
+  else {
+    manager.hidden = !p || !!state.archive || !TASK_PAGE_HOOKS.pipeline?.rail || !pipelineRailFor(p);
+    const who = p?.manager_id ? prActor(p.manager_id) : '', face = who ? actorFace(who, 22) : TL_ICON.chat;
+    if (manager.dataset.face !== face) { manager.dataset.face = face; manager.innerHTML = face; }   // only when the face changes
+    // Named here every time: a window that was a phone's had the board's bots name it (pipeline-ask.ts).
     const words = who ? `Chat with ${actorLabel(who)}` : 'Manager';
     manager.setAttribute('aria-label', words); manager.title = words;
+    manager.removeAttribute('aria-haspopup'); manager.removeAttribute('aria-expanded');
   }
   // ⋯
   const archive = $('#task-mi-archive');
   archive.textContent = state.archive ? 'Leave Archived' : 'Archived';
   $('#task-mi-edit').hidden = !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive;
   $('#task-mi-layout').hidden = !p || !!state.archive || matchMedia(PHONE).matches;
-  for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-checked', String(b.dataset.layout === state.layout));
+  for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
   $('#task-archive-x').hidden = !state.archive;
   const archives = $('#task-archives');
   archives.hidden = !state.archive;
@@ -560,7 +570,7 @@ function needsRowHTML(it: NeedsEntry): string {
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
-    + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
+    + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
     stage's review (decide.ts). None until a stage of a pipeline in view has items. */

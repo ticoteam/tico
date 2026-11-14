@@ -113,7 +113,8 @@ const mapText = (page: Page, under = '.rr-map') => page.evaluate((sel: string) =
   const browser = await chromium.launch();
   try {
     // AC-1, AC-2: first open, a computer and a phone, dark and light.
-    for (const [vp, label] of [[DESKTOP, 'desktop'], [PHONE, 'phone']] as const) for (const theme of ['dark', 'light']) {
+    // A phone shows no map (one team at a time, rules-reach.cts): its rows are checked below.
+    for (const [vp, label] of [[DESKTOP, 'desktop']] as const) for (const theme of ['dark', 'light']) {
       const {page, errors} = await openReach(browser, {viewport: vp, theme});
       const what = `${label} ${theme}`;
       assert.equal(await page.locator('.rr-cv').evaluate(el => getComputedStyle(el).transform), 'none', `${what}: the map is not scaled`);
@@ -234,6 +235,19 @@ const mapText = (page: Page, under = '.rr-map') => page.evaluate((sel: string) =
       // A still click selects.
       await page.locator(`.rr-cv [data-rr-party="human:${target}"]`).click();
       await until(async () => (await panel(page).locator('h2').innerText()) === fx.people.find(p => p.id === target)!.name, 'a click selects');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // A phone: the team's rows, never a shrunk chart; each name at 13px or more and 4.5:1, each row a 44px target.
+    for (const theme of ['dark', 'light']) {
+      const {page, errors} = await openReach(browser, {viewport: PHONE, theme});
+      await page.locator('.rr-tlist .rr-trow').first().waitFor();
+      assert.equal(await page.locator('.rr-cv').count(), 0, `phone ${theme}: no chart`);
+      const rows = await page.locator('.rr-tlist .rr-trow .rr-on').evaluateAll((els: HTMLElement[]) => els.map(e => ({px: parseFloat(getComputedStyle(e).fontSize), h: e.closest('button')!.getBoundingClientRect().height})));
+      assert.ok(rows.length > 3, `phone ${theme}: rows found`);
+      for (const r of rows) assert.ok(r.px >= 13 && r.h >= 44, `phone ${theme}: ${JSON.stringify(r)}`);
+      await shot(page, `open-phone-${theme}`);
       assert.deepEqual(errors, []);
       await page.close();
     }

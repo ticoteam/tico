@@ -5,6 +5,8 @@ interface BotPageView {
   slug: string;
   /** The tab on show (showBotTab in bot-page.ts); null until the first paint. */
   tab: string | null;
+  /** The tab as the address names it ('' for the bare #/bot/<slug>, whose chat the page picks: botTalkPick). */
+  asked?: string;
   /** The sections this page has loaded once (the `once` helper in bot-page.ts). */
   loaded: Set<string>;
   /** The viewer may not read the bot's details, so the page shows the limited view. */

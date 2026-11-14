@@ -47,7 +47,7 @@ function prDraw(state: PrState): void {
   if (!shell) return;
   const head = shell.querySelector<HTMLElement>('.pm-head');
   if (head) {
-    head.innerHTML = `<span class="pm-face">${actorFace(state.manager, 32)}</span><b class="pm-name">${esc(actorLabel(state.manager))}</b>`
+    head.innerHTML = `<span class="pm-face">${actorFace(state.manager, 28)}</span><b class="pm-name">${esc(actorLabel(state.manager))}</b>`
       + `<button type="button" class="ghost pm-x" data-pm-hide aria-label="Close" title="Close">${PR_HIDE_ICON}</button>`;
   }
   const chat = shell.querySelector<HTMLElement>('.pm-chat');

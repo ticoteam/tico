@@ -143,18 +143,22 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}) => ({id, 
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-tpage', 1], `${label}: Open shows the page in the file panel`);
     assert(visualReqs.every(p => !/f-(funnel|logo|tpage|tlogo)$/.test(p)), `${label}: a page or SVG was read from the app's own visual route: ${visualReqs}`);
 
-    // ---- Settings: one read-only line, no switch, for each setup
-    for (const [mode, words] of [['media', "Visuals: pages and SVG can't show inline. Add a visual address or Tico file hosting."],
-      ['hosted', 'Visuals: full, from Tico file hosting'], ['full', 'Visuals: full']] satisfies [string, string][]) {
+    // ---- Settings: one read-only row, no switch, for each setup: label left, what shows right; only the limited setup
+    // links to how to fix it (no paragraph of help in the card).
+    for (const [mode, words] of [['media', 'Visuals Pages and SVG open as cards · How visuals show'],
+      ['hosted', 'Visuals Full, from Tico file hosting'], ['full', 'Visuals Full']] satisfies [string, string][]) {
       config = {company_name: 'Acme', visuals: mode, visual_origin: mode === 'full' ? 'https://files.acme.example' : ''};
       await page.goto(ORIGIN + '/?setup=' + mode + '#/settings');
       await page.locator('[data-settings-tab="general"]').click();
       const line = page.locator('#settings-visuals');
       await line.waitFor();
-      assert.equal((await line.innerText()).replace(/\s+/g, ' ').trim(), words + ' How visuals show', `${label}: settings line for ${mode}`);
-      assert.match((await line.locator('a').getAttribute('href'))!, /docs\/visuals\.md/);
+      assert.equal((await line.innerText()).replace(/\s+/g, ' ').trim(), words, `${label}: settings row for ${mode}`);
+      if (mode === 'media') assert.match((await line.locator('a').getAttribute('href'))!, /docs\/visuals\.md/);
+      else assert.equal(await line.locator('a').count(), 0, `${label}: nothing to fix, no link`);
       assert.equal(await line.locator('input, button, select, [role="switch"]').count(), 0, `${label}: the line has no control`);
-      assert.equal(await page.locator('#settings-general').getByText(/visual/i).count(), 1, `${label}: nothing else about visuals in settings, no switch`);
+      const visualWords = await page.evaluate(() => ['#settings-general', '#settings-visuals']
+        .map(sel => document.querySelector<HTMLElement>(sel)!.innerText.match(/visual/gi)?.length || 0));
+      assert.equal(visualWords[0], visualWords[1], `${label}: nothing else about visuals in settings, no switch`);
     }
     assert.deepEqual(errors, [], String(errors));
     await context.close();

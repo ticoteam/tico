@@ -1,12 +1,12 @@
 /* ui/app/finance-docs.ts — Finance › Payables and Receivables (spec §12), and entering a bill, an invoice or a journal
-   entry (the Balance sheet's "+ Add", Payables' "+ Bill", Receivables' "+ Invoice").
+   entry (the Balance sheet's Add, Payables' and Receivables' quiet + in the header).
    Payables: bills as plain rows (vendor, number, due, aging, amount, status, the day a scheduled payment goes),
    searched and filtered by status; a bill's rail shows its lines, files, payments and approvals, and only the decisions
-   the viewer may take: approve, schedule, mark paid, void. The bills email address sits in the bar, copyable.
+   the viewer may take: approve, schedule, mark paid, void. The bills email address is in the header's ⋯.
    Receivables: invoices the same way; the rail marks one paid or writes it off (and sends a draft). Neither draws the
    route's open total: no totals row. Finance Owner chases late invoices; the page shows no chase history.
    Every decision is a dry run first: one the rules send for approval says to whom, and a second press sends it.
-   The owner or an admin sets or clears the bills address from the bar (PUT /api/v2/finance/bills-address).
+   The owner or an admin sets or clears the bills address from ⋯ (PUT /api/v2/finance/bills-address).
    Reads: GET /api/v2/finance/bills[/{id}], /finance/invoices[/{id}], /finance/contacts, and for the forms the lines
    the viewer may post to (/finance/chart) and the bank accounts they may pay from (/finance/pay-from).
    Writes (POST /api/v2/finance/actions): bill_create, bill_approve, bill_schedule, bill_mark_paid, bill_void,
@@ -37,6 +37,8 @@ type FinDocList = {bills?: FinDocRow[]; invoices?: FinDocRow[]; next_cursor?: st
 interface FinDocPage {
   kind: FinDocKind; rows: FinDocRow[]; next: string | null; sel: string; load: number; one: FinDocAny | null; oneLoad: number;
   email: string; paid?: FinDocRow[];
+  // Direct send, once the Sources read says a Mercury payments connection has it (null: not offered here).
+  direct?: boolean | null;
 }
 // FIN.chart: the lines read per form use (finChart); FIN.payFrom: the accounts a bill may be paid from.
 interface FinPage { doc?: FinDocPage; chart?: Record<string, FinChartAccount[] | undefined>; payFrom?: FinPick[] }
@@ -85,7 +87,13 @@ const FIN_PAY_STATUS: Record<string, FinPair> = {queued: ['waiting', 'Queued'], 
 const FIN_PAY_LIVE = new Set<string>(['queued', 'sending', 'awaiting_bank_approval', 'submitted', 'unknown']);
 
 const finPill = ([cls, label]: FinPair) => `<span class="pill ${cls}">${esc(label)}</span>`;
-const finDocStatus = (d: {status: string}) => finPill(FIN_DOC_STATUS[d.status] || ['', d.status]);
+// A document's status: the normal ones (open, sent, paid) are plain words, void a muted one, and only a draft, a
+// scheduled or part-paid one is a pill (style guide pills: only what is of interest or wrong).
+const FIN_DOC_PLAIN = new Set(['open', 'sent', 'paid']);
+const finDocStatus = (d: {status: string}) => FIN_DOC_PLAIN.has(d.status) ? esc(FIN_DOC_STATUS[d.status]?.[1] || d.status)
+  : d.status === 'void' ? '<span class="muted">Void</span>' : finPill(FIN_DOC_STATUS[d.status] || ['', d.status]);
+// In a list the normal status says nothing at all; the rest as above.
+const finDocStatusCell = (d: {status: string}) => FIN_DOC_PLAIN.has(d.status) ? '' : finDocStatus(d);
 // An unpaid bill's payment worth showing: one on its way, or one that ended without paying an open bill.
 const finBillPay = (d: FinDocAny) => {
   const p = d.payment;
@@ -96,9 +104,10 @@ const finPayPill = (p: {status: string}) => finPill(FIN_PAY_STATUS[p.status] || 
 // A row's status: a live payment stands in for Scheduled; an ended one sits beside Open.
 const finRowStatus = (d: FinDocAny) => {
   const p = finBillPay(d);
-  return !p ? finDocStatus(d) : FIN_PAY_LIVE.has(p.status) ? finPayPill(p) : `${finDocStatus(d)} ${finPayPill(p)}`;
+  return !p ? finDocStatusCell(d) : FIN_PAY_LIVE.has(p.status) ? finPayPill(p) : [finDocStatusCell(d), finPayPill(p)].filter(Boolean).join(' ');
 };
-const finAgingPill = (d: {aging?: string | null}) => d.aging ? finPill(FIN_AGING[d.aging] || ['', d.aging]) : '';
+// Late is a pill (amber, red past 60 days); not due yet is the normal state, a plain word.
+const finAgingPill = (d: {aging?: string | null}) => !d.aging ? '' : d.aging === 'current' ? esc(FIN_AGING.current?.[1] || '') : finPill(FIN_AGING[d.aging] || ['', d.aging]);
 // Cents as a form value: 1800, 45.5.
 const finCentsValue = (c: number | null | undefined) => c == null ? '' : (c / 100).toFixed(2).replace(/\.00$/, '');
 
@@ -174,12 +183,17 @@ function finDocsReload() {
 // The owner or an admin sets it (PUT /finance/bills-address), and outside view-as, if they hold finance.admin (the
 // server's check, so the dialog says so); everyone else copies it.
 const finEmailSetter = () => !finCaps()?.viewing && (S.me?.role === 'owner' || !!S.me?.bot_admin);
+// The bills address and Direct send are set rarely, so they are items in the header's ⋯ (style guide "Top bars: one
+// line"): the address's item opens it (or copies it, for whoever cannot set it), Direct send is a choice that is on or
+// off (aria-pressed). Drawn again whenever either is known or changes.
 function finDocEmailDraw() {
-  const box = $('#fin-doc-email'), email = FIN?.doc?.email || '';
-  if (!box) return;
-  if (finEmailSetter()) box.innerHTML = `<button type="button" class="ghost fin-copy" data-fin-email-set>${email
-    ? `Forward to <b>${esc(email)}</b>` : 'Bills address'}</button>`;
-  else box.innerHTML = email ? `<button type="button" class="ghost fin-copy" data-fin-copy="${esc(email)}" aria-label="Copy ${esc(email)}">Forward to <b>${esc(email)}</b></button>` : '';
+  const state = FIN?.doc;
+  if (!state) return;
+  const email = state.email || '';
+  const address = finEmailSetter() ? `<button type="button" data-fin-email-set title="${esc(email || 'No bills address')}">Bills address</button>`
+    : email ? `<button type="button" data-fin-copy="${esc(email)}" title="${esc(email)}">Copy bills address</button>` : '';
+  const direct = state.direct == null ? '' : `<button type="button" data-fin-direct aria-pressed="${state.direct}">Direct send</button>`;
+  finHeadMore(state.kind === 'bill' ? address + direct : '');
 }
 // One input: an address sets it, empty clears it. An address no Tico address has is kept but named here.
 function finDocEmailSet() {
@@ -199,10 +213,11 @@ function finDocPage(kind: FinDocKind) {
   const k = FIN_DOC[kind], f = FIN_DOC_F[kind], caps = finNeed(finCaps(), 'the finance caps');
   finNeed(FIN, 'the Finance page').doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0, email: ''};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(f.q)}" placeholder="${esc(k.search)}" aria-label="${esc(k.search)}"></label>
-      ${finSeg('status', 'Status', k.filters, f.status)}<span class="spacer"></span><span id="fin-doc-email" class="fin-doc-email"></span>
-      ${kind === 'bill' && caps.owner && !caps.viewing ? '<label class="fin-inline" data-fin-direct-box hidden><input type="checkbox" role="switch" class="people-switch" data-fin-direct aria-label="Direct send"><span>Direct send</span></label>' : ''}
-      ${caps.may(k.right) ? `<button type="button" class="primary" data-fin-doc-add>+ ${k.label}</button>` : ''}</div>`
+      ${finSeg('status', 'Status', k.filters, f.status)}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-docs">${skelRows(6, {dot: false})}</div>`, '', k.label);
+  // Entering a bill or an invoice by hand is rare (most come in by email): the header's quiet +.
+  finHeadAct(caps.may(k.right) ? pageHeadAdd(`New ${k.label.toLowerCase()}`, 'data-fin-doc-add') : '');
+  finDocEmailDraw();
   const body: HTMLElement = $('#fin-body');
   let timer = 0;
   const search = finDocPart<HTMLInputElement>(body, '[data-fin-q]');
@@ -215,6 +230,7 @@ function finDocPage(kind: FinDocKind) {
     if (t.closest('[data-fin-more]')) { void finDocLoad(true); return; }
     if (t.closest('[data-fin-doc-add]')) { void finDocAdd(kind); return; }
     if (t.closest('[data-fin-email-set]')) { finDocEmailSet(); return; }
+    if (t.closest('[data-fin-direct]')) { void finDirectSet(); return; }
     const copy = t.closest<HTMLElement>('[data-fin-copy]');
     if (copy) { void copyText(copy.dataset.finCopy!).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
     const tr = t.closest<HTMLElement>('tr[data-fin-doc]');
@@ -227,18 +243,26 @@ function finDocPage(kind: FinDocKind) {
 // already paid may go straight to Mercury instead of its approval queue. The server checks it again at send. Shown
 // once a Mercury payments connection exists (the Sources read carries the switch's state).
 async function finDirectSend() {
-  const box: HTMLElement | null = $('#fin-body [data-fin-direct-box]'); if (!box) return;
+  const state = FIN?.doc, caps = finCaps();
+  if (!state || state.kind !== 'bill' || !caps?.owner || caps.viewing) return;
   let row: {payments?: {direct_send?: boolean}} | undefined | null = null;
   try { row = ((await get<{groups?: {rows?: {payments?: {direct_send?: boolean}}[]}[]}>('/v2/finance/sources?group=payments', {fresh: true})).groups || []).flatMap(g => g.rows || []).find(r => r.payments); } catch { return; }
-  if (!row || !box.isConnected) return;
-  const input = finDocPart<HTMLInputElement>(box, 'input');
-  input.checked = !!row.payments?.direct_send; box.hidden = false;
-  input.onchange = async () => {
-    input.disabled = true;
-    try { const r = await finAct('payment_settings', {direct_send: input.checked}); if (r.status === 'committed') toast(input.checked ? 'Direct send on' : 'Direct send off'); }
-    catch (e) { toast(errorMessage(e, 'Not done'), true); input.checked = !input.checked; }
-    finally { input.disabled = false; }
-  };
+  if (!row || FIN?.doc !== state) return;
+  state.direct = !!row.payments?.direct_send;
+  finDocEmailDraw();
+}
+// Direct send on or off, from its ⋯ item; the item says the state the server kept.
+let FIN_DIRECT_BUSY = false;
+async function finDirectSet() {
+  const state = FIN?.doc;
+  if (!state || state.direct == null || FIN_DIRECT_BUSY) return;
+  const on = !state.direct;
+  FIN_DIRECT_BUSY = true;
+  try {
+    const r = await finAct('payment_settings', {direct_send: on});
+    if (r.status === 'committed') { toast(on ? 'Direct send on' : 'Direct send off'); state.direct = on; }
+  } catch (e) { toast(errorMessage(e, 'Not done'), true); }
+  finally { FIN_DIRECT_BUSY = false; if (FIN?.doc === state) finDocEmailDraw(); }
 }
 async function finDocLoad(more: boolean) {
   const state: FinDocPage = finNeed(FIN?.doc, 'the documents'), k = FIN_DOC[state.kind], f = FIN_DOC_F[state.kind], load = ++state.load;
@@ -274,21 +298,28 @@ function finDocDraw() {
   const state = FIN?.doc, box = $('#fin-docs'); if (!box || !state) return;
   const k = FIN_DOC[state.kind], bill = state.kind === 'bill';
   const paid = bill ? state.paid || [] : [];
-  const tr = (r: FinDocRow, cells: string) => `<tr data-fin-doc="${esc(r.id)}"${state.sel === r.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(r[k.contact]?.name || '—')}</button></td>${cells}</tr>`;
-  const cell = (v: string) => v ? esc(v) : '<span class="muted">—</span>';
+  const tr = (r: FinDocRow, cells: string) => `<tr data-fin-doc="${esc(r.id)}"${state.sel === r.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(r[k.contact]?.name || 'No name')}</button></td>${cells}</tr>`;
+  const cell = (v: string) => v ? esc(v) : '';
   // A bill's status carries its aging when late and the day it pays; an invoice's carries its aging.
-  const status = (r: FinDocRow) => `${finRowStatus(r)}${r.aging && r.aging !== 'current' ? ' ' + finAgingPill(r) : ''}${bill && r.pay_on && r.status !== 'paid' ? ` <span class="muted fin-small">pays ${esc(finDayLabel(r.pay_on))}</span>` : ''}`;
+  const status = (r: FinDocRow) => [finRowStatus(r), r.aging && r.aging !== 'current' ? finAgingPill(r) : '', bill && r.pay_on && r.status !== 'paid' ? `<span class="muted fin-small">pays ${esc(finDayLabel(r.pay_on))}</span>` : ''].filter(Boolean).join(' ');
+  // How a bill came in is shown only where the bills differ (style guide tables: no column that says the same thing on
+  // every row), worked out from every bill read, so it does not come and go with the status picked.
+  const origins = new Set([...state.rows, ...paid].map(r => r.origin || ''));
+  const cameIn = (r: FinDocRow) => origins.size > 1 ? esc(FIN_CAME_IN[r.origin ?? ''] || r.origin || '') : '';
   const open = !state.rows.length ? finNote(bill ? 'No bills.' : 'No invoices.') : bill
-    ? `<table class="fin-t fin-doc-t"><thead><tr><th>Vendor</th><th>Bill</th><th>Due</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>Status</th><th>Came in</th></tr></thead><tbody>${state.rows.map(r => tr(r,
-      `<td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap">${esc(finDayLabel(r.due_date))}</td><td class="fin-n">${finCents(r.total)}</td>
-      <td>${cell(finDocAccount(r))}</td><td>${cell(finDocTeam(r))}</td><td>${status(r)}</td><td>${esc(FIN_CAME_IN[r.origin ?? ''] || r.origin || '')}</td>`)).join('')}</tbody></table>`
-    : `<table class="fin-t fin-doc-t"><thead><tr><th>Customer</th><th>Invoice</th><th>Sent</th><th>Due</th><th class="fin-n">Amount</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => tr(r,
-      `<td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap">${r.sent_at ? esc(finDayLabel(r.sent_at)) : '<span class="muted">—</span>'}</td>
-      <td class="fin-nowrap">${esc(finDayLabel(r.due_date))}</td><td class="fin-n">${finCents(r.total)}</td><td>${status(r)}</td>`)).join('')}</tbody></table>`;
+    ? `<table class="fin-t fin-doc-t fin-rows"><thead><tr><th>Vendor</th><th>Bill</th><th>Due</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>Status</th><th>Came in</th></tr></thead><tbody>${state.rows.map(r => tr(r,
+      `<td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap" data-k="Due">${esc(finDayLabel(r.due_date))}</td><td class="fin-n fin-amt">${finCents(r.total)}</td>
+      <td>${cell(finDocAccount(r))}</td><td>${cell(finDocTeam(r))}</td><td>${status(r)}</td><td>${cameIn(r)}</td>`)).join('')}</tbody></table>`
+    : `<table class="fin-t fin-doc-t fin-rows"><thead><tr><th>Customer</th><th>Invoice</th><th>Sent</th><th>Due</th><th class="fin-n">Amount</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => tr(r,
+      `<td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap" data-k="Sent">${r.sent_at ? esc(finDayLabel(r.sent_at)) : ''}</td>
+      <td class="fin-nowrap" data-k="Due">${esc(finDayLabel(r.due_date))}</td><td class="fin-n fin-amt">${finCents(r.total)}</td><td>${status(r)}</td>`)).join('')}</tbody></table>`;
   box.innerHTML = open + (state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : '')
-    + (paid.length ? `<h2 class="fin-h2">Recently paid</h2><table class="fin-t fin-doc-t"><thead><tr><th>Vendor</th><th>Paid</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>By</th></tr></thead><tbody>${paid.map(r => tr(r,
-      `<td class="fin-nowrap">${r.paid_on ? esc(finDayLabel(r.paid_on)) : ''}</td><td class="fin-n">${finCents(r.total)}</td><td>${cell(finDocAccount(r))}</td>
-      <td>${cell(finDocTeam(r))}</td><td>${r.paid_by ? esc(finWho(r.paid_by)) : '<span class="muted">—</span>'}</td>`)).join('')}</tbody></table>` : '');
+    + (paid.length ? `<h2 class="fin-h2">Recently paid</h2><table class="fin-t fin-doc-t fin-rows"><thead><tr><th>Vendor</th><th>Paid</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>By</th></tr></thead><tbody>${paid.map(r => tr(r,
+      `<td class="fin-nowrap" data-k="Paid">${r.paid_on ? esc(finDayLabel(r.paid_on)) : ''}</td><td class="fin-n fin-amt">${finCents(r.total)}</td><td>${cell(finDocAccount(r))}</td>
+      <td>${cell(finDocTeam(r))}</td><td data-k="By">${r.paid_by ? esc(finWho(r.paid_by)) : ''}</td>`)).join('')}</tbody></table>` : '');
+  const [list, recent] = box.querySelectorAll('table');
+  finTrim(list, state.kind);
+  finTrim(recent, state.kind + '-paid');
 }
 // The selected document: drawn from its row at once, then whole (lines, files, payments, approvals, decisions).
 async function finDocOne() {
@@ -427,7 +458,7 @@ async function finBillSchedule(d: FinDocAny) {
   try { banks = await finPayFrom(); } catch (e) { toast(errorMessage(e, 'Did not load.'), true); return; }
   const today = finToday(), again = d.status === 'scheduled', want = again && d.pay_on ? d.pay_on : d.due_date;
   const on = want && want > today ? want : today, word = again ? 'Reschedule' : 'Schedule';
-  finDecideDialog(word, `<label>Pay on<input type="date" name="on" required value="${on}" min="${today}"></label>
+  finDecideDialog(word, `<label>Pay on<input type="date" data-date-field name="on" required value="${on}" min="${today}"></label>
     <label>From<select name="from" required>${finOpts(banks, again ? d.schedule?.money_account_id || '' : '')}</select></label>`, word, (form: FinFormOf<{on: HTMLInputElement; from: HTMLSelectElement}>) => {
     const pay_on = form.elements.on.value, from = form.elements.from.value;
     if (!pay_on) throw new Error('Pick a day');
@@ -441,7 +472,7 @@ async function finDocMarkPaid(d: FinDocAny) {
   const bill = finNeed(FIN?.doc, 'the documents').kind === 'bill';
   const banks = finNeed(finCaps(), 'the finance caps').may('finance.pay') ? await finPayFrom().catch(() => []) : [];
   finDecideDialog('Mark paid', `<label>Amount<input name="amount" inputmode="decimal" required autocomplete="off" value="${finCentsValue(d.remaining)}"></label>
-    <label>Date<input type="date" name="date" required value="${finToday()}"></label>
+    <label>Date<input type="date" data-date-field name="date" required value="${finToday()}"></label>
     <label>${bill ? 'From' : 'To'}<select name="from">${finOpts(banks)}<option value="">Elsewhere</option></select></label>`, 'Mark paid', (form: FinFormOf<{amount: HTMLInputElement; date: HTMLInputElement; from: HTMLSelectElement}>) => {
     const amount = finParseCents(form.elements.amount.value), date = form.elements.date.value, from = form.elements.from.value;
     if (!amount) throw new Error('A dollar amount, like 500');
@@ -471,10 +502,10 @@ async function finDocAdd(kind: FinDocKind) {
     <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>`
     : `<div data-fin-il>${invLine()}</div><button type="button" class="ghost fin-jl-add" data-fin-il-add>+ Line</button>
     <label data-fin-for hidden>For<select name="for"></select></label>`;
-  const dlg = finDecideDialog(k.label, `<label>${k.who}<select name="contact" required>${finOpts(contacts)}<option value="+">New ${k.who.toLowerCase()}</option></select></label>
+  const dlg = finDecideDialog(`New ${k.label.toLowerCase()}`, `<label>${k.who}<select name="contact" required>${finOpts(contacts)}<option value="+">New ${k.who.toLowerCase()}</option></select></label>
     <label data-fin-new hidden>Name<input name="name" maxlength="120" autocomplete="off"></label>
     <label>Number<input name="number" maxlength="60" autocomplete="off"></label>
-    <div class="fin-pair"><label>Date<input type="date" name="date" required value="${finToday()}"></label><label>Due<input type="date" name="due"></label></div>
+    <div class="fin-pair"><label>Date<input type="date" data-date-field name="date" required value="${finToday()}"></label><label>Due<input type="date" data-date-field name="due"></label></div>
     ${lineHtml}
     <label>Memo<input name="memo" maxlength="200" autocomplete="off"></label>`, 'Save', async (form: FinFormOf<FinDocFormControls>) => {
     const el = form.elements;
@@ -587,7 +618,7 @@ async function finJournalAdd() {
   try { lines = await finChart('journal'); } catch (e) { toast(errorMessage(e, 'Did not load.'), true); return; }
   const row = () => `<div class="fin-jl"><select name="acct" aria-label="Line"><option value=""></option>${finOpts(lines)}</select>
     <input name="dr" inputmode="decimal" autocomplete="off" aria-label="Debit"><input name="cr" inputmode="decimal" autocomplete="off" aria-label="Credit"></div>`;
-  const dlg = finDecideDialog('Journal entry', `<label>Date<input type="date" name="date" required value="${finToday()}"></label>
+  const dlg = finDecideDialog('Journal entry', `<label>Date<input type="date" data-date-field name="date" required value="${finToday()}"></label>
     <label>Memo<input name="memo" maxlength="200" autocomplete="off"></label>
     <div class="fin-jl fin-jl-head" aria-hidden="true"><span>Line</span><span>Debit</span><span>Credit</span></div>
     <div data-fin-jl>${row()}${row()}</div><button type="button" class="ghost fin-jl-add" data-fin-jl-add>+ Line</button>
@@ -641,7 +672,7 @@ async function finNewLineAdd(kind: 'loan' | 'asset') {
   let made: {name: string; id: string} | null = null;   // the line an earlier Save made: {name, id}
   finDecideDialog(k.title, `<label>Name<input name="name" required maxlength="120" autocomplete="off"></label>
     <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>
-    <label>Date<input type="date" name="date" required value="${finToday()}"></label>
+    <label>Date<input type="date" data-date-field name="date" required value="${finToday()}"></label>
     <label>${k.other}<select name="other" required>${finOpts(others)}</select></label>`, 'Save', async (form: FinFormOf<{name: HTMLInputElement; amount: HTMLInputElement; date: HTMLInputElement; other: HTMLSelectElement}>) => {
     const el = form.elements, name = el.name.value.trim(), amount = finParseCents(el.amount.value);
     if (!name) throw new Error('Name it');
@@ -663,7 +694,7 @@ async function finNewLineAdd(kind: 'loan' | 'asset') {
   }, 'Saved');
 }
 
-// ----------------------------------------------------------------- the Balance sheet's "+ Add"
+// ----------------------------------------------------------------- the Balance sheet's Add (its quiet +)
 // Connect a bank or card account (Mercury) or payments (Stripe); enter an invoice, a bill, a loan or credit line, an asset, a journal
 // entry or a spreadsheet's history: only what the viewer may do.
 function finAddMenuHtml() {
@@ -677,9 +708,9 @@ function finAddMenuHtml() {
   const connect: FinPair[] = caps.sources && caps.may('finance.admin') ? [['mercury', 'Bank account'], ['mercury-card', 'Card account'], ['stripe', 'Payments']] : [];
   if (!items.length && !connect.length) return '';
   const item = ([v, l]: FinPair) => `<button type="button" role="menuitem" data-fin-add-item="${v}">${l}</button>`;
-  return `<span class="fin-pop-at"><button type="button" class="primary" data-fin-add aria-haspopup="menu" aria-expanded="false" aria-controls="fin-add">+ Add</button>
-    <div class="fin-pop fin-menu" id="fin-add" role="menu" aria-label="Add" hidden>${connect.length ? `<span class="fin-menu-h">Connect</span>${connect.map(item).join('')}` : ''}${
-      items.length ? `${connect.length ? '<hr>' : ''}<span class="fin-menu-h">Enter</span>${items.map(item).join('')}` : ''}</div></span>`;
+  // Adding is rare: the header's quiet +, its menu under it (finance.ts finAddMenu).
+  return finAddMenu('Add', 'data-fin-add', 'fin-add', `${connect.length ? `<span class="fin-menu-h">Connect</span>${connect.map(item).join('')}` : ''}${
+    items.length ? `${connect.length ? '<hr>' : ''}<span class="fin-menu-h">Enter</span>${items.map(item).join('')}` : ''}`);
 }
 // The Balance sheet's click handler calls this first; true when the click was the menu's.
 function finAddClick(ev: Event) {

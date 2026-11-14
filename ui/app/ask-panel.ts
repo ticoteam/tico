@@ -3,9 +3,11 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant ("Tico Assistant" here), to the helpers behind it (BotOps,
-// the Strategy Owner, the Librarian). The Tico team has its own chat (ui/support.ts), opened by the ? beside Search. On a computer the "Tico Assistant" row at the bottom of the sidebar
-// (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
-// the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
+// the Strategy Owner, the Librarian). The Tico team has its own chat (ui/support.ts), opened by Help beside Search. On a
+// computer the "Assistant" row that starts the sidebar's foot (or ⌘J) opens it in the sidebar, in place of the list, the
+// foot staying below (ask.css); the page and the page's own chat on the right (page-chat.ts) stay as they are, both open
+// at once. On a phone the Liquid Dot in the middle of the tab bar opens it as a full page over the page, and closes it
+// again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
 // means. It keeps its own small state, never the bot pages' (chat.js V2C), and drops the
 // Assistant page's cached copy when it sends.
@@ -87,6 +89,9 @@ function askSync() {
   document.documentElement.classList.toggle('ask-away', away);   // ui/theme.ts set it for the first paint
   if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
+  // On a computer the list sits under the open panel: out of reach of Tab and the screen reader until it closes.
+  const list = $('#side .side-scroll'), under = open && !askPhone();
+  if (list && list.inert !== under) list.inert = under;
   askSet(row, 'title', name + ' (⌘J)');
   // While the panel is open a close mark holds the row's (and the phone tab's) dot place (ask.css).
   for (const el of [row, tab].filter(Boolean)) {
@@ -116,6 +121,18 @@ function askDot() {
 // Where the dot is now: the open panel's, else the button's (the row on a computer, the tab on a phone).
 const askHomeDot = (): Element | null => [...document.querySelectorAll('#ask-row [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
 const askLiveDot = (): Element | null => askShown() ? $('#ask-panel [data-ask-dot]') : askHomeDot();
+// Where the panel lives: in the sidebar on a computer (index.html draws it there), on the page on a phone, where the
+// sidebar is a drawer that slides away. A move keeps everything in it (the thread, the words typed, a reply streaming
+// in), and the cursor, when it was in it.
+function askPlace() {
+  const panel = $('#ask-panel'), side = $('#side'), foot = side?.querySelector(':scope > .side-footer');
+  if (!panel || !side || !foot) return;
+  const home = askPhone() ? document.body : side;
+  if (panel.parentElement === home) return;
+  const had = panel.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+  if (home === side) foot.before(panel); else ($('#mobile-nav') || side).before(panel);
+  had?.focus({preventScroll: true});
+}
 // Where `el` rests once the panel has finished sliding in: its box less the panel's translate right now (read in the
 // same style pass as the box, so a slide just begun, or one reversed mid-close, cancels out).
 function askSettled(el: Element) {
@@ -125,16 +142,13 @@ function askSettled(el: Element) {
   return dy ? {left: r.left, top: r.top - dy, width: r.width, height: r.height} : r;
 }
 // Open: the row's dot flies up to its place beside the panel's name; close: back down to the row. Both ends are
-// measured once, before anything moves. On a computer the panel stands on the row (ask.css --ask-foot), measured
-// with them. The flight is quick (a third of a free dot's): the panel is a click away and waits on nothing.
+// measured once, before anything moves. The flight is quick (a third of a free dot's): the panel is a click away and
+// waits on nothing. A page's own chat stays open beside it: the Assistant is on the left, the page's owner on the right.
 function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
   document.querySelectorAll('[data-ask-dot]').forEach(d => d._ldotFly?.cancel());   // a flight the other way lands at once
   const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askHomeDot()?.getBoundingClientRect();
-  const foot = open ? askFootNow() : null;
   const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
-  askFoot(foot);
-  if (open && pageChatShown()) pageChatToggle(false);   // Ask and a page's chat are never open together
   ASK.open = open;
   askSync();
   const to = askLiveDot();
@@ -145,10 +159,6 @@ function askToggle(open = !ASK?.open, focus = true) {
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
   else if (!open && focus && inside) (askPhone() ? $('#mobile-ask') : $('#ask-row'))?.focus();
 }
-// Where the panel's foot goes on a computer: just over the Ask row (ask.css --ask-foot). Read with the other boxes before
-// anything moves, then written; a phone's sheet has its own place.
-const askFootNow = (): number | null => { const r = askPhone() ? null : $('#ask-row')?.getBoundingClientRect(); return r?.height ? Math.round(innerHeight - r.top + 6) : null; };
-const askFoot = (px: number | null) => { if (px != null) $('#ask-panel')?.style.setProperty('--ask-foot', px + 'px'); };
 // Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
 function askDraft(text: string) {
   ASK ||= {open: false, mounted: false};
@@ -177,6 +187,8 @@ function askClick(ev: MouseEvent) {
 async function askLoad(chat: AskChat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
+  // Your messages, on the edge (ui/app/chat-index.ts): the same index every other chat has; it mounts once per thread.
+  askChatIndexMount(thread);
   const fail = (text: string) => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
   let info: AskInfo | null = null, messages: ChatMessage[] = [], execution: AskExecution | null = null, rendered = '', es: (() => void) | null = null, poll: ReturnType<typeof setInterval> | null = null, tick: ReturnType<typeof setInterval> | null = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; if (poll) clearInterval(poll); poll = null; };
@@ -337,4 +349,9 @@ document.addEventListener('click', ev => {
   if (!(ev.target instanceof Element)) return;
   if (ASK?.open && askPhone() && ev.target.closest('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
-addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
+// The tour points at rows of the list: on a computer the Assistant makes way for it.
+document.addEventListener('click', ev => {
+  if (ev.target instanceof Element && ev.target.closest('[data-gs-tour]') && ASK?.open && !askPhone()) askToggle(false, false);
+}, true);
+askPlace();
+addEventListener('resize', () => { askPlace(); askSync(); });

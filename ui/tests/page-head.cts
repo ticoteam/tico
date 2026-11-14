@@ -1,11 +1,13 @@
 // The one page header (ui/app/page-head.ts, ui/styles/page-head.css; spec "One page header on every screen", task #338)
-// on every week-one screen, on a real hub as Dana: at 1440x900 the title is the header's first item, 16px/600, at the same
-// left edge on every screen (AC-1); at most one filled button, worded, no "+", 32px, last in the header, and none on Usage,
-// Updates and Learnings (AC-2); every tab is a .ph-tab at 13px with only the current one on --surface2 at 600, and every
-// single-choice filter (.ph-seg) has that look with no shadow (AC-3); at 390x844 the title and the button share a row
-// (Tasks instead is one row of icons at 390 and 360, the UI Owner's call),
-// tabs are 40px in their own row and nothing scrolls sideways (AC-4); at 1100x800 the header is one row and the button in
-// view (AC-5); Docs', Tools', Meetings' and Updates' ⋯ list what moved there and Escape closes it (AC-6).
+// on every week-one screen, on a real hub as Dana: at 1440x900 the title is the header's first item, 17px (--t-page)/600,
+// at the same left edge on every screen (AC-1); at most one filled button, worded, no "+", 32px, last in the header but
+// for ⋯, and none on Usage, Updates and Learnings (AC-2); every tab is a .ph-tab at 13px with only the current one on
+// --surface2 at 600, and every single-choice filter (.ph-seg) has that look with no shadow (AC-3); at 390x844 the title
+// and the button share a row (Tasks instead is one row of icons at 390 and 360, the UI Owner's call),
+// tabs are 44px in their own row and nothing scrolls sideways (AC-4); at 1280, 1100, 900 and 800 the header is one row
+// (style guide "Top bars: one line": tool words become icons, then tools and the last tabs move into ⋯) and the button in
+// view (AC-5); Docs', Tools', Meetings' and Updates' ⋯ list what moved there and Escape closes it (AC-6); a header with
+// tools ends in ⋯, at most five tabs show, and Rules' last three wait in ⋯, where choosing one opens that tab (AC-7).
 import type * as RealHubSupport from './support/real-hub.cts';
 import type {Browser, Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -16,17 +18,22 @@ const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 // `iconRow`: on a phone the header is one dense row of icons with the title kept for screen readers only (Tasks).
 // `row`: the header's own one-row height where it is not the shared 41px (Tasks' 56px row, spec "Pipeline board: one-row header").
 type Screen = {name: string; hash: string; tabs?: boolean; button?: boolean; more?: string[]; iconRow?: boolean; opens?: [string, string]; row?: number};
-// The week-one table. `button: false` = no filled button allowed; undefined = at most one.
+// The week-one table. `button: false` = no filled button allowed; undefined = at most one. Automations and Listening add
+// with a quiet + (style guide: adding there is rare).
 const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
   {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true, more: ['New task', 'Archived'], row: 56},
-  {name: 'Automations', hash: '#/automations', button: true},
-  {name: 'Listening', hash: '#/listening', button: true},
+  {name: 'Automations', hash: '#/automations', button: false},
+  {name: 'Listening', hash: '#/listening', button: false},
   {name: 'Rules', hash: '#/rules', tabs: true},
   {name: 'Docs', hash: '#/docs', button: true, more: ['Import a file…', 'Add source…']},
-  {name: 'Tools', hash: '#/tools', more: ['Keys', 'Settings'], opens: ['Keys', '^#/tools/keys']},
+  // Library: Files (search and filter as tools), Skills (Use in my Claude Code in ⋯), Contacts (its types as tabs).
+  {name: 'Files', hash: '#/library/files', button: false},
+  {name: 'Skills', hash: '#/library/skills', button: false, more: ['Use in my Claude Code']},
+  {name: 'Contacts', hash: '#/library/contacts', tabs: true, button: false},
+  {name: 'Tools', hash: '#/tools', button: false, more: ['Settings'], opens: ['Settings', '^#/tools/settings']},
   // Sources joins Meetings' ⋯ once a source is connected (the source tiles stand in for it before); the seeded hub has none.
   {name: 'Meetings', hash: '#/meetings', tabs: true, more: ['Settings']},
   {name: 'Usage', hash: '#/usage', tabs: true, button: false},
@@ -57,20 +64,25 @@ function desktopProblems(page: Page, s: Screen) {
     const first = head.firstElementChild as HTMLElement;
     if (!first.matches('.ph-back, h1.ph-t')) bad.push(`first item is ${first.className}`);
     const h1 = head.querySelector<HTMLElement>(':scope > h1.ph-t')!, cs = getComputedStyle(h1);
-    if (cs.fontSize !== '16px' || cs.fontWeight !== '600') bad.push(`title ${cs.fontSize} ${cs.fontWeight}`);
+    if (cs.fontSize !== '17px' || cs.fontWeight !== '600') bad.push(`title ${cs.fontSize} ${cs.fontWeight}`);
     const prim = [...head.querySelectorAll<HTMLElement>('.primary')].filter(b => b.offsetParent !== null || b.getClientRects().length);
     if (prim.length > 1) bad.push(`${prim.length} filled buttons`);
     if (s.button === false && prim.length) bad.push('a filled button where there should be none');
     if (s.button === true && !prim.length) bad.push('no filled button');
     for (const b of prim) {
       const act = b.closest('.ph-act');
-      if (!act || act.parentElement !== head || head.lastElementChild !== act) bad.push('the filled button is not last, in .ph-act');
+      const after = act ? [...head.children].slice([...head.children].indexOf(act) + 1) : [];
+      if (!act || act.parentElement !== head || after.some(x => !x.matches('.ph-more, .ph-menu'))) bad.push('the filled button is not last but for ⋯, in .ph-act');
       const words = (b.textContent || '').trim();
       if (!/[A-Za-z]{2}/.test(words) || words.includes('+')) bad.push(`button words "${words}"`);
       if (Math.abs(b.getBoundingClientRect().height - 32) > 0.5) bad.push(`button ${b.getBoundingClientRect().height}px high`);
     }
+    // ⋯ is the last control wherever the header has tools (AC-7).
+    const shown = [...head.children].filter(x => x.getClientRects().length && !x.matches('[popover]'));
+    if (head.querySelector(':scope > .ph-tools > *, :scope > .ph-menu > .ph-tools > *') && !shown.at(-1)?.matches('.ph-more')) bad.push('a header with tools does not end in ⋯');
     const nav = head.querySelector<HTMLElement>(':scope > .ph-tabs');
     if (s.tabs && !nav?.children.length) bad.push('no tabs');
+    if (nav && [...nav.children].filter(x => x.getClientRects().length).length > 5) bad.push('more than five tabs show');
     if (nav) {
       const tabs = [...nav.children] as HTMLElement[];
       const cur = tabs.filter(x => x.matches('.cur, [aria-current=page], [aria-selected=true]'));
@@ -166,10 +178,72 @@ const titleLeft = (page: Page) => page.evaluate(() =>
       } finally { await page.context().close(); }
     }
 
+    // AC-7: Rules has eight tabs. Five show, the last three wait at the top of ⋯, and choosing one there opens that tab,
+    // which then shows on the row as the current one (the fifth steps into ⋯ for it).
+    {
+      const page = await pageAs(browser, hub, 'dana');
+      const rules = SCREENS.find(x => x.name === 'Rules')!;
+      try {
+        await ready(page);
+        await open(page, rules);
+        const head = page.locator('#main header.ph');
+        const visible = () => head.locator(':scope > .ph-tabs > .ph-tab:visible').allInnerTexts().then(x => x.map(l => l.replace(/\s*\d+$/, '')));
+        const seen = await visible();
+        if (seen.length !== 5) say(rules, '1440', [`${seen.length} tabs show (${seen.join(', ')})`]);
+        await head.locator(':scope > .ph-more').click();
+        const menu = head.locator(':scope > .ph-menu:popover-open');
+        const held = (await menu.locator('.ph-mtabs > .ph-mtab').allInnerTexts()).map(l => l.replace(/\s*\d+$/, ''));
+        if (held.join('|') !== 'Automations on tasks|Built in|Suggested') say(rules, '1440', [`⋯ holds tabs ${held.join(', ')}`]);
+        await menu.locator('.ph-mtab', {hasText: 'Built in'}).click();
+        await page.waitForFunction(() => /#\/rules\/builtin/.test(location.hash), null, {timeout: t(5000)})
+          .catch(async () => say(rules, '1440', [`⋯ Built in went to ${await page.evaluate(() => location.hash)}`]));
+        await page.waitForTimeout(t(300));
+        const now = await visible();
+        if (now.length !== 5 || now[4] !== 'Built in') say(rules, '1440', [`after choosing Built in the row shows ${now.join(', ')}`]);
+        if (!(await head.locator(':scope > .ph-tabs > .ph-tab.cur:visible', {hasText: 'Built in'}).count())) say(rules, '1440', ['Built in is not the current tab on the row']);
+        if (await menu.count()) say(rules, '1440', ['⋯ stayed open after a pick']);
+      } finally { await page.context().close(); }
+    }
+
+    // A BUTTON tab chosen from ⋯ closes ⋯ too. Its page redraws the tabs as it acts (pageHeadSet), which rebuilds ⋯'s
+    // list and takes the chosen item out of the page, so the header closes ⋯ before it clicks the tab. A probe header
+    // made by the shared part stands in for a page (Settings does this for real). ⋯'s list is a named group.
+    {
+      const page = await pageAs(browser, hub, 'dana');
+      try {
+        await ready(page);
+        await page.evaluate(() => {
+          type Tab = {label: string; cur: boolean; attrs: string};
+          const w = window as unknown as {pageHead(o: {title: string; tabs: Tab[]}): string; pageHeadTabs(tabs: Tab[]): string; pageHeadSet(head: Element, part: string, html: string): void};
+          const tabs = (cur: number): Tab[] => ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven'].map((label, i) => ({label, cur: i === cur, attrs: `data-n="${i}"`}));
+          const box = document.createElement('div');
+          box.id = 'ph-probe';
+          box.innerHTML = w.pageHead({title: 'Probe', tabs: tabs(0)});
+          document.querySelector('#main')!.prepend(box);
+          const head = box.querySelector('header.ph')!;
+          head.addEventListener('click', e => {
+            const tab = (e.target as HTMLElement).closest<HTMLElement>('.ph-tabs > .ph-tab');
+            if (tab) w.pageHeadSet(head, 'tabs', w.pageHeadTabs(tabs(Number(tab.dataset['n']))));
+          });
+        });
+        const head = page.locator('#ph-probe > header.ph');
+        await head.locator(':scope > .ph-more').waitFor({timeout: t(5000)});
+        await head.locator(':scope > .ph-more').click();
+        const menu = head.locator(':scope > .ph-menu:popover-open');
+        assert.equal(await menu.getAttribute('role'), 'group', "⋯'s list is a named group, not an ARIA menu");
+        assert.deepEqual(await menu.locator('.ph-mtabs > .ph-mtab').allInnerTexts(), ['Six', 'Seven'], 'the tabs past the fifth wait in ⋯');
+        await menu.locator('.ph-mtab', {hasText: 'Seven'}).click();
+        await head.locator(':scope > .ph-tabs > .ph-tab.cur:visible', {hasText: 'Seven'}).waitFor({timeout: t(5000)});
+        await page.waitForTimeout(t(300));
+        assert.equal(await menu.count(), 0, '⋯ closes after a button tab is chosen from it');
+        assert.equal(await head.locator(':scope > .ph-more').getAttribute('aria-expanded'), 'false');
+      } finally { await page.context().close(); }
+    }
+
     // Narrower than 1440, above a phone: 1280, 1100, 900 and 800. Every tab sits inside its row and every header control
     // is what a click at its centre hits, inside the window (Review 1: tabs slid out of their row, Ask and Live now went
-    // under Add notes). Where it all fits, the header is one row (AC-5): at 1100 on every screen whose title, tabs, ⋯ and
-    // button fit with their tools (all but Rules' eight tabs and Meetings).
+    // under Add notes). The header is one row at every width (AC-5): tool words turn to icons, then tools and the last tabs
+    // move into ⋯; there is no second row on a computer.
     {
       const page = await pageAs(browser, hub, 'dana');
       try {
@@ -179,7 +253,7 @@ const titleLeft = (page: Page) => page.evaluate(() =>
           for (const s of SCREENS) {
             try { await open(page, s); } catch { say(s, String(width), ['no header']); continue; }
             await page.waitForTimeout(t(100));   // the fit runs on the next frame
-            say(s, String(width), await page.evaluate(([oneRow, row]) => {
+            say(s, String(width), await page.evaluate((row: number | null) => {
               const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
               const vw = document.documentElement.clientWidth;
               const name = (el: Element) => el.id ? '#' + el.id : (el.textContent || '').trim().slice(0, 24) || el.className;
@@ -187,6 +261,7 @@ const titleLeft = (page: Page) => page.evaluate(() =>
               if (nav) {
                 const nr = nav.getBoundingClientRect();
                 for (const x of nav.children) {
+                  if (!x.getClientRects().length) continue;   // a tab waiting in ⋯
                   const xr = x.getBoundingClientRect();
                   if (xr.left < nr.left - 0.5 || xr.right > nr.right + 0.5) bad.push(`tab "${name(x)}" is outside its row`);
                 }
@@ -199,13 +274,11 @@ const titleLeft = (page: Page) => page.evaluate(() =>
                 const hit = document.elementFromPoint(cr.left + cr.width / 2, cr.top + cr.height / 2);
                 if (!hit || !(el.contains(hit) || hit.contains(el))) bad.push(`${name(el)} is covered by ${hit ? name(hit) : 'nothing'}`);
               }
-              if (oneRow) {
-                // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
-                const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
-                if (tall > (row ?? 41) + 0.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
-              }
+              // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
+              const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
+              if (tall > (row ?? 41) + 0.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
               return bad;
-            }, [width === 1100 && !['Rules', 'Meetings'].includes(s.name), s.row ?? null] as const));
+            }, s.row ?? null));
           }
         }
       } finally { await page.context().close(); }
@@ -239,13 +312,21 @@ const titleLeft = (page: Page) => page.evaluate(() =>
             if (nav?.children.length) {
               const nr = nav.getBoundingClientRect();
               if (nr.top < h1.bottom - 0.5) bad.push('tabs are not in their own row');
-              for (const x of nav.children) if ((x as HTMLElement).getBoundingClientRect().height < 39.5) bad.push(`tab "${x.textContent}" under 40px`);
+              for (const x of nav.children) if (x.getClientRects().length && (x as HTMLElement).getBoundingClientRect().height < 43.5) bad.push(`tab "${x.textContent}" under 44px`);
             }
             const de = document.documentElement;
             if (de.scrollWidth > de.clientWidth) bad.push(`the page scrolls sideways (${de.scrollWidth} > ${de.clientWidth})`);
             return bad;
           }));
         }
+        // A title too long for the phone's title line is cut there; it never empties the tab row under it (folding tabs
+        // frees the title no room). Updates' two tabs stay on their row.
+        const updates = SCREENS.find(x => x.name === 'Updates')!;
+        await open(page, updates);
+        await page.evaluate(() => { document.querySelector('#main header.ph > .ph-t')!.textContent = 'Updates from the whole company this week'; });
+        await page.waitForTimeout(t(200));
+        const onRow = await page.locator('#main header.ph > .ph-tabs > .ph-tab:visible').count();
+        if (onRow !== 2) say(updates, '390', [`a long title left ${onRow} of 2 tabs on the tab row`]);
       } finally { await page.context().close(); }
     }
 

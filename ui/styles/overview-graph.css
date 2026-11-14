@@ -1,11 +1,11 @@
 /* ui/styles/overview-graph.css — Overview › Graph (ui/app/overview-graph.ts): the team chart in its own pan-and-zoom
-   frame, the Rules | Goals switch above it, and the teammate panel (beside the chart; a bottom sheet on a phone). */
-.og-bar{flex:none;display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;padding:var(--s2) 28px;border-bottom:1px solid var(--line)}
-.og-seg{display:inline-flex;padding:2px;gap:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface2)}
-.og-seg button{padding:3px 12px;border:0;border-radius:4px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.og-seg button[aria-pressed="true"]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--line)}
-.og-seg button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.og-status{min-width:0}
+   frame, the Rules | Goals switch in the page header (the shared .ph-seg look), and the teammate panel (beside the chart;
+   a bottom sheet on a phone). Over the chart's top left: a phone's Team list and the line saying why nothing shows. */
+.og-over{position:absolute;z-index:2;top:var(--s3);left:var(--s3);right:var(--s3);display:flex;align-items:flex-start;gap:var(--s2);pointer-events:none}
+.og-over>*{pointer-events:auto}
+.og-team{flex:0 1 auto;width:auto;min-width:0;max-width:60%}
+.og-team[hidden]{display:none}
+.og-status{min-width:0;padding:4px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
 .og-status[hidden]{display:none}
 .og-line{margin:0;font-size:var(--t-sm)}
 
@@ -44,10 +44,8 @@
 .og-meta:empty{display:none}
 .og-count b{color:var(--ink);font-weight:600}
 .og-count.none{opacity:.8}
-.og-flag{flex:none;padding:1px 6px;border-radius:999px;font-size:var(--t-2xs);font-weight:600;line-height:var(--lh-tight)}
-.og-flag.block{background:var(--fail-bg);color:var(--fail)}
-.og-flag.escalate{background:var(--wait-bg);color:var(--wait-ink)}
-.og-meta .og-flag{margin-left:auto}
+/* what a broken rule does, beside the rule in the panel: a setting, so plain muted words, no pill and no hue */
+.og-flag{flex:none;font-size:var(--t-xs);color:var(--muted);line-height:var(--lh-tight)}
 .og-chip{flex:0 1 auto;min-width:24px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:999px;border:1px solid transparent;
   font-size:var(--t-2xs);line-height:var(--lh-tight);background:var(--idle-bg);color:var(--muted)}
 .og-chip.green{background:var(--ok-bg);color:var(--ok)}
@@ -96,9 +94,8 @@
 .og-gl-a{margin-top:4px;font-size:var(--t-xs)}
 
 @media(max-width:760px){
-  .og-bar{padding:var(--s2) var(--s4)}
   .og-panel{position:fixed;top:auto;left:0;right:0;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));width:auto;max-height:62dvh;
     border-left:0;border-top:1px solid var(--line);border-radius:var(--r-pop) var(--r-pop) 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.2)}
-  .og-tools button{min-width:36px;height:36px}
+  .og-tools button{min-width:44px;height:44px}
 }
 @media(prefers-reduced-motion:reduce){.og-node{transition:none}}

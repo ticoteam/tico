@@ -81,7 +81,11 @@ function botGoalRender(slug: string, goals: GkGoal[] | undefined) {
     if (pop.matches(':popover-open')) { pop.hidePopover(); return; }
     pop.showPopover(); tasksMenuPlace(pop, btn); pop.querySelector('.tl-mi')?.focus();
   };
-  pop.ontoggle = (ev: ToggleEvent) => btn.setAttribute('aria-expanded', String(ev.newState === 'open'));
+  // Closed with Esc or a click outside while the focus was in it, the focus goes back to the goal it opened from.
+  pop.ontoggle = (ev: ToggleEvent) => {
+    btn.setAttribute('aria-expanded', String(ev.newState === 'open'));
+    if (ev.newState === 'closed' && btn.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) btn.focus();
+  };
   pop.onkeydown = tasksMenuKeys;
   for (const a of pop.querySelectorAll('[data-goal-open]'))
     a.onclick = (ev: MouseEvent) => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); pop.hidePopover(); openGoal(a.dataset.goalOpen); };

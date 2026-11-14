@@ -8,6 +8,8 @@
 import type {Browser, Page} from 'playwright';
 import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
+// An open automation's ⋯: the page header's on a computer (its items join it there), the automation's own on a phone.
+const auMoreOpen = async (page: Page) => { const own = page.locator('.au-hd-more'); if (await own.isVisible()) await own.click(); else await page.locator('.au-ph > .ph-more').click(); };
 const assert = require('node:assert/strict');
 const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
@@ -40,8 +42,8 @@ async function apply(page: Page, writes: AutomationsFakeSupport.Write[], tid: st
 }
 const open = (browser: Browser, id: string, viewport: AutomationsFakeSupport.Viewport = DESKTOP) => openAutomations(browser, {viewport, hash: '#/automations/' + id, tweak});
 async function openApply(page: Page) {
-  await page.locator('[data-more]').click();
-  await page.locator('.au-menu [data-mi="apply"]').click();
+  await auMoreOpen(page);
+  await page.locator(':is(.au-menu, .au-ph > .ph-menu) [data-mi="apply"]:visible').click();
   await page.waitForSelector('dialog.au-nd-apply[open] [data-tid="founder"]');
 }
 
@@ -84,8 +86,8 @@ async function openApply(page: Page) {
       assert.equal(await page.locator('.au-bpr').innerText(), PROMPT);
       assert.equal(await page.locator('.au-ver').innerText(), 'v4', 'a new version');
       // A board isn't an October inbox: no Apply template.
-      await page.locator('[data-more]').click();
-      assert.equal(await page.locator('.au-menu [data-mi="apply"]').count(), 0);
+      await auMoreOpen(page);
+      assert.equal(await page.locator(':is(.au-menu, .au-ph > .ph-menu) [data-mi="apply"]:visible').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -175,9 +177,9 @@ async function openApply(page: Page) {
     {
       const {page} = await open(browser, 'au_inbox');
       await page.waitForSelector('.au-card[data-open="trigger"]');
-      await page.locator('[data-more]').click();
-      await page.waitForSelector('.au-menu [data-mi="versions"]');
-      assert.equal(await page.locator('.au-menu [data-mi="apply"]').count(), 0);
+      await auMoreOpen(page);
+      await page.waitForSelector(':is(.au-menu, .au-ph > .ph-menu) [data-mi="versions"]:visible');
+      assert.equal(await page.locator(':is(.au-menu, .au-ph > .ph-menu) [data-mi="apply"]:visible').count(), 0);
       await page.close();
     }
 

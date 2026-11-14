@@ -224,6 +224,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     { let release!: (value?: unknown) => void; thumbHold = {held: new Promise(r => { release = r; })}; thumbHold.release = release; }
     await page.evaluate(async () => { const r = await v2Get('/v2/tasks/t1') as {task: unknown}; await taskModalShow(r.task); });
     const modal = page.locator('#task-modal');
+    await modal.locator('[data-task-tab="details"]').click();   // the files are the last part of the Details tab
     await modal.locator('.tf-tile[data-tf-file="f-cut"]').waitFor();
     assert.deepEqual(await modal.locator('.tf-tile .tf-name').allTextContents(), ['cut.mp4', 'script.md', 'frame.png', 'still.png', 'shots.csv', 'logo.svg', 'page.html', 'site.html']);
     const cutTile = modal.locator('.tf-tile[data-tf-file="f-cut"]');
@@ -237,7 +238,9 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.equal(await modal.locator('.tf-tile[data-tf-file="f-logo"] .tf-thumb img').count(), 0, 'no picture: a type mark');
     // files reach an open task by the +, a drop anywhere on it, or a pasted screenshot; a comment being typed stays
     assert.equal(await modal.locator('.task-files [data-tf-add]').isVisible(), true);
-    await modal.locator('.task-chat textarea').fill('Half-written note');
+    // (The box is on the Chat tab, a tab away from the files: its text is typed in place.)
+    const typeBox = (text: string) => modal.locator('.task-chat textarea').evaluate((box, text) => { (box as HTMLTextAreaElement).value = text; box.dispatchEvent(new Event('input', {bubbles: true})); }, text);
+    await typeBox('Half-written note');
     await modal.evaluate(d => {
       const dt = new DataTransfer();
       dt.items.add(new File(['spec'], 'mockup.png', {type: 'image/png'}));
@@ -270,16 +273,19 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await modal.locator('.tf-tile .tf-name', {hasText: 'mockup.png'}).waitFor({state: 'detached'});
     assert.deepEqual(posted.at(-1)!.body, {archived: true});
     assert.match(posted.at(-1)!.path, /^\/api\/v2\/files\/f-up/);
-    await modal.locator('.task-chat textarea').fill('');
+    await typeBox('');
     files.splice(-1);
     await page.evaluate(() => tfLoad($('#task-modal'), 't1'));
     await modal.locator('.tf-tile .tf-name', {hasText: 'mockup.png'}).waitFor({state: 'detached'});
     // a comment that carried files: a small thumb for the image, a chip for the video at its version
+    const tab = (name: string) => modal.locator(`[data-task-tab="${name}"]`).click();
+    await tab('chat');
     const m1 = modal.locator('.tcomment', {hasText: 'Second pass and a frame grab.'});
     await m1.locator('.tc-thumb[data-tf-jump="f-frame"]').waitFor();
     assert.equal((await m1.locator('.tc-file[data-tf-jump="f-cut"]').textContent())!.replace(/\s+/g, ' ').trim(), 'VIDEOcut.mp4 v2');
     assert.equal(await m1.locator('video, .tf-media').count(), 0, 'no big media in a comment');
     // the linked images in the details show inline, lazily, and open full size
+    await tab('desc');
     await modal.locator('.tdesc img[src="https://img.example.com/ref.png"].ready').waitFor();
     assert.equal(await modal.locator('.tdesc > p > img').getAttribute('loading'), 'lazy');
     await modal.locator('.tdesc .inline-thumb.ready').waitFor();
@@ -287,11 +293,12 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await theme('dark');
 
     // ---- a tile opens in place: the video at v3 with its poster, the versions, who added it and its note
+    await tab('chat');
     await m1.locator('.tc-file[data-tf-jump="f-cut"]').click();
     const view = modal.locator('.tf-view');
     // the viewer is a modal over the task: fold the open file before reaching a tile or a comment under it
     const fold = async () => { if (await view.isVisible()) { await page.keyboard.press('Escape'); await view.waitFor({state: 'hidden'}); } };
-    const openTile = async (id: string) => { await fold(); await modal.locator(`.tf-tile[data-tf-file="${id}"]`).click(); };
+    const openTile = async (id: string) => { await fold(); await tab('details'); await modal.locator(`.tf-tile[data-tf-file="${id}"]`).click(); };
     await view.locator('video').waitFor();
     assert.equal(await view.evaluate(d => d.matches(':modal')), true, 'the file opens in its own modal');
     const box = (await view.boundingBox())!, vp = page.viewportSize()!;
@@ -301,7 +308,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.equal(await view.locator('video').getAttribute('src'), '/api/v2/files/f-cut?v=3');
     assert.equal(await view.locator('video').getAttribute('poster'), '/api/v2/files/f-cut/poster?v=3');
     assert.deepEqual(await view.locator('.tf-vers button').allTextContents(), ['v1', 'v2', 'v3']);
-    assert.match(await view.locator('.tf-vmeta').innerText(), /Editor · \d+h ago[\s\S]*Tighter intro, new music\./);
+    assert.match(await view.locator('.tf-vmeta').innerText(), /Editor · \d+h[\s\S]*Tighter intro, new music\./);
     assert.equal(await cutTile.getAttribute('aria-expanded'), 'true');
     // the file's question: chip, question, options with their description
     const fileAsk = view.locator('.ask');
@@ -320,7 +327,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await view.waitFor({state: 'hidden'});
     assert.equal(await modal.isVisible(), true, 'Esc folded the file and left the task open');
     // markdown: compare reads as a line diff
-    await modal.locator('.tf-tile[data-tf-file="f-script"]').click();
+    await tab('details'); await modal.locator('.tf-tile[data-tf-file="f-script"]').click();
     await view.locator('.tf-doc .md h1').waitFor();
     await view.locator('[data-tf-cmp]').click();
     await view.locator('.tf-diff-lines').waitFor();
@@ -387,14 +394,14 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     // the video stops: the next poll catches up
     await video.evaluate(v => { delete (v as unknown as {paused?: boolean}).paused; });
     await view.locator('[data-tf-v="4"]').waitFor();
-    await modal.locator('.tcomment', {hasText: 'End card added.'}).waitFor();
+    await modal.locator('.tcomment', {hasText: 'End card added.'}).waitFor({state: 'attached'});   // in the Chat tab
     await page.evaluate(() => { (window as unknown as PageWin).fastPoll = false; });
     assert.deepEqual(errors, []);
 
     // ---- phone width: no sideways scroll, with the strip and an open video
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await cutTile.getAttribute('aria-expanded'), 'true', 'still open');
-    // A phone opens on Chat, its files in the Info tab (task #409); a file open stays in view on either.
+    // A file open stays in view whichever tab is shown.
     await view.locator('video').waitFor();
     await noSideways('phone, task with an open video');
     for (const mode of ['dark', 'light']) { await theme(mode); await modal.evaluate(d => { (d as HTMLElement).scrollTop = 0; }); await shot(`task-files-strip-phone-${mode}`); await view.scrollIntoViewIfNeeded(); await shot(`task-video-versions-phone-${mode}`); }
@@ -417,13 +424,12 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       assert.equal(await modal.locator('.task-chat form').isHidden(), true, 'no comment box');
       assert.equal(await modal.locator('.task-files [data-tf-add]').isHidden(), true, 'a reader cannot add files');
       await font.locator('.ask-opt.ro').first().click();
-      if (where === 'phone') await modal.getByRole('tab', {name: 'Info'}).click();
-      await modal.locator('.tf-tile[data-tf-file="f-notes"]').click();
+      await tab('details'); await modal.locator('.tf-tile[data-tf-file="f-notes"]').click();
       await view.locator('.ask-q[data-qid="ok"]').waitFor();
       assert.equal(await view.locator('.ask button, .ask input').count(), 0);
       await noSideways(`${where}, a reader's task`);
       await fold();
-      if (where === 'phone') await modal.getByRole('tab', {name: 'Chat'}).click();
+      await tab('chat');
       for (const mode of ['dark', 'light']) { await theme(mode); await legacy.scrollIntoViewIfNeeded(); await shot(`legacy-answer-${where}-${mode}`); }
       await modal.locator('[data-modal-close]').click();
     }

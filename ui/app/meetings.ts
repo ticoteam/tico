@@ -65,6 +65,7 @@ interface MeetState {
   live?: Record<string, {chat: MeetChatMessage[]; bots: {bot: string; name?: string}[]}>;
   linkedTasks?: Record<string, MeetLinked>; linkedTaskChanges?: Record<string, Map<string, MeetLinkedTask | null>>;
   itemLoadSequence?: number; pendingDrafts?: Map<string, MeetDraft>; shared?: SharedPlaceHandle | null | undefined;
+  menuAnchor?: HTMLElement | null | undefined; menuField?: string | undefined;    // the filter popover's (task-list-menus.ts)
 }
 let MEET: MeetState | null = null;
 function meetStop() {
@@ -85,25 +86,28 @@ async function pageNotes(): Promise<void> {
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state: MeetState = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemAdd: '', confirmDelete: '', open: false};
-  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, Ask and Live now
-  // as tools, Sources and Settings in its ⋯, Add notes last. The Recorder links stay in the bar under it.
+  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, the shared filter
+  // icon and Live now as tools, Add notes the one filled button, Ask, Sources and Settings in its ⋯ (the guide: no chat
+  // button in a top bar). Filters in force show as chips under it, the way Tasks shows them. The Recorder links stay in
+  // the bar under it.
   $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
     tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
     tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
-      + `<button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`
+      + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
       + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
-    more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
+    more: '<button type="button" id="meet-ask" data-ask-open>Ask</button><div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
     primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
     <div class="meet-review-bar">
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
       <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a></div>
+    <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
-    <div class="meet-review-help muted" id="meet-review-help" hidden></div>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
     <div class="notes" id="notes">
       <div class="meet-syncing" id="meet-syncing" role="status" hidden>${meetLogo('granola', 30)}<div class="meet-main"><b>Checking Granola</b><div class="meet-meta"><span>New notes arrive once Granola has a summary</span></div></div><div class="meet-side"><span class="meet-state"><i class="mg-spin" aria-hidden="true"></i>Syncing</span></div></div>
-      <section class="notes-list"><div class="notes-filters" id="notes-filters" hidden><label class="meet-select-all" id="meet-select-all" hidden><input type="checkbox" aria-label="Select all shown meetings"></label><select id="notes-when" aria-label="When"><option value="all">Any time</option><option value="today">Today</option><option value="7">Past 7 days</option><option value="30">Past 30 days</option><option value="older">Older than 30 days</option></select><select id="notes-person" aria-label="Participant"><option value="">All participants</option></select><select id="notes-source" aria-label="Source"><option value="">All sources</option></select><select id="notes-status" aria-label="Status"><option value="all">All statuses</option><option value="unsent">Not sent</option><option value="sent">Sent</option><option value="sending">Sending</option><option value="failed">Failed</option></select><span class="notes-count muted" id="notes-count"></span></div><div class="notes-rows" id="notes-rows"><div class="notes-empty">Loading…</div></div></section>
+      <section class="notes-list"><div class="meet-list-head" id="meet-list-head" hidden><label class="meet-select-all" id="meet-select-all"><input type="checkbox" aria-label="Select all shown meetings"></label></div><div class="notes-rows" id="notes-rows"><div class="notes-empty">Loading…</div></div></section>
     </div>
+    <div id="task-filter-pop" class="tl-pop" popover></div>
     <dialog class="tmodal notes-modal" id="notes-modal" aria-label="Meeting details"><div class="notes-modal-close"><span class="mp-tools" id="notes-modal-tools"></span><button class="mp-icon" type="button" id="notes-modal-window" aria-label="Open in new tab" title="Open in new tab"><span class="nav-icon" aria-hidden="true">open_in_new</span></button><button class="mp-icon" type="button" id="notes-modal-close" aria-label="Close meeting" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div><section class="notes-detail" id="notes-detail"></section></dialog>
     <dialog class="tmodal import-modal" id="manual-modal" aria-label="Add notes"></dialog>`;
   // Pending's count is the tab's .ph-n, numbered by meetReviewTabs.
@@ -135,14 +139,7 @@ async function pageNotes(): Promise<void> {
     dialog.querySelectorAll<HTMLDetailsElement>('details.mp-pop[open]').forEach(menu => { if (!menu.contains(eventElement(e))) menu.open = false; });
     if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeNote(); } };
   $('#notes-manual').onclick = () => meetNotesOpen(state);
-  const applyFilters = () => {
-    state.person = $('#notes-person').value; state.source = $('#notes-source').value; state.filter = $('#notes-status').value; state.when = $('#notes-when').value;
-    state.selected = meetVisible(state)[0]?.id || ''; meetList(state);
-  };
-  $('#notes-person').onchange = applyFilters;
-  $('#notes-source').onchange = applyFilters;
-  $('#notes-status').onchange = applyFilters;
-  $('#notes-when').onchange = applyFilters;
+  meetFilterWire(state);
   let searchTimer: number | undefined;
   $('#notes-search').oninput = (e: Event & {target: HTMLInputElement}) => {
     state.query = e.target.value.trim(); state.selected = '';
@@ -169,26 +166,24 @@ function meetReviewTabs(state: MeetState): void {
   document.querySelectorAll<HTMLElement>('[data-review]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.review === state.review)));
   const count = $('#meet-pending-count'); if (count) count.textContent = state.pendingCount || '';
   $('[data-review=pending]')?.classList.toggle('has-pending', !!state.pendingCount);
-  const help = $('#meet-review-help');
-  if (help) { help.hidden = state.review === 'live'; help.textContent = state.review === 'pending'
-    ? 'Only you see these until you share them.' : 'Only you see dismissed meetings.'; }
 }
 // Bulk actions appear only once two or more shown rows are ticked; a hidden row is never part of them.
 function meetReviewBulk(state: MeetState): void {
   const el: HTMLElement | null = $('#meet-review-bulk'); if (!el) return;
   const visible = meetVisible(state), selected = visible.filter(r => state.checked.has(r.id)).length;
-  const all: HTMLElement | null = $('#meet-select-all');
+  const all: HTMLElement | null = $('#meet-select-all'), head: HTMLElement | null = $('#meet-list-head');
   if (all) {
     all.hidden = state.review !== 'pending' || visible.length < 2;
+    if (head) head.hidden = all.hidden;
     const box = all.querySelector<HTMLInputElement>('input')!;
     box.checked = visible.length > 0 && visible.every(r => state.checked.has(r.id));
     box.onchange = () => { for (const r of visible) box.checked ? state.checked.add(r.id) : state.checked.delete(r.id); meetList(state); };
   }
   el.hidden = state.review !== 'pending' || selected < 2;
-  el.innerHTML = `<span>${selected} selected</span><span class="spacer"></span>
-    <button class="primary small" type="button" data-review-bulk="approve_all">Share ${selected}</button>
+  // Quiet buttons: Add notes stays the view's one filled button. Clear backs out at the left, Share goes forward last.
+  el.innerHTML = `<span>${selected} selected</span><button class="linkish" type="button" data-review-clear>Clear</button><span class="spacer"></span>
     <button class="ghost small" type="button" data-review-bulk="dismiss_all">Dismiss ${selected}</button>
-    <button class="linkish" type="button" data-review-clear>Clear</button>`;
+    <button class="ghost small" type="button" data-review-bulk="approve_all">Share ${selected}</button>`;
   el.querySelectorAll<HTMLButtonElement>('[data-review-bulk]').forEach(b => b.onclick = () => meetReviewAct(state, b, b.dataset.reviewBulk ?? ''));
   el.querySelector<HTMLElement>('[data-review-clear]')!.onclick = () => { state.checked.clear(); meetList(state); };
 }
@@ -238,15 +233,17 @@ async function meetSettingsOpen(state: MeetState): Promise<void> {
   try {
     const settings = await get<import('../types/api').MeetingReviewPreferences>('/v2/meetings/settings'); if (!dialog.isConnected) return;
     const personal = settings.auto_share === null ? 'default' : settings.auto_share ? 'auto' : 'review';
-    dialog.innerHTML = `<form id="meet-settings-form"><h2>Meeting settings</h2>
+    // The guide's dialog: the title and ✕ in the head, Cancel then Save at the right of the foot.
+    dialog.innerHTML = `<form id="meet-settings-form"><header class="tmodal-head"><h2>Meeting settings</h2><button class="tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <label>Your imports<select name="personal" aria-label="Your imports"><option value="default">Use Team default (${settings.review_default === 'auto' ? 'auto-share' : 'review'})</option><option value="review">Review before sharing</option><option value="auto">Auto-share</option></select></label>
       <p class="hint">Auto-share applies to new imports. Existing Pending meetings stay pending.</p>
       ${S.me?.role === 'owner' ? '<label>Team default<select name="team" aria-label="Team default"><option value="review">Review before sharing</option><option value="auto">Auto-share</option></select></label><p class="hint">Each person can choose their own setting.</p>' : ''}
-      <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-close>Close</button><span class="err" role="status" id="meet-settings-error"></span></div></form>`;
+      <p class="err" role="status" id="meet-settings-error"></p>
+      <footer class="tmodal-foot"><button class="ghost" type="button" data-close>Cancel</button><button class="primary" type="submit">Save</button></footer></form>`;
     const form = dialog.querySelector<HTMLFormElement>('form')!, controls = form.elements as unknown as MeetSettingsControls;
     controls.personal.value = personal;
     if (controls.team) controls.team.value = settings.review_default;
-    dialog.querySelector<HTMLElement>('[data-close]')!.onclick = () => dialog.close();
+    dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(b => b.onclick = () => dialog.close());
     form.onsubmit = async (e: Event) => {
       e.preventDefault(); const submit = form.querySelector<HTMLButtonElement>('[type=submit]')!; submit.disabled = true;
       const body: {auto_share: boolean | null; review_default?: string} = {auto_share: controls.personal.value === 'default' ? null : controls.personal.value === 'auto'};
@@ -383,17 +380,97 @@ const meetVisible = (state: MeetState) => state.list.filter(r =>
   && (!state.person || meetPersonNames(r).some(p => meetPersonKey(p) === state.person))
   && (!state.source || (r.source || 'tico') === state.source)
   && (state.filter === 'all' || meetStatus(r) === state.filter));
+// Participants seen in this view stay choosable while a filter narrows the list.
 function meetFilterOptions(state: MeetState): void {
   for (const r of state.list) for (const name of meetPersonNames(r)) state.people.set(meetPersonKey(name), name.trim());
-  const el = $('#notes-person'); if (!el) return;
-  el.innerHTML = '<option value="">All participants</option>' + [...state.people].sort((a, b) => a[1].localeCompare(b[1])).map(([key, name]) => `<option value="${esc(key)}">${esc(name)}</option>`).join('');
-  el.value = state.person;
-  const src = $('#notes-source');
-  if (src) {
-    const kinds = [...new Set(state.list.map(r => r.source || 'tico'))].sort((a, b) => meetSourceLabel(a).localeCompare(meetSourceLabel(b)));
-    src.innerHTML = '<option value="">All sources</option>' + kinds.map(k => `<option value="${esc(k)}">${esc(meetSourceLabel(k))}</option>`).join('');
-    src.value = kinds.includes(state.source) ? state.source : '';
-  }
+  if (state.source && !state.list.some(r => (r.source || 'tico') === state.source)) state.source = '';
+}
+
+// ----------------------------------------------------------------- filters (the shared filter icon, as on Tasks)
+// The ⋯-style popover the Tasks page uses (task-list-menus.ts tasksMenu, #task-filter-pop): the fields first, then a
+// field's values in the same popover with a way back. A filter in force is a chip under the header; its ✕ takes it off.
+type MeetFilterKey = 'when' | 'person' | 'source' | 'filter';
+const MEET_FILTERS: [MeetFilterKey, string, string][] = [['when', 'When', 'all'], ['person', 'Participant', ''], ['source', 'Source', ''], ['filter', 'Status', 'all']];
+const MEET_WHEN: [string, string][] = [['all', 'Any time'], ['today', 'Today'], ['7', 'Past 7 days'], ['30', 'Past 30 days'], ['older', 'Older than 30 days']];
+const MEET_STATUS: [string, string][] = [['all', 'Any status'], ['unsent', 'Not sent'], ['sent', 'Sent'], ['sending', 'Sending'], ['failed', 'Failed']];
+function meetFilterValues(state: MeetState, k: MeetFilterKey): [string, string][] {
+  if (k === 'when') return MEET_WHEN;
+  if (k === 'filter') return MEET_STATUS;
+  if (k === 'person') return [['', 'Anyone'], ...[...state.people].sort((a, b) => a[1].localeCompare(b[1]))];
+  const kinds = [...new Set(state.list.map(r => r.source || 'tico'))].sort((a, b) => meetSourceLabel(a).localeCompare(meetSourceLabel(b)));
+  return [['', 'Any source'], ...kinds.map(s => [s, meetSourceLabel(s)] as [string, string])];
+}
+const meetFilterOff = (k: MeetFilterKey) => MEET_FILTERS.find(([f]) => f === k)?.[2] ?? '';
+// The field's value in force, as its label ('' when the field is off).
+function meetFilterWord(state: MeetState, k: MeetFilterKey): string {
+  const v = state[k] || meetFilterOff(k);
+  if (v === meetFilterOff(k)) return '';
+  return meetFilterValues(state, k).find(([value]) => value === v)?.[1] || v;
+}
+// `toggle`: a second click on the icon closes the menu; the way back from a field's values only redraws it.
+function meetFieldMenu(state: MeetState, anchor: HTMLElement | null, toggle = true): void {
+  const fields = MEET_FILTERS.filter(([k]) => meetFilterValues(state, k).length > 1);
+  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Filter">${fields.map(([k, name]) => {
+    const word = meetFilterWord(state, k);
+    return `<button type="button" role="menuitem" class="tl-mi" data-meet-field="${k}"><span class="tl-mi-t">${esc(name)}</span>${word ? `<span class="tl-mi-sub">${esc(word)}</span>` : ''}</button>`;
+  }).join('') || '<div class="tl-menu-none">Nothing to choose</div>'}</div>`, pop => {
+    pop.onclick = ev => {
+      const k = MEET_FILTERS.find(([f]) => f === eventElement(ev)?.closest<HTMLElement>('[data-meet-field]')?.dataset.meetField)?.[0];
+      if (k) meetValueMenu(state, k, anchor, true);
+    };
+  }, toggle);
+}
+// One field's values, one of which is in force; `back` steps back to the fields (from the filter icon, not from a chip).
+function meetValueMenu(state: MeetState, k: MeetFilterKey, anchor: HTMLElement | null, back: boolean): void {
+  const name = MEET_FILTERS.find(([f]) => f === k)?.[1] || k, cur = state[k] || meetFilterOff(k), opts = meetFilterValues(state, k);
+  tasksMenu(state, anchor, `<div class="tl-menu" role="group" aria-label="${esc(name)}">
+    ${back ? `<button type="button" role="menuitem" class="tl-mi meet-mi-back" data-meet-back><span class="meet-back-chev" aria-hidden="true">${TL_ICON.chev}</span>${esc(name)}</button><div class="tl-menu-sep" role="separator"></div>`
+      : `<div class="tl-menu-h" aria-hidden="true">${esc(name)}</div>`}
+    ${opts.length > 8 ? `<input type="search" class="tl-menu-q" placeholder="Find" aria-label="Find ${esc(name.toLowerCase())}" autocomplete="off" spellcheck="false">` : ''}
+    <div class="tl-menu-list">${opts.map(([v, label]) => `<label class="tl-opt" data-label="${esc(label.toLowerCase())}"><input type="radio" name="meet-${k}" value="${esc(v)}"${v === cur ? ' checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div>
+  </div>`, pop => {
+    const q = pop.querySelector<HTMLInputElement>('.tl-menu-q');
+    if (q) q.oninput = () => { for (const o of pop.querySelectorAll<HTMLElement>('.tl-opt')) o.hidden = !(o.dataset.label || '').includes(q.value.trim().toLowerCase()); };
+    pop.onclick = ev => { if (eventElement(ev)?.closest('[data-meet-back]')) meetFieldMenu(state, anchor, false); };
+    pop.onchange = () => {
+      const picked = pop.querySelector<HTMLInputElement>(`input[name="meet-${k}"]:checked`)?.value ?? meetFilterOff(k);
+      state[k] = picked;
+      state.selected = meetVisible(state)[0]?.id || '';
+      meetList(state);
+      pop.hidePopover();
+    };
+  }, !back);
+}
+// The badge on the icon, the chips under the header and "N of M" while a filter narrows the list.
+function meetFilterPaint(state: MeetState): void {
+  const on = MEET_FILTERS.filter(([k]) => meetFilterWord(state, k));
+  const chips = $('#notes-chips'), bar = $('#notes-filters'), badge = $('#notes-filter .tl-fbadge');
+  if (!chips || !bar) return;
+  chips.innerHTML = on.map(([k, name]) => `<span class="tl-chip" data-chip="${k}"><button type="button" class="tl-chip-main" data-chip-edit="${k}" aria-haspopup="true" title="${esc(`${name}: ${meetFilterWord(state, k)}`)}"><span class="k">${esc(name)}</span><span class="v">${esc(meetFilterWord(state, k))}</span></button><button type="button" class="tl-chip-x" data-chip-drop="${k}" aria-label="Remove ${esc(name)}">${TL_ICON.x}</button></span>`).join('');
+  bar.hidden = !on.length;
+  const shown = meetVisible(state).length, count = $('#notes-count');
+  if (count) count.textContent = on.length ? `${shown} of ${state.list.length}` : '';
+  if (badge) { badge.hidden = !on.length; badge.textContent = String(on.length); }
+  $('#notes-filter')?.setAttribute('aria-label', on.length ? `Filter, ${on.length} on` : 'Filter');
+}
+function meetFilterWire(state: MeetState): void {
+  const btn = $('#notes-filter'), pop = $('#task-filter-pop');
+  btn.onclick = () => meetFieldMenu(state, btn);
+  $('#notes-chips').onclick = (ev: MouseEvent) => {
+    const drop = eventElement(ev)?.closest<HTMLElement>('[data-chip-drop]'), edit = eventElement(ev)?.closest<HTMLElement>('[data-chip-edit]');
+    const k = MEET_FILTERS.find(([f]) => f === (drop?.dataset.chipDrop || edit?.dataset.chipEdit))?.[0];
+    if (!k) return;
+    if (drop) { state[k] = meetFilterOff(k); state.selected = meetVisible(state)[0]?.id || ''; meetList(state); btn.focus(); }
+    else meetValueMenu(state, k, edit || null, false);
+  };
+  pop.addEventListener('keydown', tasksMenuKeys);
+  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
+    btn.setAttribute('aria-expanded', String(ev.newState === 'open' && state.menuAnchor === btn));
+    if (ev.newState !== 'closed') return;
+    // Focus goes back to what opened the menu (the icon, or the icon when its chip went away).
+    const anchor = state.menuAnchor?.isConnected ? state.menuAnchor : btn; state.menuAnchor = null;
+    if (pop.contains(document.activeElement) || document.activeElement === document.body) anchor.focus();
+  });
 }
 // A meeting opens in its own resizable window showing only that meeting (`&window=1`): the
 // desktop app makes a real window (app/src/main.rs, openWindow), a browser a pop-up. Phones, a
@@ -541,6 +618,9 @@ function meetOneLine(text: unknown): string {
   const line = m ? m[0] : s;
   return line.length > 140 ? line.slice(0, 137).replace(/\s+\S*$/, '') + '…' : line;
 }
+// A row's own action: a quiet icon button (the row is a title and marks; Add notes is the view's one filled button).
+const meetRowAct = (action: string, id: string, icon: string, label: string, tip = label, extra = '') =>
+  `<button class="mp-icon meet-act" type="button" data-review-action="${action}" data-id="${esc(id)}"${extra} aria-label="${esc(label)}" title="${esc(tip)}">${meetIcon(icon)}</button>`;
 // The top of an open meeting: every task it turned into, each a link. The bot's progress is the Outcome below.
 function meetList(state: MeetState): void {
   const el: HTMLElement | null = $('#notes-rows'); if (!el) return;
@@ -548,16 +628,14 @@ function meetList(state: MeetState): void {
   const filtered = meetFiltersOn(state);
   state.loaded = true;
   state.empty = state.review === 'live' && !state.list.length && !filtered && !state.query;
-  const bar = $('#notes-filters'); if (bar) bar.hidden = !(state.list.length || filtered);
-  const count = $('#notes-count');
-  if (count) count.textContent = state.list.length ? (list.length === state.list.length ? `${list.length} total` : `${list.length} of ${state.list.length}`) : '';
+  meetFilterPaint(state);
   patchLiveHTML(el, list.length ? `<ul class="meet-list">${list.map(r => {
       const when = meetWhen(r.started || r.created), working = meetWorking(r), proposed = meetProposed(r);
       const meta = [when ? `<span>${esc(when)}</span>` : '', r.duration_ms ? `<span>${esc(mmss(r.duration_ms))}</span>` : '', meetWhoHTML(r)].filter(Boolean).join('');
       const fail = /fail/.test(meetPill(r)) ? meetPill(r) : '';
       return `<li class="meet-row review-${state.review}" data-note-row="${esc(r.id)}" title="${esc(meetSourceLabel(r.source))}">${state.review === 'pending' ? `<input type="checkbox" data-review-check="${esc(r.id)}" aria-label="Select ${esc(noteTitle(r))}"${state.checked.has(r.id) ? ' checked' : ''}>` : ''}${meetLogo(r.source || 'tico', 30)}
         <div class="meet-main"><button class="note-title" type="button" data-rec="${esc(r.id)}">${esc(noteTitle(r))}</button><div class="meet-meta">${meta}</div></div>
-        <div class="meet-side">${state.review === 'pending' ? `<button class="primary small" type="button" data-review-action="approve" data-send="auto" data-id="${esc(r.id)}" title="Share, then send to ${esc(assistantName())} to file its tasks">Share & send</button><button class="ghost small" type="button" data-review-action="dismiss" data-id="${esc(r.id)}">Dismiss</button>` : state.review === 'dismissed' ? `<button class="ghost small" type="button" data-review-action="restore" data-id="${esc(r.id)}">Restore</button>` : ''}${fail}${working ? `<span class="meet-state" title="${esc(working.bot)}">${working.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : ''}${esc(working.word)}${working.bot ? ` <span class="muted">· ${esc(working.bot)}</span>` : ''}</span>` : ''}${meetMadeChips(r)}${proposed && state.review === 'live' && !working && !meetMade(r).length ? `<span class="meet-proposed muted">${proposed} proposed</span>` : ''}</div></li>`;
+        <div class="meet-side">${state.review === 'pending' ? meetRowAct('approve', r.id, 'forward_to_inbox', 'Share & send', `Share, then send to ${assistantName()} to file its tasks`, ' data-send="auto"') + meetRowAct('dismiss', r.id, 'archive', 'Dismiss') : state.review === 'dismissed' ? meetRowAct('restore', r.id, 'unarchive', 'Restore') : ''}${fail}${working ? `<span class="meet-state" title="${esc(working.bot)}">${working.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : ''}${esc(working.word)}${working.bot ? ` <span class="muted">· ${esc(working.bot)}</span>` : ''}</span>` : ''}${meetMadeChips(r)}${proposed && state.review === 'live' && !working && !meetMade(r).length ? `<span class="meet-proposed muted">${proposed} proposed</span>` : ''}</div></li>`;
     }).join('')}</ul>`
     : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
   el.querySelectorAll<HTMLElement>('[data-note-row]').forEach(b => b.onclick = event => {
@@ -832,7 +910,7 @@ function meetNotesOpen(state: MeetState): void {
   const now = new Date(), pad = (n: number) => String(n).padStart(2, '0');
   const local = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
   dialog.innerHTML = `<form class="import-form" id="manual-form">
-      <header><h2>Add notes</h2><button class="ghost" type="button" id="manual-close" aria-label="Close">✕</button></header>
+      <header><h2>Add notes</h2><button class="ghost" type="button" id="manual-close" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <div class="import-grid">
         <label>Title <input type="text" id="manual-title" maxlength="300" autocomplete="off"></label>
         <label>Date and time <input type="datetime-local" id="manual-when" value="${local}"></label>
@@ -855,8 +933,8 @@ function meetNotesOpen(state: MeetState): void {
       </div>
       <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('')}</select></label>
       <label class="import-private"><input type="checkbox" id="manual-private"> Private: participants, its owner and the team owner only</label>
-      <div class="row"><button class="primary" type="submit" id="manual-go">Add notes</button>
-        <button class="ghost" type="button" id="manual-cancel">Cancel</button><span class="muted" id="manual-msg" role="status"></span></div>
+      <div class="row"><span class="muted" id="manual-msg" role="status"></span><span class="spacer"></span>
+        <button class="ghost" type="button" id="manual-cancel">Cancel</button><button class="primary" type="submit" id="manual-go">Add notes</button></div>
     </form>`;
   const q = (sel: string) => dialog.querySelector(sel), close = () => dialog.close();
   q('#manual-close').onclick = close; q('#manual-cancel').onclick = close;
@@ -905,7 +983,6 @@ function meetNotesOpen(state: MeetState): void {
       if (MEET !== state) return;
       state.filter = 'all'; state.person = ''; state.source = ''; state.when = 'all'; state.query = '';
       const search = $('#notes-search'); if (search) search.value = '';
-      ['#notes-status', '#notes-when', '#notes-person', '#notes-source'].forEach(id => { const el = $(id); if (el) el.selectedIndex = 0; });
       state.selected = r?.id || '';
       await meetLoad(state, true);
       if (MEET === state && state.selected) { meetShow(state, true); meetDetail(state, state.selected); }
@@ -1238,7 +1315,8 @@ function meetPendingRender(state: MeetState, rec: MeetRec, data: MeetItems): voi
       }
       const closed = draft.closed!;
       const text = [closed.text, ...Object.values(closed.detail || {})].filter(Boolean).join('\n\n');
-      node.innerHTML = `<div class="mp-sub">${esc(item.status === 'pushed' ? 'Sent by ' : 'Dismissed by ')}${esc(meetAuthor(item.updated_by))}</div><pre class="selectable"></pre><div class="mp-form-row"><span class="grow"></span><button type="button" class="ghost" data-copy>Copy</button><button type="button" class="ghost" data-close>Close</button></div>`;
+      // A notice of what someone else did with the draft: read once, then put away with ✕ (or Copy, which takes the text).
+      node.innerHTML = `<div class="mp-closed-head"><div class="mp-sub">${esc(item.status === 'pushed' ? 'Sent by ' : 'Dismissed by ')}${esc(meetAuthor(item.updated_by))}</div><button type="button" class="mp-icon" data-close aria-label="Close" title="Close">${meetIcon('close')}</button></div><pre class="selectable"></pre><div class="mp-form-row"><span class="grow"></span><button type="button" class="ghost" data-copy>Copy</button></div>`;
       node.querySelector('pre').textContent = text;
       const close = () => { draft.closedAcknowledged = true; draft.closed = null; draft.patch = {}; draft.dirty = {}; node.remove(); panel.hidden = !list.children.length; };
       node.querySelector('[data-copy]').onclick = async () => { try { await copyText(text); close(); } catch (e) { toast(errorMessage(e, ''), true); } };

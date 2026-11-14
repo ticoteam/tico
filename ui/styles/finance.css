@@ -3,9 +3,13 @@
    by depth, shade projected columns and set totals apart; list tables (cards, transactions, sources, access) are
    plain rows. */
 
-#main.finance-layout .fin-head{flex-wrap:wrap}
-.fin-as{display:inline-flex;align-items:center;gap:4px;height:var(--ctl-sm);padding:0 4px 0 10px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm);font-weight:600;white-space:nowrap}
-.fin-as button{height:22px;min-width:22px;padding:0 4px;border:0;color:inherit}
+/* Viewing as a teammate: one line under the header, the page's state, with ✕ to stop. */
+#fin-as:empty{display:none}
+.fin-as{display:flex;align-items:center;gap:6px;width:max-content;max-width:100%;box-sizing:border-box;margin:0 0 12px;padding:2px 4px 2px 10px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm);font-weight:600}
+.fin-as span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fin-as button{position:relative;flex:none;height:22px;min-height:0;min-width:22px;padding:0 4px;border:0;color:inherit}
+/* The header's add menu (finAddMenu): under its quiet +, its right edge on the +'s. */
+.fin-head-pop .fin-menu{top:calc(100% + 4px)}
 .fin-body{min-width:0}
 
 .fin-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px}
@@ -46,6 +50,7 @@
 /* The table and its rail. */
 .fin-split{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:0;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);overflow:hidden}
 .fin-main{min-width:0;padding:4px 12px 12px}
+.fin-split .fin-scroll{--fin-scroll-bg:var(--surface)}
 .fin-rail{min-width:0;padding:14px 16px;border-left:1px solid var(--line);background:var(--bg);font-size:var(--t-sm)}
 .fin-rail:empty{display:none}
 .fin-split:has(.fin-rail:empty){grid-template-columns:minmax(0,1fr)}
@@ -84,7 +89,13 @@
 .fin-crumbs h2{margin:0;font-size:var(--t-lg);font-weight:600}
 
 /* Tables: dense, numbers right-aligned in tabular figures. */
-.fin-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* A table wider than its box scrolls inside it and ends at the rail; a soft shade at an edge says there is more that way
+   (the covers scroll with the table, the shades stay with the box, so a shade shows only while columns hide past it). */
+.fin-scroll{--fin-scroll-bg:var(--bg);overflow-x:auto;-webkit-overflow-scrolling:touch;
+  background:linear-gradient(to right,var(--fin-scroll-bg) 40%,transparent) left center/28px 100% no-repeat local,
+    linear-gradient(to left,var(--fin-scroll-bg) 40%,transparent) right center/28px 100% no-repeat local,
+    linear-gradient(to right,color-mix(in srgb,var(--ink) 14%,transparent),transparent) left center/12px 100% no-repeat scroll,
+    linear-gradient(to left,color-mix(in srgb,var(--ink) 14%,transparent),transparent) right center/12px 100% no-repeat scroll}
 .fin-pl,.fin-bs,.fin-t{font-size:12.5px}
 .fin-pl th,.fin-bs th,.fin-t th{padding:8px 10px 6px 0}
 .fin-pl td,.fin-bs td,.fin-t td{padding:5px 10px 5px 0;vertical-align:middle;line-height:1.35}
@@ -128,13 +139,12 @@
 .fin-link:focus-visible{outline:var(--focus-ring);outline-offset:2px}
 .fin-nowrap{white-space:nowrap}
 .fin-cell-sel{max-width:130px;height:22px;padding:0 2px;font:inherit;font-size:var(--t-sm)}
-.fin-tx-t .fin-link{display:inline-block;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+.fin-tx-t .fin-link{display:inline-block;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
 .fin-tx-t td{white-space:nowrap}
-@media (max-width:640px){.fin-card-t :is(th,td):is(:nth-child(2),:nth-child(3)){display:none}}
-.fin-tx-t td.fin-cut{max-width:130px;overflow:hidden;text-overflow:ellipsis}
-/* With the rail open, every column fits at 1440, Status included. */
-.fin-split:not(:has(.fin-rail:empty)) .fin-tx-t .fin-link{max-width:140px}
-.fin-split:not(:has(.fin-rail:empty)) .fin-tx-t td.fin-cut{max-width:90px}
+.fin-tx-t td.fin-cut{max-width:160px;overflow:hidden;text-overflow:ellipsis}
+/* With the rail open, every column fits at 1440: the columns no row fills are left out (finTrim), so a name has room. */
+.fin-split:not(:has(.fin-rail:empty)) .fin-tx-t .fin-link{max-width:200px}
+.fin-split:not(:has(.fin-rail:empty)) .fin-tx-t td.fin-cut{max-width:130px}
 .fin-tx-t td:has(.fin-cell-sel){padding-top:2px;padding-bottom:2px}
 .fin-in{width:84px;height:26px;padding:0 6px;text-align:right;font:inherit;font-variant-numeric:tabular-nums}
 .fin-grp td{padding-top:10px;font-weight:600}
@@ -157,10 +167,9 @@
 .fin-acc-t td{white-space:normal}
 .fin-acc-t td:first-child{white-space:nowrap}
 .fin-acc-t .fin-grp td{color:var(--muted);font-size:var(--t-sm)}
-.fin-s{display:inline-block;padding:1px 8px;border-radius:999px;font-size:var(--t-xs);font-weight:600;white-space:nowrap;background:var(--idle-bg);color:var(--muted)}
-.fin-s.all{background:var(--ok-bg);color:var(--ok)}
-.fin-s.mgr{background:var(--run-bg);color:var(--run)}
-.fin-s.own{background:var(--surface2);color:var(--ink)}
+/* What a teammate sees by default: a plain word in every row, not a coloured chip (style guide pills); Nothing is muted. */
+.fin-s{white-space:nowrap;color:var(--ink)}
+.fin-s.none{color:var(--muted)}
 
 /* Dialogs and rail forms. */
 .fin-dlg{width:min(420px,calc(100vw - 32px))}
@@ -178,25 +187,10 @@
   .fin-split{grid-template-columns:minmax(0,1fr)}
   .fin-rail{border-left:0;border-top:1px solid var(--line)}
 }
-@media (max-width:640px){
-  .fin-bar>button,.fin-bar select,.fin-bar input,.fin-pop-at>button,.fin-search{height:40px}
+@media (max-width:760px){
+  /* 44px controls come from the shared floor (tokens.css --ctl, base.css); a phone's fields are 16px so iOS does not zoom. */
   .fin-bar input,.fin-form input,.fin-form select,.fin-search input,.fin-in,.fin-cell-in,.fin-cell-sel{font-size:16px}
-  .fin-cell-sel{height:40px}
-  /* A phone's fields are 16px (layout.css, so iOS does not zoom); the P&L's Compare shows its choice at the bar's size
-     over its select, which stays 16px and takes the taps. */
-  .fin-sel{position:relative;display:inline-flex;align-items:center;height:40px;padding:0 26px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font-size:var(--t-sm)}
-  .fin-sel::after{content:'';position:absolute;right:10px;top:50%;width:6px;height:6px;margin-top:-5px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
-  .fin-sel-v{display:inline}
-  .fin-sel select{position:absolute;inset:0;width:100%;height:100%;opacity:0}
-  .fin-form input,.fin-form select{height:40px}
   .fin-seg{height:auto}
-  .fin-seg button{min-height:40px;padding:6px 10px}
-  /* Names and group rows in a table: the row's height stays the text's on a computer, 40px under a thumb. */
-  .fin-t .fin-link,.fin-ln td:first-child a{display:inline-flex;align-items:center;min-height:40px}
-  .fin-acts button,.fin-foot button,.fin-doc-email button{min-height:40px}
-  #main.finance-layout .fin-head .tabs a{display:inline-flex;align-items:center;min-height:40px}
-  a.fin-src{position:relative}
-  a.fin-src::after{content:'';position:absolute;inset:-12px -6px}   /* the pill stays its size in the row; the tap area doesn't */
   .fin-search{max-width:none;flex-basis:100%}
   .fin-main{padding:4px 8px 10px}
   .fin-pl td:first-child,.fin-pl th:first-child{min-width:140px}
@@ -205,6 +199,32 @@
   .fin-tree-col{display:none}
   .fin-filter-pop{display:inline-flex}
 }
+/* A list table on a phone (.fin-rows): each row is a title line, then its facts, so nothing is cut and nothing scrolls
+   sideways. The title is the first cell (or the one marked .fin-tt), a figure marked .fin-amt sits at the title line's
+   right, and every other cell follows as a muted fact, named by its column (data-k) where the value alone would not say
+   what it is. An empty cell takes no room. */
+@media (max-width:760px){
+  .fin-rows,.fin-rows tbody{display:block}
+  .fin-rows thead{display:none}
+  .fin-rows tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:10px 4px;border-bottom:1px solid var(--line)}
+  .fin-rows tr:last-child{border-bottom:0}
+  .fin-rows tr::before{content:'';order:1;flex-basis:100%;height:0}
+  .fin-rows td{display:block;order:2;min-width:0;margin:0;padding:0;border:0;white-space:normal;color:var(--muted);font-size:var(--t-sm);line-height:var(--lh)}
+  .fin-rows:not(.fin-rows-tt) td:first-child,.fin-rows td.fin-tt{order:0;flex:1 1 0;color:var(--ink);font-size:var(--t-md);overflow-wrap:anywhere}
+  .fin-rows td.fin-amt{order:0;flex:none;margin-left:auto;color:var(--ink);font-size:var(--t-md);text-align:right}
+  .fin-rows td:empty{display:none}
+  .fin-rows td[data-k]::before{content:attr(data-k) ' '}
+  #fin-body .fin-rows :is(.fin-link,td.fin-cut){max-width:none;overflow:visible;white-space:normal;text-align:left}
+  /* a group or section row is a heading line of its own */
+  .fin-rows tr:is(.fin-grp,.fin-sec)::before,.fin-rows tr:is(.fin-subt,.fin-tot)::before{display:none}
+  .fin-rows tr.fin-grp td,.fin-rows tr.fin-sec td{color:var(--muted)}
+  .fin-rows tr:is(.fin-subt,.fin-tot) td{color:var(--ink);font-weight:600}
+  .fin-rows .fin-bar-m{width:64px}
+  /* the picked row and the row under the finger are marked whole, not cell by cell */
+  .fin-rows tr td,.fin-rows tr:hover td,.fin-rows tr.fin-on td{background:none}
+  .fin-rows tr.fin-on{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+  .fin-rows .fin-link{min-height:0}
+}
 .fin-chips{display:contents}
 .fin-kv select{width:auto;max-width:200px;min-height:0;padding:2px 6px}
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
@@ -212,7 +232,6 @@
 
 /* Payables and Receivables (ui/app/finance-docs.ts): plain rows, a rail with the document and its decisions. */
 .fin-t tbody tr[data-fin-doc]:hover td{background:var(--surface2)}
-.fin-doc-email:empty{display:none}
 .fin-copy{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fin-copy .nav-icon{font-size:14px;width:14px;height:14px;color:var(--muted)}
 .fin-acts{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;margin-top:14px}
@@ -230,7 +249,6 @@
 .fin-menu>button:hover,.fin-menu>a:hover{background:var(--surface2)}
 .fin-menu hr{width:100%;margin:4px 0;border:0;border-top:1px solid var(--line)}
 @media (max-width:640px){
-  .fin-doc-email{flex-basis:100%;order:9}
   .fin-menu{left:16px;right:16px}
   .fin-jl{grid-template-columns:minmax(0,1fr) 72px 72px}
 }
@@ -295,20 +313,27 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
   .fin-share-row{grid-template-columns:minmax(0,1fr) 76px 36px}
 }
 
-/* What changed: the briefing at the top of Finance (ui/app/finance-brief.ts). Short lines; the block is absent when empty. */
-.fin-brief{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line, #e5e5e5);border-radius:10px}
+/* What changed: the briefing at the top of the P&L (ui/app/finance-brief.ts). Short lines; the block is absent when empty. */
+.fin-brief{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius)}
 .fin-brief-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.fin-brief-head h2{margin:0;font-size:15px}
-.fin-brief-at{font-size:12px}
-.fin-brief-lines{margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5}
+.fin-brief-head h2{margin:0;font-size:var(--t-card);font-weight:600}
+.fin-brief-at{font-size:var(--t-sm)}
+.fin-brief-lines{margin:6px 0 0;padding-left:18px;font-size:var(--t-md);line-height:1.5}
 .fin-brief-lines li{overflow-wrap:anywhere}
 /* Receipts above the Transactions list (finance-receipts.ts): one stacked row per receipt at phone width. */
 .fin-receipts{margin:0 0 12px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-ctl)}
-.fin-receipts-h{margin:0 0 4px;font-size:14px}
+.fin-receipts-h{margin:0 0 4px;font-size:var(--t-md)}
+.fin-rc-state:not(.pill){color:var(--muted);font-size:var(--t-sm)}
 .fin-receipt-list{list-style:none;margin:0;padding:0}
 .fin-receipt{padding:8px 0;border-top:1px solid var(--line)}
 .fin-receipt:first-child{border-top:0}
 .fin-receipt-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .fin-receipt-head strong{overflow-wrap:anywhere;min-width:0}
 .fin-receipt-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
-.fin-receipt-acts button{min-height:36px}
+/* A destructive item, last in a menu after its separator, is red (style guide "Menu"); so is a confirm's Delete. */
+.fin-menu>button.danger,.fin-confirm button.danger{color:var(--fail)}
+/* A row's ⋯ (Attribution rules): a quiet square the row's height, its 44px on a phone from the shared floor. */
+.fin-row-more{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;color:var(--muted)}
+.fin-row-more .nav-icon{font-size:18px}
+.fin-row-more:hover,.fin-row-more[aria-expanded=true]{color:var(--ink);background:var(--surface2)}
+@media (max-width:760px){.fin-row-more{width:44px;height:44px}}

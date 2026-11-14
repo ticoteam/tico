@@ -99,14 +99,14 @@ function pageOverviewFactories(): void {
   let period = ofPeriodRead();
   const may = ofMayMakeFactory();
   main.innerHTML = `<section class="overview-page of-page" aria-label="Factories">
-    <div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('factories')}<span class="spacer"></span>
-      <div class="og-seg" role="group" aria-label="Period" id="of-period">${OF_PERIODS.map(([p, l]) =>
-        `<button type="button" data-of-period="${p}" aria-pressed="${p === period}">${l}</button>`).join('')}</div>
-      ${may ? '<button type="button" class="ghost of-new-b" id="of-new-b" aria-expanded="false" aria-controls="of-new">+ Factory</button>' : ''}</div>
+    ${dashCompanyHead('factories', {tools: `<div class="ph-seg of-period" role="group" aria-label="Period" id="of-period">${OF_PERIODS.map(([p, l]) =>
+        `<button type="button" data-of-period="${p}" aria-pressed="${p === period}">${l}</button>`).join('')}</div>`,
+      // Making a factory is rare: a quiet + (style guide "Top bars: one line").
+      add: may ? {label: 'New factory', attrs: 'id="of-new-b" aria-expanded="false" aria-controls="of-new"'} : undefined})}
     ${may ? `<form class="of-new" id="of-new" hidden>
       <label>Name <input name="name" required maxlength="80" autocomplete="off"></label>
       <label>Goal <input name="goal" maxlength="500" autocomplete="off"></label>
-      <div class="of-new-acts"><button type="button" class="ghost" data-of-new-cancel>Cancel</button><button type="submit">Save</button></div>
+      <div class="of-new-acts"><button type="button" class="ghost" data-of-new-cancel>Cancel</button><button type="submit" class="primary">Save</button></div>
       <p class="of-new-err muted" role="alert" hidden></p></form>` : ''}
     <div class="of-body" id="of-body">${skelRows(3, {dot: false})}</div></section>`;
   document.getElementById('of-period')?.addEventListener('click', ev => {

@@ -1,4 +1,4 @@
-/* ui/app/finance-brief.ts — What changed: the short Finance briefing at the top of the Finance page (plan step 4b). A few
+/* ui/app/finance-brief.ts — What changed: the short Finance briefing at the top of the P&L (plan step 4b). A few
    lines about the money the viewer may see (their budgets, their team's, cash and burn where they see the company), with
    the time those numbers last moved. Hidden when there are no lines. Read: GET /api/v2/finance/brief (view_as passes
    through like the other Finance reads). Nothing here writes.
@@ -9,10 +9,12 @@
 // The brief as GET /api/v2/finance/brief sends it: lines are already cut to the viewer.
 interface FinBriefRead { lines: string[]; as_of: string; changed_since?: string | null; version: number }
 
-// "9:40 AM": the time a brief's numbers last moved, in the viewer's clock.
+// "9:40 AM" for a time today, "Nov 12, 9:40 AM" for an earlier day (format.ts: month first, 12-hour), so a brief left
+// from another day never reads as today's.
 function finBriefTime(iso: string): string {
-  const when = new Date(iso);
-  return Number.isNaN(when.getTime()) ? '' : when.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  const when = dateOf(iso);
+  if (!when) return '';
+  return dayOffset(when) === 0 ? clockWords(when) : timeSaid(when);
 }
 
 // The block: a heading, the time, and the lines as a short list.

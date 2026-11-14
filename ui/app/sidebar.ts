@@ -860,6 +860,7 @@ function orgTopPerson(byParent: OrgByParent): OrgPersonNode | null | undefined {
 }
 function renderTree() {
   if (ORG_PENDING && !ORG_PENDING.sent) orgPendingApply(ORG_PENDING);   // a drop waiting for Move shows its new place
+  renderAccountFace();                                                    // the roster names the person: their picture
   ensureCollapsed();
   const byParent = sidebarTree();
   let needCounts: ReturnType<typeof needsMeCounts> | undefined;                                   // counted once per render, on first use
@@ -1016,9 +1017,9 @@ function renderTree() {
     renderTree();
   };
   document.querySelectorAll<HTMLElement>('[data-nav]').forEach(a => {
-    // More is current only for pages the bottom bar does not have its own button for.
+    // More is current only for pages the bottom bar does not have its own button for (Updates is in More).
     const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company's tabs, Graph included
-    const mobilePrimary = inOverview || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
+    const mobilePrimary = inOverview || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
       || S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE);
     const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
       (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||

@@ -8,8 +8,8 @@
 //    1200 px high, with 1, 6 or 200 messages; ten messages sent in a row leave it where it was; scrolling a board taller
 //    than the window moves neither the rail nor its box;
 //  - a task link in a message opens the task;
-//  - a pipeline with no manager, or a phone, has no chat icon and no rail; a phone's Ask bar opens the chat alone, its
-//    box in view.
+//  - a pipeline with no manager has no chat icon and no rail; a phone has no rail, and the header's face (its chat mark)
+//    opens the chat alone, its box in view.
 // Run: node scripts/ui-tests.cts pipeline-rail
 import type {Browser, Page, Route} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -110,7 +110,7 @@ function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
       assert.equal(await icon.locator('path[d^="M2.5 3.5h9v6"]').count(), 0, 'no generic chat bubble');
       assert.equal(await icon.getAttribute('aria-label'), 'Chat with PM');
       const faceBox = await box(page, '#task-manager > *');
-      assert.ok(Math.abs(faceBox.w - 20) < 1, `a 20 px face: ${JSON.stringify(faceBox)}`);
+      assert.ok(Math.abs(faceBox.w - 22) < 1, `a 22 px face (avatars are 16, 22, 28 or 36): ${JSON.stringify(faceBox)}`);
 
       // Opened: a column at the right, the full height beside the stages.
       await icon.click();
@@ -285,13 +285,14 @@ function assertPlaced(p: Awaited<ReturnType<typeof placed>>, where: string) {
       await page.close();
     }
     {
-      // A phone: no rail; the floating face opens the manager's chat alone, its box in view.
+      // A phone: no rail; the header's face (the page's chat mark) opens the manager's chat alone, its box in view.
       const c = chat(200);
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, needs: [], hash: '#/tasks?pipeline=product', beforeGoto: c.route});
-      assert.equal(await page.locator('#task-manager').isVisible(), false, 'a phone has no chat icon');
-      assert.equal((await box(page, '#task-rail')).hidden, true, 'nor a rail');
       await page.locator('#task-body .pv-tab[data-pv-tab="spec"]').click();
-      await page.locator('#task-ask .pa-fab').click();
+      assert.equal(await page.locator('#task-manager').isVisible(), true, 'a phone has the face in its header');
+      assert.equal(await page.locator('#task-manager').getAttribute('aria-pressed'), null, 'it opens a chat, not a rail');
+      await page.locator('#task-manager').click();
+      assert.equal((await box(page, '#task-rail')).hidden, true, 'no rail');
       // With more than one bot on the board the face opens a menu: the manager is first.
       const pick = page.locator('#task-ask .pa-pop:not([hidden]) .pa-pick').first();
       if (await pick.isVisible()) await pick.click();

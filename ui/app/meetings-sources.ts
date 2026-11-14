@@ -110,7 +110,7 @@ function meetSourcesPaint(state: MeetSourcesState, focus?: string) {
   const was = dialog.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
   const keep = was && {act: was.dataset.act, src: was.closest<HTMLElement>('[data-src]')?.dataset.src};
   const {on, off} = meetSourceItems(state);
-  dialog.innerHTML = `<header class="mg-dhead"><h2>Sources</h2><button type="button" class="ghost" data-act="close-panel" aria-label="Close">✕</button></header>
+  dialog.innerHTML = `<header class="mg-dhead"><h2>Sources</h2><button type="button" class="ghost" data-act="close-panel" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     ${on.length ? `<ul class="msrc-list" aria-label="Connected">${on.map(i => meetSourceRowHTML(i, true)).join('')}</ul>` : ''}
     ${off.length ? `<ul class="msrc-list" aria-label="Not connected">${off.map(i => meetSourceRowHTML(i, false)).join('')}</ul>` : ''}`;
   dialog.querySelectorAll<MsrcControl>('[data-act]').forEach(el => {

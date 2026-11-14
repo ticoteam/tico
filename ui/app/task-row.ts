@@ -65,9 +65,13 @@ const taskHolder = (t: TaskAny | null | undefined): string | null => {
   const who = t?.turn?.who;
   return who && /^(bot|human):/.test(who) ? who : t?.owner_id || null;
 };
-const shortDate = (iso: string | null | undefined) => {
-  const at = Date.parse(iso || '');
-  return at ? new Date(at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) : '';
+/** A day, in the shared words (format.ts dayWords): "Today", "Tomorrow", "Nov 18". '' for none. */
+const shortDate = (iso: string | null | undefined): string => iso ? dayWords(iso) : '';
+/** When a finished task finished, as a row's age (format.ts ago): "now", "35m", "3h", then the day ("Nov 13"). */
+const taskFinishedAge = (t: TaskAny): string => {
+  const at = (t as {done_at?: string | null; closed_at?: string | null}).done_at || (t as {closed_at?: string | null}).closed_at
+    || ('updated_at' in t ? t.updated_at : null);
+  return at ? ago(at) : '';
 };
 
 type TaskRowLook = 'list' | 'you' | 'archive';
@@ -89,7 +93,8 @@ function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''
   const line = taskLine(t);
   const tip = esc([taskHolder(t) ? actorLabel(taskHolder(t)) : '', line].filter(Boolean).join(' · '));
   if (look === 'archive' || t.status !== 'open' || ('snoozed' in t && t.snoozed && look !== 'you')) {
-    const when = t.status === 'open' ? shortDate(('snooze' in t ? t.snooze?.until : null) || t.turn?.until) : shortDate('updated_at' in t ? t.updated_at : null);
+    // A snoozed one shows the day it wakes; a finished one how long ago it finished, as an open row shows its age.
+    const when = t.status === 'open' ? shortDate(('snooze' in t ? t.snooze?.until : null) || t.turn?.until) : taskFinishedAge(t);
     return `<div class="tk-row tk-row-dim" data-task="${id}" role="button" tabindex="0">`
       + `<span class="tk-title">${title}</span><span class="tk-age">${esc(when)}</span></div>`;
   }
@@ -98,7 +103,7 @@ function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''
     + (look === 'you' ? '' : taskMarkHTML(t))
     + `<span class="tk-title">${title}</span>${lateTagHTML(t)}${blocksTagHTML(t)}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
-    + `<span class="tk-who">${holder ? actorFace(holder, 18) : ''}</span>`
+    + `<span class="tk-who">${holder ? actorFace(holder, 16) : ''}</span>`
     + (tail || `<span class="tk-age">${esc(taskAge(t))}</span>`) + '</div>';
 }
 /** A task in a column (S7; task #220): the title on up to two lines, then a meta line with who asked (face and name),

@@ -411,6 +411,9 @@ def plan(
         raise Problem(
             "validation", f"{e.name} is a file you upload in Settings: open {link}", 422, extra={"link": link}
         )
+    if e.route.startswith("browser/"):
+        # Kept by each browser, not the server (the theme): there is no route to plan a request for.
+        raise Problem("validation", f"{e.name} is kept by each browser: open {link}", 422, extra={"link": link})
     parsed = parse(e, value)
     body = dict(e.extra)
     if e.field:

@@ -216,7 +216,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       return calls[0]!.body.task_model;
     };
     assert.deepEqual(await savePart('compact', '600000'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 600000});
-    assert.equal(await mark.innerText(), 'Tasks · 600k');
+    assert.equal(await mark.innerText(), 'Tasks: Haiku 5.5 600K', 'a task model shows by name, with its window');
     await capture('desktop-task-row', page.locator('#settings-bots-list'));
     assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['low', 'high'], "the task model's efforts; no Same as bot while it runs them");
     assert.deepEqual(await savePart(effortPick, 'low'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000});
@@ -292,7 +292,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     const width = await row.evaluate(tr => tr.getBoundingClientRect().width);
     assert.ok(width <= 390, `the row fits the phone (${width}px)`);
     const parts = await row.locator('.sb-task-part').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return [r.left, r.right] as const; }));
-    assert.ok(parts.length === 2 && parts.every(([l, r]) => l >= 0 && r <= 390), `Task effort and Fallback fit the phone: ${JSON.stringify(parts)}`);
+    assert.ok(parts.length === 3 && parts.every(([l, r]) => l >= 0 && r <= 390), `Task model, Task effort and Fallback fit the phone: ${JSON.stringify(parts)}`);
     await capture('phone-task-row', row);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
 

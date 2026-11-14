@@ -17,6 +17,7 @@ const CATALOG: (Hit & {words: string})[] = [
   {key: 'team.tokens', name: 'API tokens', where: 'Settings > Computers > API tokens', who: 'admin', card: '#/settings/devices/settings-tokens', words: 'token key'},
   {key: 'team.models.defaults', name: 'Default model', where: 'Settings > Models > Defaults', who: 'anyone', card: '#/settings/models/settings-defaults', words: 'model idle default'},
   {key: 'nowhere', name: 'No card', where: 'Elsewhere', who: 'anyone', card: '', words: 'idle'},
+  {key: 'app.theme', name: 'Theme', where: 'Settings > General > App', who: 'self', card: '#/settings/general/settings-app', words: 'dark light system mode'},
 ];
 
 async function scenario(browser: import('playwright').Browser, role: 'owner' | 'member', width: number) {
@@ -55,19 +56,27 @@ async function scenario(browser: import('playwright').Browser, role: 'owner' | '
   try {
     await page.goto('https://tico-ui.test/#/settings/general');
     const box = page.locator('#settings-search-q'), hits = page.locator('#settings-search-hits');
-    await box.waitFor();
-    assert.ok(await box.evaluate(el => !!(el.compareDocumentPosition(document.getElementById('settings-tabs')!) & Node.DOCUMENT_POSITION_FOLLOWING)),
-      'the box sits above the tabs');
+    await box.waitFor({state: 'attached'});
+    await page.waitForTimeout(200);   // the header fits itself (tools may fold into ⋯) in the next frame
+    // The box is a tool in the one page header (pageHead), on the title's line: not a row of its own above the tabs.
+    assert.ok(await box.evaluate(el => !!el.closest('header.ph .ph-tools') && el.closest('header.ph') === document.getElementById('settings-tabs')!.closest('header.ph')),
+      'the box sits in the page header with the tabs');
     assert.equal(await hits.isHidden(), true, 'no list before any words');
+    // A narrow header folds its tools into ⋯: the search is reached there (opened first), and ⋯ closes after a pick.
+    const folded = await page.locator('header.ph > .ph-menu #settings-search-q').count() > 0;
+    if (width === 900) assert.equal(folded, true, 'a narrow computer folds the search into ⋯');
+    if (width < 761) assert.equal(folded, false, 'a phone keeps the search on the title line');
+    const menuOpen = () => page.locator('header.ph > .ph-menu').evaluate(m => m.matches(':popover-open')).catch(() => false);
+    const reach = async () => { if (folded && !(await menuOpen())) await page.locator('header.ph > .ph-more').click(); };
 
     // Matches by name only, best first as the catalogue sends them; a match with no card, or one this person may not
     // open, is not offered.
-    await box.fill('idle');
+    await reach(); await box.fill('idle');
     await hits.locator('a').first().waitFor();
     const names = await hits.locator('a').allInnerTexts();
     assert.deepEqual(names, ['Sleep when idle', 'Default model']);
     assert.equal(await hits.locator('a').first().getAttribute('title'), 'Settings > Computers > Sleep when idle');
-    await box.fill('token');
+    await reach(); await box.fill('token');
     await page.waitForFunction(() => document.querySelector('#settings-search-hits')?.textContent?.trim() !== 'Sleep when idleDefault model');
     if (role === 'owner') await hits.getByText('API tokens', {exact: true}).waitFor();
     else await hits.getByText('No settings found', {exact: true}).waitFor();
@@ -75,9 +84,9 @@ async function scenario(browser: import('playwright').Browser, role: 'owner' | '
     // An older, slower answer never replaces the newer one.
     let release!: () => void;
     hold = new Promise<void>(done => { release = done; });
-    await box.fill('slow');
+    await reach(); await box.fill('slow');
     await page.waitForTimeout(250);   // the box asks after a short pause in typing
-    await box.fill('model');
+    await reach(); await box.fill('model');
     await hits.getByText('Default model', {exact: true}).waitFor();
     release(); hold = null;
     await page.waitForTimeout(100);
@@ -89,28 +98,36 @@ async function scenario(browser: import('playwright').Browser, role: 'owner' | '
     assert.equal(await hits.isHidden(), true);
 
     // Arrows and Enter: the second match opens its tab, scrolled to the card.
-    await box.fill('idle');
+    await reach(); await box.fill('idle');
     await hits.locator('a').nth(1).waitFor();
     await box.press('ArrowDown'); await box.press('ArrowDown');
     assert.equal(await hits.locator('li.cur a').innerText(), 'Default model');
     await box.press('Enter');
     await page.waitForFunction(() => location.hash === '#/settings/models');
     await page.locator('#settings-models:not([hidden]) #settings-defaults').waitFor();
+    assert.equal(await menuOpen(), false, 'a pick by keyboard leaves ⋯ closed');
     assert.equal(await box.inputValue(), '', 'opening a match clears the search');
     assert.equal(await hits.isHidden(), true);
 
     // A click: a link the catalogue gives with the server's origin opens here, on General.
     if (role === 'owner') {
-      await box.fill('storage');
+      await reach(); await box.fill('storage');
       await hits.getByText('Storage', {exact: true}).click();
       await page.waitForFunction(() => location.hash === '#/settings/general');
       await page.locator('#settings-general:not([hidden]) #settings-storage').waitFor();
+      assert.equal(await menuOpen(), false, 'a pick by click leaves ⋯ closed');
       assert.equal(page.url().startsWith('https://tico-ui.test/'), true);
     } else {
-      await box.fill('sleep');
+      await reach(); await box.fill('sleep');
       await hits.getByText('Sleep when idle', {exact: true}).click();
       await page.waitForFunction(() => location.hash === '#/settings/devices');
     }
+    // Theme (moved from the header to General's App card) is found by its words and lands on its control.
+    await reach(); await box.fill('dark');
+    await hits.getByText('Theme', {exact: true}).click();
+    await page.waitForFunction(() => location.hash === '#/settings/general');
+    await page.waitForFunction(() => !!document.activeElement?.closest('#settings-app #settings-theme'));
+    assert.equal(await menuOpen(), false);
     assert.ok(asked.every(q => q.length > 0), 'no empty question is sent');
     const sideways = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     assert.equal(sideways, false, 'no sideways scroll');
@@ -123,6 +140,7 @@ async function scenario(browser: import('playwright').Browser, role: 'owner' | '
   try {
     await scenario(browser, 'owner', 1280);
     await scenario(browser, 'member', 390);
+    await scenario(browser, 'owner', 900);
   } finally { await browser.close(); }
   console.log('settings-search ok');
 })().catch(error => { console.error(error); process.exit(1); });

@@ -84,9 +84,9 @@ def test_vendor_scripts_are_sent_compressed_and_fonts_as_they_are(api):
     )
     plain = api.get("/vendor/marked.min.js", headers={**AUTH, "Accept-Encoding": "gzip;q=0"})
     assert plain.status_code == 200 and "content-encoding" not in plain.headers
-    # A font is compressed already: it goes as it is.
+    # A font is compressed already: it goes as it is (whichever text font the page preloads).
     font = re.search(
-        r'href="(/vendor/fonts/inter-variable\.woff2\?v=[0-9a-f]{12})"',
+        r'href="(/vendor/fonts/[a-z0-9-]+\.woff2\?v=[0-9a-f]{12})"',
         (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text(),
     ).group(1)
     assert "content-encoding" not in api.get(font, headers={**AUTH, "Accept-Encoding": "gzip"}).headers

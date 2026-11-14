@@ -83,7 +83,7 @@ window.mountDirectorySync = async function (host: Element | null, onChange?: () 
   const GUIDE = 'https://github.com/ticoteam/tico/blob/main/docs/people.md#';
   const ANCHOR: Record<string, string> = {google: 'google-workspace', entra: 'microsoft-entra-id', scim: 'scim-okta-microsoft-entra-provisioning-jumpcloud'};
   const last = view.last?.at
-    ? `Last sync ${text(new Date(view.last.at).toLocaleString())}: ${view.last.ok === false ? `failed, ${text(view.last.error)}` : view.last.held ? 'held for your confirmation' : 'ok'}`
+    ? `Last sync ${text(timeSaid(view.last.at))}: ${view.last.ok === false ? `failed, ${text(view.last.error)}` : view.last.held ? 'held for your confirmation' : 'ok'}`
     : 'Never synced';
   host.innerHTML = `
     <form data-ds-form class="ds-form">
@@ -104,7 +104,7 @@ window.mountDirectorySync = async function (host: Element | null, onChange?: () 
       <div data-ds-scim class="ds-stack" hidden>
         <div class="ds-row">Base URL <code>${text(view.scim.url)}</code></div>
         <div class="ds-row"><button class="ghost" type="button" data-ds-token>${view.scim.enabled ? 'Replace token' : 'Create token'}</button>
-          <span class="muted">${view.scim.enabled ? `Token created ${text(new Date(view.scim.created_at ?? '').toLocaleDateString())}` : ''}</span></div>
+          <span class="muted">${view.scim.enabled ? `Token created ${text(lowerDay(dayWords(view.scim.created_at ?? '')))}` : ''}</span></div>
         <p data-ds-token-out></p>
       </div>
       <div class="ds-row" data-ds-status-row><span class="muted" data-ds-last>${last}</span>

@@ -263,6 +263,12 @@ const boardLinks = async (page: Page) => {
   return page.locator('.dash-head [data-gr-board], #dash-grid a.grc-more').evaluateAll(els => els.map(el => [el.getAttribute('href') || '', (el as HTMLElement).checkVisibility()]));
 };
 const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').allInnerTexts();
+// A header control wherever the shared header put it: on its row, or in ⋯ (rarer actions, and a phone's folded tools).
+const headTool = async (page: Page, sel: string) => {
+  const item = page.locator('#main header.ph').locator(sel).first();
+  if (!(await item.isVisible())) await page.locator('#main header.ph > .ph-more').click();
+  await item.click();
+};
 // WCAG contrast of an element's text on its own background.
 const contrast = (loc: Locator) => loc.evaluate((el: Element) => {
   const rgb = (c: string) => { const ctx = document.createElement('canvas').getContext('2d')!; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3); };
@@ -285,27 +291,28 @@ async function shot(page: Page, name: string) {
       await page.locator('#dash-grid .grc-funnel').waitFor();
       assert.deepEqual(await headings(page), ['Funnel', 'New customers', 'CAC', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'], 'the default cards');
       assert.equal(await page.locator('#side a[data-nav="growth"].cur').count(), 1, 'Growth is current');
-      // The head: Growth, the North Star line, the month, the board, Settings; arranging comes from the grid.
+      // The head is the shared one-line header: Growth, the month and the board as tools, Settings and Edit in ⋯. The
+      // North Star is the Funnel's: its stage is marked, with the target, and opens its KPI.
       assert.equal(await page.locator('.dash-head h1').innerText(), 'Growth');
-      const ns = page.locator('.dash-head [data-gr-ns]');
-      assert.match(await ns.innerText(), /North Star\s+Activated\s+210/);
-      assert.match(await ns.innerText(), /Target 300/);
-      assert.equal(await ns.getAttribute('href'), '#/strategy/goals?kpi=k2');
+      assert.ok(!(await page.locator('#main header.ph').innerText()).includes('North Star'), 'nothing beside the title');
+      const ns = page.locator('#dash-grid .grc-st-ns');
+      assert.match(await ns.innerText(), /Activated[\s\S]*210[\s\S]*★ North Star · Target 300/);
+      assert.equal(await ns.locator('a').getAttribute('href'), '#/strategy/goals?kpi=k2');
       assert.equal(await page.locator('[data-gr-month]').inputValue(), '2026-10');
       assert.deepEqual(await page.locator('[data-gr-month] option').allInnerTexts(), ['Oct 2026', 'Sep 2026', 'Aug 2026', 'Jul 2026'], 'newest first');
       assert.deepEqual((await boardLinks(page))[0], [BOARD, true], 'the Growth board opens Growth Experiments');
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
       assert.equal(await page.locator('#gr-start').isVisible(), false, 'a set-up Growth has no Get started panel');
       assert.equal(await page.locator('#dash-grid .grs-fill').count(), 0);
-      assert.equal(await page.locator('.dash-actions').isVisible(), true);
-      assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
+      assert.equal(await page.locator('#main header.ph .ph-menu [data-dash-mode="edit"]').count(), 1, 'the owner arranges: Edit in ⋯');
+      assert.equal(await page.locator('#main header.ph .ph-menu [data-gr-settings]').count(), 1, 'Settings in ⋯');
       // Arranging is in edit mode: Edit shows the grips, menus and + Card / + Page; Done hides them.
       const editControls = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
       const shown = (sel: string) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
       assert.equal(await shown(editControls), 0, 'viewing shows no edit controls');
-      await page.locator('[data-dash-mode="edit"]').click();
+      await headTool(page, '[data-dash-mode="edit"]');
       assert.ok(await shown('[data-dash-grip]') > 0, 'Edit shows the grips');
-      assert.equal(await shown('[data-dash-add]'), 2, '+ Card and + Page');
+      assert.equal(await shown('[data-dash-add]'), 2, '+ Card and + Page (an owner pins pages too)');
       assert.equal(await shown('[data-dash-mode="edit"]'), 0);
       await page.locator('[data-dash-mode="done"]').click();
       assert.equal(await shown(editControls), 0, 'Done hides them');
@@ -317,7 +324,7 @@ async function shot(page: Page, name: string) {
       assert.match(await deltas.nth(0).getAttribute('class'), /gr-d-good/, 'more customers is good');
       assert.match(await deltas.nth(1).getAttribute('class'), /gr-d-good/, 'a lower CAC is good');
       assert.match(await deltas.nth(2).innerText(), /5 pts/, 'a share moves in points');
-      assert.match(await page.locator('#dash-grid .grc-num-d').nth(2).innerText(), /Sep 26/, 'carried back from September');
+      assert.match(await page.locator('#dash-grid .grc-num-d').nth(2).innerText(), /\bSep\b(?! \d)/, 'carried back from September (this year: the month alone)');
       assert.equal(await page.locator('#dash-grid .grc-num .gr-spark').count(), 3);
 
       // The Funnel: five stages, conversion, the North Star, the loop; a stage without a KPI says so.
@@ -336,7 +343,7 @@ async function shot(page: Page, name: string) {
       const rows = page.locator('#dash-grid .grc-ch tbody tr');
       assert.deepEqual(await rows.locator('th').allInnerTexts(), ['Search', 'Referrals']);
       assert.deepEqual(await rows.nth(0).locator('td.grc-n').allInnerTexts(), ['31', '$38', '3.2×']);
-      assert.equal(await rows.nth(1).locator('td.grc-n').nth(1).innerText(), '—', 'no CAC that month');
+      assert.equal(await rows.nth(1).locator('td.grc-n').nth(1).innerText(), '', 'no CAC that month: an empty cell');
       assert.match(await rows.nth(1).locator('td.grc-n').nth(2).getAttribute('class'), /grc-old/, 'LTV:CAC carried back');
       const chips = rows.nth(0).locator('a.grc-chip');
       assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.getAttribute('href'))), ['#/task/t1', '#/task/t2', '#/task/t3']);
@@ -379,7 +386,7 @@ async function shot(page: Page, name: string) {
       await page.waitForFunction(() => document.querySelector('#dash-grid .grc-num-v')?.textContent === '41');
 
       // Add a Number from its form: a metric for one channel, a tile by default; the defaults are saved first.
-      await page.locator('[data-dash-mode="edit"]').click();
+      await headTool(page, '[data-dash-mode="edit"]');
       await page.locator('[data-dash-add="card"]').click();
       const dlg = page.locator('#dash-dialog[open]');
       assert.equal(await dlg.locator('[name="template"]').inputValue(), 'growth_number', 'a Number first');
@@ -406,7 +413,7 @@ async function shot(page: Page, name: string) {
       await dlg.locator('[data-close]').first().click();
 
       // Settings: the numbers, each channel with its months, + Channel, and where the numbers come from.
-      await page.locator('[data-gr-settings]').click();
+      await headTool(page, '[data-gr-settings]');
       const set = page.locator('dialog.gr-dlg[open]');
       await set.locator('[data-gs-channel="search"]').waitFor();
       assert.deepEqual(await set.locator('[data-gs-channel] .gr-row-t').allInnerTexts(), ['Search', 'Referrals', 'Unknown']);
@@ -427,7 +434,7 @@ async function shot(page: Page, name: string) {
       // A member reads the cards, opens the board and the sources, and arranges nothing.
       const {page, errors, fake} = await open(browser, {me: MEMBER});
       await page.locator('#dash-grid .grc-funnel').waitFor();
-      assert.equal(await page.locator('.dash-actions').isVisible(), false);
+      assert.equal(await page.locator('[data-dash-mode="edit"]').count(), 0, 'nothing to arrange');
       assert.equal(await page.locator('[data-dash-grip], [data-dash-menu], [data-gr-settings]').count(), 0);
       assert.equal(await page.locator('[data-dash-mode="edit"]').isVisible(), false, 'no Edit');
       assert.equal(await page.locator('.dash-head a[data-gr-sources]').getAttribute('href'), '#/growth/sources');
@@ -516,11 +523,11 @@ async function shot(page: Page, name: string) {
       const card = page.locator('#dash-grid [data-grx]');
       await card.locator('table').waitFor();
       const rowsOf = () => card.locator('tbody tr:not(.grx-wk)').evaluateAll(els => els.map(el => [...el.children].map(c => (c as HTMLElement).innerText.trim())));
-      assert.deepEqual(await rowsOf(), [['Search', '64', '81%', 'not yet · 29 Dec', 'not yet · 29 Mar', '$540', '$45'], ['Unknown', '19', '12 of 19', 'not yet · 29 Dec', 'not yet · 29 Mar', 'too few', '—'],
-        ['Referrals typed', '25', '70%', '—', '—', '—', '—']], 'a channel with typed retention and no customers stays, marked typed');
+      assert.deepEqual(await rowsOf(), [['Search', '64', '81%', 'not yet · Dec 29', 'not yet · Mar 29', '$540', '$45'], ['Unknown', '19', '12 of 19', 'not yet · Dec 29', 'not yet · Mar 29', 'too few', ''],
+        ['Referrals typed', '25', '70%', '', '', '', '']], 'a channel with typed retention and no customers stays, marked typed');
       assert.equal(await card.locator('tr[data-origin="typed"] button').count(), 0, 'a typed figure has no customers to open');
       assert.match(await card.locator('.grx-foot').innerText(), /Rows marked typed were typed by the team/);
-      assert.match(await card.locator('.grx-foot').innerText(), /Computed from 124 customers · loaded 13 Nov 06:00 from an upload in Growth\./);
+      assert.match(await card.locator('.grx-foot').innerText(), /Computed from 124 customers · loaded Nov 13, 6:00 AM from an upload in Growth\./);
       assert.match(await card.locator('.grx-foot').innerText(), /Under 30 customers a cohort shows counts only: too few for a rate\./);
       assert.ok(await contrast(card.locator('td.grc-k').first()) >= 4.5, 'a computed share reads at 4.5:1');
       await card.locator('[data-gr-seg="grx-by"] button[data-v="segment"]').click();
@@ -534,7 +541,7 @@ async function shot(page: Page, name: string) {
       await card.locator('[data-gr-seg="grx-by"] button[data-v="channel"]').click();
       await card.locator('[data-gr-seg="grx-grain"] button[data-v="week"]').click();
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] tr.grx-wk'));
-      assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of 28 Sep', 'Week of 21 Sep']);
+      assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of Sep 28', 'Week of Sep 21']);
       assert.deepEqual((await rowsOf()).map(r => r[6]), ['monthly', '$42'], 'a week of daily spend shows its CAC; one touching a typed month says monthly');
       assert.match(await card.locator('.grx-foot').innerText(), /a week touching a month with typed spend says monthly\./);
       assert.ok(fake.reads.includes('by=channel&grain=week&month=2026-09'), 'the weekly read asks for the month');
@@ -547,7 +554,7 @@ async function shot(page: Page, name: string) {
       await dlg.waitFor();
       assert.equal(await dlg.getAttribute('aria-label'), 'Search · Sep 2026 · day 30: 81% (52 of 64)');
       assert.match(await dlg.innerText(), /Became customer 2026-09-01 to 2026-09-30, channel search, still paying on day 30\./);
-      assert.match(await dlg.innerText(), /Still customers \(52\)[\s\S]*cus_1042[\s\S]*Churned by day 30 \(12\)[\s\S]*cus_1044\s+19 Sep/i);
+      assert.match(await dlg.innerText(), /Still customers \(52\)[\s\S]*cus_1042[\s\S]*Churned by day 30 \(12\)[\s\S]*cus_1044\s+Sep 19/i);
       assert.ok(fake.reads.includes('by=channel&customers=true&month=2026-09'), 'the trace reads one period');
       await shot(page, 'desktop-growth-trace');
       await dlg.locator('[data-close]').first().click();
@@ -621,13 +628,13 @@ async function shot(page: Page, name: string) {
       assert.equal(await banner.locator('a[data-gr-health-sources]').getAttribute('href'), '#/growth/sources');
       const pin = (name: string) => page.locator('#dash-grid .dash-pin').filter({has: page.locator('.dash-pin-head h2', {hasText: new RegExp(`^${name}$`)})});
       const newLine = pin('New customers').locator('[data-gr-origin]');
-      assert.match(await newLine.innerText(), /^Signups \(warehouse\) · \d+d ago failing · typed · actual$/, 'a failing source is marked on the number it fills');
+      assert.match(await newLine.innerText(), /^Signups \(warehouse\) · [A-Z][a-z]{2} \d{1,2}(, \d{4})? failing · typed · actual$/, 'a failing source is marked on the number it fills');
       const cacLine = pin('CAC').locator('[data-gr-origin]');
-      assert.match(await cacLine.innerText(), /^from Finance ad spend · 2h ago · 3 typed · estimate$/, 'a worked-out figure names its sources');
+      assert.match(await cacLine.innerText(), /^from Finance ad spend · 2h · 3 typed · estimate$/, 'a worked-out figure names its sources');
       assert.equal(await cacLine.getAttribute('title'), 'Worked out from spend, bot cost and new customers');
-      assert.match(await pin('Kept 30 days').locator('[data-gr-origin]').innerText(), /^Retention sheet · \d+d ago stale · actual$/, 'a synced number says actual');
+      assert.match(await pin('Kept 30 days').locator('[data-gr-origin]').innerText(), /^Retention sheet · [A-Z][a-z]{2} \d{1,2}(, \d{4})? stale · actual$/, 'a synced number says actual');
       const conflict = pin('New customers').locator('[data-gr-conflict]');
-      assert.match(await conflict.innerText(), /Search · Oct 26 · new customers: typed 120, Signups \(warehouse\) says 131\s*Keep 120\s*Use 131/);
+      assert.match(await conflict.innerText(), /Search · Oct · new customers: typed 120, Signups \(warehouse\) says 131\s*Keep 120\s*Use 131/);
       await shot(page, 'desktop-growth-synced');
       await conflict.getByRole('button', {name: 'Use 131'}).click();
       await page.waitForFunction(() => !document.querySelector('#dash-grid [data-gr-conflict]'));
@@ -637,7 +644,7 @@ async function shot(page: Page, name: string) {
       // Settings → Months → October: spend is the source's, locked; new customers were typed, and Keep / Use show
       // while the warehouse disagrees; a save sends only what changed.
       SYNC.conflict = true;
-      await page.locator('[data-gr-settings]').click();
+      await headTool(page, '[data-gr-settings]');
       await page.locator('dialog.gr-dlg[open] [data-gs-months="search"]').click();
       const months = page.locator('dialog.gr-dlg[open]', {hasText: 'Search · Months'});
       await months.locator('.gc-coh').first().waitFor();
@@ -647,7 +654,7 @@ async function shot(page: Page, name: string) {
       await oct.locator('[name="spend"]').waitFor();
       assert.equal(await oct.locator('[name="spend"]').isDisabled(), true, 'a synced number is locked');
       assert.equal(await oct.locator('[name="kept_d30"]').isDisabled(), false, 'a number its source no longer fills is typed again');
-      assert.match(await oct.locator('[data-gc-origin="spend"]').innerText(), /^From Finance ad spend · 2h ago · actual$/);
+      assert.match(await oct.locator('[data-gc-origin="spend"]').innerText(), /^From Finance ad spend · 2h · actual$/);
       assert.match(await oct.locator('[data-gc-origin="new_customers"]').innerText(), /^Typed by .+, Nov 2 · actual$/);
       assert.match(await oct.locator('.gr-conflict').innerText(), /typed 48, Signups \(warehouse\) says 131\s*Keep 48\s*Use 131/);
       await shot(page, 'desktop-growth-month-synced');
@@ -662,12 +669,16 @@ async function shot(page: Page, name: string) {
       await page.evaluate(() => { location.hash = '#/growth/sources'; });
       await page.locator('.gsrc-ul li').first().waitFor();
       const row = (id: string) => ({innerText: async () => String(await page.locator(`.gsrc-ul li[data-src="${id}"] .gsrc-sync`).textContent()).replace(/\s+/g, ' ').trim()});
-      assert.match(await row('s1').innerText(), /^spend Fresh synced 2h ago$/);
+      // Fresh is the normal state: no pill, just when it synced (in a sentence: "2h ago"); a typed source says nothing.
+      assert.match(await row('s1').innerText(), /^spend synced 2h ago$/);
+      assert.equal(await page.locator('.gsrc-ul li[data-src="s1"] .pill').count(), 0, 'a fresh source has no pill');
       assert.match(await row('s2').innerText(), /^new customers and revenue \/ customer Failing since .*12.* · column "channel" not found$/);
       assert.match(await row('s3').innerText(), /^kept 30 days and kept 90 days Stale last good run Nov 3/);
-      assert.equal(await row('s4').innerText(), 'Typed by hand · not synced');
+      assert.equal(await row('s4').innerText(), '');
+      // The list has heads, in the tables' small uppercase label; an address reads as its site.
+      assert.deepEqual(await page.locator('.gsrc-head span').allInnerTexts().then(t => t.map(x => x.toUpperCase())), ['TRUTH FOR', 'SOURCE', 'REACHED BY', 'BOTS MAY', 'OWNER']);
       await shot(page, 'desktop-growth-sources');
-      await page.locator('[data-src-connect]').click();
+      await page.locator('#gr-head [data-src-connect]').click();   // the header's quiet +
       const con = page.locator('dialog.gr-dlg[open]', {hasText: 'Connect a source'});
       await con.locator('[name="system"]').fill('Signups sheet');
       const csv = 'month,channel,Spend,signups\n2026-10,search,4210,131\n2026-10,referrals,300,12\n2026-10,podcast,10,1\n';

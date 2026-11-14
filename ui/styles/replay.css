@@ -1,35 +1,38 @@
-/* ui/styles/replay.css — Replay: range and scope bar, and the player (bots, board, feed, transport bar).
+/* ui/styles/replay.css — Replay: its header (the shared page header: range, Who, Present), the row under it (a custom
+   range's fields, the Who chip), and the player (board, feed, transport bar).
    The cascade runs in the order index.html links these files. */
 /* The page fills the window below its bar: the board's columns and the feed take the rest and scroll inside. */
 #main.replay-layout{display:flex;flex-direction:column;max-width:none;min-height:0;overflow:hidden;height:calc(100vh - var(--demo-h,0px));height:calc(100dvh - var(--demo-h,0px))}
 @media (min-width:761px){#main.replay-layout{height:100%;padding-bottom:16px}}
 .rp-page{display:flex;flex-direction:column;flex:1;min-height:0;max-width:none}
 #rp-player{display:flex;flex-direction:column;flex:1;min-height:0}
-.rp-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:var(--s3)}
-.rp-head h1{font-size:var(--t-lg);margin:0 4px 0 0}
-.rp-head select{width:auto;min-width:150px;max-width:220px}
-.rp-head .spacer{flex:1}
+/* Under the header, only when it holds something: a custom range's two fields, then the chip naming who is shown. */
+.rp-under{display:none;align-items:center;gap:var(--s2);flex-wrap:wrap;margin:-4px 0 var(--s3)}
+.rp-under.on{display:flex}
 .rp-custom{display:inline-flex;gap:var(--s2);flex-wrap:wrap}
 .rp-custom[hidden]{display:none}
 .rp-custom input{width:auto}
 .rp-actions{display:inline-flex;align-items:center;gap:4px}
-.rp-icon{width:32px;padding:0;display:inline-grid;place-items:center}
-.rp-icon .nav-icon{width:20px;height:20px;font-size:20px}
 #rp-present[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+/* the Who icon: its count on its corner; folded into ⋯ on a phone it reads "Who" with the count at the row's end */
+.rp-head .ph-fold-word{display:none}
+.rp-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}
+.rp-head>.ph-menu>.ph-tools>.tl-ib{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:auto;padding:6px 10px}
+.rp-head>.ph-menu>.ph-tools>.tl-ib .ph-fold-word{display:inline}
+.rp-head>.ph-menu>.ph-tools>.tl-ib .tl-fbadge{position:static;margin-left:auto}
+.rp-head>.ph-menu>.ph-tools .rp-seg{flex-wrap:wrap}
+/* the Who list is long (every team, bot and person): it scrolls under its search */
+.rp-who .tl-menu-list{max-height:min(420px,60vh);overflow-y:auto}
 .rp-note{margin:0 0 var(--s3);font-size:var(--t-sm);color:var(--muted)}
 .rp-note[hidden]{display:none}
 
 /* ---- the player */
 .rp{display:flex;flex-direction:column;gap:var(--s3);min-width:0;flex:1;min-height:0}
 .rp-stage{display:flex;flex-direction:column;gap:var(--s3);min-width:0;flex:1;min-height:0}
-.rp-top{display:flex;align-items:center;gap:var(--s3);min-height:28px}
-.rp-bots{display:flex;gap:6px 14px;flex-wrap:wrap;min-height:28px;flex:1;min-width:0}
-.rp-stamp{display:none;margin-left:auto;font-size:var(--t-md);font-weight:600;white-space:nowrap;letter-spacing:var(--track-snug)}
-.rp-fade .rp-stamp{display:block}
-.rp-bots[hidden]{display:none}
-.rp-bot{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);transition:color var(--dur) var(--ease)}
-.rp-bot[data-state=running]{color:var(--ink)}
-.rp-bot-name{white-space:nowrap}
+/* The clock over the stage, only while presenting (the page's header and its bar are hidden then). */
+.rp-top{display:none;align-items:center;gap:var(--s3);min-height:28px}
+.rp-fade .rp-top{display:flex}
+.rp-stamp{margin-left:auto;font-size:var(--t-md);font-weight:600;white-space:nowrap;letter-spacing:var(--track-snug)}
 .rp-face{position:relative;display:inline-flex;flex:none}
 .rp-face[data-state]::after{content:"";position:absolute;right:-1px;bottom:-1px;width:7px;height:7px;border-radius:50%;border:2px solid var(--bg);display:none}
 .rp-face[data-state=running]::after{display:block;background:var(--ok)}
@@ -81,7 +84,7 @@
 body.rp-presenting{display:block}
 /* Present's own button rides in the transport bar (ui/app/replay.ts), so it fades with the controls. */
 body.rp-presenting #side,body.rp-presenting #topbar,body.rp-presenting #mobile-nav,body.rp-presenting .rp-head,
-body.rp-presenting .rp-note{display:none!important}
+body.rp-presenting .rp-note,body.rp-presenting .rp-under{display:none!important}
 body.rp-presenting #main{padding:20px 24px;height:calc(100vh - var(--demo-h,0px));height:calc(100dvh - var(--demo-h,0px));overflow:hidden}
 /* The controls float over the stage's foot, so the stage keeps the whole screen. */
 body.rp-presenting .rp-bar{position:fixed;left:24px;right:24px;bottom:16px;z-index:20;box-shadow:0 6px 24px rgba(0,0,0,.25)}
@@ -97,10 +100,7 @@ body.rp-presenting .rp-bar{position:fixed;left:24px;right:24px;bottom:16px;z-ind
   body.rp-presenting .rp-bar{left:12px;right:12px;bottom:12px}
 }
 @media (max-width:760px){
-  .rp-head select,.rp-custom,.rp-custom input{flex:1 1 100%;max-width:none}
-  .rp-bots{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:8px}
-  .rp-bot-name{display:none}
-  .rp-head .spacer{display:none}
+  .rp-custom,.rp-custom input{flex:1 1 100%;max-width:none}
   .rp-board{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;margin:0 -12px;padding:0 12px 4px}
   .rp-board .bcol{flex:0 0 max(220px,72vw);scroll-snap-align:start}
   .rp-bar{gap:8px}
@@ -113,5 +113,5 @@ body.rp-presenting .rp-bar{position:fixed;left:24px;right:24px;bottom:16px;z-ind
 }
 @media (prefers-reduced-motion:reduce){
   .rp-caret,.rp-flash{animation:none}
-  .rp-bar,.rp-bot,.rp-head{transition:none}
+  .rp-bar{transition:none}
 }

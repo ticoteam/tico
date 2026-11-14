@@ -1,4 +1,5 @@
-/* Tags: display chips, checklist pages and templates in Settings. */
+/* ui/app/tags.ts — Tags: display chips, the Tags page (#/tags) and a tag's checklist page (#/tag/<key>), and the same
+   list in Settings › Tasks. */
 'use strict';
 
 // The fields a tag summary reads: a tag as the server sends it, or the stand-in a missing tag gets (its key and label).
@@ -124,17 +125,18 @@ async function pageTag(key: string) {
     const data = await get<import('../types/api').TagDetail>('/v2/tags/' + encodeURIComponent(key));
     if (!current()) return;
     const tag = data.tag;
+    // A sub-page of Tags: the shared header's "Tags ›" leads back (ui/app/page-head.ts). Its title is set again on a save.
     $('#main').innerHTML = `<div class="page-tags">
-      <div class="board-tools"><h1 data-tag-heading>${esc(tagSummary(tag))}</h1><a href="#/tags">Tags</a></div>
-      <section class="card"><header><h2>${tag.is_template ? 'Template' : 'Checklist'}</h2>${data.editable ? '<button type="button" data-tag-edit>Edit</button>' : ''}</header><div class="tag-notes" data-tag-notes></div><div data-tag-editor hidden></div></section>
+      ${pageHead({title: tagSummary(tag), hook: 'tag-head', back: {href: '#/tags', label: 'Tags'}})}
+      <section class="card"><header><h2>${tag.is_template ? 'Template' : 'Checklist'}</h2>${data.editable ? '<button type="button" class="ghost tag-edit" data-tag-edit>Edit</button>' : ''}</header><div class="tag-notes" data-tag-notes></div><div data-tag-editor hidden></div></section>
       ${tag.is_template ? `<section class="card"><header><h2>Make a tag</h2></header>${tagCreateForm(tag)}</section>` : ''}
-      <section class="card"><header><h2>Tasks</h2></header><div data-tag-tasks>${tagTaskRows(data.tasks)}</div>${data.next_offset != null ? '<button type="button" data-tag-more>More</button>' : ''}</section></div>`;
+      <section class="card"><header><h2>Tasks</h2></header><div class="tag-list" data-tag-tasks>${tagTaskRows(data.tasks)}</div>${data.next_offset != null ? '<button type="button" class="ghost tag-more" data-tag-more>More</button>' : ''}</section></div>`;
     const save: TagSave = async (fields, checkIndex = null, editVersion = null) => {
       try {
         const result: import('../types/api').TagResult = await post('/v2/tags/' + encodeURIComponent(tag.id), {version: editVersion ?? tag.version, ...fields});
         if (!current()) return;
         Object.assign(tag, result.tag);
-        $('[data-tag-heading]').textContent = tagSummary(tag);
+        tagHeading(tag);
         tagChecklist($('[data-tag-notes]'), tag, data.editable, save);
         if (checkIndex != null) $('[data-tag-notes] [data-tag-check="' + checkIndex + '"]')?.focus({preventScroll: true});
         else $('[data-tag-editor]').hidden = true;
@@ -150,7 +152,7 @@ async function pageTag(key: string) {
               const latest = await get<import('../types/api').TagDetail>('/v2/tags/' + encodeURIComponent(tag.id));
               if (!current()) return;
               Object.assign(tag, latest.tag); data.editable = latest.editable;
-              $('[data-tag-heading]').textContent = tagSummary(tag);
+              tagHeading(tag);
               tagChecklist($('[data-tag-notes]'), tag, data.editable, save);
             } catch (error) { if (current()) toast(errorMessage(error, '')); }
           });
@@ -205,14 +207,15 @@ function tagCreateForm(template: import('../types/api').Tag | null = null) {
   const metadata = `<label>Metadata <textarea name="metadata" rows="2">${esc(JSON.stringify(template?.metadata || {}, null, 2))}</textarea></label>`;
   if (template) return `<form class="tag-form" data-tag-create>
     <label>Key <input name="key" required maxlength="${TAG_KEY_MAX}" placeholder="release-2026-10-02"></label>${metadata}
-    <button type="submit">Create</button><p role="alert" data-tag-error></p></form>`;
+    <div class="tag-form-btns"><button type="submit" class="primary">Create</button></div><p role="alert" data-tag-error></p></form>`;
+  // The New tag form opens from a quiet + (the Tags page's header, the Tags card in Settings): Cancel left, Create right.
   return `<form class="tag-form" data-tag-create>
     <label>Name <input name="label" required placeholder="bug"></label>
     <label>Notes <textarea name="markdown" rows="5" placeholder="- [ ] Check the result"></textarea></label>
     <label><input type="checkbox" name="is_template"> Template</label>
     <details class="tag-advanced"><summary>Advanced</summary><label>Key <input name="key" maxlength="${TAG_KEY_MAX}" placeholder="made from the name"></label>
       <small class="tag-key-line" data-tag-key-line aria-live="polite">Key: made from the name</small>${metadata}</details>
-    <button type="submit">Create</button><p role="alert" data-tag-error></p></form>`;
+    <div class="tag-form-btns"><button type="button" class="ghost" data-tag-new-cancel>Cancel</button><button type="submit" class="primary">Create</button></div><p role="alert" data-tag-error></p></form>`;
 }
 function bindTagCreate(root: ParentNode, template: import('../types/api').Tag | null = null) {
   const form: TagForm | null = $('[data-tag-create]', root);
@@ -241,7 +244,7 @@ function tagEditForm(tag: import('../types/api').Tag, save: TagSave, editable: b
   editor.innerHTML = `<form class="tag-form"><label>Label <input name="label" value="${esc(tag.label)}" required></label>
     <label>Notes <textarea name="markdown" rows="8">${esc(tag.markdown)}</textarea></label>
     <details class="tag-advanced"><summary>Advanced</summary><label>Metadata <textarea name="metadata" rows="3">${esc(JSON.stringify(tag.metadata, null, 2))}</textarea></label></details>
-    <button type="submit">Save</button><button type="button" data-tag-cancel>Cancel</button><p role="alert" data-tag-error></p><button type="button" data-tag-refresh hidden>Load current</button></form>`;
+    <div class="tag-form-btns"><button type="button" class="ghost" data-tag-cancel>Cancel</button><button type="submit" class="primary">Save</button></div><p role="alert" data-tag-error></p><button type="button" class="ghost" data-tag-refresh hidden>Load current</button></form>`;
   $('[data-tag-cancel]', editor).onclick = () => { editor.hidden = true; };
   const form: TagForm = $('form', editor);
   form.onsubmit = async (event: Event) => {
@@ -261,7 +264,7 @@ function tagEditForm(tag: import('../types/api').Tag, save: TagSave, editable: b
           const latest = await get<import('../types/api').TagDetail>('/v2/tags/' + encodeURIComponent(tag.id));
           if (!editor.isConnected) return;
           Object.assign(tag, latest.tag); version = tag.version;
-          $('[data-tag-heading]').textContent = tagSummary(tag);
+          tagHeading(tag);
           tagChecklist($('[data-tag-notes]'), tag, latest.editable, save);
           $('[data-tag-error]', form).textContent = 'Current notes loaded. Combine your changes before saving.';
           reload.hidden = true;
@@ -272,7 +275,22 @@ function tagEditForm(tag: import('../types/api').Tag, save: TagSave, editable: b
     finally { $('button[type=submit]', form).disabled = false; }
   };
 }
-async function renderTags(host: Element) {
+// The heading a tag page shows: the shared header's title.
+function tagHeading(tag: import('../types/api').Tag): void {
+  const head = $('#main header.tag-head');
+  if (head) pageHeadSet(head, 'title', esc(tagSummary(tag)));
+}
+// The quiet + that opens the New tag form (style guide: "A page whose adding is rare has a quiet + there instead").
+const TAG_ADD = (): string => pageHeadAdd('New tag', 'data-tag-new');
+// Open (or close) the New tag form in a tag list; opening puts the cursor in its name.
+function tagNewShow(host: Element, open: boolean): void {
+  const card = $('[data-tag-new-card]', host);
+  if (!card) return;
+  card.hidden = !open;
+  if (open) { card.scrollIntoView({block: 'nearest'}); $('input[name=label]', card)?.focus(); }
+}
+// `addInCard`: Settings › Tasks has no page header of its own, so its + sits in the Tags card's header.
+async function renderTags(host: Element, addInCard = true) {
   try {
     const data = await get<import('../types/api').TagList>('/v2/tags');
     if (!host.isConnected) return;
@@ -282,14 +300,20 @@ async function renderTags(host: Element) {
     const starter = (label: string) => `<button type="button" class="ghost" data-release-starter>${label}</button>`;
     const templates = list(true);
     // patchHTML keeps the New tag form's node (its markup never changes), so a refresh that lands while someone types
-    // keeps their values, focus and an open Advanced. A full draw (the first, or after an error) reopens Advanced below.
-    const advanced = !!$('[data-tag-create] .tag-advanced[open]', host);
-    patchHTML(host, `<section class="card"><header><h2>Templates</h2>${templates ? starter('Release checklist') : ''}</header>${templates
-        || `<div class="empty tags-empty">No templates. ${starter('Start with a release checklist')}</div>`}</section>
-      <section class="card"><header><h2>Tags</h2></header>${list(false) || '<div class="empty">None yet</div>'}</section>
-      <section class="card"><header><h2>New tag</h2></header>${tagCreateForm()}</section>`);
+    // keeps their values, focus, an open Advanced and the form itself open. A full draw (the first, or after an error)
+    // opens them again below. The form waits behind a quiet + until someone adds a tag.
+    const advanced = !!$('[data-tag-create] .tag-advanced[open]', host), adding = !!$('[data-tag-new-card]:not([hidden])', host);
+    patchHTML(host, `<section class="card tag-new" data-tag-new-card hidden><header><h2>New tag</h2></header>${tagCreateForm()}</section>
+      <section class="card"><header><h2>Templates</h2>${templates ? starter('Release checklist') : ''}</header>${templates ? `<div class="tag-list">${templates}</div>`
+        : `<div class="empty tags-empty">No templates. ${starter('Start with a release checklist')}</div>`}</section>
+      <section class="card"><header><h2>Tags</h2>${addInCard ? TAG_ADD() : ''}</header>${list(false) ? `<div class="tag-list">${list(false)}</div>` : '<div class="empty">None yet</div>'}</section>`);
     if (advanced) $('[data-tag-create] .tag-advanced', host).open = true;
+    if (adding) $('[data-tag-new-card]', host).hidden = false;
     bindTagCreate(host);
+    const add = $('[data-tag-new]', host);
+    if (add) add.onclick = () => tagNewShow(host, true);
+    const cancel = $('[data-tag-new-cancel]', host);
+    if (cancel) cancel.onclick = () => { tagNewShow(host, false); ($('[data-tag-new]', host) || $('#main header.tags-head [data-tag-new]'))?.focus(); };
     const releaseStarter: HTMLButtonElement = $('[data-release-starter]', host);
     releaseStarter.onclick = async () => {
       const button = releaseStarter;
@@ -314,8 +338,11 @@ async function renderTags(host: Element) {
   } catch (error) { if (host.isConnected) host.innerHTML = `<div class="empty" role="alert">${esc(errorMessage(error, ''))}</div>`; }
 }
 function pageTags() {
-  $('#main').innerHTML = '<div class="page-tags"><h1>Tags</h1><div data-tags-list></div></div>';
-  void renderTags($('[data-tags-list]'));
+  // The one page header (ui/app/page-head.ts) with its quiet + for a new tag; the list under it at the content's left edge.
+  $('#main').innerHTML = `<div class="page-tags">${pageHead({title: 'Tags', hook: 'tags-head', add: {label: 'New tag', attrs: 'data-tag-new'}})}<div data-tags-list></div></div>`;
+  const host = $('[data-tags-list]');
+  $('#main header.tags-head [data-tag-new]').onclick = () => tagNewShow(host, true);
+  void renderTags(host, false);
 }
 function settingsTags() {
   const pane = $('#settings-tags');

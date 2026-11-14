@@ -492,7 +492,7 @@ async function keys(browser: import('playwright').Browser) {
     await dialog.locator('[data-key-scope]').waitFor();
     assert.ok(await dialog.locator('input[name=key-scope][value=all]').isDisabled());
     assert.match(await dialog.locator('[data-key-scope]').innerText(), /Old box \(needs a runner update to clear it from here\)/);
-    assert.match(await dialog.locator('[data-key-scope]').innerText(), /Update Old box first, or delete the shared key in Credentials/);
+    assert.match(await dialog.locator('[data-key-scope]').innerText(), /Update Old box first, or delete the shared key in Tools/);
     await dialog.locator('[data-close]').first().click();
     oldBox = false;
 

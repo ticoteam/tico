@@ -80,7 +80,7 @@ declare function liveEmit(topic: string, data: unknown): void;
       await page.evaluate(() => { location.hash = '#/tasks'; });
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       // A phone shows Related, with its merge order, in the task window's Info tab (task #409).
-      if (width <= 390) await page.locator('#task-modal[open][data-task="t-2"] [data-task-tab="info"]').click();
+      await page.locator('#task-modal[open][data-task="t-2"] [data-task-tab="details"]').click();
       const order = page.locator('#task-modal[open][data-task="t-2"] .task-order');
       await order.first().waitFor();
       assert.deepEqual(await order.evaluateAll(rows => rows.map(r => (r as HTMLElement).innerText.replace(/\s+/g, ' ').trim())),

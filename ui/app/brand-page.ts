@@ -84,15 +84,21 @@ const brSw = (c: BrandColor, size = '') => brHex(c.hex) ? `<span class="br-sw${s
 // ----------------------------------------------------------------- shared with the go-to-market: draft, publish, versions
 const grDocMay = (d: BrandDoc | null | undefined): boolean => d?.may_edit ?? grAdmin();
 const grDocChanged = (d: BrandDoc | null | undefined): number => d?.draft?.changed?.length || 0;
-function grDocToolsHtml(d: BrandDoc | null, state: BrandState, publish = true) {
+// The brand's parts of the Strategy header (page-head.ts), so the page has one header line (style guide, "Top bars: one
+// line"): Book and Edit as the tools, with the draft's changes as a pill (something waits to be published); Versions in
+// ⋯ (each version says its date there); Publish, while editing, as the one filled button.
+function grDocHeadHtml(d: BrandDoc | null, state: BrandState, editing: boolean) {
   const n = grDocChanged(d), p = d?.published, may = grDocMay(d);
-  return `${may && n ? `<span class="pill waiting">${n === 1 ? '1 change' : `${n} changes`}</span>` : ''}${p ? `<span class="muted gr-meta">v${esc(p.n)} · ${esc(grDay(p.published_at))}</span>` : ''}
-    ${(d?.versions || []).length ? '<button class="ghost" type="button" data-doc-versions>Versions</button>' : ''}
-    ${may && publish && !state.publishing ? `<button class="primary" type="button" data-doc-publish${n || (!p && d?.draft) ? '' : ' disabled title="Nothing new to publish"'}>Publish</button>` : ''}`;
+  const seg = may ? `<nav class="ph-seg br-views" aria-label="View"><a href="${BRAND_ROUTE}"${editing ? '' : ' aria-current="page"'}>Book</a><a href="${BRAND_ROUTE}/edit"${editing ? ' aria-current="page"' : ''}>Edit</a></nav>` : '';
+  return {
+    tools: `${seg}${may && n ? `<span class="pill waiting">${n === 1 ? '1 change' : `${n} changes`}</span>` : ''}`,
+    more: (d?.versions || []).length ? '<button type="button" data-doc-versions>Versions</button>' : PAGE_HEAD_COPY,
+    primary: may && editing && !state.publishing ? `<button class="primary ph-go" type="button" data-doc-publish${n || (!p && d?.draft) ? '' : ' disabled title="Nothing new to publish"'}>Publish</button>` : '',
+  };
 }
 const grDocPublishHtml = () => `<form class="strat-publish gr-pub" data-doc-publish-form novalidate>
     <input type="text" name="note" maxlength="200" autocomplete="off" placeholder="What changed" aria-label="What changed" required>
-    <button class="primary" type="submit">Publish</button><button class="ghost" type="button" data-doc-cancel>Cancel</button></form>`;
+    <button class="ghost" type="button" data-doc-cancel>Cancel</button><button class="primary" type="submit">Publish</button></form>`;
 // Saves sections into the draft with the revision it was read at; a newer draft (409) is read again and drawn.
 async function grDocSave(base: string, state: BrandState, sections: Record<string, unknown>, redraw: () => void): Promise<boolean> {
   try {
@@ -205,7 +211,8 @@ const grLines = (text: unknown): string[] => String(text || '').split('\n').map(
 function brandBookHtml(body: BrandBody | null | undefined, {full = false}: {full?: boolean} = {}) {
   const b: BrandBody = body || {}, colors = (b.visual?.colors || []).filter(c => brHex(c.hex));
   const hero = colors[0]?.hex, voice = b.voice || [], words: BrandWords = b.words || {}, claims: BrandClaims = b.claims || {};
-  const tile = (cls: string, title: string, inner: string) => inner ? `<section class="br-tile ${cls}">${title ? `<h3 class="gr-k">${esc(title)}</h3>` : ''}${inner}</section>` : '';
+  // A tile's title is a card title (style guide, Card), not the uppercase label.
+  const tile = (cls: string, title: string, inner: string) => inner ? `<section class="br-tile ${cls}">${title ? `<h3 class="br-k">${esc(title)}</h3>` : ''}${inner}</section>` : '';
   const heroTile = `<section class="br-tile br-s8 br-hero"${hero ? ` style="background:${brHex(hero)};color:${brInk(hero)}"` : ''}>
       <span class="br-name">${esc(b.name || companyName())}</span>${b.positioning ? `<span class="br-pos">${esc(b.positioning)}</span>` : ''}
       ${voice.length ? `<span class="br-traits">${voice.map(v => `<span>${esc(v.trait)}</span>`).join('')}</span>` : ''}</section>`;
@@ -219,13 +226,13 @@ function brandBookHtml(body: BrandBody | null | undefined, {full = false}: {full
   const claimsTile = tile('br-s12', 'Claims', (claims.allowed || []).length || (claims.never || []).length ? `${(claims.allowed || []).length ? `<ul class="br-claims">${(claims.allowed || []).map(c =>
       `<li><span class="br-claim">${esc(c.claim)}</span><span class="muted">${esc([c.proof, c.check].filter(Boolean).join(' · '))}</span>${c.status ? `<span class="pill ${c.status === 'proven' ? 'ok' : 'waiting'}">${c.status === 'proven' ? 'Proven' : 'Due'}</span>` : ''}</li>`).join('')}</ul>` : ''}
       ${(claims.never || []).length ? `<div class="br-wl"><span class="muted">Never claim</span>${(claims.never || []).map(n => `<span class="br-wa">${esc(n)}</span>`).join('')}</div>` : ''}` : '');
-  const tone = (b.tone || []).length ? `<section class="br-tile br-s6"><h3 class="gr-k">Tone</h3><dl class="br-dl">${(b.tone || []).map(t => `<dt>${esc(t.situation)}</dt><dd>${esc(t.guide)}</dd>`).join('')}</dl></section>` : '';
-  const naming = (b.naming || []).length ? `<section class="br-tile br-s6"><h3 class="gr-k">Naming</h3><dl class="br-dl">${(b.naming || []).map(n => `<dt>${esc(n.name)}</dt><dd>${esc(n.rule || '')}${(n.wrong || []).length ? ` ${(n.wrong || []).map(w => `<s class="br-wa">${esc(w)}</s>`).join(' ')}` : ''}</dd>`).join('')}</dl></section>` : '';
+  const tone = (b.tone || []).length ? `<section class="br-tile br-s6"><h3 class="br-k">Tone</h3><dl class="br-dl">${(b.tone || []).map(t => `<dt>${esc(t.situation)}</dt><dd>${esc(t.guide)}</dd>`).join('')}</dl></section>` : '';
+  const naming = (b.naming || []).length ? `<section class="br-tile br-s6"><h3 class="br-k">Naming</h3><dl class="br-dl">${(b.naming || []).map(n => `<dt>${esc(n.name)}</dt><dd>${esc(n.rule || '')}${(n.wrong || []).length ? ` ${(n.wrong || []).map(w => `<s class="br-wa">${esc(w)}</s>`).join(' ')}` : ''}</dd>`).join('')}</dl></section>` : '';
   const vis: BrandVisual = b.visual || {};
-  const visual = (vis.fonts || []).length || (vis.logo_files || []).length || vis.imagery ? `<section class="br-tile br-s6"><h3 class="gr-k">Visual</h3><dl class="br-dl">
+  const visual = (vis.fonts || []).length || (vis.logo_files || []).length || vis.imagery ? `<section class="br-tile br-s6"><h3 class="br-k">Visual</h3><dl class="br-dl">
       ${(vis.fonts || []).length ? `<dt>Fonts</dt><dd>${esc((vis.fonts || []).join(', '))}</dd>` : ''}${(vis.logo_files || []).length ? `<dt>Logo</dt><dd>${(vis.logo_files || []).map(f => esc(f)).join(', ')}</dd>` : ''}
       ${vis.imagery ? `<dt>Imagery</dt><dd>${esc(vis.imagery)}</dd>` : ''}</dl></section>` : '';
-  const examples = (b.examples || []).length ? `<section class="br-tile br-s6"><h3 class="gr-k">Examples</h3><ul class="br-ex">${(b.examples || []).map(x =>
+  const examples = (b.examples || []).length ? `<section class="br-tile br-s6"><h3 class="br-k">Examples</h3><ul class="br-ex">${(b.examples || []).map(x =>
       `<li><span class="pill ${x.verdict === 'off' ? 'fail' : 'ok'}">${x.verdict === 'off' ? 'Off brand' : 'On brand'}</span><span>“${esc(x.text)}”</span>${x.why ? `<span class="muted">${esc(x.why)}</span>` : ''}</li>`).join('')}</ul></section>` : '';
   const rest = tone + naming + visual + examples;
   return `<div class="br-bento">${heroTile}${colorTile}${voiceTile}${wordsTile}${claimsTile}</div>
@@ -249,8 +256,8 @@ function brandStripHtml(d: BrandDoc | null | undefined) {
   return `<a class="br-strip" href="${BRAND_ROUTE}"><span class="br-strip-hero"${hero ? ` style="background:${brHex(hero)};color:${brInk(hero)}"` : ''}>
       <span class="br-name">${esc(body.name || companyName())}</span>${body.positioning ? `<span class="br-pos">${esc(body.positioning)}</span>` : ''}</span>
     <span class="br-strip-rest">${colors.length ? `<span class="br-sws" aria-label="Colours">${colors.slice(0, 6).map(c => brSw(c)).join('')}</span>` : ''}
-      ${traits.length ? `<span class="br-strip-k"><span class="gr-k">Voice</span>${esc(traits.join(' · '))}</span>` : ''}
-      ${never.length ? `<span class="br-strip-k"><span class="gr-k">Never say</span>${never.map(w => `<s class="br-never">${esc(w)}</s>`).join(' ')}</span>` : ''}
+      ${traits.length ? `<span class="br-strip-k"><span class="br-strip-l">Voice</span>${esc(traits.join(' · '))}</span>` : ''}
+      ${never.length ? `<span class="br-strip-k"><span class="br-strip-l">Never say</span>${never.map(w => `<s class="br-never">${esc(w)}</s>`).join(' ')}</span>` : ''}
       <span class="spacer"></span>${n ? `<span class="pill waiting">${n === 1 ? '1 change' : `${n} changes`}</span>` : ''}<span class="br-go">Brand book →</span></span></a>`;
 }
 
@@ -262,7 +269,7 @@ function pageBrand() {
   BR = {load, data: BR?.data || null, view: path === BRAND_ROUTE + '/edit' ? 'edit' : 'book',
     sub: new URLSearchParams(query || '').get('s') || BR?.sub || 'positioning', props: BR?.props || [], hits: null, text: BR?.text || '', publishing: false};
   const main = $('#main');
-  main.classList.add('strategy-layout', 'growth-layout');
+  main.classList.add('strategy-layout', 'growth-layout', 'brand-layout');   // brand-layout: the Strategy tabs' gutters (brand.css)
   main.innerHTML = redesignStrategyHead('brand') + `<div id="gr-body" class="gr-body">${BR.data ? '' : skelRows(6, {dot: false})}</div>`;
   if (BR.data) { brandDraw(); BR.drawn = true; }
   void brandRead(BR);
@@ -282,13 +289,18 @@ async function brandRead(state: BrandState) {
 }
 function brandDraw() {
   const state = BR, body: HTMLElement | null = $('#gr-body');
-  if (!state || !body || !state.data) return;
+  // A read that lands after the person left Brand (Growth draws a #gr-body too) draws nothing.
+  if (!state || !body || !state.data || !rdUnder(String(S.route || '').split('?')[0] ?? '', BRAND_ROUTE)) return;
   const d = state.data, may = grDocMay(d), editing = state.view === 'edit';
-  const seg = may ? `<nav class="gr-tabs" aria-label="View"><a href="${BRAND_ROUTE}"${editing ? '' : ' aria-current="page"'}>Book</a><a href="${BRAND_ROUTE}/edit"${editing ? ' aria-current="page"' : ''}>Edit</a></nav>` : '';
-  const head = grCrumbs('#/strategy', 'Strategy', 'Brand', `${seg}${grDocToolsHtml(d, state, editing)}`) + (state.publishing ? grDocPublishHtml() : '');
+  // The header's parts are set only when they change, so an open ⋯ is left alone by a redraw.
+  const ph = $('.rd-strat-head'), parts = grDocHeadHtml(d, state, editing);
+  if (ph) for (const part of ['tools', 'more', 'primary'] as const) {
+    const key = 'br' + part;
+    if (ph.dataset[key] !== parts[part]) { ph.dataset[key] = parts[part]; pageHeadSet(ph, part, parts[part]); }
+  }
   const book = editing ? (d.draft?.body || d.published?.body) : (d.published?.body || (may ? d.draft?.body : null));
-  body.innerHTML = head + (editing ? brandEditHtml(state) : book && Object.keys(book).length ? brandBookHtml(book) : '');
-  grDocBind(body, '/v2/brand', state, brandDraw, b => brandBookHtml(b, {full: true}));
+  body.innerHTML = (state.publishing ? grDocPublishHtml() : '') + (editing ? brandEditHtml(state) : book && Object.keys(book).length ? brandBookHtml(book) : '');
+  grDocBind($('#main'), '/v2/brand', state, brandDraw, b => brandBookHtml(b, {full: true}));
   if (editing) brandEditBind(state);
 }
 
@@ -342,14 +354,14 @@ function brandEditHtml(state: BrandState) {
       <span>${esc(label)}</span>${changed.has(k) || (k === 'positioning' && changed.has('name')) ? '<span class="gr-dot gr-ts-review" title="Changed" aria-label="Changed"></span>' : ''}<span class="muted">${brandCount(b, k)}</span></button>`).join('')}</nav>`;
   const editor = `<form class="card br-editor gr-form" data-sec="${esc(state.sub)}" novalidate>${brandEditorHtml(state.sub, b)}
       <div class="gr-foot"><button class="primary" type="submit">Save</button></div></form>`;
-  const props = state.props.length ? `<section class="card gr-sec"><h3 class="gr-k">Proposed</h3>${state.props.map(p => `<div class="br-prop" data-prop="${esc(p.id)}">
+  const props = state.props.length ? `<section class="card gr-sec"><h3 class="br-k">Proposed</h3>${state.props.map(p => `<div class="br-prop" data-prop="${esc(p.id)}">
       <span>${esc(p.reason || p.card?.title || Object.keys(p.payload?.sections || {}).join(', ') || 'Brand change')}</span>
       <span class="muted">${esc(grWho(p.proposed_by))} · ${esc(grDay(p.proposed_at))}</span>
-      ${p.may_decide !== false ? '<span class="br-prop-b"><button class="primary small" type="button" data-decide="confirm">Add to draft</button><button class="ghost small" type="button" data-decide="reject">Decline</button></span>' : ''}</div>`).join('')}</section>` : '';
-  const check = `<section class="card gr-sec"><h3 class="gr-k">Check copy</h3><form class="br-check" data-check novalidate>
+      ${p.may_decide !== false ? '<span class="br-prop-b"><button class="ghost small" type="button" data-decide="reject">Decline</button><button class="primary small" type="button" data-decide="confirm">Add to draft</button></span>' : ''}</div>`).join('')}</section>` : '';
+  const check = `<section class="card gr-sec"><h3 class="br-k">Check copy</h3><form class="br-check" data-check novalidate>
       <label class="sr-only" for="br-check-t">Copy</label><textarea id="br-check-t" name="text" rows="3">${esc(state.text)}</textarea>
       <button class="ghost small" type="submit">Check</button></form><div class="br-hits" data-hits>${brandHitsHtml(state.hits)}</div></section>`;
-  const vers = (d.versions || []).length ? `<section class="card gr-sec"><h3 class="gr-k">Versions</h3><ul class="gr-vers">${(d.versions || []).slice().sort((a, b) => b.n - a.n).slice(0, 6).map(x =>
+  const vers = (d.versions || []).length ? `<section class="card gr-sec"><h3 class="br-k">Versions</h3><ul class="gr-vers">${(d.versions || []).slice().sort((a, b) => b.n - a.n).slice(0, 6).map(x =>
       `<li><button type="button" class="gr-ver" data-ver="${esc(x.n)}"><b>v${esc(x.n)}</b><span>${esc(x.note || '')}</span><span class="muted">${esc(grDay(x.published_at))}</span></button></li>`).join('')}</ul></section>` : '';
   return `<div class="br-edit">${nav}${editor}<aside class="br-rail" aria-label="Brand tools">${props}${check}${vers}</aside></div>`;
 }

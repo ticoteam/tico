@@ -24,6 +24,11 @@ const VIEW_READS = [
   '.tl-chip button', '#task-more button', '.tk-row', '[data-task]',
   '[data-need]', '[data-reload]', '[data-dash-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
   '[aria-label="Close"]', '[data-close]', '[data-modal-close]', '[data-task-earlier]', '[data-task-tab]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
+  // The shared page header's ⋯ (page-head.ts) opens a menu; its views held there and Copy link only move or read.
+  'header.ph > .ph-more', '.ph-menu > .ph-mtabs > .ph-mtab', '.ph-menu .ph-copy',
+  // A bot's page: its ⋯ (the detail views and Incognito, which only move between its chats) and the rail's ⋯ (the task
+  // lists that did not fit). The private chat's Archive in that ⋯ is a write and stays off.
+  '#bot-more-btn', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
 ];
 const VIEW_CONTROLS = 'button, input, textarea, select, [contenteditable="true"], [role="button"], [role="checkbox"], '
   + '[role="switch"], [role="menuitem"], [role="menuitemradio"]';

@@ -1,11 +1,6 @@
-/* ui/styles/bot-page.css — Bot page: header, tab strip, tasks.
+/* ui/styles/bot-page.css — Bot page: header, tab strip, tasks; and a person's page (ui/app/person-page.ts), whose header
+   is the shared one (page-head.ts).
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* bot page */
-.bothead{display:flex;align-items:center;gap:12px;margin-bottom:22px}   /* room for the sticky strip's padding below: nothing overlaps the goal */
-.bothead h1{font-size:var(--t-lg);display:inline}
-.bothead .botid{min-width:0;flex:1}
-.bothead .meta{display:inline-block;vertical-align:middle;margin-left:8px;font-size:var(--t-base)}
-.bothead .actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
 .role{color:var(--muted);font-size:var(--t-base);line-height:var(--lh);max-width:72ch;white-space:pre-wrap;margin-top:6px}
 .bot-request-head{font-size:var(--t-md);margin:14px 2px 6px}
 .bot-setup{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;margin:0;font-size:var(--t-base);align-items:center}
@@ -16,24 +11,12 @@
 .bot-screen-steps{margin-top:4px;color:var(--muted)}.bot-screen-steps p{margin:6px 0 4px}
 .bot-screen-cmd{display:flex;align-items:center;gap:8px;max-width:100%}.bot-screen-cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--hover);color:var(--ink)}
 button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:pointer;font:inherit;text-decoration:underline}
-/* the tab strip stays put while the pane scrolls */
-.tabs.bottabs{position:sticky;top:-22px;z-index:8;margin:-22px 0 14px;padding-top:22px;background:var(--bg)}   /* the padding sits in .bothead's margin and hides content scrolling under #main's 22px top padding */
 @media (max-width:760px){
-  .bothead{gap:10px;margin-bottom:18px}
-  .bothead .actions{display:none}       /* the same two links live in the More tab */
-  .bothead .av{width:32px!important;height:32px!important;font-size:var(--t-sm)!important}
-  .bothead h1{font-size:var(--t-lg);line-height:var(--lh-tight)}
-  .bothead .meta{font-size:var(--t-sm);margin-left:6px}
   .role{font-size:var(--t-base);margin-top:4px;cursor:pointer}
   .role:not(.open){display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal}
   .bot-setup{grid-template-columns:1fr;gap:2px}.bot-setup dt{margin-top:8px;font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);font-weight:600}.bot-setup dt:first-child{margin-top:0}
   /* the Chat tab is for the thread: no goal, no sticky strip (only the thread scrolls), no header while typing */
   #main.bot-chat-layout .role{display:none}
-  #main.bot-chat-layout .bothead{margin-bottom:8px}
-  #main.bot-chat-layout .tabs.bottabs{position:static;margin:0 0 8px;padding-top:0}
-  body.mobile-composer-focus #main.bot-chat-layout .bothead{display:none}
-  .tabs.bottabs{top:-18px;margin:-18px 0 10px;padding-top:18px}   /* #main's padding is 18px here */
-  .tabs.bottabs button{padding:8px 11px}
 }
 [hidden]{display:none!important}
 /* bot page header (#514): the goal leads; the bot's name and More sit compact beside it. A status
@@ -64,13 +47,15 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 .bot-goal[data-status="none"]{flex-shrink:0}   /* "Set goal" is short: whole, or not in the header */
 .bot-goal:empty,.bot-top.no-goal>.bot-goal{display:none}
 .bot-goal>.muted{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* One line on a computer: the bot (name, then its alert cut to fit) takes the left; the goal sits right, by the actions. */
+/* On a computer the bot takes the left and the goal sits right, by the actions. An alert is the line under the bot's
+   name (style guide, Bot page parts: "The line under a bot's name when its last run stopped"), its one fix beside it,
+   so the name is never cut to make room for it. */
 @media (min-width:1100px){
   .bot-top{align-items:center}
   .bot-ident{flex:1 1 auto;margin-right:auto}
-  .bot-ident .botid{display:flex;align-items:center;gap:10px}
   .bot-ident .bot-nameline{flex:0 1 auto}
-  .bot-ident .meta{margin-top:0;flex:0 1000 auto;overflow:hidden}
+  .bot-ident .meta:not(:empty){display:flex;align-items:center;gap:8px;min-width:0}
+  .bot-ident .meta .bot-alert-resume{margin-left:0;flex:none}
   .bot-ident .bot-stop{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 }
 .bot-goal-main{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:28px;padding:0 10px;overflow:hidden;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:inherit;font:inherit;cursor:pointer}
@@ -86,21 +71,49 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 .bot-goal-mi{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bot-goal-pop a.tl-mi{text-decoration:none}
 .bot-goal-row{padding:8px 0;border-top:1px solid var(--line)}.bot-goal-row:first-child{border-top:0;padding-top:0}
-.person-edit-btn{font-size:var(--t-base);font-weight:400;margin-left:8px;vertical-align:middle}
+/* A person's page: the shared header's title carries their face (pageHeadSet 'title'); the name is cut, never the face. */
+.ph.person-ph>.ph-t{display:flex;align-items:center;gap:10px;min-width:0}
+.ph.person-ph>.ph-t>.av{flex:none}
+.person-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person-goals{margin:0 0 var(--s3)}
+.ph.person-ph #person-dm{display:inline-flex;align-items:center;gap:6px}
+.ph.person-ph #person-dm .nav-icon{font-size:18px}
+#person-github{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+#person-github>.bp-ico{margin:-6px 0}
+.person-form-acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.person-form-acts>[data-status]{margin-right:auto}
+.person-github-form>[data-status]:empty{display:none}
+.tmodal.person-task-dlg{width:min(560px,calc(100vw - 32px))}
+.person-task-dlg .tmodal-body{display:grid;gap:8px}
+.person-task-dlg .tmodal-body :is(input,textarea){width:100%;box-sizing:border-box}
+.person-task-dlg .tmodal-body textarea{min-height:120px;resize:vertical}
+.person-task-dlg .tmodal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.person-task-dlg .tmodal-foot>[role=status]{margin-right:auto;font-size:var(--t-sm)}
 .person-notify{display:flex;width:fit-content;align-items:center;gap:10px;cursor:pointer}.person-notify+.person-notify{margin-top:10px}
-.person-muted{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:8px 0 0 44px;font-size:var(--t-base)}.person-muted[hidden]{display:none}.person-muted select{width:auto;min-width:0;flex:none;padding:2px 6px;font-size:var(--t-base)}
+.person-muted{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:8px 0 0 44px;font-size:var(--t-base)}.person-muted[hidden]{display:none}.person-muted select{width:auto;min-width:0;flex:none}
 #person-notify-status:empty{display:none}#person-notify-status{margin-top:8px;font-size:var(--t-base)}
 .person-head-form{display:grid;gap:8px;margin-top:6px;max-width:640px}.person-head-form input,.person-head-form textarea{width:100%}
 .person-github-form{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.person-github-form input{width:auto;flex:1 1 140px;min-width:0}
-.bot-more-btn{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:6px;color:var(--muted);text-decoration:none}
-.bot-more-btn:hover,.bot-more-btn.cur{color:var(--ink)}
-.bot-more-btn:hover{text-decoration:none}
-.bot-more-btn .nav-icon{width:20px;height:20px;font-size:20px;color:inherit}
-.bot-more-btn.cur{background:var(--surface2)}
+.bot-top>.ph-more{order:4;flex:none;align-self:center;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.bot-top>.ph-more:hover,.bot-top>.ph-more[aria-expanded=true],.bot-top>.ph-more.cur{background:var(--surface2);color:var(--ink)}
+.bot-top>.ph-more .nav-icon{font-size:20px}
+/* ⋯'s list (page-head.ts pageHeadMore): its groups split by a hairline, each item a mark and its words. Incognito is
+   in it only on a phone, where the top line has no room for the lock. */
+#bot-more-menu .bot-mi{display:flex;align-items:center;gap:8px}
+#bot-more-menu .bot-mi .nav-icon{flex:none;width:18px;font-size:17px;color:var(--muted)}
+#bot-more-menu .bot-mi[aria-pressed=true] .nav-icon{color:var(--ink)}
+#bot-more-menu .bot-mi[aria-current=page]{background:var(--surface2);font-weight:600}
+#bot-more-menu .bot-mi-phone,#bot-more-menu [hidden]{display:none}
+#bot-more-menu>.bot-mgroup+.bot-mgroup:not([hidden]){margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
+@media (max-width:760px){
+  #bot-more-menu .bot-mi-phone:not([hidden]){display:flex}
+  #bot-more-menu .bot-mi-phone:not([hidden])~.bot-mgroup:first-of-type{margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
+  /* the lock is Incognito in ⋯ here, and the chat's Members too: back, the bot, Chat, Tasks and ⋯ fill the line */
+  #bot-top>.bot-incognito,#bot-top-acts [data-thv-members]{display:none}
+}
 .bot-switch{display:none}
 .bot-switch button{flex:none;border:0;border-radius:7px;background:none;padding:5px 10px;color:var(--muted);font-weight:600;font-size:var(--t-base);cursor:pointer}
 .bot-switch button.cur{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
-.bot-back{display:inline-block;margin:0 0 var(--s3);font-size:var(--t-base)}
 /* The right rail (#pane-tasks), after BotDesk: plain sections split by 1px lines, small muted headings,
    rows about 28px tall, one short muted line or no section at all when empty, and a small "+N" instead of
    a button. On a desktop it runs the full height of the page beside the top bar and chat (chat.css). */
@@ -125,6 +138,11 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-task-tabs::-webkit-scrollbar{height:4px}
 .bot-task-tabs::-webkit-scrollbar-thumb{border-radius:2px;background:var(--line)}
 .bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;min-height:26px;padding:3px 8px;font-size:var(--t-sm)}
+/* Tabs past the rail's width wait behind ⋯ at the bar's end (bot-tasks.ts botTaskTabsFit); editing shows them all. */
+.bot-task-tabs.tabs.slim>.bot-tab-over{display:none}
+.bot-task-tabs.tabs.slim>.bot-tab-more{display:inline-grid;place-items:center;margin-left:auto;padding:0 6px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted)}
+.bot-task-tabs.tabs.slim>.bot-tab-more:hover,.bot-task-tabs.tabs.slim>.bot-tab-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.bot-task-tabs>.bot-tab-more .nav-icon{font-size:18px}
 .trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
@@ -218,10 +236,8 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-nameline h1{min-width:0;flex:0 1 auto}
 @media (min-width:1100px){.bot-top .bot-switch{display:none}}
 @media (max-width:1099px){
-  .bot-back,.bot-more-btn{display:none}   /* Chat · Tasks · More in the top line is the way around */
   .bot-top{flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:8px}
   .bot-ident{flex:1 1 0;max-width:none;gap:8px}
-  .bot-ident .av{width:28px!important;height:28px!important;font-size:var(--t-sm)!important}
   .bot-ident>[data-tip-bot]{display:inline-grid;place-items:center;min-width:44px;min-height:44px;margin:-8px}   /* status tip: a 44 px tap */
   .bot-ident h1{font-size:var(--t-lg)}
   .bot-top .bot-switch{display:flex;order:2;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
@@ -299,12 +315,16 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   #bot-access-card .acc-summary{font-size:var(--t-sm);margin-bottom:6px}
 }
 
-/* Configuration tabs remain visible at every width; their panes retain unsaved edits while switching. */
-.bot-detail-tabs{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;gap:4px;overflow-x:auto;flex-wrap:nowrap;margin:0 0 16px;border-bottom:1px solid var(--line)}
-.bot-detail-tabs button{flex:none;white-space:nowrap;padding:10px 14px}
+/* Configuration tabs remain visible at every width; their panes retain unsaved edits while switching. They are the
+   shared header's tabs (.ph-tab, page-head.css), which that sheet styles only inside a header: the same look here. */
+.bot-detail-tabs{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap;margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
+.bot-detail-tabs::-webkit-scrollbar{display:none}
+.bot-detail-tabs>.ph-tab{flex:none;box-sizing:border-box;height:auto;min-height:0;margin:0;padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;box-shadow:none;color:var(--muted);font:inherit;font-size:var(--t-base);font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer}
+.bot-detail-tabs>.ph-tab:hover{background:var(--surface2);color:var(--ink)}
+.bot-detail-tabs>.ph-tab.cur{background:var(--surface2);color:var(--ink);font-weight:600}
+.bot-detail-tabs>.ph-tab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 #bot-details{min-width:0}
 .bot-editor.bot-editor-inline{width:100%;max-height:none;box-shadow:none;border-radius:0;overflow:visible}
-.bot-editor-inline .tmodal-head{position:static;padding:0 0 12px}
 .bot-editor-inline .bot-editor-body{padding:12px 0}
 .bot-editor-inline .bot-editor-foot{position:static;padding:12px 0 0}
 .bot-editor-inline .sb-rows{background:none}
@@ -323,8 +343,8 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .screen-control>.bot-screen-steps{flex:1 1 100%;min-width:0;font-size:var(--t-sm)}
 .bot-screen-steps details{margin-top:8px}
 @media(max-width:760px){
-  .bot-detail-tabs{gap:0;margin-bottom:12px}
-  .bot-detail-tabs button{flex:1;padding:9px 8px;font-size:var(--t-sm)}
+  .bot-detail-tabs{margin-bottom:12px}
+  .bot-detail-tabs>.ph-tab{min-height:44px;display:inline-flex;align-items:center}
 }
 
 .bot-settings-panel:is(.owner-picker,.access-editor){width:100%;max-width:none;max-height:none;padding:0;box-shadow:none;margin-top:18px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
@@ -347,3 +367,65 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 /* #282: the tabs are icons (chat, Tasks, ⋯) */
 .bot-switch button{display:inline-grid;place-items:center}
 .bot-switch button .nav-icon{font-size:20px;width:20px;height:20px}
+
+/* On a computer the chat and the tasks sit side by side, so the top line has no Chat · Tasks switch; while a detail
+   view shows, its Chat mark is the way back to the chat (the old "‹ Home" link above the tabs is gone). */
+@media (min-width:1100px){
+  #main:not(.bot-chat-layout) .bot-top .bot-switch:has(button){display:flex;order:2;flex:none;align-self:center;gap:2px}
+  #main:not(.bot-chat-layout) .bot-top .bot-switch [data-bt=tasks]{display:none}
+  #main:not(.bot-chat-layout) .bot-top .bot-switch button:hover{background:var(--surface2);color:var(--ink)}
+}
+/* A quiet icon button in a card's header (Add goal; on a person's page Edit and Add): an action drawn as a button,
+   never as an underlined link. A control's height on a computer, the 44px target on a phone (--ctl-sm). */
+button.bp-ico{display:inline-grid;place-items:center;flex:none;box-sizing:border-box;width:var(--ctl-sm);height:var(--ctl-sm);min-height:0;margin:-4px 0;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+button.bp-ico:hover{background:var(--surface2);color:var(--ink)}
+button.bp-ico:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+button.bp-ico .nav-icon{font-size:18px;color:inherit}
+section.card>header>button.bp-ico{margin-left:auto}
+/* Working notes: one section a note, each folding behind its heading's chevron; an empty one is its name and "Empty". */
+.bot-note{border-top:1px solid var(--line)}
+.bot-note:first-child{border-top:0}
+.bot-note>summary,.bot-note-empty{display:flex;align-items:center;gap:6px;min-height:36px;font-size:var(--t-base);font-weight:600;color:var(--ink)}
+.bot-note>summary{cursor:pointer;list-style:none}
+.bot-note>summary::-webkit-details-marker{display:none}
+.bot-note>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;color:var(--muted)}
+.bot-note[open]>summary::before{transform:var(--chev-open)}
+.bot-note>.md{padding:0 0 var(--s3) 10px}
+.bot-note-empty{gap:10px;padding-left:10px}
+.bot-note-empty .muted{font-weight:400}
+@media (max-width:760px){.bot-note>summary,.bot-note-empty{min-height:44px}}
+/* The request form's row: its status, then Cancel, then Send changes last at the right (Button order). */
+.bot-instructions-acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.bot-instructions-acts>[role=status]{margin-right:auto;font-size:var(--t-sm);color:var(--muted)}
+/* Settings: the tab already says "Settings", so the editor inside it draws no title of its own; its ⋯ (Archive bot)
+   sits at the card's top right, beside the first section's heading. The title stays for screen readers and focus. */
+.bot-editor-card{position:relative}
+.bot-editor-inline .tmodal-head{position:absolute;top:var(--s3);right:var(--s3);z-index:1;padding:0;border:0;background:none}
+.bot-editor-inline #bot-editor-title{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.bot-editor-inline .bot-editor-body{padding-top:0}
+/* The last run's dialog: the small dialog, its one action at the right of the foot. */
+.tmodal.bot-last-stop{width:min(440px,calc(100vw - 32px))}
+.bot-last-stop .tmodal-body p{margin:0 0 var(--s3);font-size:var(--t-md);line-height:var(--lh)}
+.bot-last-stop .tmodal-body p:last-child{margin-bottom:0}
+.bot-last-stop .tmodal-foot{display:flex;justify-content:flex-end;gap:8px}
+/* A phone: what a finger taps on these pages is a 44px target (style guide, Platform rules). The rules above that set a
+   smaller height for a computer are lifted here; marks that stay small (the rail's edit pencil, a link in a list) keep
+   their size and reach 44px with a ::before (forms.css .tap-mark's way), clear of what sits beside them. */
+@media (max-width:760px){
+  .bot-task-tabs.tabs.slim button{min-height:44px}
+  .bot-rail .rail-foot{gap:16px}
+  .bot-rail .rail-foot a.rail-more{display:inline-flex;align-items:center;min-height:44px}
+  #bot-sidebar-edit{width:44px;height:44px;margin:0;top:0;right:-10px}
+  #bot-tools :is(.bt-item,.bt-repo)>summary{min-height:44px;box-sizing:border-box}
+  #bot-goals-list .goal-ed-text{min-height:44px}
+  :is(#pane-more,#pane-history,#person-tasks-card) section.card>header a.linkish,#bot-updates-card>header a.linkish{display:inline-flex;align-items:center;min-height:44px;padding:0 8px}
+  #bot-updates-card .upd-switch,.screen-toggle,.person-notify{min-height:44px}
+  #bot-recent-runs tr{min-height:44px;box-sizing:border-box}
+  #bot-recent-runs td a{position:relative}
+  #bot-recent-runs td a::before{content:"";position:absolute;top:calc(50% - 22px);bottom:calc(50% - 22px);left:-12px;right:-12px}
+  .person-tasks-done>summary{display:flex;align-items:center;min-height:44px}
+  /* Reports and Bots: chips 32px tall in rows 12px apart, each with a 44px target that never reaches the next row. */
+  #pane-profile .chip-list{gap:12px 16px}
+  #pane-profile .chip-list>a.chip{position:relative;min-height:32px;min-width:44px;box-sizing:border-box}
+  #pane-profile .chip-list>a.chip::before{content:"";position:absolute;left:0;right:0;top:-6px;bottom:-6px}
+}

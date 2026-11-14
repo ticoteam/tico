@@ -35,7 +35,7 @@ interface DirHistoryRow { id: string; attribute_key: string; value: unknown; sou
 
 const DIR_WORKS_AT = ['works_at', 'member_of'];
 const DIR_EFFECTS: Record<string, [string, string]> = {
-  block: ['Block', 'fail'], escalate: ['Ask', 'waiting'], warn: ['Warn', 'waiting'], ok: ['Ok', 'ok'], skip: ['Skip', ''],
+  block: ['Block', 'fail'], escalate: ['Ask', 'waiting'], warn: ['Warn', 'waiting'], ok: ['Ok', ''], skip: ['Skip', ''],
 };
 
 const dirOut = (l: DirLink, me: string): boolean => l.from_entity_id === me;
@@ -68,7 +68,8 @@ async function pageDirectoryEntity(id: string): Promise<void> {
       get<{ types: DirType[] }>('/v2/entities/types', { fresh: true }).then(r => r.types),
     ]);
   } catch (e) {
-    if (dirLive(run)) main.innerHTML = `<div class="tt dir"><p><a href="${DIR_ROUTE}">Contacts</a></p>${dirErr(e)}</div>`;
+    // The header still goes back to Contacts; the error says what happened.
+    if (dirLive(run)) main.innerHTML = `<div class="tt dir">${pageHead({title: 'Contact', hook: 'dir-ehead', back: {href: DIR_ROUTE, label: 'Contacts'}, more: PAGE_HEAD_COPY})}${dirErr(e)}</div>`;
     return;
   }
   // Rules, the type's field names and our own row are drawn when they come; the page does not wait on them.
@@ -91,17 +92,16 @@ async function pageDirectoryEntity(id: string): Promise<void> {
 }
 
 // ----------------------------------------------------------------- header
-function dirCrumb(card: DirCard, types: readonly DirType[], parent: DirLink | undefined): string {
-  // A type the list does not show (a document) has no list to go back to.
+// The one page header (ui/app/page-head.ts): "Contacts ›" back to the list of the contact's type (Contacts itself for a
+// type the list does not show, a document), the contact's name as the title, ⋯ last. Under it, the identity line: the
+// avatar, who or what it is, and how it relates to us in muted words.
+function dirHead(card: DirCard, types: readonly DirType[]): string {
   const listed = types.some(t => t.key === card.type);
-  return `<nav class="dir-crumb" aria-label="Contacts"><a href="${DIR_ROUTE}">Contacts</a>
-    ${listed ? `<span aria-hidden="true">›</span> <a href="${dirListHref(card.type)}" data-dir-crumb-type>${esc(dirTypeName(types, card.type, true))}</a>` : ''}
-    ${parent ? `<span aria-hidden="true">›</span> <a href="${dirHref(parent.other_id)}">${esc(parent.other_name)}</a>` : ''}</nav>`;
+  return pageHead({title: card.name, hook: 'dir-ehead', back: {href: listed ? dirListHref(card.type) : DIR_ROUTE, label: 'Contacts'}, more: PAGE_HEAD_COPY});
 }
 function dirHero(card: DirCard, sub: string, chips: string): string {
-  return `<header class="dir-hero"><span class="dir-av dir-av-lg" aria-hidden="true">${esc(dirInitials(card.name))}</span>
-    <div class="dir-hero-text"><h1 data-dir-name>${esc(card.name)}</h1>${sub ? `<p class="muted dir-sub" data-dir-sub>${sub}</p>` : ''}</div>
-    ${chips ? `<div class="dir-chips">${chips}</div>` : ''}</header>`;
+  return `<div class="dir-hero"><span class="dir-av dir-av-lg" aria-hidden="true">${esc(dirInitials(card.name))}</span>
+    ${sub ? `<p class="muted dir-sub" data-dir-sub>${sub}</p>` : ''}${chips ? `<div class="dir-chips">${chips}</div>` : ''}</div>`;
 }
 // A document is a file, not a contact: it opens its file (a page in Tico, any other file as itself), and without one
 // it is its name alone.
@@ -129,8 +129,8 @@ function dirEntityHTML(card: DirCard, types: readonly DirType[], describe: DirDe
   }
   if (where) subParts.push(dirLinkTo(where));
   const rel = card.links_to_us.length ? card.links_to_us : card.organization?.links_to_us ?? [];
-  const chips = dirRelationChip(rel) + (card.self ? ' <span class="pill ok">Us</span>' : '');
-  return `${dirCrumb(card, types, undefined)}${dirHero(card, subParts.join(' · '), chips)}
+  const chips = dirRelationChip(rel) + (card.self ? ' <span class="muted">Us</span>' : '');
+  return `${dirHead(card, types)}${dirHero(card, subParts.join(' · '), chips)}
     <div class="dir-cols">
       <div class="dir-main">
         ${dirRulesCard('Rules')}
@@ -155,7 +155,8 @@ function dirDetailsCard(card: DirCard, describe: DirDescribe | null): string {
       <td>${values.map(v => `<span class="dir-val">${esc(dirValueText(v.value))}</span>`).join(', ')}</td>
       <td class="dir-meta">${values.slice(0, 1).map(v => {
         const from = dirValueSource(v);
-        return `${from ? `<span class="pill dir-src" data-dir-src>${esc(from)}</span>` : ''}<button type="button" class="dir-age" data-dir-history="${esc(key)}" aria-label="History of ${esc(named.get(key) ?? key)}" title="History">${esc(dirShortAgo(v.updated_at))}</button>`;
+        // Where it came from and when, as one muted line on the value's row ("You · Nov 11"); the age opens its history.
+        return `${from ? `<span class="dir-src" data-dir-src>${esc(from)}</span><span aria-hidden="true"> · </span>` : ''}<button type="button" class="dir-age tap-mark" data-dir-history="${esc(key)}" aria-label="History of ${esc(named.get(key) ?? key)}" title="History">${esc(dirShortAgo(v.updated_at))}</button>`;
       }).join('')}</td></tr>`);
   }
   if (!rows.length) return '';
@@ -269,10 +270,8 @@ async function dirHistoryDrawer(card: DirCard, key: string, name: string): Promi
     body.innerHTML = dirErr(e);
   }
 }
-const dirDay = (iso: string): string => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
-};
+// A day in the app's date words (ui/app/format.ts dayWords: "Nov 11", "Nov 11, 2024"); what is not a date stays as written.
+const dirDay = (iso: string): string => dayWords(iso) || iso;
 
 // ----------------------------------------------------------------- a place
 function dirPlaceHTML(card: DirCard, types: readonly DirType[], us: DirSelf | null): string {
@@ -284,12 +283,14 @@ function dirPlaceHTML(card: DirCard, types: readonly DirType[], us: DirSelf | nu
   const place = card.place ?? { kind: '', governing_body: '', shared: false };
   const operate = us?.operates_in.some(p => p.id === me) ?? false;
   const governor = place.governing_body || bodies.find(l => l.link_key === 'governs')?.other_name || '';
-  const sub = [place.kind ? esc(dirCap(place.kind.replace(/_/g, ' '))) : '', governor ? `governed by ${esc(governor)}` : ''].filter(Boolean).join(' · ');
-  const chips = (operate ? '<span class="pill ok" data-dir-operate>We operate here</span> ' : '')
-    + (place.shared ? '<span class="pill" data-dir-shared>Shared</span>' : '');
+  // The place it sits in is on the identity line (it was a breadcrumb step): "City · in Texas · governed by …".
+  const sub = [place.kind ? esc(dirCap(place.kind.replace(/_/g, ' '))) : '', parent ? `in ${dirLinkTo(parent)}` : '',
+    governor ? `governed by ${esc(governor)}` : ''].filter(Boolean).join(' · ');
+  const chips = [operate ? '<span class="muted" data-dir-operate>We operate here</span>' : '',
+    place.shared ? '<span class="muted" data-dir-shared>Shared</span>' : ''].filter(Boolean).join('<span class="muted" aria-hidden="true"> · </span>');
   const list = (rows: readonly DirLink[], label: (l: DirLink) => string): string =>
     `<ul class="dir-plain">${rows.map(l => `<li>${dirLinkTo(l)}${label(l) ? ` <span class="muted">${esc(label(l))}</span>` : ''}</li>`).join('')}</ul>`;
-  return `${dirCrumb(card, types, parent)}${dirHero(card, sub, chips)}
+  return `${dirHead(card, types)}${dirHero(card, sub, chips)}
     <div class="dir-cols">
       <div class="dir-main">
         ${dirRulesCard('Rules that bind us here')}

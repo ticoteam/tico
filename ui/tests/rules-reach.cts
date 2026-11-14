@@ -39,9 +39,24 @@ const RULES = [
 ];
 const PARTIES = ['*', ...fx.groups.map(g => 'group:' + g.id), ...fx.people.map(p => 'human:' + p.id), ...fx.employees.map((e: {name: string}) => 'bot:' + e.name)];
 
-async function openReach(browser: import('playwright').Browser, {viewport = DESKTOP, hash = '#/rules', viewer = 'ana', mayEdit = PARTIES} = {}) {
+// Outside, Due and Pipelines and stages, for their own checks (a phone's filter menu, the Status column, the headings).
+const EXTERNAL = [
+  {...rule('x-1', 'File a 1099-NEC for each vendor paid for services.', {everyone: true}), kind: 'external', source: {id: 's-irs', name: 'IRS', kind: 'government'}},
+  {...rule('x-2', 'Pay Acme Books invoices within 30 days.', {everyone: true}), kind: 'external', source: {id: 's-acme', name: 'Acme Books', kind: 'vendor'}},
+];
+const dueRow = (id: string, status: string, due_on: string) => ({id, status, due_on, repeats: 'yearly', task_days: 10, owner: 'bot:builder', rule: {id: 'x-1', text: 'File the 1099s ' + id}});
+const due = {list: [dueRow('d-1', 'upcoming', '2027-01-31'), dueRow('d-2', 'satisfied', '2026-01-31')]};
+const STAGE_RULES = [
+  {id: 'sr-1', name: 'Owner on the team', pipeline_id: 'eng', pipeline_name: 'Engineering', stages: ['build', 'fix2'], stage_names: ['Build', 'Fixes 2'],
+    event: 'enters', then: 'block', scope: 'stage', revision: 1, status: 'active', cost: 'free', can_edit: true},
+  {id: 'sr-2', name: 'Snooze only for a real wait', pipeline_id: '', stages: [], event: 'bot_snoozes', jev: 'Is it a real wait?', then: 'block', scope: 'company', revision: 1,
+    status: 'active', cost: 'One Jev call per event', can_edit: true},
+];
+// The checks line's read (GET /v2/rules/stats), changed by a test before it opens the page.
+const stats = {on: true, checks_today: 12, unchecked_today: 0, usd_left: 48, people_usd: 0};
+async function openReach(browser: import('playwright').Browser, {viewport = DESKTOP, hash = '#/rules', viewer = 'ana', mayEdit = PARTIES, role = 'member'} = {}) {
   const person = fx.people.find(p => p.id === viewer);
-  const me = viewer === fx.me.id ? fx.me : {id: viewer, name: person!.name, email: viewer + '@acme.example', role: 'member', company_role: 'member', cloud: true};
+  const me = viewer === fx.me.id ? fx.me : {id: viewer, name: person!.name, email: viewer + '@acme.example', role, company_role: 'member', cloud: true};
   const config = {company_name: 'Acme'};
   const may = new Set(mayEdit);
   const reach: {settings: Setting[]; lines: Line[]} = {
@@ -76,7 +91,11 @@ async function openReach(browser: import('playwright').Browser, {viewport = DESK
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/groups') return json(fx.groups);
     // Rules (backend/org_rules.py shapes).
-    if (p === '/api/v2/rules' && method === 'GET') return json({rules: url.searchParams.get('kind') === 'internal' ? RULES : [], next_cursor: null});
+    if (p === '/api/v2/rules' && method === 'GET') return json({rules: url.searchParams.get('kind') === 'internal' ? RULES : url.searchParams.get('kind') === 'external' ? EXTERNAL : [], next_cursor: null});
+    if (p === '/api/v2/rules/stats') return json(stats);
+    if (p === '/api/v2/rule-sources') return json({sources: [{id: 's-irs', name: 'IRS', kind: 'government'}, {id: 's-acme', name: 'Acme Books', kind: 'vendor'}], next_cursor: null});
+    if (p === '/api/v2/rules/due') return json({due: due.list, next_cursor: null});
+    if (p === '/api/v2/stage-rules') return json({items: url.searchParams.get('status') ? [] : STAGE_RULES, built_in: []});
     if (p === '/api/v2/rules' && method === 'POST') return json({...rule('r-new', body.text, body.who), who: body.who});
     let m = p.match(/^\/api\/v2\/rules\/([^/]+)$/);
     if (m && RULES.some(r => r.id === m![1])) return json(RULES.find(r => r.id === m![1]));
@@ -107,7 +126,8 @@ async function openReach(browser: import('playwright').Browser, {viewport = DESK
     return json(unrouted(p));
   });
   await page.goto(ORIGIN + '/' + hash);
-  await page.locator('.rr').waitFor();
+  if (hash.startsWith('#/rules/')) await page.locator('.ru-list :is(.ru-table, .ru-sg, .ru-pad)').first().waitFor();
+  else await page.locator('.rr').waitFor();
   return {page, errors, writes, reach};
 }
 
@@ -212,6 +232,8 @@ async function until(fn: () => unknown, what: string) {
       assert.deepEqual(await ed.locator('[data-rr-dir]').allInnerTexts(), ['Builder → Web', 'Web → Builder']);
       assert.equal(await ed.locator('[data-rr-dir="to"]').getAttribute('aria-pressed'), 'true');
       assert.equal(await ed.locator('input[name=per_day]').inputValue(), '0', 'a new exception starts at 0 while Builder is open');
+      // Button order (style guide): Cancel left of the forward action, which is last; a new one has nothing to remove.
+      assert.deepEqual(await ed.locator('.rr-foot button').allInnerTexts(), ['Cancel', 'Add']);
       await shot(page, 'desktop-editor');
       await ed.locator('[data-rr-dir="from"]').click();
       await ed.locator('input[name=per_day]').fill('5');
@@ -227,6 +249,7 @@ async function until(fn: () => unknown, what: string) {
       await panel(page).locator('[data-rr-line="l-2"]').click();
       assert.equal(await ed.locator('input[name=per_day]').inputValue(), '20');
       assert.equal(await ed.locator('[data-rr-save]').innerText(), 'Save');
+      assert.deepEqual(await ed.locator('.rr-foot button').allInnerTexts(), ['Remove', 'Cancel', 'Save'], 'Remove alone on the left, Save last');
       await ed.locator('input[name=per_day]').fill('');
       await ed.locator('[data-rr-save]').click();
       await until(async () => lastWrite(writes, 'POST')?.path === '/api/v2/reach/lines/l-2', 'line saved');
@@ -357,28 +380,57 @@ async function until(fn: () => unknown, what: string) {
       await page.close();
     }
 
-    // ---- a phone: the map (scrolling inside its pane), a list while searching, the party's panel under the map
+    // ---- a phone: one team at a time (style guide, Org chart: the switcher replaces the canvas, which never shrinks to
+    // fit): a Team select and the team's rows, a list while searching, and a row's panel in their place, with ‹ back
     {
       const {page, errors, writes} = await openReach(browser, {viewport: PHONE});
-      assert.equal(await page.locator('.rr-map').isVisible(), true);
+      await page.locator('select[data-rr-team]').waitFor();
+      assert.equal(await page.locator('.rr-map').count(), 0, 'no chart on a phone');
       assert.equal(await page.locator('.rr-side').isVisible(), false);
       assert.equal(await page.locator('.rr-pick').isVisible(), false);
-      await noSideways(page, 'phone map');
-      await shot(page, 'phone-map');
-      // A tap on the map picks a party, as on a computer.
-      await page.locator('.rr-cv [data-rr-party="bot:builder"]').tap();
-      await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown from the map');
-      assert.equal(await page.locator('.rr-map').isVisible(), true);
+      // The top of the chart: Everyone first, the teams step in.
+      const parties = () => page.locator('.rr-tlist .rr-trow').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty || 'team:' + x.dataset.rrTeamGo));
+      const top = await parties();
+      assert.equal(top[0], '*');
+      assert.ok(top.includes('team:eng') && top.includes('team:sales'), top.join());
+      for (const h of await page.locator('.rr-tlist .rr-trow').evaluateAll(b => b.map(x => x.getBoundingClientRect().height))) assert.ok(h >= 44, 'a 44px row');
+      await noSideways(page, 'phone teams');
+      await shot(page, 'phone-teams');
+      // A team steps in: the team itself first, then its people and bots; a team inside it is a row too.
+      await page.locator('.rr-tlist [data-rr-team-go="eng"]').tap();
+      await until(async () => (await page.locator('select[data-rr-team]').inputValue()) === 'eng', 'Engineering picked');
+      const eng = await parties();
+      assert.equal(eng[0], 'group:eng');
+      assert.ok(['bot:builder', 'bot:reviewer', 'human:cara', 'team:web'].every(p => eng.includes(p)), eng.join());
+      assert.ok(!eng.includes('bot:sdr'), 'only this team');
+      // The select names nested teams under their parent, and picks any team at once.
+      assert.ok((await page.locator('select[data-rr-team] option').allInnerTexts()).includes('Engineering › Web'));
+      await page.locator('select[data-rr-team]').focus();
+      await page.locator('select[data-rr-team]').selectOption('sales');
+      await until(async () => (await parties()).includes('bot:sdr'), 'Sales listed');
+      // A pick keeps the focus on the select: it is given its value, never drawn again.
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('select[data-rr-team]')), true, 'the select keeps the focus');
+      const sel = await page.locator('select[data-rr-team]').elementHandle();
+      await page.locator('select[data-rr-team]').selectOption('outbound');
+      await until(async () => (await page.locator('.rr-tlist [data-rr-party="group:outbound"]').count()) === 1, 'Outbound listed');
+      assert.equal(await page.evaluate(s => document.activeElement === s && s!.isConnected, sel), true, 'the same select, still focused, after a second pick');
+      await page.locator('select[data-rr-team]').selectOption('eng');
+      await until(async () => (await parties()).includes('bot:builder'), 'Engineering again');
+      // A row opens its panel in the list's place.
+      await page.locator('.rr-tlist [data-rr-party="bot:builder"]').tap();
+      await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown from a row');
+      assert.equal(await page.locator('.rr-tlist').isVisible(), false);
       await panel(page).locator('.rr-back').tap();
-      await until(async () => !(await page.locator('.rr-side').isVisible()), 'map alone again');
+      await until(async () => !(await page.locator('.rr-side').isVisible()), 'the team again');
+      assert.equal(await page.locator('select[data-rr-team]').inputValue(), 'eng', 'the team is kept');
       await page.locator('.ru-ph .rr-q').fill('build');
-      assert.equal(await page.locator('.rr-map').isVisible(), false);
+      assert.equal(await page.locator('.rr-tlist').isVisible(), false);
       assert.deepEqual(await page.locator('.rr-pick [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['bot:builder']);
       assert.equal(await page.locator('.ru-ph .rr-results').isVisible(), false);
       await page.locator('.rr-pick [data-rr-party="bot:builder"]').tap();
       await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown');
       assert.equal(await page.locator('.rr-pick').isVisible(), false);
-      assert.equal(await page.locator('.rr-map').isVisible(), true);
+      assert.equal(await page.locator('.rr-tlist').isVisible(), false);
       assert.equal(await panel(page).locator('h2').innerText(), 'Builder');
       const box = (await panel(page).boundingBox())!;
       assert.ok(box.width >= PHONE.width - 2, `full width (${box.width})`);
@@ -392,10 +444,110 @@ async function until(fn: () => unknown, what: string) {
       await panel(page).locator('.rr-ed [data-rr-save]').tap();
       await until(async () => lastWrite(writes, 'POST'), 'added on a phone');
       assert.deepEqual(lastWrite(writes, 'POST').body, {sender: 'bot:builder', receiver: 'human:cara', per_day: 0, rule: null});
-      // Back to the map.
+      // Back to the team's rows.
       await panel(page).locator('.rr-back').tap();
-      await until(async () => !(await page.locator('.rr-side').isVisible()), 'map again');
-      assert.equal(await page.locator('.rr-map').isVisible(), true);
+      await until(async () => !(await page.locator('.rr-side').isVisible()), 'rows again');
+      assert.equal(await page.locator('.rr-tlist').isVisible(), true);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // ---- Outside and Due on a phone: the filters behind the shared filter icon, never a block of chips
+    for (const [tab, label] of [['external', 'Outside'], ['due', 'Due']] as const) {
+      const {page, errors} = await openReach(browser, {viewport: PHONE, hash: '#/rules/' + tab});
+      assert.equal(await page.locator('.ru-filters .ru-f').evaluateAll(b => b.some(x => (x as HTMLElement).checkVisibility())), false, `${label}: no chips on a phone`);
+      const btn = page.locator('.ru-filters [data-ru-filter]');
+      assert.equal(await btn.isVisible(), true, `${label}: the filter icon`);
+      assert.ok((await btn.boundingBox())!.height >= 44, `${label}: a 44px target`);
+      if (tab === 'external') {
+        const [q, b] = [await page.locator('.ru-filters .ru-q').boundingBox(), await btn.boundingBox()];
+        assert.ok(q && b && Math.abs((q.y + q.height / 2) - (b.y + b.height / 2)) < 2 && b.x > q.x, `${label}: beside the search`);
+      }
+      assert.equal(await btn.locator('.tl-fbadge').isVisible(), false, `${label}: no badge with nothing on`);
+      await btn.tap();
+      const pop = page.locator('#task-filter-pop:popover-open');
+      await pop.waitFor();
+      const items = await pop.locator('.tl-mi[data-ru-f]').evaluateAll(b => b.map(x => [x.querySelector('.tl-mi-t')!.textContent, x.querySelector('.tl-mi-n')!.textContent]));
+      assert.ok(items.length > 0 && items.every(([, n]) => n !== '0'), `${label}: choices with counts, none at 0: ${JSON.stringify(items)}`);
+      const box = (await pop.boundingBox())!;
+      assert.ok(box.y + box.height >= PHONE.height - 2 && box.width >= PHONE.width - 2, `${label}: a sheet from the bottom`);
+      const first = pop.locator('.tl-mi[data-ru-f]').first(), what = await first.locator('.tl-mi-t').innerText();
+      await first.tap();
+      await until(async () => (await pop.locator('.tl-mi[aria-checked="true"]').count()) === 1, `${label}: the pick is checked`);
+      assert.equal(await pop.locator('.tl-mi[aria-checked="true"] .tl-mi-t').innerText(), what);
+      assert.equal(await pop.locator('.tl-mi[aria-checked="true"] .tl-mi-on').count(), 1, `${label}: with its mark`);
+      assert.equal(await page.evaluate(() => !!document.activeElement?.matches('#task-filter-pop .tl-mi[aria-checked="true"]')), true, `${label}: the menu stays open, focus on the pick`);
+      await page.keyboard.press('Escape');
+      await until(async () => !(await page.locator('#task-filter-pop').evaluate(e => e.matches(':popover-open'))), `${label}: Esc closes it`);
+      assert.equal(await btn.locator('.tl-fbadge').innerText(), '1', `${label}: the badge counts what is on`);
+      assert.equal(await btn.getAttribute('aria-label'), 'Filter, 1 on');
+      await until(async () => page.evaluate(() => !!document.activeElement?.matches('[data-ru-filter]')), `${label}: the focus returns to the icon`);
+      await noSideways(page, label + ' filters');
+      await shot(page, `phone-${tab}-filter`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // ---- Outside's ⋯: Add document for a person, none for a bot (nor its quiet +)
+    for (const [viewer, role, has] of [['cara', 'member', 1], ['cara', 'bot', 0]] as const) {
+      const {page, errors} = await openReach(browser, {viewer, role, hash: '#/rules/external'});
+      assert.equal(await page.locator('.ru-ph > .ph-menu [data-ru-add-doc]').count(), has, `${role}: Add document in ⋯`);
+      assert.equal(await page.locator('.ru-ph [data-ru-add]').count(), has, `${role}: the quiet +`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // ---- the rule checks: a quiet line in ⋯; when a quarter or more went unchecked, the line is amber and ⋯ has a dot
+    for (const unchecked of [0, 5]) {
+      stats.unchecked_today = unchecked;
+      const {page, errors} = await openReach(browser, {hash: '#/rules/external'});
+      const line = page.locator('.ru-ph > .ph-menu > .ru-checks');
+      await until(async () => (await line.count()) === 1, 'the checks line');
+      const warn = unchecked > 0;
+      assert.equal(await page.locator('.ru-ph > .ph-more.ru-checks-warn').count(), warn ? 1 : 0, `${unchecked} unchecked: the dot`);
+      assert.equal(await line.evaluate(e => e.classList.contains('warn')), warn, `${unchecked} unchecked: amber`);
+      await page.locator('.ru-ph > .ph-more').click();
+      const [lineColor, itemColor] = await line.evaluate(e => [getComputedStyle(e).color, getComputedStyle(document.querySelector('.ru-ph .ph-copy')!).color]);
+      assert.notEqual(lineColor, itemColor, 'never the items\' ink');
+      await page.keyboard.press('Escape');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    stats.unchecked_today = 0;
+
+    // A computer keeps the rail and has no filter icon.
+    {
+      const {page, errors} = await openReach(browser, {hash: '#/rules/external'});
+      assert.equal(await page.locator('.ru-filters .ru-f').first().isVisible(), true);
+      assert.equal(await page.locator('[data-ru-filter]').isVisible(), false);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // ---- Due on a computer: the Status column only when a date has a status worth a word
+    {
+      const {page, errors} = await openReach(browser, {hash: '#/rules/due'});
+      const heads = () => page.locator('.ru-duet .ru-head > span').allInnerTexts();
+      assert.ok(!(await heads()).map(h => h.toUpperCase()).includes('STATUS'), 'upcoming and satisfied only: no Status column');
+      assert.equal(await page.locator('.ru-duet .pill').count(), 0, 'no pill where nothing needs doing');
+      await page.close();
+      due.list = [dueRow('d-1', 'upcoming', '2027-01-31'), dueRow('d-3', 'overdue', '2026-11-01')];
+      const again = await openReach(browser, {hash: '#/rules/due'});
+      assert.ok((await again.page.locator('.ru-duet .ru-head > span').allInnerTexts()).map(h => h.toUpperCase()).includes('STATUS'), 'an overdue date brings Status');
+      assert.equal(await again.page.locator('.ru-duet .pill').allInnerTexts().then(t => t.join()), 'Overdue');
+      due.list = [dueRow('d-1', 'upcoming', '2027-01-31'), dueRow('d-2', 'satisfied', '2026-01-31')];
+      assert.deepEqual([...errors, ...again.errors], []);
+      await again.page.close();
+    }
+
+    // ---- Pipelines and stages: the count sits right after the pipeline's name, the stages muted after it
+    for (const vp of [DESKTOP, PHONE]) {
+      const {page, errors} = await openReach(browser, {viewport: vp, hash: '#/rules/stages'});
+      const h = page.locator('.sr-ru-group').first().locator('header');
+      assert.equal((await h.locator('h2').innerText()).replace(/\s+/g, ' ').trim(), 'Engineering 1');
+      assert.equal(await h.locator('.ru-sg-where').innerText(), 'Build, Fixes 2');
+      assert.equal((await page.locator('.sr-ru-group').nth(1).locator('h2').innerText()).replace(/\s+/g, ' ').trim(), 'Every pipeline 1');
+      assert.equal(await page.locator('.sr-ru-group .pill, .sr-cost').count(), 0, 'no Free or Jev pill');
+      assert.equal(await page.locator('.sr-ru-group .ru-cost').count(), 1, 'a quiet Jev mark');
+      await noSideways(page, 'stages');
       assert.deepEqual(errors, []);
       await page.close();
     }

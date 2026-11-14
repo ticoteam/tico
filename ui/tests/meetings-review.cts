@@ -179,7 +179,10 @@ async function shot(page: Page, name: string) {
         if (filter === 'search') {
           await page.locator('#notes-search').fill('review');
         } else {
-          await page.locator('#notes-source').selectOption('zoom');
+          // The Source filter, behind the shared filter icon (fields, then values).
+          await page.locator('#notes-filter').click();
+          await page.locator('#task-filter-pop [data-meet-field=source]').click();
+          await page.locator('#task-filter-pop .tl-opt', {hasText: 'Zoom'}).click();
         }
         await page.locator('[data-note-row=two]').waitFor({state: 'detached'});
         const visible = ['one', 'three'];

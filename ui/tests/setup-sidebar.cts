@@ -129,7 +129,7 @@ async function wizard(browser: import('playwright').Browser, theme: string) {
   // Leaving setup restores the bar and makes the normal drawer reachable again.
   await phone.page.evaluate(() => { location.hash = '#/tasks'; });
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
   assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link')).includes('tasks'));
@@ -204,7 +204,7 @@ async function created(browser: import('playwright').Browser, theme: string) {
 
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/tasks'});
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor({state: 'visible'});
   await expand(phone.page);

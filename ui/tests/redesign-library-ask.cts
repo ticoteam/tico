@@ -1,5 +1,5 @@
 // Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
-// (ui/app/ask-panel.ts), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
+// (ui/app/ask-panel.ts), which sees the page (Meetings' is in its header's ⋯: the style guide has no chat button in a top bar); no Librarian rail, sidebar row or settings link. The Library and Company sidebar
 // groups fold behind a chevron (kept per browser, open again on their own pages).
 // Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cts).
 import type {Page} from 'playwright';
@@ -12,11 +12,12 @@ const at = (page: Page, hash: string) => go(page, hash).then(() => page.waitForF
 
 run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/docs'});
-  for (const [hash, button] of [['#/docs', '#docs-ask'], ['#/meetings', '#meet-ask'], ['#/tools/keys', '#lc-ask']] as const) {
+  for (const [hash, button] of [['#/docs', '#docs-ask'], ['#/meetings', '#meet-ask']] as const) {
     await at(page, hash);
     const ask = page.locator(button), panel = page.locator('#ask-panel');
+    if (hash === '#/meetings') await page.locator('.notes-head .ph-more').click();
     await ask.waitFor({timeout: t(10000)});
-    assert.equal(await ask.getAttribute('aria-label'), 'Ask', `${tag} ${hash}: Ask`);
+    assert.equal(await ask.getAttribute('aria-label') || (await ask.innerText()).trim(), 'Ask', `${tag} ${hash}: Ask`);
     await ask.click();
     await panel.waitFor({timeout: t(5000)});
     // It sees the page whether or not this person's Assistant is on yet (the hub's may still be off).

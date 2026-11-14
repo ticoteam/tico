@@ -70,7 +70,7 @@ async function visit(page: Page, url: string, {read = true}: {read?: boolean} = 
   const seen = read ? page.waitForResponse((r: {url(): string}) => r.url().endsWith('/api/v2/repositories')) : null;
   await page.goto(url);
   if (seen) await seen;
-  await page.locator(url.includes('/task/') ? '.tmodal-main' : '#bot-banners').first().waitFor({state: 'attached'});
+  await page.locator(url.includes('/task/') ? '#task-modal .task-side' : '#bot-banners').first().waitFor({state: 'attached'});
   await page.waitForTimeout(200);   // the card fills in the same tick as the read; this lets the render finish
 }
 

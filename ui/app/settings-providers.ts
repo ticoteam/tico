@@ -92,7 +92,7 @@ const PROVIDER_PRESETS: SettingsProviderPreset[] = [
   {id: 'subscriptions', label: 'Your Claude and ChatGPT subscriptions only',
    line: 'Bots wait until a Claude or ChatGPT account is signed in on their computer.'},
   {id: 'gateway', label: 'Tico Gateway only', line: 'Bots run on Tico models with the company\'s gateway key below.'},
-  {id: 'own-keys', label: "Your company's plans or API keys", line: 'Bring your own: tick the providers below and sign in, or add API keys in Credentials.'},
+  {id: 'own-keys', label: "Your company's plans or API keys", line: 'Bring your own: tick the providers below and sign in, or add API keys in Tools.'},
 ];
 function providersPresetHTML(view: SettingsProvidersView, dis: string): string {
   const known = view.presets || PROVIDER_PRESETS.map(row => row.id);

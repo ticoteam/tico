@@ -61,7 +61,7 @@ function ageShort(iso: string | null | undefined) {
   if (s < 3600) return `${Math.round(s / 60)}m`;
   if (s < 86400) return `${Math.round(s / 3600)}h`;
   if (s < 86400 * 7) return `${Math.round(s / 86400)}d`;
-  return new Date(t).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  return dayWords(iso);
 }
 // A time from the server. One without an offset is a legacy value the server reads as Pacific (backend/hubdb.py
 // not_yet_due), so it is read the same way here: the day shown never slips by one.

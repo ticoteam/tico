@@ -134,7 +134,7 @@
 <body>
 <section id="asset-recovery" aria-labelledby="asset-recovery-h"><div class="asset-card"><div class="asset-brand">Tico</div><h1 id="asset-recovery-h">Opening your team</h1><p id="asset-recovery-why">If this screen stays here, part of Tico could not load. Check your connection, then reload the page.</p><div class="asset-actions"><a href="/">Reload Tico</a><a href="https://app.tico.dev/support" target="_blank" rel="noopener noreferrer">Contact support</a></div><small>Your team’s billing status has not been checked. A loading problem does not mean you need to add credit.</small><noscript><p>JavaScript is turned off. Enable it in your browser, then reload Tico.</p></noscript></div></section>
 <div id="side-backdrop" hidden></div>
-<div id="stale-banner" role="status" hidden><span>New version ·</span><button class="primary" type="button" id="stale-reload">Reload</button></div>
+<div id="stale-banner" role="status" hidden><span>New version</span><button class="primary" type="button" id="stale-reload">Reload</button></div>
 <div id="app-update" role="status" hidden><span id="app-update-text"></span><button class="primary" type="button" id="app-update-go" hidden>Update</button><a class="primary" id="app-update-dl" target="_blank" rel="noopener noreferrer" hidden>Download</a><button class="ghost" type="button" id="app-update-later">Later</button></div>
 <div id="version-message" role="note" aria-label="Notices from Tico" hidden></div>
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
@@ -204,38 +204,50 @@
       </div>
     </section>
   </nav>
+  <!-- The Assistant on a computer: in the sidebar, in place of the list, above the foot (ask.css); the page and its own
+       chat on the right are never covered. On a phone ui/app/ask-panel.ts moves it out to the page, a full page above the
+       tab bar. -->
+  <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" inert>
+    <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
+      <span class="ask-sees" data-ask-sees><span data-ask-sees-name></span></span>
+      <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
+    <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
+    <div class="ask-form"></div>
+    <p class="err" data-ask-error role="alert" hidden></p>
+  </section>
   <footer class="side-footer">
     <div class="new-version" id="new-version-wrap" hidden>
       <button id="new-version" type="button" aria-expanded="false" aria-controls="new-version-pop"><span class="nv-dot" aria-hidden="true"></span><span id="new-version-label"></span></button>
       <div id="new-version-pop" role="dialog" aria-label="New version" hidden></div>
     </div>
     <a id="changelog-notice" href="#/changelog" hidden><span class="changelog-notice-dot" aria-hidden="true"></span><span class="changelog-notice-label">What's new</span></a>
-    <!-- Ask on a computer: the dot and "Tico Assistant" (ui/app/ask-panel.ts), then Search's icon and the Tico team's ? (ui/support.ts). Where Ask is away
-         (the Assistant page, setup, signed out) the icon is the whole Search row again (search.css): html.ask-away, which
-         ui/theme.ts sets for the first paint from the address. -->
+    <!-- The foot's one row (the style guide's "Sidebar foot, computer"): the Assistant (ui/app/ask-panel.ts), Search's
+         icon (⌘K), Help (ui/support.ts), then your picture and an up arrow, which opens the account menu upward
+         (ui/app/drawer.ts). Where Ask is away (the Assistant page, setup, signed out) Search is the whole row's start again
+         (search.css): html.ask-away, which ui/theme.ts sets for the first paint from the address. -->
     <div class="side-ask">
-      <button class="ask-row" id="ask-row" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Tico Assistant</span><span class="ask-word" data-ask-word></span></button>
+      <button class="ask-row" id="ask-row" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Assistant</span><span class="ask-word" data-ask-word></span></button>
       <button id="search-open" type="button" aria-label="Search (⌘K)" aria-haspopup="dialog" title="Search bots, humans and pages (⌘K)"><span class="nav-icon" aria-hidden="true">search</span><span class="search-label">Search</span><kbd>⌘K</kbd></button>
-      <button id="support-open" type="button" aria-label="Tico team" aria-haspopup="dialog" title="Tico team"><span class="nav-icon" aria-hidden="true">help</span></button>
-    </div>
-    <div class="side-utility">
+      <button id="support-open" type="button" aria-label="Help" aria-haspopup="dialog" title="Help"><span class="nav-icon" aria-hidden="true">help</span></button>
       <div class="account-wrap">
-        <button id="account" type="button" aria-expanded="false" aria-controls="account-menu" title="Account navigation"><span id="heartbeat" class="account-dot" role="status" aria-label="Connecting" title="Connecting"></span><span class="account-email">Signing in…</span></button>
+        <button id="account" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="Account"><span class="account-face" aria-hidden="true"></span><span id="heartbeat" class="account-dot" role="status" aria-label="Connecting" title="Connecting"></span><span class="sr-only">Account, </span><span class="account-email sr-only">Signing in…</span><span class="nav-icon account-up" aria-hidden="true">expand_more</span></button>
         <div id="account-status-pop" class="account-status" hidden></div>
-        <nav id="account-menu" aria-label="Account navigation" hidden>
-          <div id="account-status" class="account-status" hidden></div>
-          <a class="nav-link" href="#/replay" data-nav="replay"><span class="nav-icon" aria-hidden="true">history</span>Replay</a>
-          <a class="nav-link" href="#/learnings" data-nav="learnings"><span class="nav-icon" aria-hidden="true">psychology</span>Learnings</a>
-          <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
-          <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
-          <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
-          <a class="nav-link" id="account-administration" target="_blank" rel="noopener noreferrer" hidden><span class="nav-icon" aria-hidden="true">manage_accounts</span>Admin</a>
-          <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
-          <button class="nav-link" id="org-switch" type="button" hidden><span class="nav-icon" aria-hidden="true">swap_horiz</span>Switch organization</button>
-          <button class="nav-link" id="org-add" type="button" hidden><span class="nav-icon" aria-hidden="true">add</span>Add organization</button>
-          <a class="nav-link" id="sign-out" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
-          <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
-        </nav>
+        <!-- Settings holds what is set once; the rest are places. Switch organization, Admin, Download the app and Sign out
+             show only where they apply. Replay is hidden for now (Chris, Nov 13); its page still opens from its address. -->
+        <div id="account-menu" role="menu" aria-label="Account" hidden>
+          <div id="account-status" class="account-status" role="none" hidden></div>
+          <a class="nav-link" id="account-settings" role="menuitem" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
+          <a class="nav-link" role="menuitem" href="#/learnings" data-nav="learnings"><span class="nav-icon" aria-hidden="true">psychology</span>Learnings</a>
+          <a class="nav-link" role="menuitem" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
+          <a class="nav-link" role="menuitem" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
+          <button class="nav-link" id="account-tour" role="menuitem" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
+          <a class="nav-link" id="account-administration" role="menuitem" target="_blank" rel="noopener noreferrer" hidden><span class="nav-icon" aria-hidden="true">manage_accounts</span>Admin</a>
+          <button class="nav-link" id="org-switch" role="menuitem" type="button" hidden><span class="nav-icon" aria-hidden="true">swap_horiz</span>Switch organization</button>
+          <button class="nav-link" id="org-add" role="menuitem" type="button" hidden><span class="nav-icon" aria-hidden="true">add</span>Add organization</button>
+          <a class="nav-link" id="download-app" role="menuitem" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
+          <a class="nav-link" role="menuitem" href="#/replay" data-nav="replay" hidden><span class="nav-icon" aria-hidden="true">history</span>Replay</a>
+          <a class="nav-link" id="sign-out" role="menuitem" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
+        </div>
       </div>
     </div>
   </footer>
@@ -248,22 +260,14 @@
   <div id="app-nudge" hidden><span class="app-nudge-text"></span><a class="app-nudge-get" href="/download/mac">Download</a><button type="button" class="app-nudge-close" aria-label="Not now">✕</button></div>
 </div>
 <main id="main"></main>
-<section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" inert>
-  <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
-    <span class="ask-sees" data-ask-sees><span data-ask-sees-name></span></span>
-    <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
-  <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
-  <div class="ask-form"></div>
-  <p class="err" data-ask-error role="alert" hidden></p>
-</section>
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
   <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads"><span class="mobile-nav-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog" hidden><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Assistant</span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span><span class="nav-badge" data-needs-badge hidden></span></a>
-  <a class="mobile-nav-item" href="#/updates" data-nav="updates"><span class="mobile-nav-icon" aria-hidden="true">dynamic_feed</span><span class="mobile-nav-label">Updates</span><span class="nav-badge" data-upd-badge hidden></span></a>
-  <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span></button>
+  <!-- Five slots (the style guide's "Bottom bar, phone"): Updates is in More, and More carries its count. -->
+  <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span><span class="nav-badge" data-upd-badge hidden></span></button>
 </nav>
 <div id="org-fan" class="org-fan" role="menu" aria-label="Switch bot" hidden><ul class="org-fan-list"></ul></div>
 
@@ -412,6 +416,8 @@
 <script src="/tico/ui/app/chat-goal.ts"></script>
 
 <script src="/tico/ui/app/chat-outline.ts"></script>
+
+<script src="/tico/ui/app/chat-index.ts"></script>
 
 <script src="/tico/ui/app/slash-commands.ts"></script>
 

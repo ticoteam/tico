@@ -9,17 +9,16 @@
 
 .mkt-host{flex:1;min-height:0;overflow:auto;padding:18px 28px 40px;background:var(--bg);color:var(--ink)}
 .mkt-pg{max-width:1120px}
-.mkt-top{display:flex;align-items:center;gap:12px;margin:0 0 16px}
-.mkt-top h2{margin:0;font-size:var(--t-xl);font-weight:650;line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
-.mkt-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-base)}
-.mkt-top .spacer,.mkt-ctl .spacer{flex:1}
-.mkt-top a{flex:none}
+/* The page has one title, the Strategy header's; Open map and Definition are in its ⋯ (ui/app/redesign-market.ts). */
+.mkt-pg>:first-child{margin-top:0}
 .mkt-card{min-width:0;box-sizing:border-box;padding:14px;border:1px solid var(--line);border-radius:var(--radius,10px);background:var(--surface)}
-.mkt-lab{margin:0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+/* A chart card's title and a tile's name: the chart frame's title (style guide, Charts), never the uppercase label. */
+.mkt-lab{margin:0;font-size:var(--t-sm);font-weight:600;line-height:var(--lh-tight);color:var(--ink)}
+.mkt-tile-k .mkt-lab{color:var(--muted)}
 .mkt-up{color:var(--ok)}
 .mkt-down{color:var(--fail)}
-.mkt-sure{display:inline-block;padding:1px 6px;border-radius:5px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:600;white-space:nowrap}
-.mkt-sure.r{background:var(--ok-bg);color:var(--ok)}
+/* How sure the size is: a quiet word after the growth, not a pill (nothing is wrong with an estimate). */
+.mkt-sure{white-space:nowrap}
 
 /* Three tiles: the market's size, its fastest segment, our share. */
 .mkt-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
@@ -39,15 +38,14 @@
 .mkt-items{display:grid;gap:10px;margin:0;padding:14px;list-style:none;font-size:var(--t-base)}
 .mkt-items li{display:flex;align-items:baseline;gap:10px;min-width:0}
 .mkt-it{flex:1;min-width:0}
-.mkt-kind{flex:none;padding:1px 6px;border-radius:5px;font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;background:var(--surface2);color:var(--muted)}
-.mkt-kind.k-change{background:var(--run-bg);color:var(--run)}
-.mkt-kind.k-signal{background:var(--ok-bg);color:var(--ok)}
-.mkt-kind.k-theme{background:var(--wait-bg);color:var(--wait-ink)}
+/* An item's kind (Change, Signal, Theme): a quiet word in its own column, no hue and no pill. */
+.mkt-kind{flex:none;min-width:52px;color:var(--muted);font-size:var(--t-sm)}
 .mkt-bet{flex:none;padding:1px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:var(--t-xs);text-decoration:none;white-space:nowrap}
 .mkt-bet:hover{color:var(--ink);background:var(--surface2);text-decoration:none}
 
 /* Where is the money going? */
 .mkt-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.mkt-ctl:not(:has(*)){display:none}
 .mkt-seg{display:inline-flex;padding:3px;background:var(--surface2);border-radius:999px}
 .mkt-seg button{border:0;background:none;border-radius:999px;padding:3px 12px;color:var(--muted);font-size:var(--t-sm);font-weight:500;cursor:pointer}
 .mkt-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
@@ -210,11 +208,14 @@ td.mkt-sh{white-space:nowrap}
   .mkt-panel .tmodal-body{max-height:calc(90dvh - 56px)}
 }
 @media (max-width:600px){
-  .mkt-host{padding:14px 16px 28px}
+  .mkt-host{padding:14px 12px 28px}
   .mkt-tiles{grid-template-columns:minmax(0,1fr);gap:8px}
   .mkt-tile-k{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:2px 12px;padding:10px 12px}
   .mkt-tile-k .mkt-big{grid-row:span 2;margin:0;text-align:right;font-size:var(--t-lg)}
   .mkt-q{margin-top:24px}
+  /* Read (the briefing) is a link-like button in the question's line: a 44px target around its words. */
+  .mkt-more .linkish{position:relative}
+  .mkt-more .linkish::before{content:"";position:absolute;top:-14px;bottom:-14px;left:-8px;right:-8px}
   .mkt-ans{flex-basis:100%;order:3}
   .mkt-items{padding:12px}
   .mkt-items li{flex-wrap:wrap;gap:4px 8px}

@@ -70,13 +70,7 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .gr-row .pill{margin:0}
 .gr-num{font-variant-numeric:tabular-nums;white-space:nowrap}
 
-/* ---------- the Growth page head (Sources keeps the old head with its way back) */
-.gr-head .strat-actions{display:flex;align-items:center;gap:8px}
-.gr-head .strat-actions:empty{display:none}
-@media (max-width:760px){#main .gr-head h1{flex:none}#main .gr-head>.spacer{display:block}#main .gr-head .strat-actions{order:0;flex:none}}
-.gr-back{color:var(--muted);text-decoration:none;font-size:var(--t-lg)}
-.gr-back:hover{color:var(--ink)}
-.gr-head:has(.gr-back){gap:8px}
+/* ---------- Sources: the shared header (page-head.ts, "Growth › Sources") over the list, both as wide as the list */
 .growth-layout>.gr-head,.growth-layout>.gr-body{max-width:1080px}
 .gr-d{color:var(--muted);white-space:nowrap}
 .gr-d-good{color:var(--ok)}
@@ -86,14 +80,21 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .gr-spark-one{fill:var(--g5)}
 .gr-spark-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}
 
-/* ---------- the Growth page: the Dashboard's grid (ui/styles/dashboard.css) under one head row */
-.grh-ns{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;min-width:0;font-size:var(--t-sm);color:var(--ink);text-decoration:none}
-.grh-ns[hidden]{display:none}
-.grh-ns:hover .grh-ns-n{text-decoration:underline}
-.grh-ns b{font-weight:600;font-variant-numeric:tabular-nums}
+/* ---------- the Growth page: the Dashboard's grid (ui/styles/dashboard.css) under the shared header (page-head.css).
+   Its tools: the month picker, and the Growth board as a quiet tool (an icon and its words, the words giving way first). */
 .grh-month[hidden]{display:none}
+/* the Funnel's North Star line, when no stage measures it: one quiet line under the stages that opens its KPI */
+.grc-ns{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;margin-top:10px;font-size:var(--t-sm);color:var(--ink);text-decoration:none}
+.grc-ns:hover span:nth-child(2){text-decoration:underline}
+.grc-ns-k{font-weight:600}
+.grc-ns b{font-weight:600;font-variant-numeric:tabular-nums}
 .grh-month select{width:auto;min-width:0;height:var(--ctl);padding-top:0;padding-bottom:0}
-a.gr-btn.grh-btn,button.grh-btn{min-height:var(--ctl);font-size:var(--t-base)}
+.ph a.gr-btn.grh-btn{gap:6px;height:var(--ctl);padding:0 10px;border-color:transparent;font-weight:400;color:var(--ink)}
+.ph a.gr-btn.grh-btn:hover{background:var(--surface2)}
+.ph a.gr-btn.grh-btn svg{color:var(--muted)}
+/* folded into ⋯ (a phone, or a tight row), the tools stand one under another at the menu's width */
+.ph-menu .grh-month select{width:100%}
+.ph-menu a.gr-btn.grh-btn{display:flex;justify-content:flex-start}
 .grc-table{width:100%;border-collapse:collapse;font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .grc-table th,.grc-table td{padding:5px 8px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}
 .grc-table thead th{border-top:0;border-bottom:0;padding-top:0}
@@ -151,10 +152,12 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
   .grc-ch tbody tr:first-child{border-top:0;padding-top:0}
   .grc-ch tbody :is(th,td){display:block;padding:0;border:0;min-width:0}
   .grc-ch tbody th{overflow:hidden;text-overflow:ellipsis}
-  .grc-ch td.grc-sp{display:none}
+  /* the six months' trend keeps its place on a phone: a line of its own under the name and figures */
+  .grc-ch td.grc-sp{grid-column:1/-1}
   .grc-ch td.grc-tasks{display:flex;grid-column:1/-1}
   .grc-ch td.grc-tasks:empty{display:none}
   .grc-ch td.grc-n::before{content:attr(data-k) " ";color:var(--muted);font-size:var(--t-xs)}
+  .grc-ch td.grc-n:empty::before{content:none}
 }
 
 /* Retention: cells shaded by the share kept, from the page's ink to jade; the text stays dark on the light cells */
@@ -216,7 +219,10 @@ button.gsrc-row:hover{background:var(--surface2)}
 .gsrc-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr) minmax(0,.9fr);align-items:center;gap:4px 14px;width:100%;padding:10px var(--s4);border:0;border-radius:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;box-sizing:border-box}
 .gsrc-row>span{min-width:0;overflow-wrap:anywhere}
 .gsrc-t{font-weight:600}
-.gsrc-row code{font-size:var(--t-xs)}
+.gsrc-ref{overflow-wrap:anywhere}
+/* the list's heads: the same columns as a row, in the table heads' small uppercase label */
+.gsrc-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr) minmax(0,.9fr);gap:4px 14px;padding:10px var(--s4) 6px;color:var(--muted);font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps)}
+.gsrc-sync:empty{display:none}
 
 /* ---------- Brand */
 .br-dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;margin:0;font-size:var(--t-sm)}
@@ -311,7 +317,6 @@ button.gsrc-row:hover{background:var(--surface2)}
     .gr-crumbs h2{font-size:var(--t-card)}
   .gr-crumbs .spacer{flex-basis:100%;height:0}
   .gr-pair,.gr-trio{grid-template-columns:minmax(0,1fr)}
-  .grh-ns{order:9;flex-basis:100%}
   .br-edit{grid-template-columns:minmax(0,1fr)}
   .br-subs{position:static;flex-direction:row;overflow-x:auto;scrollbar-width:none}
   .br-subs button{flex:none}
@@ -330,6 +335,8 @@ button.gsrc-row:hover{background:var(--surface2)}
   .gr-f>:is(input,select,textarea),.br-check textarea,.grh-month select{font-size:16px}
 }
 @media (max-width:640px){
+  .gsrc-head{display:none}
+  .gsrc-ul>.gsrc-head+li{border-top:0}
   .gsrc-row{display:flex;flex-wrap:wrap;gap:2px 10px}
   .gsrc-t{flex:1 1 auto}
   .gsrc-r,.gsrc-m,.gsrc-o{flex-basis:100%;font-size:var(--t-xs)}

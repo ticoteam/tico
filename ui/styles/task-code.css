@@ -1,60 +1,149 @@
-/* ui/styles/task-code.css — The task modal's right rail (Code, Subtasks) and the small PR badge on task rows.
-   Dense, like the bot page's rail: thin dividers, small headings, one line per item. */
-/* The task window, option A (task #409): the chat is the left column from the top of the window, its box always in
-   view under its own scroll; the right column holds Pages, the request, To leave, Done looks like, the properties, the
-   rail (Code, Subtasks) and, when opened from ⋯, Activity and links. The window has a fixed height so neither column
-   pushes the other down. On a phone it is three tabs instead (Chat, Pages, Info), opening on Chat. */
-#task-modal:has(.task-layout){width:min(1040px,calc(100vw - 32px))}
+/* ui/styles/task-code.css — The task window's layout (the head, the tabs and the three panes), its Details (Pages, To
+   leave, the facts, Code, Subtasks, Files, Activity and links) and the small PR badge on task rows.
+   Dense: thin dividers, small sentence-case headings, one line per item. */
+/* The task window, as the style guide's Task window (ui/style-guide/guide.html #sg-task): one head row (the title top
+   left, the actions right), three tabs under it (Description, Chat, Details), then one pane at a time with the full
+   width. The window has a fixed height so a pane scrolls inside it and the chat's box stays in view. Ids keep these
+   above task-list.css, which loads later and styles the older window. */
+#task-modal:has(.task-layout){width:min(820px,calc(100vw - 32px))}
 #task-modal[open]:has(.task-layout){display:flex;flex-direction:column;height:min(86vh,900px)}
-.tmodal-body.task-layout{flex:1;min-height:0;max-height:none;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) 300px;grid-template-rows:minmax(0,1fr);grid-template-areas:"chat side";column-gap:20px;align-items:stretch;padding-bottom:12px}
-.task-layout>.task-chat{grid-area:chat;min-width:0;min-height:0;display:flex;flex-direction:column;margin:0;padding:0;border:0}
-.tmodal-body.task-layout>.task-chat>h3{display:none}
-.task-layout>.task-chat .task-comments{flex:1;min-height:0;max-height:none}
-.task-side{grid-area:side;min-width:0;min-height:0;overflow:auto;padding-left:16px;border-left:1px solid var(--line);font-size:var(--t-sm)}
-.task-side>.tmodal-main{min-width:0}
-.task-side .task-pages:not([hidden]){margin:0 0 8px}
-.task-tabs{display:none}
-#task-modal:has(.task-layout)>.task-wait{margin:0 16px 8px;color:var(--muted);font-size:var(--t-sm)}
-.task-chat .task-earlier{align-self:center;font-size:var(--t-sm);color:var(--muted);padding:4px 8px}
-.task-chat .tpage-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-xs);padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink);text-decoration:none}
-.task-activity{border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
-.task-activity>.rail-h{margin:0 0 2px;outline:0}
-.task-activity .tsec{margin:6px 0 0;padding-top:6px;border-top:1px solid var(--line)}
-.task-activity:not(.open) .tsec.tsec-empty:not(:has(form:not([hidden]))){display:none}
-.task-activity:not(.open):not(:has(>.tsec:not(.tsec-empty):not([hidden]))){display:none}
-.task-rail{min-width:0}
-.task-rail:not([hidden]){border-top:1px solid var(--line);margin-top:4px}
-.task-rail .rail-sec{padding:6px 0 10px}
-.task-rail .rail-sec+.rail-sec{border-top:1px solid var(--line)}
-.task-rail .rail-h{margin:0 0 4px}
+#task-modal .tw-head{flex:none;display:flex;align-items:flex-start;gap:var(--s3);padding:var(--s3) var(--s3) var(--s3) var(--s4);color:var(--muted)}
+#task-modal .tw-head .tmodal-title{flex:1;min-width:0;margin:0;padding-top:4px;font-size:var(--t-page);line-height:1.3;font-weight:600;color:var(--ink);letter-spacing:var(--track-snug);overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal}
+/* A long title shows two lines; only editing it shows all of it. */
+#task-modal .tw-head .tmodal-title[contenteditable="plaintext-only"]{display:block;-webkit-line-clamp:none;line-clamp:none;overflow:visible}
+#task-modal .tw-acts{flex:none;display:flex;align-items:center;gap:2px;min-height:var(--ctl)}
+#task-modal .tw-quiet{display:inline-flex;align-items:center;gap:2px}
+#task-modal .tw-head .tw-ic,#task-modal .tw-head .fb-btn{width:var(--ctl);min-width:var(--ctl);height:var(--ctl);padding:0;display:inline-grid;place-items:center;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted)}
+#task-modal .tw-head .tw-ic:hover,#task-modal .tw-head .fb-btn:hover{color:var(--ink);background:var(--surface2)}
+#task-modal .tw-head .tw-ic .nav-icon{font-size:20px;width:20px;height:20px;color:inherit}
+#task-modal .tw-head .fb-btn[aria-pressed="true"]{color:var(--ink)}
+#task-modal .tw-head .tmodal-age{padding:0 var(--s2);font-size:var(--t-sm);white-space:nowrap}
+#task-modal .tw-head .tmodal-sep{width:1px;height:18px;margin:0 var(--s1);background:var(--line)}
+#task-modal .tw-head>.tthread-back{flex:none;margin-top:0}
+/* Someone else here, or an edit that did not save: one quiet line under the head, only then. An error stays until it saves. */
+#task-modal .task-edit-meta{display:flex;flex-wrap:wrap;gap:4px 16px;margin:-6px var(--s4) var(--s2);font-size:var(--t-sm)}
+#task-modal .task-edit-meta:not(:has([data-task-presence]:not(:empty),[data-task-edit-error]:not([hidden]))){display:none}
+#task-modal [data-task-edit-error]{color:var(--fail)}
+#task-modal .task-edit-current{margin:0 var(--s4) var(--s2);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
+#task-modal .task-tabs{flex:none;display:flex;gap:var(--s4);padding:0 var(--s4);border-bottom:1px solid var(--line)}
+#task-modal .task-tab{display:inline-flex;align-items:center;gap:6px;min-height:var(--ctl);padding:var(--s2) 0;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-base);cursor:pointer}
+#task-modal .task-tab:hover{color:var(--ink)}
+#task-modal .task-tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+/* The Chat tab's dot: the chat ends on your own ask (Answer). */
+#task-modal .task-tab .tw-dot{width:6px;height:6px;border-radius:50%;background:var(--wait)}
+#task-modal .task-tab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+#task-modal>.rule-holds:not([hidden]){flex:none;max-height:40%;overflow:auto;margin:var(--s2) var(--s4) 0}
+/* The panes fill the body; the one not shown is hidden but kept, so a file opened from a message still shows in the
+   Files section's own viewer (task-files.ts, a modal dialog in the top layer, which takes visibility back). */
+#task-modal .tmodal-body.task-layout{position:relative;flex:1;min-height:0;max-height:none;display:block;overflow:hidden;padding:0;margin:0}
+#task-modal .task-layout>[role="tabpanel"]{position:absolute;inset:0;min-width:0;overflow:auto;overscroll-behavior:contain}
+#task-modal .task-layout:not([data-task-tab-shown="desc"])>.task-desc,#task-modal .task-layout:not([data-task-tab-shown="chat"])>.task-chat,
+#task-modal .task-layout:not([data-task-tab-shown="details"])>.task-side{visibility:hidden;pointer-events:none}
+#task-modal .task-layout>.task-side .tf-view{visibility:visible;pointer-events:auto}
+/* Description: who asked and when, Edit, the request; then Done looks like and the owner's latest note. */
+#task-modal .task-desc{padding:var(--s4);font-size:var(--t-md);line-height:1.55}
+#task-modal .task-desc>*{max-width:680px}
+#task-modal .task-desc-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s1);font-size:var(--t-sm);line-height:var(--lh)}
+#task-modal .task-desc .tdesc{margin:0;padding:0;background:none;font-size:inherit;line-height:inherit;max-height:none;white-space:normal}
+#task-modal .task-desc .tdesc>:first-child{margin-top:0}
+#task-modal .task-desc textarea[data-task-field="body"]{min-height:220px;font-size:var(--t-md)}
+#task-modal .task-desc .tw-part{margin-top:var(--s4)}
+/* Chat: the feed scrolls, the box stays at the foot. */
+#task-modal .task-layout>.task-chat{display:flex;flex-direction:column;overflow:hidden;margin:0;padding:0;border:0}
+#task-modal .task-layout>.task-chat>h3{display:none}
+#task-modal .task-chat>.task-comments{flex:1;min-height:0;max-height:none;gap:var(--s2);padding:var(--s3) var(--s4)}
+#task-modal .task-chat>.task-pill,#task-modal .task-chat>form{flex:none;margin:0;padding:0 var(--s3) var(--s3)}
+#task-modal .task-chat>p[role="status"]{margin:var(--s4)}
+/* Details: Pages, To leave <stage>, the facts, Subtasks, Files; Activity and links once ⋯ opens it. */
+#task-modal .task-side{display:flex;flex-direction:column;gap:var(--s4);padding:var(--s3) var(--s4) var(--s5);margin:0;border:0;font-size:var(--t-base)}
+#task-modal .task-side>*{width:100%;margin:0}
+#task-modal .task-side>[hidden]{display:none}
+#task-modal :is(.tw-h,.task-side .rail-h){display:flex;align-items:center;justify-content:space-between;gap:var(--s2);min-height:var(--ctl);margin:0;padding:0;color:var(--muted);font-size:var(--t-sm);font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
+#task-modal .task-side .tsec{margin:0;padding:0;border:0}
+/* Labels inside the window are small, muted and in sentence case (search.css's caps are for the other dialogs). */
+#task-modal .task-layout .lbl{margin:0;color:var(--muted);font-size:var(--t-sm);font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
+#task-modal .task-side .rail-h .prop-add{margin-left:auto;width:var(--ctl);height:var(--ctl)}
+#task-modal .task-side .tsec-empty:not(:has(form:not([hidden]))):not(.task-requirements):not(.tf-shown){display:none}
+/* Pages: a row is the page's mark and name, and opens it; + opens the page search. */
+#task-modal .task-pages:not([hidden]){display:flex;flex-direction:column;gap:0}
+#task-modal .task-pages .tp-pages{display:flex;flex-direction:column;gap:0}
+#task-modal .task-pages .tp-row{gap:var(--s2);padding:5px 0;border-radius:var(--r-ctl)}
+#task-modal .task-pages .tp-row .nav-icon{font-size:18px;width:18px;height:18px}
+#task-modal .task-pages .tp-picker{display:flex;flex-direction:column;gap:2px;margin:0 0 var(--s2);padding:var(--s1);border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 8px 24px rgb(0 0 0/.18)}
+#task-modal .task-pages .tp-picker[hidden]{display:none}
+#task-modal .task-pages .tp-picker>input{width:100%;height:var(--ctl);margin-bottom:var(--s1)}
+#task-modal .task-pages .tp-results{display:flex;flex-direction:column;max-height:240px;overflow:auto}
+#task-modal .task-pages .tp-result{display:flex;align-items:center;gap:var(--s2);min-width:0;padding:6px var(--s2)}
+#task-modal .task-pages .tp-result .nav-icon{flex:none;font-size:18px;width:18px;height:18px;color:var(--muted)}
+#task-modal .task-pages .tp-result:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+#task-modal .task-pages .tp-drop{margin-top:var(--s1);padding:var(--s3);border:1px dashed var(--line);border-radius:var(--r-ctl);background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:center;cursor:pointer}
+#task-modal .task-pages .tp-drop:hover,#task-modal .task-pages .tp-picker.over .tp-drop{color:var(--ink);border-color:var(--muted)}
+#task-modal .task-pages .tp-drop[hidden]{display:none}
+/* To leave <stage>: a mark and a few words a line; who checks it is the tooltip. */
+#task-modal .task-requirements .task-req{display:flex;align-items:center;gap:var(--s2);min-height:0;padding:5px 0;border:0}
+#task-modal .task-requirements .task-req-dot{flex:none;width:18px;font-size:18px;color:var(--muted)}
+#task-modal .task-requirements .task-req[data-state="met"] .task-req-dot{color:var(--run)}
+#task-modal .task-requirements .task-req[data-state="back"] .task-req-dot{color:var(--fail)}
+#task-modal .task-requirements .task-req-name{flex:1;min-width:0}
+#task-modal .task-requirements .task-req-val{margin-left:auto;color:var(--muted);font-weight:400;font-size:var(--t-sm)}
+#task-modal .task-requirements .task-req-end{flex:none}
+#task-modal .task-requirements .task-req-count{margin-left:var(--s1)}
+/* The facts: a muted label, then the value; Code's lines and Subtasks under them. */
+#task-modal .task-side>.task-props{padding:var(--s3) 0 0;border-top:1px solid var(--line)}
+#task-modal .task-side .prop{grid-template-columns:72px minmax(0,1fr);gap:var(--s3);min-height:28px}
+#task-modal .task-side .prop[hidden]{display:none}
+#task-modal .task-side .prop-k{font-size:var(--t-sm)}
+#task-modal .task-side .prop-v{font-size:var(--t-base);font-weight:400}
+#task-modal .task-side .prop-link .prop-txt{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--muted) 55%,transparent);text-underline-offset:2px}
+#task-modal .task-side .prop-more{margin-left:var(--s1);font-size:var(--t-sm)}
+#task-modal .task-side .prop-code{align-items:start}
+#task-modal .task-side .prop-code .prop-k{padding-top:4px}
+#task-modal .task-side .prop-code .prop-vwrap{display:block}
+#task-modal .task-side .prop-code .code-list{margin:0}
+/* Its own size over the shared menu's (.tl-pop, task-list.css, loads later). */
+.tl-pop.task-run-pop{width:300px;padding:var(--s3)}
+.tl-pop.task-run-pop .task-run-form{grid-template-columns:minmax(0,1fr)}
+#task-modal .task-rail .rail-sec{padding:0}
+#task-modal .task-rail .rail-h{margin:0}
+#task-modal .task-side>.task-files .tf-strip{margin-top:2px}
+/* Activity and links, last: only its parts with something in them (a session, runs, related tasks, meetings, links, the
+   public roadmap's text), and none at all when all are empty; ⋯ › Activity and links opens it with the empty ones too,
+   to add a link or a session. */
+#task-modal .task-activity{padding-top:var(--s3);border-top:1px solid var(--line)}
+#task-modal .task-activity:not(.open) .tsec.tsec-empty:not(:has(form:not([hidden]))){display:none}
+#task-modal .task-activity:not(.open):not(:has(>.tsec:not(.tsec-empty):not([hidden]))){display:none}
+#task-modal .task-activity>.rail-h{color:var(--ink);font-weight:600;outline:0}
+#task-modal .task-activity .tsec{margin:var(--s2) 0 0;padding-top:var(--s2);border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+#task-modal .task-activity.open .tsec.tsec-empty:not(:has(form:not([hidden]))){display:block}
+#task-modal .task-activity .tsec-empty .rail-h{height:auto;padding:0;font-weight:400}
+#task-modal .task-activity .tsec-empty .rail-h .prop-add::after{display:none}
+#task-modal .task-activity .tsec-empty .rail-h .prop-add{order:0;margin-left:auto;width:var(--ctl);height:var(--ctl)}
 .prop[data-prop-row="visible"] .prop-vwrap{flex-wrap:wrap;gap:4px 6px}
 .prop[data-prop-row="visible"] .prop-ic.nav-icon{font-size:16px;width:16px;height:16px}
 .prop[data-prop-row="visible"] .prop-sep{color:var(--muted)}
+/* A phone: the window is the whole screen, the same three tabs; the head keeps Archive, ⋯ and ✕ (👍 👎 and the age are
+   in ⋯), every control a 44px target. */
+@media (max-width:600px){
+  #task-modal .tw-head{gap:var(--s1);padding:max(6px,env(safe-area-inset-top)) var(--s1) var(--s1) var(--s4)}
+  #task-modal .tw-head .tmodal-title{padding-top:10px}
+  #task-modal .tw-quiet,#task-modal .tw-head .tmodal-sep{display:none}
+  #task-modal .tw-head .tw-ic,#task-modal .tw-head .tchip-snoozed{width:44px;min-width:44px;height:44px}
+  #task-modal .tw-head .tchip-snoozed{width:auto;max-width:96px}
+  #task-modal .tw-head .tmodal-act{min-height:44px}
+  #task-modal .task-tab{min-height:44px;min-width:44px;justify-content:center}
+  #task-modal .task-side .rail-h .prop-add,#task-modal .task-pages .tp-drop{min-height:44px;min-width:44px}
+  #task-modal .task-pages .tp-row,#task-modal .task-pages .tp-result,#task-modal .task-requirements .task-req{min-height:44px}
+  #task-modal .task-side .prop{min-height:44px}
+}
 @media (max-width:760px){
   #task-modal:has(.task-layout){position:fixed;inset:0;width:100%;max-width:none;height:100%;height:100dvh;max-height:none;margin:0;border-radius:0}
   /* The visible rectangle (ui/app/viewport.ts): with the keyboard up, the box sits on top of it. */
   #task-modal[open]:has(.task-layout){top:var(--chat-viewport-top,0px);bottom:auto;height:var(--chat-viewport-height,100dvh)}
-  #task-modal:has(.task-layout) .tmodal-head{gap:6px;padding:10px 10px 10px 12px;padding-top:max(10px,env(safe-area-inset-top));border-bottom:1px solid var(--line)}
-  #task-modal:has(.task-layout) .tmodal-head>.tnum{display:none}
-  #task-modal:has(.task-layout) .tmodal-title{margin:14px 16px 2px}
-  #task-modal:has(.task-layout) .task-props{margin:2px 0 6px;padding:2px 0 6px}
-  #task-modal:has(.task-layout) .task-rail:not([hidden]){margin:8px 0;border-bottom:1px solid var(--line)}
-  #task-modal:has(.task-layout) .prop{min-height:44px}
+  #task-modal .task-chat>.task-pill,#task-modal .task-chat>form{padding-bottom:max(var(--s3),env(safe-area-inset-bottom))}
+  #task-modal .task-side{padding-bottom:max(var(--s5),env(safe-area-inset-bottom))}
+  .tl-pop.task-run-pop{position:fixed;inset:auto 0 0;width:auto;max-width:none;margin:0;border-radius:var(--r-pop) var(--r-pop) 0 0;padding-bottom:max(var(--s3),env(safe-area-inset-bottom))}
   body.task-modal-open{overflow:hidden}
-  .task-tabs{display:flex;gap:20px;padding:0 16px;border-bottom:1px solid var(--line);flex:none}
-  .task-tab{min-height:44px;min-width:44px;padding:0;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-base);cursor:pointer}
-  .task-tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
-  .tmodal-body.task-layout{display:flex;flex-direction:column;overflow:auto;padding:8px 16px max(16px,env(safe-area-inset-bottom))}
-  .task-layout[data-task-tab-shown="chat"]{overflow:hidden;padding-bottom:max(8px,env(safe-area-inset-bottom))}
-  .task-layout>.task-chat{flex:1}
-  .task-layout:not([data-task-tab-shown="chat"])>.task-chat{display:none}
-  /* On Chat the side column is hidden, not removed: a file opened from a message shows in the Files section's own
-     viewer (task-files.ts, a modal dialog in the top layer), which takes visibility back. */
-  .task-layout[data-task-tab-shown="chat"]>.task-side{visibility:hidden;position:absolute;width:0;height:0;overflow:hidden}
-  .task-layout[data-task-tab-shown="chat"]>.task-side .tf-view{visibility:visible}
-  .task-side{overflow:visible;padding:0;border:0}
-  .task-layout[data-task-tab-shown="pages"] .task-side>:not(.tmodal-main),.task-layout[data-task-tab-shown="pages"] .tmodal-main>:not(.task-pages){display:none}
-  .task-layout[data-task-tab-shown="info"] .task-pages{display:none}
 }
 /* Properties: a muted label, then an icon and a value; a click edits it */
 .task-props{--prop-hover:color-mix(in srgb,var(--ink) 6%,transparent);padding:2px 0 8px}
@@ -157,17 +246,41 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 
 .prop[data-prop-row="owner"] .prop-vwrap{flex-wrap:wrap;gap:4px 8px}
 .prop-vwrap>small{flex-basis:100%;font-size:var(--t-xs);color:var(--muted);line-height:var(--lh)}
-/* Details: one line until opened (task #419); the rows open in place under it. */
-.task-details{border-top:1px solid var(--line);margin-top:2px}
-.task-details>summary{display:flex;align-items:center;gap:8px;min-height:30px;cursor:pointer;list-style:none;font-size:var(--t-sm)}
-.task-details>summary::-webkit-details-marker{display:none}
-.task-details-k{color:var(--muted);flex:none}
-.task-details-line{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
-.task-details-chev{flex:none;color:var(--muted);transition:transform .12s}
-.task-details[open]>summary .task-details-chev{transform:rotate(90deg)}
-.task-details[open]>summary .task-details-line{visibility:hidden}
-@media (max-width:760px){.task-details>summary{display:none}}
-/* A task waiting on the reader's own answer: a banner above the chat (task #419). */
-.task-need{display:flex;align-items:center;gap:10px;margin:0 16px 8px;padding:8px 12px;border:1px solid var(--wait);border-radius:var(--radius);background:var(--wait-bg);color:var(--ink);font-size:var(--t-sm)}
-.task-need-line{flex:1;min-width:0}
-.task-need .tmodal-act{flex:none}
+/* The chat's last rows say what is happening now (task-modal.ts taskStateHTML): the chat's status row (threads.css
+   .th-status); the reader's own ask is tinted, with Answer. */
+#task-modal .task-chat .th-status-ask{background:var(--wait-bg)}
+#task-modal .task-chat .th-status-ask .th-status-word{color:var(--wait-ink);font-weight:600}
+#task-modal .task-chat .th-status-detail{white-space:normal}
+#task-modal .task-chat .th-status-detail .task-state-line{min-width:0;overflow-wrap:anywhere}
+#task-modal .task-chat .th-status .run-steps{min-width:0}
+#task-modal .task-chat .th-status .run-steps>summary{display:flex;align-items:center;gap:6px;padding-left:0;color:var(--muted)}
+#task-modal .task-chat .th-status .run-steps>summary::before{display:none}
+#task-modal .task-chat .task-deferred{margin:0}
+/* Take back (×) on an ask: a quiet mark, not a boxed button. */
+#task-modal .task-requirements .task-req .x{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font-size:var(--t-md);line-height:1;cursor:pointer}
+#task-modal .task-requirements .task-req .x:hover{color:var(--ink);background:var(--surface2)}
+@media (max-width:600px){#task-modal .task-requirements .task-req .x{width:44px;height:44px}}
+/* Subtasks: a mark for each child's state, as To leave's lines (task-code.ts taskSubMarkHTML). */
+#task-modal .sub-line .sub-mark{flex:none;width:16px;font-size:16px;color:var(--muted)}
+#task-modal .sub-line .sub-mark[data-status="done"]{color:var(--run)}
+/* The chat's "N updates" line reads as one run, left aligned: the mark, "4 updates", "· 6h". */
+#task-modal .task-chat details.src-group>summary{justify-content:flex-start;gap:6px}
+#task-modal .task-chat details.src-group>summary .src-chev{order:-1;margin:0}
+#task-modal .task-chat details.src-group>summary .src-time{margin-left:0}
+#task-modal .task-chat details.src-group>summary .src-time::before{content:"· "}
+/* A state row with nobody to name has no face: its words line up with the updates line. */
+#task-modal .task-chat .th-status-bare{padding-left:6px}
+#task-modal .task-chat .th-status-lead{color:var(--ink);font-weight:600;font-size:var(--t-sm)}
+#task-modal .task-chat .th-status-ask .th-status-lead{color:var(--wait-ink)}
+/* Followers stay one line: names clip before the + wraps. */
+#task-modal .task-side .prop[data-prop-row="followers"] .prop-tags{flex-wrap:nowrap;min-width:0}
+#task-modal .task-side .prop[data-prop-row="followers"] .prop-chip{flex:0 1 auto;min-width:0}
+#task-modal .task-side .prop[data-prop-row="followers"] :is(.prop-v,.prop-add){flex:none}
+/* The request, the chat's first message, reads like any other (a long one stops at ten lines with Show more). */
+#task-modal .task-chat .th-request .th-body-wrap>.msg-more{margin-top:2px}
+/* The older window's rules (task-list.css) do not reach the new rows: a status row is a status row, and the Snoozed
+   chip keeps a width limit inside the head's actions. */
+#task-modal .task-chat .th-status.task-wait{margin:0;color:inherit;font-size:var(--t-sm)}
+#task-modal .tw-acts>.tchip-snoozed{flex:0 1 auto;min-width:0;max-width:min(220px,30vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A bot's read-only view (view-only.ts) hides what only writes: the way back for a finished task, and Pages' upload line. */
+html.view-only #task-modal :is([data-task-reopen],[data-tp-drop]){display:none!important}

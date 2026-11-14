@@ -1,9 +1,10 @@
 // The Tasks header as one row (ui/app/tasks-page.ts, ui/styles/task-list.css; spec "Pipeline board: one-row header, one
 // count per stage, a floating face", part A), offline on the fake server of tasks-page.cts. Checks:
-//  - a phone (390×844) on a pipeline: one 44 px row of the picker, Search, Filter, ▶ n and ⋯, nothing accent; at 320 px
-//    with a long pipeline name it is still one row and the name ends in "…" (AC-1);
+//  - a phone (390×844) on a pipeline: one 44 px row of the picker, Search, Filter, ▶ n and ⋯, nothing accent, the title for
+//    screen readers only (the UI Owner's call; page-head.cts); at 320 px with a long pipeline name it is still one row
+//    and the name ends in "…" (AC-1);
 //  - a computer (1440×900, and 1000×800 with the manager's panel open): one 56 px row of Tasks, the picker, a 280 px
-//    search, Filter, ▶ n, the manager's 20 px face and ⋯, nothing sideways; the face opens and closes the panel (AC-2);
+//    search, Filter, ▶ n, the manager's 22 px face and ⋯, nothing sideways; the face opens and closes the panel (AC-2);
 //  - ⋯ holds New task, Archived, Edit pipeline and, on a computer on a pipeline, List and Columns with the current one
 //    ticked; each does what its button did; C still makes a task; closed, ⋯ is aria-expanded="false" (AC-3);
 //  - ▶ on a pipeline opens the review on the open stage; with nothing waiting it is quiet, keeps its width and says
@@ -23,7 +24,8 @@ const box = (page: Page, sel: string) => page.locator(sel).first().evaluate(el =
 const rowControls = (page: Page) => page.evaluate(() => {
   const h = document.querySelector<HTMLElement>('#main header.ph')!;
   return [...h.querySelectorAll<HTMLElement>(':scope > #task-scope, :scope > .ph-tools > *, :scope > .ph-more, :scope > .ph-act *')]
-    .filter(el => el.getClientRects().length)
+    // shown: a field folded out of sight (the narrowest phone's search, 1 px and clipped) is not on the row
+    .filter(el => el.getClientRects().length && el.getBoundingClientRect().width > 1)
     .map(el => { const r = el.getBoundingClientRect(); return {id: el.id || el.className, top: r.top, bottom: r.bottom, left: r.left, right: r.right, w: r.width, h: r.height}; });
 });
 // The header's problems with being one row: a control off the line, a filled (accent) button, anything sideways.
@@ -41,7 +43,7 @@ async function oneRow(page: Page, height: number): Promise<string[]> {
   }
   // each control takes a tap at its centre: nothing (the folded search's field) lies over it
   const covered = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#main header.ph > #task-scope, #main header.ph > .ph-tools > *, #main header.ph > .ph-more')]
-    .filter(el => el.getClientRects().length).filter(el => {
+    .filter(el => el.getClientRects().length && el.getBoundingClientRect().width > 1).filter(el => {
       const r = el.getBoundingClientRect(), at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return !at || !el.contains(at);
     }).map(el => el.id || el.className));
@@ -59,7 +61,7 @@ async function oneRow(page: Page, height: number): Promise<string[]> {
   return bad;
 }
 const menuItems = (page: Page) => page.locator('#task-menu-pop:popover-open :is(button,a):visible').evaluateAll(els =>
-  els.map(e => (e.getAttribute('aria-checked') === 'true' ? '✓ ' : '') + (e.textContent || '').trim()));
+  els.map(e => (e.getAttribute('aria-pressed') === 'true' ? '✓ ' : '') + (e.textContent || '').trim()));
 async function menu(page: Page): Promise<string[]> {
   await page.locator('#task-menu').click();
   await page.locator('#task-menu-pop:popover-open').waitFor();
@@ -71,7 +73,7 @@ async function menu(page: Page): Promise<string[]> {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     {
-      // A phone on Product: one 44 px row; Spec's two asks are ▶ 2.
+      // A phone on Product: one 44 px row; Spec's two asks are ▶ 2. A board with no bot has no face on it.
       const {page, errors} = await open(browser, {viewport: PHONE, hash: '#/tasks?pipeline=product'});
       await page.locator('#task-body .pv-phone').waitFor();
       await page.waitForFunction(() => document.querySelector('#task-play .tl-review-n')?.textContent === '2');
@@ -107,18 +109,34 @@ async function menu(page: Page): Promise<string[]> {
       await page.close();
     }
     {
-      // 320 px and a long pipeline name: still one row, the name cut with "…".
+      // 320 px, the tightest: a long pipeline name on a pipeline with a manager, so the board's face is on the row too.
+      // Still one row; the search's icon folds into ⋯ first, so the name keeps at least eight letters before its "…";
+      // ⋯'s Search opens the search over the row.
       const name = product.name;
       (product as {name: string}).name = 'Product launches and everything around them';
+      (product as {manager_id: string | null}).manager_id = 'bot:pm';
       try {
         const {page, errors} = await open(browser, {viewport: {width: 320, height: 640}, hash: '#/tasks?pipeline=product'});
         await page.locator('#task-body .pv-phone').waitFor();
+        await page.locator('#task-manager').waitFor();
         assert.deepEqual(await oneRow(page, 44), []);
-        const cut = await page.locator('#task-scope .tl-scope-l').evaluate(el => ({over: el.scrollWidth > el.clientWidth, how: getComputedStyle(el).textOverflow}));
-        assert.deepEqual(cut, {over: true, how: 'ellipsis'}, 'the name ends in …');
+        assert.deepEqual((await rowControls(page)).map(c => c.id), ['task-scope', 'task-filter', 'task-play', 'task-manager', 'task-menu'],
+          'the picker, Filter, ▶, the face and ⋯; the search is in ⋯');
+        const cut = await page.locator('#task-scope .tl-scope-l').evaluate(el => {
+          const range = document.createRange(), text = el.firstChild!;
+          range.setStart(text, 0); range.setEnd(text, 8);
+          return {over: el.scrollWidth > el.clientWidth, how: getComputedStyle(el).textOverflow, eight: el.clientWidth >= range.getBoundingClientRect().width};
+        });
+        assert.deepEqual(cut, {over: true, how: 'ellipsis', eight: true}, 'the name ends in …, after at least eight letters');
+        assert.deepEqual(await menu(page), ['Search', 'New task', 'Archived', 'Edit pipeline']);
+        await page.locator('#task-mi-search').click();
+        await page.waitForFunction(() => document.activeElement?.id === 'task-q');
+        const field = await box(page, '#main header.ph .tl-search'), row = await box(page, '#main header.ph');
+        assert.ok(Math.abs(field.left - row.left) < 1 && Math.abs(field.right - row.right) < 1 && Math.abs(field.height - 44) < 1,
+          `Search opens over the whole row: ${JSON.stringify({field, row})}`);
         assert.deepEqual(errors, []);
         await page.close();
-      } finally { (product as {name: string}).name = name; }
+      } finally { (product as {name: string}).name = name; (product as {manager_id: string | null}).manager_id = null; }
     }
     {
       // A 700 px window (a small tablet, a split screen) gets the phone's row while its pane is wider than the narrow-pane

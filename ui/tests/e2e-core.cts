@@ -23,12 +23,10 @@ const tasks = (() => {
   const CREATED = /[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/;
 
   async function detail(page: Page) {
-    // A phone shows the rows on its Info tab: the Chat tab hides them.
-    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click());
+    // The rows are on the Details tab.
+    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="details"]')?.click());
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
-      // Details is one line until opened: its rows are read open.
-      m?.querySelectorAll<HTMLDetailsElement>('details.task-details').forEach(x => { x.open = true; });
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
@@ -39,7 +37,7 @@ const tasks = (() => {
         created_at: m?.querySelector<HTMLElement>('.tmodal-age')?.getAttribute('title') || '',
         owner_id: row('Owner'),
         asked: row('Asked by'),
-        history: m?.querySelector<HTMLElement>('.task-comments')?.innerText.replace(/\s+/g, ' ').trim() || '',
+        history: m?.querySelector<HTMLElement>('.task-comments')?.textContent!.replace(/\s+/g, ' ').trim() || '',
         canDone: !!m?.querySelector<HTMLElement>('[data-task-finish="done"]'),
         canClose: !!m?.querySelector<HTMLElement>('[data-task-finish="close"]'),
       };
@@ -59,8 +57,9 @@ const tasks = (() => {
     await page.waitForFunction(src => new RegExp(src, 'i').test([...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
       .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Stage')?.innerText || ''), re.source, {timeout: t(15000)});
   }
+  // The history is in the Chat tab, and its moves fold into one "N updates" line: read its text, shown or folded.
   async function waitHistory(page: Page, text: string) {
-    await page.waitForFunction(text => document.querySelector<HTMLElement>('#task-modal .task-comments')?.innerText.includes(text),
+    await page.waitForFunction(text => (document.querySelector<HTMLElement>('#task-modal .task-comments')?.textContent || '').replace(/\s+/g, ' ').includes(text),
       text, {timeout: t(15000)});
   }
 
@@ -311,8 +310,7 @@ const newBot = (() => {
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
       && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
     const owner = await page.evaluate(() => {
-      document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click();
-      document.querySelectorAll<HTMLDetailsElement>('#task-modal details.task-details').forEach(x => { x.open = true; });
+      document.querySelector<HTMLElement>('#task-modal [data-task-tab="details"]')?.click();
       return [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
       .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '';
     });

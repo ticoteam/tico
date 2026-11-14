@@ -7,7 +7,7 @@ is sent and kept.
 
 ## For a human
 
-The **?** beside Search (on a computer, at the end of the sidebar's Tico Assistant row; on a phone, beside Search in the More
+**Help**, the **?** beside Search (on a computer, in the sidebar's foot after Search; on a phone, beside Search in the More
 drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
 over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
 has replied to one of your requests and you haven't seen it.
@@ -24,8 +24,9 @@ has replied to one of your requests and you haven't seen it.
 - The trash icon in the header, left of Close, is **Delete chat history**. It asks first, inside the chat ("Delete chat
   history?", Delete or Cancel); Delete removes every one of your tickets and their attachments at HQ and the local
   ticket records, and leaves the empty chat.
-- When support is off on the server (demo, rehearsal or `TICO_SUPPORT=off`) the **?** is hidden, and a `#/support` link
-  says messages to the Tico team are off.
+- When support is off on the server (demo, rehearsal or `TICO_SUPPORT=off`) **Help** stays: it, and a `#/support` link,
+  say messages to the Tico team are off and offer the help Tico has without the team: Ask the Assistant, Take the tour and
+  Read the docs.
 
 Behind the chat, messages are still tickets at HQ, so the team can work them: a message goes to your newest ticket that is
 not closed or removed, and starts a new one when there is none. The chat shows every ticket's messages together in time

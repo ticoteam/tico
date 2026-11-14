@@ -76,13 +76,19 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
 
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#settings-tabs').waitFor();
-    // The tab row: Health, Gateway and Repositories are not tabs, Contacts is a tab, Security is an admin's;
-    // More keeps Billing.
+    // The tabs: Health, Gateway and Repositories are not tabs, Contacts is a tab, Security and Billing are an admin's,
+    // Billing last. They are the one page header's tabs (pageHead): five on the row, the rest under ⋯, none lost.
     const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab));
-    assert.deepEqual(tabs.filter(t => t !== 'security'), ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'history']);
+    assert.deepEqual(tabs.filter(t => t !== 'security' && t !== 'billing'), ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'history']);
     if (tabs.includes('security')) assert.equal(tabs.indexOf('security'), tabs.indexOf('history') - 1, 'Security sits before History');
-    assert.deepEqual(await page.locator('#settings-more [data-settings-tab]').evaluateAll(b => b.map(x => x.dataset.settingsTab)),
-      ['billing']);
+    if (tabs.includes('billing')) assert.equal(tabs.at(-1), 'billing', 'Billing is last');
+    assert.equal(await page.locator('#settings-more').count(), 0, 'no More disclosure: no tabs inside tabs');
+    const shown = await page.locator('#settings-tabs > [data-settings-tab]:visible').evaluateAll(b => b.map(x => x.dataset.settingsTab));
+    assert.deepEqual(shown, tabs.slice(0, 5), 'five tabs on the row');
+    await page.locator('header.ph > .ph-more').click();
+    assert.deepEqual(await page.locator('header.ph > .ph-menu .ph-mtab').allInnerTexts(),
+      await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(b => b.slice(5).map(x => x.textContent)), 'the rest are under ⋯');
+    await page.keyboard.press('Escape');
     // Bad checks and a person's issue are urgent, warn checks to fix, info checks and the rest of the issues FYI.
     await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-count=urgent]'));
     await redraw();

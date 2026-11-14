@@ -1,5 +1,5 @@
 // The Files section of a bot's right rail (ui/bot-files.ts): one row each, a kind's mark (or an image's thumbnail) and
-// the name without its extension, three rows and "N more" / "Less" inline, no counts, subtitle or buttons. The whole
+// the name with its ending (style guide, Files), three rows and "N more" / "Less" inline, no counts, subtitle or buttons. The whole
 // row opens the file. A linked document opens at its provider
 // (a new tab), a stored file in the review view (ui/app/file-review.ts; a CSV as a table, a quoted comma kept in one cell),
 // a file that did not sync is plain text, never a storage address; on a computer and on a phone. More than three files:
@@ -196,7 +196,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
       console.log(`bot files card (${tag}): plain list, Show all, a link opens externally, a stored file and a CSV in the viewer`);
     }
     // Each kind's mark and name (AC-9 to AC-12): an image's thumbnail (its kind's icon when the thumbnail is gone), a
-    // page, a CSV named without its folder and extension, and a link kept as written; 19 files read "16 more".
+    // page, a CSV named without its folder but with its ending, and a link kept as written; 19 files read "16 more".
     const kinds = [
       file('file-thumb-ok', {title: 'charts/2026-11-12-hig-bot-chat.jpg', name: '2026-11-12-hig-bot-chat.jpg', kind: 'image', mime: 'image/jpeg', thumb_blob_id: 'b-thumb', version: 3}),
       file('file-page', {title: 'page-owner-chat.html', name: 'page-owner-chat.html', kind: 'document', mime: 'text/html'}),
@@ -226,7 +226,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     assert.deepEqual(await marks(), ['thumbnail', 'article', 'table_chart', 'link', 'image', 'draft', 'description'], 'kinds: a mark for each kind');
     // A stored file a bot titled with a slash keeps its title whole: only a title that is the file's path loses its folder.
     assert.deepEqual((await card.locator('.bf-name').allInnerTexts()).slice(0, 7),
-      ['2026-11-12-hig-bot-chat', 'page-owner-chat', 'ticket-topics', 'Q3 plan / draft', 'logo', '.json', 'Q4 budget / final'], 'kinds: names without folder or extension; a link and a given title as written');
+      ['2026-11-12-hig-bot-chat.jpg', 'page-owner-chat.html', 'ticket-topics.csv', 'Q3 plan / draft', 'logo.png', '.json', 'Q4 budget / final.md'], 'kinds: names without their folder, each with its ending (style guide, Files); a link and a given title as written');
     assert.equal(await card.locator('.bf-row').nth(2).getAttribute('title'), 'reports/ticket-topics.csv', 'kinds: the tooltip is the full title');
     // Glyphs the icon font must hold, or a mark reads as its name.
     const icons = fs.readFileSync(path.join(__dirname, '..', 'vendor', 'fonts', 'icons.txt'), 'utf8').split('\n');
@@ -246,7 +246,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     assert.equal(await card.locator('.bf-sbtn').isVisible(), false, 'find: the field in the mark\'s place');
     await card.locator('.bf-q').pressSequentially('budget');
     await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 1);
-    assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['Q4 budget / final'], 'find: the server\'s answer');
+    assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['Q4 budget / final.md'], 'find: the server\'s answer');
     assert.ok(state.asked!.some(a => /[?&]q=budget(&|$)/.test(a) && /limit=20/.test(a)) && !state.asked!.some(a => /q=b(&|$)|q=bu(&|$)/.test(a)), 'find: one paged request once typing stops');
     assert.equal(await card.locator('[data-bf-less]').count(), 1, 'find: results open');
     if (shots) await card.screenshot({path: path.join(shots, 'bot-files-search.png')});
@@ -297,7 +297,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (shots) await card.screenshot({path: path.join(shots, 'bot-files-kinds.png')});
     assert.deepEqual(errors, [], 'kinds: page errors');
     await page.close();
-    console.log('bot files card (kinds): marks, a thumbnail and its fallback, names without extensions, 16 more; heading search and kind, named files as links');
+    console.log('bot files card (kinds): marks, a thumbnail and its fallback, names with their endings, 16 more; heading search and kind, named files as links');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
 async function until(test: () => boolean, ms = 5000) { for (const end = Date.now() + t(ms); !test(); ) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 50)); } }

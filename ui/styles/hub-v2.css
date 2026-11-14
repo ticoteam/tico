@@ -65,7 +65,7 @@
 #main.docs-layout>.ph{flex:none}
 .ph .docs-search-field{flex:0 1 280px;width:280px;min-width:36px}   /* the width is stated: a size container has no natural width */
 .ph a#docs-new{display:inline-flex;align-items:center;text-decoration:none}
-.ph :is(#docs-ask,#docs-add-source){flex:none;white-space:nowrap}
+.ph #docs-ask{flex:none;white-space:nowrap}
 .docs-search-field .nav-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;font-size:16px}
 .docs-search-field input.docs-search{width:100%;min-width:0;height:32px;padding:0 30px 0 32px;font-size:var(--t-base);background-image:none}   /* the field has its own icon */
 .docs-kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);min-width:18px;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:var(--t-xs)/16px var(--mono);text-align:center;pointer-events:none}
@@ -172,7 +172,7 @@ a.docs-settings{box-sizing:border-box;text-decoration:none}
 .docs-recent-row:hover{background:var(--surface2);text-decoration:none}
 .docs-recent-title{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .docs-recent-folder{grid-row:2;color:var(--muted);font-size:var(--t-sm)}
-.docs-recent-when{grid-row:1/3;grid-column:2;align-self:center;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.docs-recent-when{grid-row:1;grid-column:2;align-self:center;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
 /* Reading type: a comfortable measure and line height, a clear h1-h3 scale, roomy lists, code and tables. */
 .docs-content{max-width:72ch;font-size:var(--prose);line-height:var(--lh-read);color:var(--ink);overflow-wrap:anywhere}
 .docs-content>:first-child{margin-top:0}
@@ -253,7 +253,7 @@ a.docs-settings{box-sizing:border-box;text-decoration:none}
 .docs-history-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:var(--t-base)}
 .docs-history-text{font-size:var(--t-md);line-height:var(--lh-read);padding-top:8px;border-top:1px solid var(--line)}
 .docs-history .err{color:var(--fail);font-size:var(--t-base);margin:0 0 8px}
-@media(max-width:800px){#main.docs-layout{display:block;height:auto;max-height:none;overflow-y:auto;padding-bottom:60px}.docs-workspace{display:block;min-height:0}.docs-browser{overflow:visible;border-right:0;padding:0 0 24px}.docs-reader{overflow:visible;padding:0}.docs-workspace.has-selection:not(.searching) .docs-browser,.docs-workspace.has-selection.searching .docs-reader{display:none}.docs-workspace:not(.has-selection) .docs-reader{display:none}.docs-back{display:inline-flex;align-items:center;height:28px;margin:0 0 6px;color:var(--muted);font-size:var(--t-base);text-decoration:none}.docs-back:hover{color:var(--ink)}.docs-content{font-size:var(--t-lg);line-height:var(--lh-read)}.docs-content h2{font-size:var(--prose-h2);letter-spacing:var(--track-tight)}.docs-reader-head h2{font-size:var(--prose-title);letter-spacing:var(--track-tight)}.docs-link-edit{opacity:1;position:static;align-self:center;background:none}.docs-editor-fields{grid-template-columns:1fr}.docs-history-body{grid-template-columns:1fr}.docs-history-list{border-right:0;border-bottom:1px solid var(--line);padding:0 0 8px;max-height:28vh}.docs-history-view{max-height:none}.docs-item{padding:8px 8px;font-size:var(--t-lg)}.docs-browser details>.docs-item{padding-left:22px}.docs-browser summary{padding:8px 6px 6px 2px;font-size:var(--t-base)}.docs-link-main{padding:8px}.docs-link-text{font-size:var(--t-lg)}
+@media(max-width:800px){#main.docs-layout{display:block;height:auto;max-height:none;overflow-y:auto;padding-bottom:60px}.docs-workspace{display:block;min-height:0}.docs-browser{overflow:visible;border-right:0;padding:0 0 24px}.docs-reader{overflow:visible;padding:0}.docs-workspace.has-selection:not(.searching) .docs-browser,.docs-workspace.has-selection.searching .docs-reader{display:none}.docs-workspace:not(.has-selection) .docs-reader{display:none}.docs-back{display:inline-flex;align-items:center;height:28px;margin:0 0 6px;color:var(--muted);font-size:var(--t-base);text-decoration:none}.docs-back:hover{color:var(--ink)}.docs-content{font-size:var(--t-lg);line-height:var(--lh-read)}.docs-content h2{font-size:var(--prose-h2);letter-spacing:var(--track-tight)}.docs-reader-head h2{font-size:var(--prose-title);letter-spacing:var(--track-tight)}.docs-link-edit{opacity:1;position:static;align-self:center;background:none;min-width:44px;min-height:44px}.docs-editor-fields{grid-template-columns:1fr}.docs-history-body{grid-template-columns:1fr}.docs-history-list{border-right:0;border-bottom:1px solid var(--line);padding:0 0 8px;max-height:28vh}.docs-history-view{max-height:none}.docs-item{min-height:44px;padding:8px 8px;font-size:var(--t-md)}.docs-browser details>.docs-item{padding-left:22px}.docs-browser summary{min-height:44px;padding:8px 6px 6px 2px;font-size:var(--t-md)}.docs-link-main{padding:8px}.docs-link-text{font-size:var(--t-md)}
   /* Reading on a phone: the doc takes the screen; search comes back with the list. */
   /* Reading on a phone: one top row, back on the left and the doc's Edit and menu on the right; the page's own
      buttons and search come back with the list. */
@@ -269,6 +269,13 @@ a.docs-settings{box-sizing:border-box;text-decoration:none}
 /* Compact changelog: accomplishments and releases share a scannable list. */
 .release-page{max-width:1200px;padding-top:0}.release-header{margin-bottom:14px}.release-header h1{font-size:var(--t-lg)}.release-eyebrow{display:none}.release-filters{margin-bottom:14px}.release-entry{grid-template-columns:100px minmax(0,1fr);gap:16px}.release-date{padding-top:12px;font-size:var(--t-xs)}.release-time{display:block;margin-top:2px;color:var(--muted);font-size:var(--t-2xs)}.release-dot{top:16px;width:6px;height:6px;right:-3px;box-shadow:none}.release-card{padding:10px 14px;margin:0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent}.release-card h2{font-size:var(--t-card);margin:3px 0 4px;line-height:var(--lh)}.release-area{font-size:var(--t-2xs);padding:0;background:none;letter-spacing:var(--track-caps)}.release-card ul{font-size:var(--t-sm);line-height:var(--lh);padding-left:16px}.release-card li+li{margin-top:2px}.release-source{font-size:var(--t-xs);margin-top:4px}.release-filters select{padding:8px 10px}.release-filters input{flex:1}.release-filters select{flex:0 0 auto;width:auto;min-width:170px}@media(max-width:650px){.release-entry{grid-template-columns:1fr;gap:0}.release-date{padding-top:10px}.release-card{padding:6px 0 12px}.release-filters input{flex-basis:100%}.release-filters select{width:100%}}
 .release-header h1{margin:0}.release-filters{align-items:center}.release-filters .add-ctl{order:2}.release-filters select{order:1}.release-filters .release-review{order:1;white-space:nowrap}@media(max-width:650px){.release-filters{flex-wrap:wrap;--add-w:40px;--add-h:40px}.release-filters input{order:1;flex:1 1 0;min-width:0}.release-filters .add-ctl{order:2}.release-filters select{order:3;flex:1 1 100%;width:100%}.release-filters .release-review{order:4}}
+/* The Changelog's header (ui/changelog.ts, the shared page header): the filter icon's count sits on its corner; folded
+   into ⋯ on a phone, the icon reads "Filter" with the count at the row's end. */
+.cl-head .ph-fold-word{display:none}
+.cl-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}
+.cl-head>.ph-menu>.ph-tools>.tl-ib{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:auto;padding:6px 10px}
+.cl-head>.ph-menu>.ph-tools>.tl-ib .ph-fold-word{display:inline}
+.cl-head>.ph-menu>.ph-tools>.tl-ib .tl-fbadge{position:static;margin-left:auto}
 /* The top of What's new (ui/changelog.ts): Beta features, folded, then the known issues in this version. */
 .changelog-top{margin:0 0 14px;padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:var(--t-base)}
 .changelog-top h2,.changelog-beta>summary strong{font-size:var(--t-card);margin:0 0 6px}
@@ -285,8 +292,10 @@ a.docs-settings{box-sizing:border-box;text-decoration:none}
 .market-paging{display:flex;justify-content:space-between;gap:8px;margin:10px 8px}
 .market-paging button{font:inherit;font-size:var(--t-sm);color:var(--ink);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;cursor:pointer}
 /* Docs' first-run question (ui/docs-page.ts docsSetup) */
-.docs-setup{flex:none;max-width:640px;margin:0 0 16px;padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.docs-setup{position:relative;flex:none;max-width:640px;margin:0 0 16px;padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .docs-setup h2{margin:2px 0 6px;font-size:var(--t-lg);letter-spacing:var(--track-tight)}
 .docs-setup>form>p.muted,.docs-setup>p.muted{margin:0 0 12px;line-height:var(--lh)}
 .docs-setup .gs-field{max-width:none}
+.docs-setup .docs-setup-x{position:absolute;top:10px;right:10px}   /* the filed card's dismiss (ui/docs-page.ts) */
+@media (max-width:760px){.docs-setup .docs-setup-x{top:4px;right:4px;min-width:44px;min-height:44px}}
 .docs-setup-off{margin:0 0 12px;font-size:var(--t-sm)}

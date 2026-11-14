@@ -222,7 +222,9 @@ async function access(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.waitForFunction(() => S.route === '#/bot/intake');   // a page change draws a frame later (its fade)
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks', 'info']);
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks']);
+  // The details are ⋯'s list, last in the line: Info and Rules for someone who may not read the bot.
+  assert.deepEqual(await page.locator('#bot-more-menu [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
   assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
@@ -238,7 +240,9 @@ async function access(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/#/bot/sales');
   await page.waitForFunction(() => S.route === '#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no DM, no tasks');
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), [], 'see only: no DM, no tasks');
+  assert.deepEqual(await page.locator('#bot-more-menu [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules'], 'see only: Info and Rules in ⋯');
+  assert.equal(await page.locator('#bot-more-menu [data-bot-incognito], #bot-dm-arch').count(), 0, 'see only: no private chat');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);
   assert.deepEqual(errors, []);
   console.log('PASS: Access column and editor presets, the org filter beside Recent, and bot pages that show no activity to someone who cannot read.');

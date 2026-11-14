@@ -22,7 +22,9 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       const {page, errors} = await openAutomations(browser, {viewport: PHONE, hash: '#/listening'});
       await page.waitForSelector('.lst-row');
       assert.deepEqual(await page.locator('.lst-row .lst-nm').allInnerTexts(), ['Market listening', 'Pricing page watch'], tag + ': the listenings and nothing else');
-      assert.equal(await page.locator('.lst-row .lst-lim').first().isVisible(), false, tag + ': the limits leave the row on a phone');
+      // A row fits a phone as the name over its facts: the limits stay, under the name; nothing is cut away.
+      const [nm, lim] = await Promise.all(['.lst-nm', '.lst-lim'].map(sel => page.locator(`.lst-row ${sel}`).first().boundingBox()));
+      assert.ok(nm && lim && lim.y >= nm.y + nm.height - 1, tag + ': the limits sit under the name on a phone');
       assert.equal(await page.locator('.au-q').isVisible(), true, tag + ': a search');
       assert.equal(await page.locator('.au-range, .au-fbtn, .au-tabs').evaluateAll(els => els.some(el => (el as HTMLElement).checkVisibility())), false, tag + ': no range, filters or tabs');
       assert.equal(await sideways(page), false, tag + ': no sideways scroll');
@@ -222,8 +224,8 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await page.close();
     }
 
-    // None yet: one line on what Listening does and one green New listening: the header's, which never moves (the shared
-    // page header, task 338); the empty state offers the same action as a plain button. A double press makes one listening.
+    // None yet: one line and one action (style guide, "A great page"): the empty state's New listening, the page's one add;
+    // the header's + and search step aside until there is a listening. A double press makes one listening.
     {
       const tag = 'none';
       let posts = 0;
@@ -237,10 +239,11 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
         }});
       const empty = page.locator('.au-lst .empty-state.lst-empty');
       await empty.waitFor();
-      assert.equal((await empty.locator('p').innerText()).trim(), 'Watches the sites and searches you pick, and posts what matters to Updates.', tag + ': what it does');
+      assert.equal((await empty.locator('p').innerText()).trim(), 'No listening yet', tag + ': one line');
       assert.equal(await empty.locator('.ea-art').count(), 1, tag + ': its little picture');
       assert.deepEqual(await page.locator('.au-lst :is(button,a).primary:visible').allInnerTexts(), ['New listening'], tag + ': one green action');
-      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the header\'s quiet + stays in place');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), false, tag + ': no second add in the header');
+      assert.equal(await page.locator('.au-lst .au-q').isVisible(), false, tag + ': nothing to search');
       assert.equal(await page.locator('.au-lst .au-new').getAttribute('aria-label'), 'New listening', tag + ': the + is named');
       await empty.locator('[data-lst-new]').dblclick();
       await page.waitForFunction(() => /^#\/listening\/au_\d+$/.test(location.hash));

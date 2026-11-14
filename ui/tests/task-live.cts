@@ -31,9 +31,8 @@ type Gate = ReturnType<typeof gate>;
    try {
     const {page, errors} = await open({newPage: () => context.newPage()}, {viewport: {width, height: 900}});
     const edit = page.getByRole('button', {name: 'Edit details', exact: true});
-    // A phone shows the details in the task window's Info tab (task #409).
-    if (phone) await page.locator('#task-modal[open] [data-task-tab="info"]').click();
-    await page.locator('details.task-orig').filter({has: edit}).evaluateAll(rows => rows.forEach(el => { (el as HTMLDetailsElement).open = true; }));
+    // The request and its Edit are on the task window's Description tab.
+    await page.locator('#task-modal[open] [data-task-tab="desc"]').click();
     await edit.waitFor();
     const box = (await edit.boundingBox())!;
     if (phone) {
@@ -60,7 +59,7 @@ type Gate = ReturnType<typeof gate>;
    for (const [viewer, viewport] of [['ana', width], ['sam', width === 390 ? 1440 : 390]] as const) {
     const {page, data, errors} = await open(browser, {at: '#/task/t-checkout', viewport: {width: viewport, height: 900}});
     pages.push(page); viewers.push(page); viewerErrors.push(errors);
-    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
+    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'});
     task ||= {...data.tasks[0]!, title: 'Review the launch', body: 'Initial details', links: [], children_summary: undefined};
     await page.evaluate(viewer => {
      taskLiveStop(taskModal());
@@ -92,9 +91,8 @@ type Gate = ReturnType<typeof gate>;
     });
     await page.evaluate(async task => { await taskModalShow(task); }, task);
     await page.waitForFunction(() => !!taskModal().taskLive?.shared);
-    // A phone shows the details in the task window's Info tab (task #409).
-    if (viewport <= 760) await page.locator('#task-modal[open] [data-task-tab="info"]').click();
-    await page.locator('details.task-orig').filter({has: page.locator('[data-task-edit-body]')}).evaluateAll(rows => rows.forEach(el => { (el as HTMLDetailsElement).open = true; }));
+    // The request and its Edit are on the task window's Description tab.
+    await page.locator('#task-modal[open] [data-task-tab="desc"]').click();
     assert.deepEqual(errors, []);
    }
    const [a, b] = viewers as [Page, Page];
@@ -127,7 +125,12 @@ type Gate = ReturnType<typeof gate>;
    await a.waitForFunction(() => !taskModal().taskLive!.draft.error && !taskModal().taskLive!.draft.flight);
    assert.equal(task.title, 'Final title'); assert.equal(task.body, 'Sam changed only details');
    assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1)!.patch).sort(), ['title', 'version']);
-   await a.getByText('You edited · just now', {exact: true}).waitFor();
+   // No "edited" line under the title: who changed it is the chat's history ("renamed it", folded with the updates).
+   assert.equal(await a.locator('#task-modal [data-task-edited]').count(), 0, 'no edited line');
+   await a.waitForFunction(() => /You renamed it/.test(document.querySelector('#task-modal .task-comments')?.textContent || ''));
+   await a.waitForFunction(() => /edited the request/.test(document.querySelector('#task-modal .task-comments')?.textContent || ''));
+   // Both are in the folded "N updates" line, not lines of their own.
+   assert.ok(await a.evaluate(() => [...document.querySelectorAll('#task-modal .task-comments details.src-group')].some(g => /renamed it/.test(g.textContent || '') && /edited the request/.test(g.textContent || ''))), 'the edits fold into the updates line');
    assert.equal(listReads, 0, 'autosave and task invalidations never reread the task list');
    deny = true;
    await fillTitle('Keep this refused draft'); await title.evaluate(el => el.blur());

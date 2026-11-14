@@ -27,7 +27,8 @@
 .strat-sec-head{display:flex;align-items:center;gap:8px;min-height:26px;margin:0 0 6px}
 .strat-sec-head .strat-k{margin:0}
 .strat-sec-head .cnt{color:var(--muted);font-size:var(--t-sm)}
-.strat-k{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+/* A card's title: the guide's card title (15px, ink), never the uppercase label style ("Strategy card"). */
+.strat-k{margin:0 0 6px;font-size:var(--t-card);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-normal);color:var(--ink)}
 .strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:var(--lh-tight)}
 .strat-empty{margin:0;font-size:var(--t-base)}
 .strat-text{margin:0;font-size:var(--t-md);line-height:var(--lh-read);white-space:pre-line;overflow-wrap:anywhere}
@@ -62,13 +63,13 @@
 .strat-wrong-kind{flex:none;width:120px}
 .strat-wrong-fields{display:flex;gap:8px;flex:1 1 auto;min-width:0}
 .strat-wrong-fields[hidden]{display:none}
-.strat-wrong-fields input,.strat-wrong-fields select{box-sizing:border-box;height:36px;min-width:0;padding:0 9px;font-size:var(--t-md)}
+.strat-wrong-fields input,.strat-wrong-fields select{box-sizing:border-box;height:var(--ctl);min-width:0;padding:0 9px;font-size:var(--t-md)}
 .strat-wrong-fields>*{flex:1 1 auto}
 .strat-wrong-fields select[name="direction"]{flex:0 0 96px}
 .strat-wrong-fields input[name="threshold"]{flex:0 0 110px}
 .strat-wrong-by{max-width:200px}
 .strat-form-why{margin:0;color:var(--wait-ink);font-size:var(--t-sm)}
-.strat-sec-form input[name="title"]{box-sizing:border-box;width:100%;height:36px;margin:0 0 8px;font-size:var(--t-md)}
+.strat-sec-form input[name="title"]{box-sizing:border-box;width:100%;height:var(--ctl);margin:0 0 8px;font-size:var(--t-md)}
 .strat-flash{animation:stratflash 1.6s var(--ease-out)}
 @keyframes stratflash{from{background:color-mix(in srgb,var(--ink) 10%,transparent)}to{background:transparent}}
 @media (prefers-reduced-motion:reduce){.strat-flash{animation:none}}
@@ -79,8 +80,7 @@
 .strat-card[hidden]{display:none!important}
 .strat-card-head,.strat-sec-head{display:flex;align-items:center;gap:8px;min-height:24px;margin:0}
 .strat-card-head .strat-k,.strat-sec-head .strat-k{margin:0}
-.strat-card-head .strat-add{margin-left:auto}
-.strat-hint{margin-left:auto;color:var(--muted);font-size:var(--t-xs)}
+.strat-card-head .strat-mini{margin-left:auto}
 .strat-row{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
 @media (min-width:1100px){.strat-row{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}}
 .strat-secs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
@@ -95,8 +95,9 @@
 .strat-ed::placeholder{color:var(--muted)}
 .strat-big{margin:0;font-size:var(--t-lg);font-weight:500;line-height:var(--lh-read);overflow-wrap:anywhere}
 .strat-memo section.card.strat-top{padding:16px 18px}
-/* × to remove: on hover or focus with a mouse, always on a touch screen. */
-.strat-x{display:grid;place-items:center;flex:none;width:22px;height:22px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+/* × to remove: on hover or focus with a mouse, always on a touch screen. It stays a small mark there; .tap-mark (forms.css)
+   gives it a 44px target around it, so it is positioned. */
+.strat-x{position:relative;display:grid;place-items:center;flex:none;width:22px;height:22px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .strat-x svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .strat-x:hover{background:var(--fail-bg);color:var(--fail)}
 .strat-x:focus-visible{opacity:1}
@@ -105,13 +106,13 @@
 .strat-add{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;line-height:var(--lh-tight);cursor:pointer;white-space:nowrap}
 .strat-add:hover{border-color:var(--muted);color:var(--ink)}
 .strat-addrow{display:flex;gap:6px;margin:2px 0 0}
-.strat-addrow input{flex:1 1 auto;min-width:0;height:30px;padding:0 12px;border-radius:999px;font-size:var(--t-base)}
+.strat-addrow input{flex:1 1 auto;min-width:0;height:var(--ctl);padding:0 12px;border-radius:999px;font-size:var(--t-base)}
 
 /* The bets: number (the drag handle), statement, then health, status and ×. */
 .strat-bets-card .strat-bet{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:8px;align-items:start;padding:9px 0;border-top:1px solid var(--line)}
 .strat-bets-card .strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
 .strat-bets-card .strat-bet-n{width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:700;line-height:24px;text-align:center}
-.strat-bets-card button.strat-bet-n{cursor:grab;touch-action:none}
+.strat-bets-card button.strat-bet-n{position:relative;cursor:grab;touch-action:none}
 .strat-bets-card button.strat-bet-n:hover{background:var(--surface2)}
 .strat-bets-card .strat-bet.dragging{opacity:.7}
 .strat-bets-card .strat-bet.dragging .strat-bet-n{cursor:grabbing}
@@ -122,8 +123,6 @@
 .strat-sec-head .strat-mini{margin-left:auto}
 .strat-bet-side{display:flex;align-items:center;gap:6px;min-height:24px}
 .strat-bets-card .strat-none-row{display:block}
-button.strat-pill{border:0;cursor:pointer;font:inherit;font-size:var(--t-xs)}
-button.strat-pill:hover{filter:brightness(1.1)}
 .strat-retired{margin-top:2px}
 .strat-retired>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);padding:4px 0}
 .strat-retired .cnt{margin-left:4px}
@@ -154,6 +153,15 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-tm-plain .strat-tm.pick{padding-right:24px}
 .strat-tm-plain .strat-tm.ours{border-color:var(--accent)}
 .strat-tm-plain .strat-tm.next{border:1px dashed var(--accent)}
+/* On a touch screen every tile's × shows, so removing a segment never goes through a tap on the tile (which retargets
+   it). It has the tile's top-right corner to itself: the name stops 46px short of the edge, and its 44px target reaches
+   only into that empty corner. The tile clips it (overflow:hidden), so it never covers a neighbouring tile. */
+@media (hover:none){
+  .strat-tm.pick,.strat-tm-plain .strat-tm.pick{padding-right:46px}
+  .strat-tm-plain .strat-tm.pick{min-height:44px}
+  .strat-tm .strat-x{top:0;right:0;width:32px;height:32px}
+  :is(.strat-map,.strat-tm-plain) .strat-tm .strat-x::before{content:"";position:absolute;top:0;right:0;bottom:auto;left:auto;width:44px;height:44px}
+}
 
 /* Competitors: chips that link out. */
 .strat-chips{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:0;padding:0}
@@ -195,8 +203,9 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-sv-bets li{margin:0 0 6px}
 
 @media (max-width:760px){
-  #main.strategy-layout{padding-left:12px;padding-right:12px;padding-top:12px}
-  #main.market-layout .strat-head{padding:12px 12px 8px}
+  /* #main keeps its phone padding (18px on top), so the title stands where every other page's does; Market's header
+     brings the same gutters itself. */
+  #main.market-layout .strat-head{padding:18px 12px 8px}
   .strat-head{gap:8px 12px}
   .strat-head .spacer{display:none}
   .strat-actions{flex-basis:100%}
@@ -204,8 +213,7 @@ button.strat-pill:hover{filter:brightness(1.1)}
   /* Number and statement on one line; the status and the tools share the next, so the number never sits alone. */
   .strat-bet-top{flex-wrap:wrap;row-gap:6px}
   .strat-bet-st{flex-basis:calc(100% - 24px)}
-  .strat-pill{margin-left:24px}
-  .strat-mini{min-height:32px;padding:4px 10px}
+  .strat-mini{padding:4px 10px}
   .strat-sec-form textarea,.strat-publish input{font-size:16px}
   .strat-publish{flex-wrap:wrap}.strat-publish input{flex-basis:100%}
   .strat-bet-lines{margin-left:0}
@@ -213,12 +221,28 @@ button.strat-pill:hover{filter:brightness(1.1)}
   .strat-wrong-row{flex-wrap:wrap}
   .strat-wrong-kind{width:100%}
   .strat-wrong-fields{flex-basis:100%;flex-wrap:wrap}
-  .strat-wrong-fields input,.strat-wrong-fields select{height:44px;font-size:16px}
   .strat-wrong-fields select[name="kpi_id"]{flex-basis:100%}
   .strat-wrong-by{max-width:none}
   .strat-ed,.strat-addrow input{font-size:16px}
   .strat-memo section.card.strat-card{padding:12px}
   .strat-map{aspect-ratio:1.4/1}
-  .strat-addrow input{height:40px}
   .strat-add{padding:6px 12px}
+  /* A bet on a phone: its statement takes the row; the pill, Make active and × go on their own 44px row under it, the ×
+     last at the right. Each small mark's 44px target (.tap-mark) keeps 12px clear of what sits beside it, so a finger on
+     Make active, a name or the next chip never lands on a ×. */
+  .strat-bets-card .strat-bet{grid-template-columns:24px minmax(0,1fr) auto;grid-template-rows:24px auto;column-gap:12px;padding:12px 0}
+  .strat-bet-main{grid-column:2;grid-row:1 / span 2}
+  .strat-bet-side{grid-column:2 / -1;grid-row:3;min-height:44px;gap:12px}
+  .strat-bet-side>.strat-x{margin-left:auto}
+  .strat-bet-side:not(:has(>*)){display:none}
+  /* A bet with nothing to decide (no pill, no Make active) has no row of its own: its × is the small mark at the top
+     right, its 44px target inside the bet's padding and the 12px gap beside the statement; its health dot sits under
+     its number, the bet's state beside the bet, not a second dot on the goal line. */
+  .strat-bets-card .strat-bet:not(:has(.strat-pill))>.strat-bet-side{display:contents}
+  .strat-bets-card .strat-bet:not(:has(.strat-pill))>.strat-bet-side>.strat-x{grid-column:3;grid-row:1;margin:1px 0 0}
+  /* the statement's field reaches 6px past its text on the left only, so the 12px gap to the × stays clear */
+  .strat-bets-card .strat-ed.strat-bet-st{width:calc(100% + 6px);margin-right:0}
+  .strat-bets-card .strat-bet:not(:has(.strat-pill))>.strat-bet-side>.strat-health{grid-column:1;grid-row:2;justify-self:center;align-self:start;margin-top:6px}
+  .strat-chips{gap:16px 12px}
+  .strat-chip{gap:12px;padding-right:12px}
 }
