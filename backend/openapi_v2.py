@@ -11021,7 +11021,8 @@ def spec(app):
                 if param.get("name") == "m":
                     param["description"] = (
                         "A path or file name as the bot wrote it; repeat for each (m=a&m=b), at most 60. Values are "
-                        "trimmed, a repeat counts once, and one over 300 characters is ignored"
+                        "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
+                        "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
                     )
             responses["404"] = {**ERROR, "description": "not_found: no such bot, or one the caller may not see"}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):

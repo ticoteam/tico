@@ -193,8 +193,8 @@ A path or file name a bot writes in a message (`reports/2026-11-12-legal-review-
 shows: the bot's chat on its page, the Assistant, task chats and threads, Catch up and updates, in running text, lists
 and table cells alike. A page asks the server for every name it draws in one request, `GET /api/v2/bots/{bot}/files/mentions?m=…&m=…` (up to 60), which
 answers only names that are exactly one of the bot's files the viewer may see: a path by its path (or the end of it),
-a bare name only when no other file has it. A bare name after a folder in the same paragraph or list item is looked
-up in that folder first. Anything else stays text; web addresses are links as before. An answer that comes after the
+a bare name only when no other file the viewer may see has it. A bare name after a folder in the same paragraph or
+list item is looked up in that folder first. Anything else stays text; web addresses are links as before. An answer that comes after the
 message is drawn links the names in place. The route is in the stable API (`resolveBotFileMentions`), so a custom
 frontend or an agent can call it as the [custom frontend guide](custom-frontend.md) shows; the folder-in-the-same-paragraph
 rule is the web app's, so such a caller sends the joined path itself.

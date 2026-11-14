@@ -475,6 +475,7 @@ def test_every_thread_route_the_server_serves_is_documented(api):
 
 def test_the_file_mentions_answer_matches_its_contract(api):
     """resolveBotFileMentions (docs/files.md, Files named in a message): one file per name or the name is absent."""
+    from backend.tests.helpers.api import get
     from backend.tests.helpers.files import publish, turn
 
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
@@ -513,6 +514,9 @@ def test_the_file_mentions_answer_matches_its_contract(api):
     r = ask(said)
     assert r.status_code == 200, r.text
     assert conforms(r.json(), schema, document) is None, conforms(r.json(), schema, document)
+    entry = declared["properties"]["files"]["additionalProperties"]
+    for name, file in r.json()["files"].items():  # conforms leaves a map's values unchecked; each is a BotFile
+        assert conforms(file, entry, document, name) is None, conforms(file, entry, document, name)
     assert {k: v["id"] for k, v in r.json()["files"].items()} == {s: pack for s in said[:3]}, "two of a name: absent"
     hidden = ask(said[:1], who="cara-test")
     assert hidden.status_code == 200 and hidden.json()["files"] == {}, "a file the caller may not read is absent"
@@ -521,4 +525,10 @@ def test_the_file_mentions_answer_matches_its_contract(api):
     assert ask(["x%d" % i for i in range(61)]).status_code == 422
     missing = ask(said[:1], bot="nobody")
     assert missing.status_code == 404 and missing.json()["error"]["code"] == "not_found"
+    revision = get(api, "bots/ops/access", "ana-test")["revision"]
+    only_ben = {"people": ["ben"]}
+    access = {"see": only_ben, "read": only_ben, "write": only_ben, "revision": revision}
+    assert api.put("/api/v2/bots/ops/access", json=access, headers=headers("ana-test")).status_code == 200
+    unseen = ask(said[:1], who="cara-test")
+    assert unseen.status_code == 404 and unseen.json()["error"]["code"] == "not_found", "a bot cara may not see"
     assert api.get("/api/v2/bots/ops/files/mentions?m=a.docx").status_code == 401
