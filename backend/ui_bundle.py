@@ -40,6 +40,11 @@ real function, which the part's own declaration has put in the stub's place; an 
 helper) does nothing until its part is loaded. A part is never larger than PART_BYTES (refused at build), and an old
 part address is a 404: an open tab from before a release reloads to the current one (ui/app/parts.ts).
 
+The shell has a ceiling (SHELL_JS_CEILING): the JavaScript a cold open of Home downloads, gzip as the server sends it
+(`cold_js`), may not grow past it. backend/tests/test_ui_shell_size.py fails a pull request that does (`shell_over`
+names the size and the largest shell files), and scripts/pr_checks.py runs that test for every change that can move the
+number. `python -m backend.ui_bundle --shell-size` prints it.
+
 Set TICO_UI_BUNDLE=off to serve the separate files as index.html lists them (editing the UI).
 `python3 -m backend.ui_bundle <ui dir> <out dir>` writes the page and both bundles, for the browser tests.
 """
@@ -55,6 +60,12 @@ from . import ui_build
 
 PREFIX = "/tico/ui/"
 JS_PATH, CSS_PATH = PREFIX + "app.bundle.js", PREFIX + "app.bundle.css"
+# The most JavaScript, in bytes, a cold open of Home may download before the app runs: the shell's parts and the
+# standalone scripts, gzip as a browser gets them (`cold_js`). The performance budget is 300 KB (P05b); lower this
+# whenever the shell shrinks, never raise it to let a change in: move code a click runs into a page part instead.
+SHELL_JS_CEILING = 340 * 1024
+# The gzip level and floor backend/ui_compression.py sends the standalone scripts with (the parts carry their own).
+STANDALONE_GZIP_LEVEL, STANDALONE_GZIP_MIN = 3, 1024
 # The largest part (decoded): a WebKit cache of 4 MB or more keeps it. The files are cut between, never inside.
 PART_BYTES = 512 * 1024
 PART = re.compile(re.escape(PREFIX) + r"app\.bundle(?:\.([2-9]|[1-9][0-9]|[a-z][a-z0-9-]*))?\.(js|css)")
@@ -333,13 +344,15 @@ def build(ui_dir):
     owner = {f: part for part, spec in parts.items() for f in spec["files"]}
     # One script is one scope for 'use strict': a directive only counts at the top of a script, so the
     # bundle opens with it once, and every file must already be strict.
-    js, paged = [], {part: [] for part in parts}
+    js, paged, shell_files = [], {part: [] for part in parts}, []
     for name, text, map_file in sources["js"]:
         # esbuild writes the directive of a compiled or minified file with double quotes.
         if not re.search(r"""^(['"])use strict\1;""", text, re.M):
             raise BundleError(f"{name}: not strict, so it cannot share a script")
         chunk = (f"// file: {name}\n{text.rstrip()}\n\n".encode(), 1, map_file)
         (paged[owner[name]] if name in owner else js).append(chunk)
+        if name not in owner:
+            shell_files.append((name, chunk[0]))
     css = [(f"/* file: {name} */\n{text.rstrip()}\n\n".encode(), 1, m) for name, text, m in sources["css"]]
     # Each part is a script of its own, so each opens with the directive; the first also marks where the run starts.
     head = BUNDLE_MARK + stubs(parts)
@@ -389,7 +402,7 @@ def build(ui_dir):
         return tags
 
     page = REGION.sub(region, html)
-    versions, standalone = {}, []
+    versions, standalone, standalone_bytes = {}, [], {}
     for url, name in STANDALONE.items():
         path, tag = ui_dir / name, f'src="{url}"'
         if tag not in page or not path.is_file():
@@ -398,7 +411,8 @@ def build(ui_dir):
         if name.endswith(".ts"):  # served as its compiled output, so the hash names those bytes (as for a bundled file)
             typed.append(path)
             served = ui_build.compiled(ui_dir, name)  # StaleBuild, not the source
-        versions[url] = hashlib.sha256(served.read_bytes()).hexdigest()[:16]
+        standalone_bytes[url] = served.read_bytes()
+        versions[url] = hashlib.sha256(standalone_bytes[url]).hexdigest()[:16]
         page = page.replace(tag, f'src="{url}?v={versions[url]}"')
         standalone.append(path)
     listed = [p for kind in files.values() for _, p in kind] + standalone + [ui_dir / "index.html"]
@@ -409,7 +423,38 @@ def build(ui_dir):
         listed.append(ui_build.manifest_path(ui_dir))
     if parts:
         listed.append(Path(ui_dir) / "parts.json")
-    return Bundle(page.encode(), js_parts, css_parts, versions, sections, page_parts), listed
+    bundle = Bundle(page.encode(), js_parts, css_parts, versions, sections, page_parts)
+    # What `cold_js` and `shell_over` read: each shell file's code as bundled, and each standalone script's bytes.
+    bundle.shell_files, bundle.standalone = shell_files, standalone_bytes
+    return bundle, listed
+
+
+def cold_js(bundle):
+    """{URL path: bytes on the wire} of the JavaScript a cold open of Home downloads before the app runs, as a browser
+    that accepts gzip gets it: the shell's parts (`Bundle.gz`) and the standalone scripts the page names (theme.ts,
+    marked), which backend/ui_compression.py compresses. Page parts are left out: none is fetched until its page opens."""
+    out = {path: len(bundle.gz[path]) for path in sorted(bundle.shell_paths) if path.endswith(".js")}
+    for url, body in bundle.standalone.items():
+        if not url.endswith(".css"):
+            big = len(body) >= STANDALONE_GZIP_MIN
+            out[url] = len(gzip.compress(body, STANDALONE_GZIP_LEVEL, mtime=0)) if big else len(body)
+    return out
+
+
+def shell_over(bundle, ceiling=None):
+    """None when a cold open's JavaScript (`cold_js`) is within `ceiling` bytes; otherwise what to tell the change's
+    author: the size, the ceiling and the five largest shell files (each gzip on its own, so they add up to more)."""
+    ceiling = SHELL_JS_CEILING if ceiling is None else ceiling
+    total = sum(cold_js(bundle).values())
+    if total <= ceiling:
+        return None
+    largest = sorted(((len(gzip.compress(text, 6, mtime=0)), name) for name, text in bundle.shell_files), reverse=True)
+    files = ", ".join(f"{name} {size / 1024:.1f} KB" for size, name in largest[:5])
+    return (
+        f"A cold open of Home downloads {total / 1024:.1f} KB of JavaScript (gzip), over its ceiling of "
+        f"{ceiling / 1024:.1f} KB (backend/ui_bundle.py SHELL_JS_CEILING). The largest shell files: {files}. Move code "
+        "that runs on a click or on another page into a page part (ui/parts.json) instead of raising the ceiling."
+    )
 
 
 class UiBundle:
@@ -540,6 +585,17 @@ if __name__ == "__main__" and sys.argv[1:2] == ["--where"]:
         raise SystemExit(f"ui bundle: {exc}") from None
     for arg in sys.argv[2:]:
         print(f"{arg} -> {where(current, arg) or 'not in a minified file'}")
+elif __name__ == "__main__" and sys.argv[1:2] == ["--shell-size"]:
+    # The JavaScript a cold open of Home downloads (what bench/first-open.cts measures in a browser), against the ceiling.
+    try:
+        current, _ = build(Path(__file__).resolve().parents[1] / "ui")
+    except ui_build.StaleBuild as exc:
+        raise SystemExit(f"ui bundle: {exc}") from None
+    sizes = cold_js(current)
+    for path, size in sizes.items():
+        print(f"{size / 1024:8.1f} KB  {path}")
+    print(f"{sum(sizes.values()) / 1024:8.1f} KB  cold open of Home, gzip (ceiling {SHELL_JS_CEILING / 1024:.1f} KB)")
+    raise SystemExit(1 if shell_over(current) else 0)
 elif __name__ == "__main__":
     ui, out = Path(sys.argv[1]), Path(sys.argv[2])
     try:

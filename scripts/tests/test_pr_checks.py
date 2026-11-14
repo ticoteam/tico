@@ -2472,6 +2472,25 @@ def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event,
     assert checks.CLI_SPEC not in light_plan(["backend/growth.py"], event, repo_map, added=[])["guards"]
 
 
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize(
+    "path",
+    ["ui/app/sidebar.ts", "ui/parts.json", "ui/index.html", "ui/vendor/marked.min.js", "backend/ui_bundle.py",
+     "backend/ui_compression.py", "scripts/build-ui.cjs", "package-lock.json"],
+)
+def test_a_change_that_can_grow_the_shell_runs_the_size_ceiling_even_in_a_light_plan(event, path, repo_map):
+    # P05b: between P05's two pull requests the code a cold open of Home downloads crept from 341 to 383 KB, and no
+    # check noticed. Every path that can move that number runs the ceiling, in a light plan too.
+    light = light_plan([path], event, repo_map, added=[])
+    assert checks.UI_SHELL_SIZE in light["guards"] and checks.UI_SHELL_SIZE in light["python"]
+    assert light["narrow"]["tier"][checks.UI_SHELL_SIZE] == 0 and (ROOT / checks.UI_SHELL_SIZE).is_file()
+
+
+@pytest.mark.parametrize("path", ["ui/tests/thread-redraw.cts", "ui/baselines/home.png", "ui/README.md", "backend/growth.py"])
+def test_a_change_that_cannot_grow_the_shell_leaves_the_size_ceiling_out(path, repo_map):
+    assert checks.UI_SHELL_SIZE not in light_plan([path], "pull_request", repo_map, added=[])["guards"]
+
+
 def test_a_schema_line_in_a_backend_module_runs_the_rows_schema_test(tmp_path):
     # A column added to a CREATE TABLE string (hubdb.py, store.py) or to the column list an ALTER TABLE loop reads
     # changes the hub's schema without a migration: rows.py must follow, so test_rows_schema.py runs.
