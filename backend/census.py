@@ -120,9 +120,8 @@ class Census:
 
     def ready(self, c):
         """Counting is on and the owner has been shown the notice (as Homebrew does: nothing goes out before it)."""
-        if (
-            self.settings.hosted
-        ):  # hosted by our team: counted by default, no notice (the company signed up for hosting)
+        # Hosted by our team: counted by default, with no notice (the company signed up for hosting).
+        if self.settings.hosted:
             return not self.off_reason(c)
         return not self.off_reason(c) and bool(_load(c).get("notice"))
 
