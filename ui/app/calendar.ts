@@ -98,12 +98,6 @@ function calTitle(p: CalPage): string {
   return s.getMonth() === last.getMonth() ? `${md(s)} – ${last.getDate()}` : `${md(s)} – ${md(last)}`;
 }
 
-// ----------------------------------------------------------------- page and load
-function calendarRoute(r: string): boolean {
-  if (!rdUnder((r || '').split('?')[0] ?? '', CAL_ROUTE)) return false;
-  pageCalendar(r);
-  return true;
-}
 function calendarStop(r: string): void {
   if (rdUnder((r || '').split('?')[0] ?? '', CAL_ROUTE)) return;
   CALP = null; calCardClose();

@@ -34,46 +34,13 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// 'settings' or 'settings/<section>', '<view>' (inboxesView), or '<kind>/<id>[/activity]' (one inbox). Set by Tools' router.
-let INBOXES_VIEW: string = '';
-const INBOX_KINDS: Record<string, InboxKind> = {}, INBOX_VIEWS: Record<string, InboxView> = {}, INBOX_SETTINGS: InboxSetting[] = [], INBOX_PANELS: InboxPanel[] = [];
-const INBOX_SECTIONS: [string, string][] = [['email', 'Email'], ['texts', 'Texts'], ['letters-in', 'Letters in'], ['letters-out', 'Letters out']];
-const INBOX_STATUS: Record<string, [string, string]> = {ok: ['ok', 'Connected'], attention: ['fail', 'Needs attention'], pending: ['waiting', 'Pending'], off: ['', 'Not in use']};
-// A kind's segment in its Tools address. Tico addresses and phone numbers are one page (inDetail tells them apart);
-// letters out is the company's one outbox, so it has a fixed id.
-const INBOX_SEGMENTS: Record<string, string> = {mailbox: 'mailbox', tico: 'number', number: 'number', postal: 'address', outbox: 'address'};
-const INBOX_OUTBOX_ID = 'outbox';
-const IB: {run: number} = {run: 0};
 
 function inboxesKind(key: string, spec: InboxKindSpec): void { INBOX_KINDS[key] = {key, ...spec}; }
 function inboxesView(key: string, spec: InboxViewSpec): void { INBOX_VIEWS[key] = {key, ...spec}; }
 function inboxesSetting(key: string, spec: InboxSettingSpec): void { INBOX_SETTINGS.push({key, ...spec}); INBOX_SETTINGS.sort((a, b) => a.order - b.order); }
 function inboxesPanel(key: string, spec: InboxPanelSpec): void { INBOX_PANELS.push({key, ...spec}); INBOX_PANELS.sort((a, b) => a.order - b.order); }
 
-// The Tools address of an inbox ('mailbox', id), of Tools › Settings ('settings', section) or of a view ('messages').
-function inboxesLink(kind: string, id?: string): string {
-  if (kind === 'settings') return '#/tools/settings' + (id ? '/' + encodeURIComponent(id) : '');
-  if (kind === 'outbox') return '#/tools/address/' + INBOX_OUTBOX_ID;
-  if (!INBOX_SEGMENTS[kind]) return '#/tools/' + kind;
-  return `#/tools/${INBOX_SEGMENTS[kind]}${id ? '/' + encodeURIComponent(id) : ''}`;
-}
-const inboxesPill = (status: string, text?: string): string => {
-  const [tone, label] = INBOX_STATUS[status] || ['', status];
-  return `<span class="pill${tone ? ' ' + tone : ''}" data-ib-status="${esc(status)}">${esc(text || label)}</span>`;
-};
 
-// The view a Tools address names (its parts after #/tools/), or null when it is not one of these pages.
-function inboxesRoute(parts: string[]): string | null {
-  const [seg = '', id, tab] = parts;
-  if (seg === 'settings') return INBOX_SECTIONS.some(([k]) => k === id) ? 'settings/' + id : 'settings';
-  if (INBOX_VIEWS[seg] && !id) return seg;
-  if (!id) return null;
-  if (seg === 'address' && id === INBOX_OUTBOX_ID) return 'outbox/company';
-  const kinds: Record<string, string> = {mailbox: 'mailbox', number: 'number', address: 'postal'};
-  const kind = kinds[seg];
-  if (!kind) return null;
-  return kind + '/' + id + (tab === 'activity' && INBOX_KINDS[kind]?.activity ? '/activity' : '');
-}
 // A view's address: what ctx.go opens.
 function inboxesHref(view: string): string {
   if (!view) return TOOLS_ROUTE;
@@ -89,19 +56,6 @@ function inboxesGo(view: string): void | Promise<void> {
   location.hash = href;
 }
 
-function inboxesCtx(run: number): InboxCtx {
-  const loads: Record<string, Promise<unknown> | undefined> = {};
-  return {
-    admin: settingsIsAdmin(), me: S.me, run,
-    live: () => run === IB.run,
-    once: <T>(name: string, load: () => T | PromiseLike<T>) => {
-      loads[name] ||= Promise.resolve().then(load);
-      return loads[name] as Promise<T>;
-    },
-    refresh: () => inboxesRender(),
-    go: inboxesGo,
-  };
-}
 
 async function inboxesRender(): Promise<void> {
   const el = $('#tools-inbox') as HTMLElement | null; if (!el) return;
@@ -145,9 +99,6 @@ async function inboxesSettingsPage(el: HTMLElement, section: string, ctx: InboxC
   if (section && ctx.live()) $('#inboxes-' + section)?.scrollIntoView({block: 'start'});
 }
 
-// A card on Tools › Settings, or on an inbox's page.
-const inboxesCard = (id: string, title: string, body: string, action = ''): string =>
-  `<section class="card ib-card"${id ? ` id="${esc(id)}"` : ''}><header><h2>${esc(title)}</h2>${action}</header>${body}</section>`;
 // A placeholder: the card's title and its Coming soon pill, nothing under them.
 const inboxesSoon = (id: string, title: string): string => inboxesCard(id, title, '', '<span class="pill" data-ib-soon>Coming soon</span>');
 

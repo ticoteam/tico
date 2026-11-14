@@ -11,6 +11,7 @@ type Route = import('playwright').Route;
 type Locator = import('playwright').Locator;
 // The live view the thread renderer draws (its own type is not exported).
 type SysLive = Parameters<typeof thvDraw>[0];
+declare function uiPartLoad(part: string): Promise<void>;
 declare var thvApplyMessage: (view: SysLive, event: unknown) => void;
 declare var thvUpdateReveal: (view: SysLive, id: string) => void;
 declare var rowSource: (m: {[key: string]: unknown; sender_id: string}, by?: unknown) => {kind: string; name: string};
@@ -204,6 +205,8 @@ let browser: Browser | null = null;
     assert.ok(!/Assistant/.test(chat.text), 'the chat names no Assistant for them');
 
     // A task's thread: two task updates in a row are one shut group; the event the server made has no sender.
+    // The task window's code is a page part (ui/parts.json), loaded as opening a task would.
+    await page.evaluate(() => uiPartLoad('task'));
     const task = await page.evaluate(() => {
       const c = (id: string, n: number) => ({kind: 'comment', ts: new Date(Date.now() - (10 - n) * 60000).toISOString(),
         message: {id, sender_id: 'keeper', kind: 'notice', body: 'Doing: step ' + n, refs: {task: 't'}, created_at: new Date(Date.now() - (10 - n) * 60000).toISOString()}});

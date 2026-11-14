@@ -73,9 +73,6 @@ function peopleDialog(title: string, body: string) {
   if (!d.open) d.showModal();
   return d;
 }
-function peopleSwitch(attrs: string, checked: boolean | null | undefined, disabled: boolean | null | undefined, label: string): string {
-  return `<input type="checkbox" role="switch" class="people-switch" ${attrs} aria-label="${esc(label)}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}>`;
-}
 // Owners and admins set what a member may do; only the owner makes admins, transfers ownership or marks someone as left.
 function peopleMenu(p: SettingsAccessPerson, view: SettingsAccessView | null | undefined): string {
   const owner = S.me?.role === 'owner', items: string[] = [];

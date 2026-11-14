@@ -77,7 +77,6 @@ declare var pageCompanyDocs: () => Promise<void>;
 
 let DOC_DATA: DocsPageData = {docs: [], linked: []};
 let DOC_QUERY = '';
-let DOC_LOAD = 0;
 let DOC_BROWSER_SCROLL = 0;
 const docsHref = (id = '', extra: Record<string, string> = {}): string => {
   const q = new URLSearchParams(extra);

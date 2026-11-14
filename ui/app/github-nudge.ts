@@ -22,10 +22,6 @@ interface GithubNudgeTask {
   status?: string;
 }
 
-// A task BotOps files to build a bot: "Build a bot: <name>", owned by BotOps (playbooks/set-up-a-bot.md).
-const GH_NUDGE_BUILD_PREFIX = 'Build a bot: ';
-// A task that is over gets no card: there is nothing left to build.
-const GH_NUDGE_OVER = new Set(['done', 'closed', 'declined']);
 
 // The team's answer, read once per page: `ghNudgeRead` is the read in flight or done (it resolves to true while GitHub
 // is missing); `ghNudgeAnswer` is that answer once it is in, so a draw can fill its card without waiting.
@@ -77,18 +73,7 @@ async function githubNudgeBot(slug: string): Promise<void> {
   host.innerHTML = ghNudgeHTML(botDisplayName(slug), S.me?.role === 'owner', settingsOwnerName());
 }
 
-// The bot a Build a bot task is making, by its name in the title ('' for any other task, or one that is over).
-function ghNudgeBuildName(task: GithubNudgeTask): string {
-  const title = String(task.title ?? '');
-  if (task.owner_id !== 'bot:botops' || !title.startsWith(GH_NUDGE_BUILD_PREFIX)) return '';
-  if (GH_NUDGE_OVER.has(String(task.status ?? ''))) return '';
-  return title.slice(GH_NUDGE_BUILD_PREFIX.length).trim();
-}
 
-// The host a "Build a bot" task's page draws, empty for any other task.
-function githubNudgeTaskHostHTML(task: GithubNudgeTask): string {
-  return ghNudgeBuildName(task) ? `<div class="gh-nudge-host" data-gh-nudge-task data-task="${esc(String(task.id))}"></div>` : '';
-}
 
 // A Build a bot task's page: the card in its host, filled once the read says GitHub is missing.
 async function githubNudgeTask(dialog: HTMLElement, task: GithubNudgeTask): Promise<void> {

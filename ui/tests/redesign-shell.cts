@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+declare function uiPartLoad(part: string): Promise<void>;
 declare var S: {route: string; emps: {name: string; [key: string]: unknown}[]; me: {role: string; bot_admin?: boolean}; config: {update: {[key: string]: unknown}; [key: string]: unknown}};
 const uiDir = path.join(__dirname, '..');
 const fixture = (name: string): unknown => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
@@ -127,6 +128,8 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
       for (const helper of ['botops', 'rules-owner', 'mail-sorter'])
         assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
+      // Recruiting and the company page's sources are page parts (ui/parts.json): loaded as opening those pages would.
+      await page.evaluate(() => Promise.all([uiPartLoad('bot'), uiPartLoad('company')]));
       assert.deepEqual(await page.evaluate(() => ({
         recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
         audience: cpSourceChoices().some(([id]) => id === 'counsel'),

@@ -75,3 +75,7 @@ declare var ticoIsCloud: any;
 declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
 declare var ticoTheme: any;
+
+// The page parts' stand-ins (backend/ui_bundle.py stubs), declared by the server before the shell's files; none when
+// the UI is served as separate files (ui/app/parts.ts).
+declare const UI_PART_STUBS: Set<unknown> | undefined;

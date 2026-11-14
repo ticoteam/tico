@@ -503,6 +503,7 @@ class Support:
                 | {"sw.js"}  # ui/sw.ts is served at the root as sw.js, the name a worker's error gives
                 | {"app.bundle.js"}
                 | {f"app.bundle.{n}.js" for n in range(2, 100)}
+                | page_parts(ui)  # the page parts (ui/parts.json), fetched as a page is first opened
             )
             bundle["browser"] = [
                 {**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser
@@ -1161,3 +1162,14 @@ def install(app, store, settings, census):
         who = person(request)
         require_on(settings)
         return support.remove(who, ticket_id)
+
+
+def page_parts(ui):
+    """The file names of the page parts (backend/ui_bundle.py), as a browser event names them."""
+    import json
+
+    try:
+        parts = json.loads((ui / "parts.json").read_text())
+    except (OSError, ValueError):
+        return set()
+    return {f"app.bundle.{name}.js" for name in parts if not name.startswith("//")}

@@ -22,6 +22,7 @@ declare const window: Window & typeof globalThis & {
   cloudAgentsTab(host: HTMLElement, seatId: string): void;
 };
 // Defined by ui/app/team-build.ts, which the page loads below.
+declare function uiPartLoad(part: string): Promise<void>;
 declare function teamBuildOpen(team: string): void;
 
 interface Agent {
@@ -248,6 +249,8 @@ const pulseIsOpacityOnly = (page: Page) => page.evaluate(() => {
       const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
       await page.goto('https://tico-ui.test/#/tasks');
       await page.waitForSelector('#tree [data-seat="s-lead"]');
+      // A seat's page draws this tab from Settings' code (ui/parts.json), loaded here as opening the seat would.
+      await page.evaluate(() => uiPartLoad('settings'));
       await page.evaluate(() => {
         const host = document.createElement('div');
         host.id = 'seat-tab';

@@ -227,6 +227,8 @@ async function add(page: Page, words: string, name: string) {
     await phone.goto(hub.url + '/#/threads');
     await phone.locator('#thread-rail [data-tr-new]').tap();
     await hashIs(phone, '#/threads/new');
+    // New message is a page part (ui/parts.json): its pane draws once that code has loaded.
+    await phone.locator('.tr-pane #nm-list').waitFor();
     const box = await phone.locator('.tr-pane').boundingBox();
     assert.ok(box && box.width >= 380, 'the pane is the screen: ' + JSON.stringify(box));
     assert.equal(await phone.locator('#thread-rail').isVisible(), false);

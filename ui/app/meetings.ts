@@ -165,13 +165,6 @@ async function pageNotes(): Promise<void> {
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
-// Review stays personal until approval; counts are quiet and never enter Needs you.
-function meetPendingBadge(count: number): void {
-  for (const el of document.querySelectorAll<HTMLElement>('[data-meet-pending]')) {
-    el.hidden = !count; countSet(el, count > 99 ? '99+' : String(count || ''));   // a new number ticks in (ui/app/motion.ts)
-    el.setAttribute('aria-label', `${count} pending meetings`);
-  }
-}
 function meetReviewTabs(state: MeetState): void {
   document.querySelectorAll<HTMLElement>('[data-review]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.review === state.review)));
   const count = $('#meet-pending-count'); if (count) count.textContent = state.pendingCount || '';

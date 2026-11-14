@@ -46,16 +46,11 @@ interface CloudMachineSize {
   reason?: string;
 }
 const CLOUD_SIZE_NAMES = ['small', 'default', 'large', 'xlarge'];
-const CLOUD_STATES: Record<string, string> = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
-  stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
 // The Computer select's values for the two cloud machines; any other value is a computer's id.
 const CLOUD_CHOICES: Record<string, string> = {'cloud-shared': 'shared', 'cloud-own': 'own'};
 // The names the Computer select shows for them; settings-bots.js search matches a bot's by the same words.
 const CLOUD_CHOICE_LABELS: Record<string, string> = {'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'};
 let CLOUD_SIZES: CloudMachineSize[] | null = null;
-const cloudSizeName = (name: string | null | undefined) => name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
-const cloudMachineOn = (e: CloudMachineBot | null | undefined) => e?.cloud_machine?.mode === 'cloud';
-const cloudMachineShared = (e: CloudMachineBot) => cloudMachineOn(e) && e.cloud_machine?.placement !== 'own';
 const cloudMachinePick = (value: string) => CLOUD_CHOICES[value] || null;
 const cloudMachineValue = (e: CloudMachineBot) => cloudMachineOn(e) ? (cloudMachineShared(e) ? 'cloud-shared' : 'cloud-own') : '';
 // The name of a bot's cloud machine as the Computer select shows it; '' for a bot not on one.
@@ -81,25 +76,6 @@ function cloudSizeLabel(size: CloudMachineSize): string {
 function cloudSizeReason(size: CloudMachineSize): string {
   const why = size.reason || 'Needs a higher plan';
   return why.charAt(0).toLowerCase() + why.slice(1);
-}
-// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and a grow note only while it
-// needs someone ("Disk 96% full: XLarge is the largest size"); a problem replaces the state.
-function cloudMachineStatus(m: CloudMachineRow): string {
-  const parts: (string | null | undefined)[] = [m.problem || CLOUD_STATES[m.state ?? ''] || m.state, cloudSizeName(m.machine_size || m.size)];
-  if (m.cost_month_usd) parts.push(`$${Number(m.cost_month_usd).toFixed(2)} this month`);
-  if (m.starts_month) parts.push(`${m.starts_month} start${m.starts_month === 1 ? '' : 's'}`);
-  if (m.machine_size && m.size !== m.machine_size)
-    parts.push(`${cloudSizeName(m.size)} ${m.resizing ? 'once its turns finish' : 'at next start'}`);
-  if (m.always_on) parts.push('Always on');
-  if (m.grow_note) parts.push(m.grow_note);
-  return parts.filter(Boolean).join(' · ');
-}
-// The Computer value on the bot's page and in its Info for a bot on a cloud machine; '' for any other.
-function cloudMachineComputerHTML(e: CloudMachineBot): string {
-  if (!cloudMachineOn(e)) return '';
-  const m = e.cloud_machine;
-  if (!m) return '';
-  return `${cloudMachineShared(e) ? 'Shared' : 'Own'} cloud machine <span class="muted">· ${esc(cloudMachineStatus(m))}</span>`;
 }
 // Settings > Computers: which cloud machine a computer is.
 function cloudMachineFacts(machine: CloudMachineBot): string {

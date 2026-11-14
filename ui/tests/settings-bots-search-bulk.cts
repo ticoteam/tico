@@ -80,7 +80,7 @@ type Call = {slug: string; what: string; body: {expected_revision: number; model
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.length === 7 && SETTINGS_DATA.models?.length);
+    await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.length === 7 && SETTINGS_DATA.models?.length && typeof settingsShow === 'function');   // Settings' code is a page part
     await page.evaluate(() => settingsShow('bots'));
     const search = page.locator('[data-bots-search]'), rows = page.locator('[data-settings-bot]');
     assert.equal(await rows.count(), 7, 'old computer/model/effort preferences cannot hide bots');

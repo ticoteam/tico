@@ -99,26 +99,10 @@ interface UsePurged { cancelled: number; kept_people: number; still_running: num
 // at list price. Billed spend alone is in the hover, since a bot's limits count only that.
 const USE_RANGES: [string, string][] = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
 const USE_DIMENSIONS: [string, string][] = [['harness', 'Harness'], ['model', 'Model'], ['effort', 'Effort'], ['subscription', 'Subscription']];
-let USE: UseState | null = null;
 // The Filter panel's click-outside listener: one at a time, replaced each time the page is drawn (useFilterWire).
 let USE_OUTSIDE: ((ev: MouseEvent) => void) | null = null;
 // The value of the select an event came from (its own control, so a plain read of the value).
 const eventValue = (ev: Event): string => { const el = eventElement(ev); return el && 'value' in el ? String(el.value) : ''; };
-const useDay = (date: Date): string => date.toISOString().slice(0, 10);
-const useAdd = (day: string, n: number): string => useDay(new Date(Date.parse(day + 'T00:00:00Z') + n * 864e5));
-function useSpan(range: string, custom?: { from?: string; to?: string } | null): { from: string; to: string } {
-  const today = useDay(new Date());
-  if (range === 'today') return {from: today, to: today};
-  if (range === '30d') return {from: useAdd(today, -29), to: today};
-  if (range === 'month') return {from: today.slice(0, 8) + '01', to: today};
-  if (range === 'custom' && custom?.from && custom?.to) return {from: custom.from, to: custom.to};
-  return {from: useAdd(today, -6), to: today};
-}
-function useMoney(n: number | null | undefined): string {
-  if (n == null) return '—';
-  if (n > 0 && n < 0.01) return '<$0.01';
-  return '$' + n.toLocaleString(undefined, n >= 100 ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
-}
 function useCount(n: number | null | undefined): string {
   n = n || 0;
   if (n < 1000) return String(n);
@@ -131,7 +115,6 @@ function useCount(n: number | null | undefined): string {
 // Cache writes are input too: input_tokens leaves them out since runners count them apart.
 const useTokens = (r: UseFigures): number =>
   (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.cache_write_tokens || 0) + (r.output_tokens || 0);
-const useSpend = (r: UseFigures): number => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
 const useRuns = (n: number | null | undefined): string => `${(n || 0).toLocaleString()} run${n === 1 ? '' : 's'}`;
 // Runs on a model whose long prompts cost more, without each request's tokens, were priced at the lower rate.
 const useLowWhy = (n: number): string => `${useRuns(n)} on a model that charges more for long prompts did not report each request's tokens, so they are priced at the lower rate`;
@@ -155,8 +138,6 @@ const usePct = (n: number | null): string => n == null ? '—' : n > 0 && n < 0.
 const USE_PARTS: [string, string, keyof UseFigures][] = [['read', 'Cache reads', 'cached_tokens'], ['write', 'Cache writes', 'cache_write_tokens'],
                                                          ['new', 'New input', 'input_tokens'], ['output', 'Output', 'output_tokens']];
 const useShortDay = (day: string): string => new Date(day + 'T00:00:00Z').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'});
-// A number a limit or a pool holds under a field name; anything else reads as no amount.
-const useNum = (v: unknown): number | null => typeof v === 'number' ? v : null;
 function useSaved(): { range?: string; department?: string } {
   try { return JSON.parse(localStorage.getItem('tico.usage') || '{}') || {}; } catch { return {}; }
 }
@@ -448,32 +429,7 @@ function useCsv(): void {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
-// ----------------------------------------------------------------- limits
-// A cap in estimated USD per 30 minutes, day, week and month (backend/usage_limits.py): on a bot, on the combined spend of
-// a group or of the whole team, and the default for each bot with none of its own. Over one, the bots it covers take no
-// new job; at 80% someone is told. The hour came before the half hour replaced it: still enforced where it is set, so it
-// shows only where it is set and is never sent elsewhere (a new hour would be saved as half of it per 30 minutes).
-// [field, column, unit in a row's summary, key of `spent`]
-const USE_PERIODS: [string, string, string, string][] = [['per_30m_usd', '30 min', '/30m', '30m'], ['hourly_usd', 'Hour', '/hr', 'hour'], ['daily_usd', 'Day', '/day', 'day'],
-                     ['weekly_usd', 'Week', '/wk', 'week'], ['monthly_usd', 'Month', '/mo', 'month']];
-const USE_WORDS: Record<string, string> = {per_30m: '30-minute', hourly: 'hourly', daily: 'daily', weekly: 'weekly', monthly: 'monthly'};
-const useCap = (n: number): string => '$' + (n >= 100 || Number.isInteger(n) ? n.toLocaleString(undefined, {maximumFractionDigits: 0}) : n.toFixed(2));
 const usePlain = (n: number): string => String(Math.round(n * 100) / 100);
-function useLimitText(limit: UseLimit | null | undefined): string {
-  return USE_PERIODS.filter(([key]) => limit?.[key]).map(([key, , unit]) => useCap(useNum(limit?.[key]) ?? 0) + unit).join(' · ');
-}
-// What holds a bot, in words: its own limit, or the team's or a group's.
-const useHeldBy = (limit: UseLimit | null | undefined): string => limit?.blocked_by && limit.blocked_by.scope !== 'bot'
-  ? `${limit.blocked_by.name} is over its ${USE_WORDS[String(limit.blocked_by.period)] || limit.blocked_by.period} limit`
-  : `Over its ${USE_WORDS[String(limit?.blocked)] || limit?.blocked} limit`;
-// The cell on a Usage row and in Settings > Bots: the limit, a chip when it is near or met, and a click to change it.
-function useLimitButton(slug: string, name: string | undefined, limit: UseLimit | null | undefined): string {
-  if (!limit?.may_edit) return '<span class="use-limit"></span>';
-  const text = useLimitText(limit);
-  const chip = limit.blocked ? '<span class="pill fail">Paused</span>' : limit.percent >= 80 ? `<span class="pill waiting">${limit.percent}%</span>` : '';
-  return `<button type="button" class="use-limit${text ? '' : ' none'}" data-use-limit="${esc(slug)}" aria-label="Limit for ${esc(name || slug)}"
-    title="${limit.blocked ? esc(`${useHeldBy(limit)}: no new work until it resets or the limit is raised`) : 'Change limit'}">${chip}<span>${text ? esc(text) : 'Set limit'}</span></button>`;
-}
 
 // Groups ordered as the org nests them: by the names from the top group down.
 function useGroupOrder(groups: Record<string, UseLimit>): [string, UseLimit, string[]][] {

@@ -69,17 +69,11 @@ const whRefused = (r: { outcome: string }) => r.outcome === 'refused' || r.outco
 const WH_SEND_STATES: Record<string, string> = {delivered: 'ok', failed: 'fail', ready: 'waiting', sending: 'waiting', canceled: '', withheld: ''};
 // Each part's host element, and the page address an open item rides on (none for the Gateway fold).
 const WH_HOSTS: Record<WhTab, string> = {incoming: '#wh-incoming', outgoing: '#wh-outgoing', gateway: '#wh-gateway'};
-const WH_HOOKS_ROUTE = '#/tools/webhooks', WH_INCOMING_ROUTE = '#/automations/webhooks';
 const WH_ROUTES: Partial<Record<WhTab, string>> = {incoming: WH_INCOMING_ROUTE, outgoing: WH_HOOKS_ROUTE};
-// A link to the Gateway part (#/settings/models/wh-gateway) opens the fold, or does once the card is drawn
-// (settingsShow, renderSettingsProviders).
-let WH_OPEN_GATEWAY = false;
 // The open part and item, and the one set of secrets on screen: {id, url?, signing?, relay?} for an incoming webhook,
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
 const WH: WhState = {tab: 'incoming', trigger: '', hook: '', shown: null, hookShown: null, wakeSecret: ''};
 let WH_RUN = 0, WH_HOOKS: WhHook[] | null = null;
-// The incoming webhooks (GET /v2/triggers), loaded when a part opens; other files read it through webhookTriggers().
-let WH_TRIGGERS: WebhookTrigger[] | null = null;
 // The event catalog (backend/event_catalog.py): the endpoint picker reads it.
 let EVENT_TYPES: WhEventType[] = [], EVENT_TYPES_P: Promise<WhEventType[]> | null = null;
 function eventTypesLoad(): Promise<WhEventType[]> {
@@ -104,13 +98,6 @@ function whMount(tab: WhTab, item = '') {
   const cur = tab === 'incoming' ? WH.trigger : tab === 'outgoing' ? WH.hook : '';
   if (WH.tab !== tab || cur !== item) Object.assign(WH, {tab, trigger: tab === 'incoming' ? item : '', hook: tab === 'outgoing' ? item : '', shown: null, hookShown: null});
   return whRender();
-}
-// An old Settings > Webhooks address (#/triggers, #/settings/webhooks[/<part>]) at the part's new home.
-function whOldAddress(route: string) {
-  const part = String(route).split('?')[0]!.split('/')[3];
-  if (part === 'outgoing') return WH_HOOKS_ROUTE;
-  if (part === 'gateway') return SETTINGS + '/models/wh-gateway';
-  return WH_INCOMING_ROUTE;
 }
 async function whRender() {
   const el = $(WH_HOSTS[WH.tab]); if (!el) return;

@@ -36,16 +36,6 @@ function replaySpan(range: string) {
 // <input type=datetime-local> speaks local wall time without a zone.
 const replayLocal = (iso: string) => { const d = new Date(iso); return isNaN(+d) ? '' : new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
 const replayIso = (local: string) => { const d = new Date(local); return isNaN(+d) ? '' : d.toISOString(); };
-function replayScopeOptions(selected: string) {
-  const opt = (value: string, label: string) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
-  const groups = (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'planned' && e.status !== 'archived').sort((a, b) => botDisplayName(a.id).localeCompare(botDisplayName(b.id)));
-  const people = (S.people || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  return opt('', 'Everyone')
-    + (groups.length ? `<optgroup label="Teams">${groups.map(g => opt('team:' + g.id, g.name || g.id)).join('')}</optgroup>` : '')
-    + (bots.length ? `<optgroup label="Bots">${bots.map(e => opt('bot:' + e.id, botDisplayName(e.id))).join('')}</optgroup>` : '')
-    + (people.length ? `<optgroup label="People">${people.map(p => opt('human:' + p.id, p.name || p.id)).join('')}</optgroup>` : '');
-}
 function replayStop() {
   if (!REPLAY) return;
   REPLAY.player?.destroy();
@@ -155,14 +145,6 @@ async function replayLoad(state: ReplayState) {
   replayPresent(state, state.presenting);
 }
 
-// Real names throughout, the viewer's own too: a replay is watched and recorded, so "You" would read wrong.
-// A bot no longer on the roster keeps its history: the server's name for it ("Deleted bot"), never its id.
-const replayName = (data: { names?: Record<string, string> | undefined }) => (a: ReplayActor): string => {
-  const slug = actorSlug(a), pid = actorPerson(a);
-  if (slug) return botRow(slug) ? botDisplayName(slug) : data.names?.[String(a)] || 'Deleted bot';
-  if (pid) return data.names?.[String(a)] || (S.people || []).find(p => p.id === pid)?.name || personDisplay(pid);
-  return a === 'keeper' ? AUTOMATIC_LABEL : String(a || '');     // the server itself, never the Assistant or the app
-};
 
 // The app's own faces: a bot's blob in the replayed state (never the live one), a person's photo or initials.
 function replayFace(actor: ReplayActor, size: number, state?: string) {

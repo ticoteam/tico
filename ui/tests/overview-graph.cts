@@ -117,7 +117,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
   await page.locator(hash.startsWith('#/overview/graph') ? '#og-cv [data-og]' : '.dash-tabs').first().waitFor();
   return {page, errors, writes, reads, data};
 }
-const ready = async (page: import('playwright').Page, view: string) => page.waitForFunction(v => OG && (v === 'rules' ? OG.rules !== null : OG.goals !== null), view);
+const ready = async (page: import('playwright').Page, view: string) => page.waitForFunction(v => typeof OG !== 'undefined' && OG && (v === 'rules' ? OG.rules !== null : OG.goals !== null), view);
 const node = (page: import('playwright').Page, key: string) => page.locator(`#og-cv [data-og="${key}"]`);
 async function shot(page: import('playwright').Page, name: string) {
   if (!SHOTS) return;

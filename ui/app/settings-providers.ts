@@ -94,8 +94,6 @@ const PROVIDER_PRESETS: SettingsProviderPreset[] = [
   {id: 'gateway', label: 'Tico Gateway only', line: 'Bots run on Tico models with the company\'s gateway key below.'},
   {id: 'own-keys', label: "Your company's plans or API keys", line: 'Bring your own: tick the providers below and sign in, or add API keys in Credentials.'},
 ];
-// The two choices that run main work on Claude and ChatGPT tick them when nothing is ticked yet.
-const PRESET_PROVIDERS: Record<string, string[]> = {'subscriptions-gateway': ['anthropic', 'openai'], subscriptions: ['anthropic', 'openai']};
 function providersPresetHTML(view: SettingsProvidersView, dis: string): string {
   const known = view.presets || PROVIDER_PRESETS.map(row => row.id);
   return `<div class="prov-list" role="radiogroup" aria-label="Models" data-provider-presets>${PROVIDER_PRESETS.filter(row => known.includes(row.id)).map(row =>

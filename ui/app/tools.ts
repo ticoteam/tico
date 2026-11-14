@@ -28,8 +28,6 @@ interface ToolsWho { kind: string; id: string; name?: string; members?: number |
 interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; }
 // The list's state: its run (a newer pageTools wins), its rows and counts once read, the error, the search and the filter.
 interface ToolsListState { run: number; rows: ToolsRow[] | null; counts: Record<string, number> | null; error: string; q: string; show: string; }
-const TOOLS_ROUTE = '#/tools';
-const TOOLS_KEYS = '#/tools/keys';
 // The list's filters: key, label, which rows, and the counts field that numbers it.
 const TOOLS_FILTERS: [string, string, (r: ToolsRow) => boolean, string][] = [
   ['', 'All', () => true, 'all'],
@@ -192,56 +190,6 @@ function toolsAddBind(root: HTMLElement) {
   });
 }
 
-// ----------------------------------------------------------------- routes
-// The redesign's router asks first (ui/app/redesign.ts). Old addresses are replaced, so Back skips them.
-function toolsRoute(r: string): boolean {
-  const [path = '', query = ''] = r.split('?'), q = query ? '?' + query : '';
-  const go = (to: string) => { location.replace(to); return true; };
-  // Library › Tools and its old names: a tool's page, a credential's, or the list.
-  for (const old of ['#/library/tools', INTEGRATIONS]) {
-    if (!rdUnder(path, old)) continue;
-    const rest = path.slice(old.length).replace(/^\/+/, '');
-    if (!rest) return go(new URLSearchParams(query).has('who') ? TOOLS_KEYS + q : TOOLS_ROUTE);
-    return go((rest.startsWith('credentials/') ? TOOLS_KEYS + '/' : TOOLS_ROUTE + '/') + rest + q);
-  }
-  if (rdUnder(path, '#/library/connections')) {
-    const rest = path.slice('#/library/connections'.length).replace(/^\/+/, '');
-    return go(rest ? TOOLS_ROUTE + '/' + rest : TOOLS_ROUTE);
-  }
-  if (rdUnder(path, CREDENTIALS)) return go(TOOLS_KEYS + '?show=credentials');
-  // Settings › Inboxes and the tabs it replaced (Mailboxes, Email & Phone, Mail; Google's sign-in return).
-  if (rdUnder(path, '#/settings/inboxes')) return go(toolsFromInboxes(path.slice('#/settings/inboxes'.length).replace(/^\/+/, '')));
-  const oldTab = path.match(/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(?:\/([^/]+))?\/?$/);
-  if (oldTab) {
-    const [, tab = '', rest] = oldTab;
-    return go(tab === 'mailboxes' ? (rest ? '#/tools/mailbox/' + rest : TOOLS_ROUTE + '?show=mail')
-      : tab === 'mail' ? '#/tools/settings/letters-in' : ['inbox', 'google'].includes(tab) || rest === 'set-inbound' ? '#/tools/settings/email'
-      : TOOLS_ROUTE + '?show=mail');
-  }
-  if (!rdUnder(path, TOOLS_ROUTE)) return false;
-  const parts = path.slice(TOOLS_ROUTE.length).split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
-  if (!parts.length) { pageTools(); return true; }
-  if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
-  if (parts[0] === 'website' && parts[1]) { void pageToolWebsite(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
-  if (parts[0] === 'keys') { pageRdTools(); return true; }
-  if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
-  const view = inboxesRoute(parts);
-  if (view !== null) { toolsInboxPage(view); return true; }
-  pageToolService(parts.join('/'));
-  return true;
-}
-// An old Settings › Inboxes address (what follows #/settings/inboxes/) at its home under Tools.
-function toolsFromInboxes(rest: string): string {
-  const [head = '', id = ''] = rest.split('/');
-  if (!head) return TOOLS_ROUTE + '?show=mail';
-  if (head === 'settings' || INBOX_SECTIONS.some(([k]) => k === head)) {
-    const section = head === 'settings' ? id : head;
-    return '#/tools/settings' + (INBOX_SECTIONS.some(([k]) => k === section) ? '/' + section : '');
-  }
-  if (head === 'messages') return '#/tools/messages';
-  if (INBOX_KINDS[head] && id) return inboxesLink(head, decodeURIComponent(id));
-  return TOOLS_ROUTE + '?show=mail';
-}
 // One inbox kind's page, mail settings or Messages, drawn by ui/app/inboxes.ts into a host kept while the address stays
 // under the same page, so a redraw keeps what it drew.
 function toolsInboxPage(view: string) {

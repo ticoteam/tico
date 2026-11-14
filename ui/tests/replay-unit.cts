@@ -14,6 +14,8 @@ const GONE = '01a1cdda-6f96-7593-be09-719b45a9df76';
 const emps = [{id: 'writer-id', slug: 'writer', display_name: 'Writer'}];
 type Face = string | {id: string; display_name: string};
 const ctx = vm.createContext({
+  window: {addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}})},
+  document: {addEventListener() {}},
   S: {emps, people: []},
   botRow: (id: string) => emps.find(e => e.id === id),
   botDisplayName: (id: string) => emps.find(e => e.id === id)?.display_name || id,   // the app's: the id when unknown
@@ -25,6 +27,8 @@ const ctx = vm.createContext({
   botAvatar: (bot: Face) => `<face ${typeof bot === 'string' ? emps.find(e => e.id === bot)?.display_name || bot : bot.display_name}>`,
   personAvatar: () => '', personCircle: (name: string) => `<face ${name}>`,
 });
+// The names the shell keeps for every page (ui/app/pages-shell.ts, the page parts' ui/parts.json) load first, as in the app.
+vm.runInContext(transformSync(fs.readFileSync(path.join(__dirname, '..', 'app', 'pages-shell.ts'), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: 'pages-shell.ts'});
 const file = path.join(__dirname, '..', 'app', 'replay.ts');
 vm.runInContext(transformSync(fs.readFileSync(file, 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: 'replay.ts'});
 const name = (names: Record<string, string> | undefined, actor: string): string =>

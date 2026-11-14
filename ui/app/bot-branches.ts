@@ -38,13 +38,6 @@ function branchDialog(title: string): HTMLDialogElement {
   return dialog;
 }
 
-function botBranchChatTarget(slug: string): string;
-function botBranchChatTarget(slug: string | undefined): string | undefined;
-function botBranchChatTarget(slug: string | undefined): string | undefined {
-  const original = botRow(slug);
-  if (!original?.shared) return slug;
-  return S.emps.find(e => e.shared_from === slug && e.owner_id === S.me?.id && e.status === 'active')?.id || slug;
-}
 
 async function botBranchesLoad(slug: string): Promise<void> {
   const host = $('#bot-branches') as HTMLElement | null, bot = botRow(slug);

@@ -12,12 +12,8 @@ interface BpBot { id: string; can_manage?: boolean; profile?: BpProfile | null; 
 // A history row's value for the profile field.
 interface BpHistoryValue { profile?: string | null; options?: { digest_hour?: number | null; takes?: string | null } | null; }
 
-// The picker reads its choices and their one-line descriptions from GET /v2/profiles, so a profile the server adds
-// shows with no UI change. The labels here are for history rows and a picker drawn before that answer lands.
-const PROFILE_LABELS: Record<string, string> = {doer: 'Doer', reviewer: 'Reviewer', lead: 'Lead', manager: 'Manager', responder: 'Responder', monitor: 'Monitor', custom: 'Custom'};
 const PROFILE_PULLS: Array<[string, string]> = [['all', 'Any open task'], ['review', 'Review and QA only'], ['none', 'Nothing']];
 const PROFILE_TAKES: Array<[string, string]> = [['all', 'Any task'], ['review', 'Review and QA only'], ['watcher', "Its watcher's tasks"], ['none', 'None']];
-let PROFILE_LIST: BpChoice[] | null = null, PROFILE_LOAD: Promise<BpChoice[]> | null = null;
 async function profileChoices(): Promise<BpChoice[]> {
   if (PROFILE_LIST) return PROFILE_LIST;
   PROFILE_LOAD ||= get<BpChoices>('/v2/profiles').then(d => (PROFILE_LIST = d.profiles || [])).finally(() => { PROFILE_LOAD = null; });

@@ -74,14 +74,18 @@ def register(app, auth, settings):
             kind = "js" if path.endswith(".js") else "css"
             media_type = "text/javascript; charset=utf-8" if kind == "js" else "text/css; charset=utf-8"
             v = request.query_params.get("v")
-            stale = v is not None and v != bundle.version[kind]
+            stale = v is not None and v != bundle.part_version[path]
+            if stale and kind == "js" and path not in bundle.shell_paths:
+                # A page part under an old address (a tab from before a release): never this build's code there, as
+                # the old shell may not fit it. The page reloads to the current release (ui/app/parts.ts).
+                raise Problem("not_found", "Not found", 404)
             cache_control = "no-store" if stale else ui_bundle.IMMUTABLE
             # A page from before the split names only the first URL: it needs the whole app, without caching it there.
             if stale and path == ui_bundle.part_path(kind, 0):
                 etag = bundle.whole_etag[kind]
                 return ui_reply(
                     request,
-                    getattr(bundle, kind),
+                    bundle.js_whole if kind == "js" else bundle.css,
                     media_type,
                     etag,
                     cache_control,

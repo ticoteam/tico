@@ -17,6 +17,9 @@
 //   PHONE_REPORT=1 node ...     print every break and exit 0 (for hunting)
 //   PHONE_SHOTS=<folder> ...    also save a screenshot of every screen
 import type {Browser, Page} from 'playwright';
+// The page parts being fetched and those that have run (ui/app/parts.ts).
+declare const UI_PART_SCRIPTS: Map<string, Promise<void>>;
+declare const UI_PART_LOADED: Set<string>;
 const {chromium} = require('playwright') as typeof import('playwright');
 const {spawn} = require('node:child_process') as typeof import('node:child_process');
 const path: typeof import('node:path') = require('node:path');
@@ -248,7 +251,14 @@ function keyboardAudit(): {rule: number; element: string; why: string}[] {
 // ------------------------------------------------------------------------------------------------ the walk
 const settle = async (page: Page) => {
   await page.waitForFunction(() => (document.querySelector('#main')?.children.length ?? 0) > 0, null, {timeout: t(20000)}).catch(() => {});
+  // A page's own code may still be on its way (a page part, ui/app/parts.ts): the page is drawn once it has run.
+  await page.waitForFunction(() => typeof UI_PART_SCRIPTS === 'undefined' || [...UI_PART_SCRIPTS.keys()].every(n => UI_PART_LOADED.has(n)),
+    null, {timeout: t(20000)}).catch(() => {});
   await page.waitForTimeout(t(450));
+  // A modal that opened late (its task read answered after the wait) may still be fading in: mid-fade, at opacity 0,
+  // Chrome's elementFromPoint passes through it, which rule 2 would read as the page drawn over it.
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog[open]')].every(d => d.getAnimations().every(a => a.playState !== 'running')),
+    null, {timeout: t(5000)}).catch(() => {});
 };
 const go = async (page: Page, hash: string) => {
   await page.evaluate(h => { location.hash = h; }, hash);

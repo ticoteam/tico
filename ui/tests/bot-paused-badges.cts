@@ -50,7 +50,8 @@ declare function get(path: string): Promise<unknown>;
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.length === 5);
+    // Settings' own code is a page part (ui/parts.json), loaded once the route asks for it.
+    await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.length === 5 && typeof settingsShow === 'function');
     await page.evaluate(() => settingsShow('bots'));
     const badge = page.locator('[data-settings-bot=paused] .bot-paused-badge');
     const node = page.locator('#tree a[data-org="b:paused"]');

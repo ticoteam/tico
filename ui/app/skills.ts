@@ -56,7 +56,6 @@ interface SkillProposalDetail {
 // The page on screen (SKP): its run, the skill's name and the usage window.
 interface SkillsPage { run: number; name?: string; days?: number | undefined; }
 
-const SKILLS_ROUTE = '#/library/skills';
 const SKILLS_TRIGGERS: [string, string][] = [['model', 'Model'], ['person', 'Person'], ['nested', 'Nested']];
 const SKILLS_SCREEN_CAP = 50;   // waiting proposals whose screening risk is read for the list
 let SKP: SkillsPage | null = null;                 // {run}: the page on screen, so a slow answer for a page left behind draws nothing
@@ -482,15 +481,5 @@ function skillsDiffHTML(diff: string | null | undefined) {
 
 // ----------------------------------------------------------------- routes
 function skillsRedraw() { skillsRoute(S.route || ''); }
-// The redesign's router asks first (ui/app/redesign.ts).
-function skillsRoute(r: string) {
-  const [path = ''] = r.split('?');
-  if (!rdUnder(path, SKILLS_ROUTE)) return false;
-  const parts = path.slice(SKILLS_ROUTE.length).split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
-  if (parts[0] === 'proposals' && parts[1]) { void pageSkillProposal(parts[1]); return true; }
-  if (parts.length) { void pageSkill(parts.join('/')); return true; }
-  void pageSkills();
-  return true;
-}
 // Leaving the page drops its state, so a late answer draws nothing.
 function skillsStop(r: string) { if (!rdUnder((r || '').split('?')[0] ?? '', SKILLS_ROUTE)) SKP = null; }

@@ -10,7 +10,6 @@
    Settings › Contacts is ui/app/directory-settings.ts. Classic script: globals are shared with ui/app/. */
 'use strict';
 
-const DIR_ROUTE = '#/library/contacts', DIR_OLD_ROUTE = '#/library/directory';
 const DIR_MAIN_TYPES = ['person', 'organization', 'place'];   // the hub leaves documents out (store.NOT_CONTACTS)
 // How a link to us reads as a relationship (backend/entities/schema.py link types).
 const DIR_RELATIONS: Record<string, string> = {
@@ -228,23 +227,6 @@ function dirTable(type: string, rows: readonly DirBrief[]): string {
     }).join('')}</tbody></table>`;
 }
 
-// ----------------------------------------------------------------- routing
-// The redesign's router asks first (ui/app/redesign.ts).
-function directoryRoute(r: string): boolean {
-  // The old address of the page, from before it was Contacts.
-  if (rdUnder(r, DIR_OLD_ROUTE)) { location.replace(DIR_ROUTE + r.slice(DIR_OLD_ROUTE.length)); return true; }
-  const [path = '', query = ''] = r.split('?');
-  if (!rdUnder(path, DIR_ROUTE)) return false;
-  const rest = path.slice(DIR_ROUTE.length).replace(/^\//, '');
-  if (rest) {
-    let id = rest;
-    try { id = decodeURIComponent(rest); } catch { /* an address typed by hand: use it as it is */ }
-    void pageDirectoryEntity(id);
-    return true;
-  }
-  void pageDirectory(query);
-  return true;
-}
 // Leaving the page drops its state, so a late answer draws nothing.
 function directoryStop(r: string): void {
   if (!rdUnder((r || '').split('?')[0] ?? '', DIR_ROUTE)) { DIRP = null; DIRL = null; }
