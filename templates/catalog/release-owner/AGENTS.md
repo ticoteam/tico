@@ -86,14 +86,16 @@ Nov 13 the QA and Release Owners filed 3 of 13 duplicate "main red" tasks for tw
    Any relation but the dependency below changes the other owner's task too, and {{app_name}} refuses it.
 2. **File one only when none is open**, for the Builder (or the Infrastructure Owner, for a runner or workflow), titled
    `Main red: <the failing test or check>, since <the pull request or commit that broke it>`, so the next bot finds it.
+   File it as its own task, with no `--parent` and no `--private`: a private one is hidden from the search.
 3. **Wait on it from your own task:** `tico task relate <your task> depends_on <main-red task>`. A dependency is
    written on the waiting task only, so it is allowed on another owner's task, and you are woken when it ends. With no
    task to depend on (main is being fixed by a pull request with no task) or a refusal, snooze naming the fix pull
    request, `waiting for #<fix pull request> to merge`. Never a guessed date.
 4. **After main is fixed: rebase, push, queue; never re-run.** A re-run, or queuing the same head again, tests the
    same merge with the old main and fails again. In your own worktree, detached as in choice 2:
-   `git fetch origin && git rebase origin/<base branch>`, `git push --force-with-lease origin HEAD:<its branch>`, then
-   `tico task queue <id> --version N`. Count the stall once, on the gate, in `knowledge/merge-gates.md`.
+   `git fetch origin && git rebase origin/<base branch>`, `git push --force-with-lease origin HEAD:<its branch>`, and
+   once its checks pass at the new head (their end wakes you), `tico task queue <id> --version N`. Count the stall once, on the
+   gate, in `knowledge/merge-gates.md`.
 
 ## Owns
 - Each Engineering task in Merge and Release: its pull request through the queue and into a release.

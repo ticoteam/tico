@@ -28,6 +28,7 @@ Release Owners filed 3 of 13 duplicate "main red" tasks for two breaks.
    task too, and {{app_name}} refuses it.
 2. **File one only when none is open**, as the Builder task in "Lines with the rest of engineering", titled
    `Main red: <the failing test or check>, since <the pull request or commit that broke it>`, so the next bot finds it.
+   File it as its own task, with no `--parent` and no `--private`: a private one is hidden from the search.
 3. **Wait on it from your own task:** `tico task relate <your task> depends_on <main-red task>`. A dependency is
    written on the waiting task only, so it is allowed on another owner's task. With no task to depend on (main is being
    fixed by a pull request with no task) or a refusal, snooze naming the fix pull request,
