@@ -242,7 +242,7 @@ function finTrim(table: HTMLTableElement | null | undefined, key: string) {
   // Each row's cells by the column they start at, for rows that have one cell per column.
   const plain = rows.filter(r => r.cells.length === n && r !== head && !r.closest('thead'));
   for (let i = 0; i < n; i++) if (plain.some(r => finCellHas(r.cells[i]))) seen.add(i);
-  head.querySelectorAll('[data-fin-keep]').forEach(th => seen.add((th as HTMLTableCellElement).cellIndex));
+  head.querySelectorAll('[data-fin-keep]').forEach(th => { seen.add((th as HTMLTableCellElement).cellIndex); });
   for (let i = n - 1; i >= 0; i--) {
     if (seen.has(i)) continue;
     for (const r of rows) {

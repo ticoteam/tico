@@ -1179,7 +1179,7 @@ const ruStageWhere = (r: StageRuleCore) => r.scope === 'company' ? 'Every pipeli
 // opens the panel's form for it, with ⋯ (Edit, Retire); any other opens its whole text in place.
 function ruStageRowHTML(r: StageRule): string {
   // One the viewer may change (any scope): the row opens the panel's own form for it, and ⋯ holds Edit and Retire.
-  return stageRuleRowHTML({key: `ru-${r.id}`, tag: 'div', attrs: `data-stage-rule="${esc(r.id)}"`, then: r.then, text: srSentence(r, true),
+  return stageRuleRowHTML({key: `ru-${r.id}`, tag: 'div', attrs: `data-stage-rule="${esc(r.id)}"`, outcome: r.then, text: srSentence(r, true),
     cost: r.cost, idle: r.not_acting, name: r.name,
     ...(r.can_edit ? {open: `data-sr-page-edit="${esc(r.id)}"`, more: r.id} : {detail: stageRuleReadHTML(r)})});
 }
@@ -1229,7 +1229,7 @@ function ruStageSuggestedHTML(rows: StageRule[]): string {
     // One line as any rule (the rule it would be; the one it retires), with the suggestion's mark; opened: what it is, where,
     // the whole rule, what changes or why, and Skip and Accept.
     const shown = kind === 'retire' ? old ?? r : r;
-    return stageRuleRowHTML({key: `rs-${r.id}`, tag: 'div', attrs: `data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"`, then: shown.then,
+    return stageRuleRowHTML({key: `rs-${r.id}`, tag: 'div', attrs: `data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"`, outcome: shown.then,
       text: srSentence(shown, true), cost: r.cost, idle: kind === 'retire' ? '' : r.not_acting, name: title,
       suggest: kind === 'retire' ? 'Suggested retire' : kind === 'change' ? 'Suggested change' : 'Suggested rule',
       detail: `<p class="sr-d-name" data-sr-title>${esc(title)}</p><p class="muted">${esc(ruStageWhere(old ?? r))}</p><p>${esc(srSentence(shown))}</p>`

@@ -43,9 +43,10 @@ const SR_FREE = 'free';
 /** The rules that apply in each pipeline the board has drawn: pipeline id -> its rules, or the read in flight. */
 const SR_BOARD = new Map<string, StageRule[] | Promise<void>>();
 
-/** The Add rule and Edit form's fields by name (`on` is absent for a company rule, whose On is fixed). */
+/** The Add rule and Edit form's fields by name (`name` and `on` are absent from a stage's form, `on` for a company rule,
+ * whose On is fixed). */
 interface SrControls {
-  name: HTMLInputElement; on?: HTMLSelectElement; event: HTMLSelectElement; hours: HTMLInputElement; timer_kind: HTMLSelectElement;
+  name?: HTMLInputElement; on?: HTMLSelectElement; event: HTMLSelectElement; hours: HTMLInputElement; timer_kind: HTMLSelectElement;
   owner_check: HTMLSelectElement; owner_team: HTMLInputElement; label: HTMLInputElement; jev: HTMLTextAreaElement; then: HTMLSelectElement; reason: HTMLInputElement;
 }
 const srControls = (form: HTMLFormElement) => form.elements as unknown as SrControls;
@@ -108,13 +109,18 @@ function stageRulesButtonHTML(pipelineId: string, stage: {id?: string | null; na
  *   anything else (one this screen has no words for)  While here
  *
  * No event fires as a task leaves yet, so To leave holds no rule and has no + Rule until one does. */
-type SrPhase = 'enter' | 'here' | 'leave';
-const srPhaseOf = (event: string): SrPhase => event.split(',').includes('enters') ? 'enter' : 'here';
+/* Chris, Nov 14: the When is the place a rule sits in the stage, never a field on the rule's form. While here holds
+   the timers; what answers something else (a bot's snooze, an owner change on its own, a When with no words here)
+   sits in More rules, after To leave. */
+type SrPhase = 'enter' | 'here' | 'leave' | 'more';
+const srPhaseOf = (event: string): SrPhase => event.split(',').includes('enters') ? 'enter' : event === 'timer' ? 'here' : 'more';
+const srIsPhase = (at: string | undefined): at is SrPhase => at === 'enter' || at === 'here' || at === 'leave' || at === 'more';
 /** The When a phase's + Rule offers, the first picked. */
 const SR_PHASE_EVENTS: Record<SrPhase, [string, string][]> = {
-  enter: [['enters', 'A task enters'], ['enters,owner_changes', 'A task enters or the owner changes']],
-  here: [['timer', 'A timer'], ['bot_snoozes', 'A bot snoozes'], ['owner_changes', 'The owner changes']],
+  enter: [['enters', 'A task enters']],
+  here: [['timer', 'A timer']],
   leave: [],
+  more: [['bot_snoozes', 'A bot snoozes']],
 };
 
 /** The rules a form is about: the stage it is On, the rules that apply there, and where it was opened from. */
@@ -188,7 +194,7 @@ function stageRulesSectionRename(stageEl: Element | null | undefined, name: stri
 }
 
 /** What has the focus in a stage after a form or a retire: the rule's row (in whichever phase it now sits), else the
- * phase's + Rule (On entering's + Rule or action), else the phase's heading. */
+ * phase's + Rule (On entering's: the editor's + Rule, else + Action), else the phase's heading. */
 function srSectionFocus(stageId: string, id: string, phase: SrPhase | undefined): HTMLElement | null {
   const all = [...document.querySelectorAll<HTMLElement>(`[data-sr-section="${CSS.escape(stageId)}"]`)];
   const row = id ? all.map(sec => sec.querySelector<HTMLElement>(`[data-sr-rule="${CSS.escape(id)}"] .sr-open`)).find(Boolean) : null;
@@ -197,7 +203,7 @@ function srSectionFocus(stageId: string, id: string, phase: SrPhase | undefined)
     ?? ph?.querySelector<HTMLElement>('.pe-h') ?? null;
 }
 
-/** A new rule's form for a stage's phase, from outside its rules (On entering's + Rule or action › Rule): as that
+/** A new rule's form for a stage's phase, from outside its rules (On entering's + Rule, the editor's): as that
  * phase's + Rule would. False when the rules are not read. */
 function stageRulesAdd(sec: HTMLElement): boolean {
   const open = srSectionOpen(sec);
@@ -210,7 +216,7 @@ function stageRulesAdd(sec: HTMLElement): boolean {
 function srSectionOpen(sec: HTMLElement): SrOpen | null {
   const ed = SR_ED, stageId = sec.dataset['srSection'] ?? '';
   if (!ed?.list || !stageId) return null;
-  const at = sec.dataset['srPhase'], phase = at === 'enter' || at === 'here' || at === 'leave' ? at : undefined;
+  const at = sec.dataset['srPhase'], phase = srIsPhase(at) ? at : undefined;
   const open: SrOpen = {pipelineId: ed.pipelineId, stageId, stageName: sec.dataset['srStageName'] ?? '', list: srStageList(ed.list, stageId),
     host: {done: () => stageRulesEditorLoad(ed.pipelineId), focus: id => srSectionFocus(stageId, id, open.phase)}};
   if (phase) open.phase = phase;
@@ -338,11 +344,13 @@ interface StageRuleRow {
   /** Where it applies beyond this stage ("In every pipeline"): a quiet mark, in the stage editor; none for its own. */
   shared?: string | undefined;
   /** Its Then (block, tell_manager…); none for a built-in. */
-  then?: string | undefined;
+  outcome?: string | undefined;
   /** The rule in one line (srSentence; a built-in's what): cut with "…" on the row, whole in its tip and name. */
   text: string;
   /** What checking it costs; none, or free, has no mark. */
   cost?: string | undefined;
+  /** The cost mark's glyph: bolt in a stage (a decision model checks it); the brain elsewhere. */
+  costIcon?: string | undefined;
   /** Why it never acts (not_acting). */
   idle?: string | undefined;
   /** A bot's suggestion: the mark's words ("Suggested change"). */
@@ -350,7 +358,7 @@ interface StageRuleRow {
   builtIn?: boolean | undefined;
   /** What the row button does: its attributes (data-sr-edit="id", data-sr-open-ru…); none opens the read view below. */
   open?: string | undefined;
-  /** A leading glyph in place of a Then's mark: a stage's Limit or its On entering action, drawn as a rule's row. */
+  /** A leading glyph in place of a Then's mark: in a stage's phase lists, the rule mark or the action mark (SR_ROW_ICONS). */
   icon?: string | undefined;
   /** With `open`: what sits under the row, such as its own small editor opened in place (pipeline-editor.ts). */
   below?: string | undefined;
@@ -360,23 +368,27 @@ interface StageRuleRow {
   name?: string | undefined;
   /** The read view's HTML (the name, the whole rule, what it says, its cost, why it is not acting, actions). */
   detail?: string | undefined;
+  /** HTML right after the text, inside the row button: a requirement's faces (who OKs it). */
+  after?: string | undefined;
+  /** More marks after its own, at the right: a requirement's lock (it can't be pushed past). */
+  marks?: string | undefined;
 }
 /** The row: what it does (a mark), the rule cut to one line, its marks (costs a Jev call, not acting, a bot's
  * suggestion, built in), then ⋯ where the viewer may change it. The row is one button: it opens the rule for editing,
  * or, read only, its whole text in place under the row (aria-expanded). 36 px on a computer, 44 px on a phone. */
 function stageRuleRowHTML(o: StageRuleRow): string {
   const tag = o.tag ?? 'li', det = `sr-d-${o.key}`;
-  const marks = (o.cost && o.cost !== SR_FREE ? srMarkHTML('sr-m-cost', 'psychology', srCostWords(o.cost), 'data-sr-cost') : '')
+  const marks = (o.cost && o.cost !== SR_FREE ? srMarkHTML('sr-m-cost', o.costIcon ?? 'psychology', srCostWords(o.cost), 'data-sr-cost') : '')
     + (o.idle ? srMarkHTML('sr-m-idle', 'error', `Not acting: ${o.idle}`, 'data-sr-idle') : '')
     + (o.suggest ? srMarkHTML('sr-m-suggest', 'lightbulb', o.suggest, 'data-sr-suggest') : '')
-    + (o.shared ? srMarkHTML('sr-m-shared', 'dynamic_feed', o.shared, 'data-sr-shared') : '');
+    + (o.shared ? srMarkHTML('sr-m-shared', 'dynamic_feed', o.shared, 'data-sr-shared') : '') + (o.marks ?? '');
   const how = o.open || `data-sr-read aria-expanded="false" aria-controls="${esc(det)}"`;
   // ⋯, or its empty slot, so every row's marks sit in the same column
   const more = o.more ? `<button type="button" class="sr-more" data-sr-more="${esc(o.more)}" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(`More for ${o.name || o.text}`)}" title="More">`
     + '<span class="nav-icon" aria-hidden="true">more_horiz</span></button>' : '<span class="sr-more-slot" aria-hidden="true"></span>';
-  const lead = o.icon ? `<span class="sr-then"><span class="nav-icon rule-outcome" aria-hidden="true" data-icon="${esc(o.icon)}"></span></span>` : srThenHTML(o.then);
+  const lead = o.icon ? `<span class="sr-then"><span class="nav-icon rule-outcome" aria-hidden="true" data-icon="${esc(o.icon)}"></span></span>` : srThenHTML(o.outcome);
   return `<${tag} class="sr-r${o.builtIn ? ' sr-builtin' : ''}" ${o.attrs}><div class="sr-line">`
-    + `<button type="button" class="sr-open" ${how} title="${esc(o.text)}">${lead}<span class="sr-text">${esc(o.text)}</span></button>`
+    + `<button type="button" class="sr-open" ${how} title="${esc(o.text)}">${lead}<span class="sr-text">${esc(o.text)}</span>${o.after ?? ''}</button>`
     + (marks ? `<span class="sr-marks">${marks}</span>` : '') + more + '</div>'
     + (o.open ? o.below ?? '' : `<div class="sr-detail" id="${esc(det)}" hidden>${o.detail ?? ''}</div>`) + `</${tag}>`;
 }
@@ -384,7 +396,7 @@ function stageRuleRowHTML(o: StageRuleRow): string {
  * where the list does not (the Rules page's suggestions). */
 function stageRuleReadHTML(r: StageRule, where = ''): string {
   return `<p class="sr-d-name">${esc(r.name)}</p>${where ? `<p class="muted">${esc(where)}</p>` : ''}<p>${esc(srSentence(r))}</p>`
-    + (r.reason ? `<p class="muted">“${esc(r.reason)}”</p>` : '') + `<p class="muted">Cost: ${esc(r.cost || SR_FREE)}</p>${srIdleHTML(r)}`;
+    + (r.reason ? `<p class="muted">“${esc(r.reason)}”</p>` : '') + (r.cost && r.cost !== SR_FREE ? `<p class="muted">Cost: ${esc(r.cost)}</p>` : '') + srIdleHTML(r);
 }
 /** A built-in's row: what it does, and its name in the read view (they sit under "Always on, can't be changed"). */
 const builtInRowHTML = (b: StageBuiltIn, key: string, tag: 'li' | 'div' = 'li', attrs = ''): string => stageRuleRowHTML({
@@ -418,11 +430,25 @@ function stageRuleRowKey(ev: KeyboardEvent): void {
   btn.focus();
 }
 
+/** The two leading marks of a stage's phase lists (Chris, Nov 14: "all the rules have a rule icon, and all the actions
+ * have an action icon"): every rule (a stage's Limit too) the board's rules gavel, every action on entering a play mark
+ * (never the bolt: that is Jev's, and Automations'), every requirement to leave a done mark, its lock when it can't be
+ * pushed past. The Rules page keeps each rule's outcome mark (srThenHTML). Icon subset: ui/vendor/fonts/icons.txt. */
+const SR_ROW_ICONS = {rule: 'gavel', act: 'play_arrow', req: 'task_alt', lock: 'lock'};
 /** A rule in a stage's phase: one the person may change opens its edit form, with ⋯ holding Edit and Retire; any other
  * opens its read view. A rule that applies beyond the stage has the quiet shared mark. `k` keeps its read view's id
  * unique (the whole pipeline's editor lists a shared rule under each stage). */
+/** A stage row's line: what the rule checks, in its own words. Its phase says when (so entering is not said), its
+ * action is a mark at the right, and a model's question is the question itself. */
+function srStageLine(r: StageRuleCore): string {
+  const {when, ifs} = srParts(r), q = (r.jev ?? '').trim();
+  const conds = q ? ifs.replace(`Jev: ${r.jev}`, '').replace(/, $/, '') : ifs;
+  const said = [r.event.split(',').includes('enters') ? '' : when, conds, q].filter(Boolean).join(' · ');
+  return said ? said.charAt(0).toUpperCase() + said.slice(1) : when;
+}
 const srRowHTML = (r: StageRule, k: string, shared = ''): string => stageRuleRowHTML({
-  key: `${k}-${r.id}`, attrs: `data-sr-rule="${esc(r.id)}"`, then: r.then, text: srSentence(r, true), cost: r.cost, idle: r.not_acting, name: r.name, shared,
+  key: `${k}-${r.id}`, attrs: `data-sr-rule="${esc(r.id)}"`, icon: SR_ROW_ICONS.rule, text: srStageLine(r), cost: r.cost, costIcon: 'bolt', idle: r.not_acting, name: r.name, shared,
+  marks: ruleOutcomeIconHTML(r.then),
   ...(r.can_edit ? {open: `data-sr-edit="${esc(r.id)}"`, more: r.id} : {detail: stageRuleReadHTML(r)})});
 
 /** A rule's ⋯: Edit, then after a line, red and last, Retire. The menu lives in the open dialog when there is one (the
@@ -507,7 +533,7 @@ function srSharedWords(r: StageRule, open: Pick<SrOpen, 'pipelineId' | 'list'>):
 /** A phase's rules: a thin line under the phase's fields, the rules acting there (the stage's own, then the shared ones
  * with their quiet mark), then + Rule, quiet, where the viewer may add one and the phase has a When to start on. A phase
  * with no rules shows only its + Rule. On entering has no + Rule of its own: its rules end the phase's one list (Limit,
- * action, rules), whose one add button is the editor's (pipeline-editor.ts, + Rule or action; stageRulesAdd). */
+ * actions, rules), whose + Rule and + Action are the editor's (pipeline-editor.ts; stageRulesAdd). */
 function srPhaseRowsHTML(open: Pick<SrOpen, 'pipelineId' | 'stageId' | 'stageName' | 'list'>, phase: SrPhase): string {
   const list = open.list;
   if (!list) return '';
@@ -522,9 +548,9 @@ function srAlwaysHTML(open: Pick<SrOpen, 'stageId' | 'list'>): string {
   const list = open.list;
   if (!list) return '';
   const k = open.stageId, built = list.built_in || [], al = `sr-al-${k}`;
-  const builtHTML = built.length ? `<section class="sr-group sr-always" data-sr-group="builtin">`
-    + `<button type="button" class="sr-always-h" data-sr-always aria-expanded="false" aria-controls="${esc(al)}"><span class="sr-cx" aria-hidden="true">›</span>Always on, can't be changed (${built.length})</button>`
-    + `<ul class="sr-list" id="${esc(al)}" hidden>${built.map((b, i) => builtInRowHTML(b, `${k}-b${i}`)).join('')}</ul></section>` : '';
+  // listed as they are: More rules (pipeline-editor.ts peMoreHTML) is the line that opens them
+  const builtHTML = built.length ? `<section class="sr-group sr-always" data-sr-group="builtin"><p class="sr-always-cap muted">Always on</p>`
+    + `<ul class="sr-list" id="${esc(al)}">${built.map((b, i) => builtInRowHTML(b, `${k}-b${i}`)).join('')}</ul></section>` : '';
   const who = list.may_add ? '' : '<p class="muted sr-who">Only the pipeline\'s owner, its manager and Admins change its rules.</p>';
   return builtHTML + who;
 }
@@ -559,11 +585,16 @@ function srOptions<K extends string>(pairs: [K, string][], current: string): str
   return pairs.map(([k, l]) => `<option value="${esc(k)}"${k === current ? ' selected' : ''}>${esc(l)}</option>`).join('');
 }
 
-/** The Add rule and Edit form: On, When, If, Then, and what it costs. A new rule starts On this stage. */
+/** The Add rule and Edit form: When, If, Then, and what it costs. Opened from a stage (Chris, Nov 14: "we don't need
+ * 'name' or 'on' because its only on this stage anyway"), it has no Name (kept on an edit, made from the rule's words
+ * for a new one: srBody) and no On: a new rule is the stage's, an edited one keeps where it applies, and a shared one
+ * says where in one quiet line. Elsewhere (the Rules page) Name and On come first, as before. */
 function srFormHTML(r: StageRule | null): string {
   const open = SR;
   if (!open) return '';
+  const staged = !!open.stageId;
   const on = r ? r.scope : 'stage';
+  const shared = staged && r ? srSharedWords(r, open) : '';
   const cond = r?.cond || {};
   const onField = r && r.scope === 'company'
     ? '<p class="muted">Company: every pipeline</p>'
@@ -577,12 +608,15 @@ function srFormHTML(r: StageRule | null): string {
   const first = r?.event ?? phased[0]?.[0] ?? 'enters';
   const events: [string, string][] = phased.length ? phased
     : SR_EVENTS.some(([k]) => k === first) ? SR_EVENTS : [...SR_EVENTS, [first, srWhen(first)]];
+  if (staged) return srStagedFormHTML(r, first, shared);
   return `${srHeadHTML(srFormTitle(r))}
     <form class="ru-form sr-form" data-sr-form="${esc(r?.id ?? '')}" data-sr-revision="${r?.revision ?? ''}">
-      <label class="ru-fl"><span class="ru-lbl">Name</span><input name="name" maxlength="200" required value="${esc(r?.name ?? '')}"></label>
-      <div class="ru-fl"><span class="ru-lbl">On</span>${onField}</div>
-      <label class="ru-fl"><span class="ru-lbl">When</span><select name="event">${srOptions(events, first)}</select></label>
-      <div class="ru-fl sr-timer" data-sr-timer><span class="ru-lbl">Timer</span><span class="sr-row">
+      ${staged ? (shared ? `<p class="sr-form-shared muted">${srMarkHTML('sr-m-shared', 'dynamic_feed', shared)}${esc(shared)}</p>` : '')
+    : `<label class="ru-fl"><span class="ru-lbl">Name</span><input name="name" maxlength="200" required value="${esc(r?.name ?? '')}"></label>
+      <div class="ru-fl"><span class="ru-lbl">On</span>${onField}</div>`}
+      ${staged ? `<input type="hidden" name="event" value="${esc(first)}">`
+    : `<label class="ru-fl"><span class="ru-lbl">When</span><select name="event">${srOptions(events, first)}</select></label>`}
+      <div class="ru-fl sr-timer" data-sr-timer><span class="ru-lbl">${staged ? 'After' : 'Timer'}</span><span class="sr-row">
         <input name="hours" type="number" min="1" max="720" value="${esc(str(r?.timer?.hours) || '6')}" aria-label="Hours"> h
         <select name="timer_kind" aria-label="Timer">${srOptions(SR_TIMERS, r?.timer?.kind ?? 'quiet')}</select></span></div>
       <div class="ru-fl"><span class="ru-lbl">If <span class="ru-opt">(optional)</span></span>
@@ -599,6 +633,64 @@ function srFormHTML(r: StageRule | null): string {
     </form>`;
 }
 
+/** A rule's form opened from a stage (Chris, Nov 14: "we need to present this more clearly"; "I don't like the 'when'
+ * being in the rule card, i want it in the stages"). The place it was opened from is its When, so each kind shows
+ * only what that kind can use, in words:
+ *   a snooze rule   "Refuse the snooze when" (the Jev question, in the person's words), then what the bot is told;
+ *   on entering     "Refuse an owner who is" not on / on a team (a picker, never an id), then what they are told;
+ *   a timer         "After" N h of a clock, "Then" tell or move back, then what it says.
+ * Narrowing (a team, a label) is one quiet "Only for…" that opens. What a kind cannot use rides along unseen, so an
+ * edit never drops it. The field names are the full form's: srBody and srFormSync read both. */
+function srStagedFormHTML(r: StageRule | null, event: string, shared: string): string {
+  const cond = r?.cond || {};
+  const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+  const kind = event === 'timer' ? 'timer' : event.split(',').includes('enters') ? 'enter' : event === 'bot_snoozes' ? 'snooze' : 'other';
+  const owner = 'owner_on_team' in cond ? 'on' : 'owner_not_on_team' in cond ? 'not_on' : '';
+  const team = str(cond['owner_on_team'] ?? cond['owner_not_on_team']);
+  const groups = (S.orgGroups || []).filter(g => g.id).map((g): [string, string] => [String(g.id), String(g.name || g.id)]);
+  const teams: [string, string][] = [['', "the manager's team"], ...groups, ...(team && !groups.some(([id]) => id === team) ? [[team, team] as [string, string]] : [])];
+  const teamPick = `<select name="owner_team" aria-label="Team">${srOptions(teams, team)}</select>`;
+  const label = `<input name="label" maxlength="200" placeholder="Label" aria-label="Has label" value="${esc(str(cond['label']))}">`;
+  const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${esc(value)}">`;
+  const says = (word: string, hint: string) => `<label class="ru-fl"><span class="ru-lbl">${word}</span><input name="reason" maxlength="1000" value="${esc(r?.reason ?? '')}" placeholder="${esc(hint)}"></label>`;
+  // narrowing, shut unless something is set
+  const only = (rows: string, set: boolean) => `<details class="sr-only-for"${set ? ' open' : ''}><summary>Only for…</summary><div class="sr-only-rows">${rows}</div></details>`;
+  const ownerRow = (words: [string, string][]) => `<span class="sr-row"><select name="owner_check" aria-label="The owner's team">${srOptions<string>(words, owner)}</select>${teamPick}</span>`;
+  const narrowOwner = ownerRow([['', 'any owner'], ['on', 'an owner on'], ['not_on', 'an owner not on']]);
+  let body: string;
+  if (kind === 'timer') {
+    body = `<div class="ru-fl sr-timer" data-sr-timer><span class="ru-lbl">After</span><span class="sr-row">
+        <input name="hours" type="number" min="1" max="720" value="${esc(str(r?.timer?.hours) || '6')}" aria-label="Hours"> h
+        <select name="timer_kind" aria-label="Timer">${srOptions(SR_TIMERS, r?.timer?.kind ?? 'quiet')}</select></span></div>
+      <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then" required>${srOptions(SR_THENS, r?.then ?? 'tell_manager')}</select></label>
+      ${says('Message', 'What it says')}
+      ${hidden('jev', r?.jev ?? '')}
+      ${only(narrowOwner + label, !!owner || !!cond['label'])}`;
+  } else if (kind === 'enter') {
+    body = `<div class="ru-fl"><span class="ru-lbl">Refuse an owner who is</span>
+        ${ownerRow([['not_on', 'not on'], ['on', 'on'], ...(owner ? [] : r ? [['', 'anyone at all'] as [string, string]] : [])])}</div>
+      ${hidden('then', 'block')}${hidden('jev', r?.jev ?? '')}${hidden('hours', '6')}${hidden('timer_kind', 'quiet')}
+      ${says('They are told', 'Why, and what to do instead')}
+      ${only(label, !!cond['label'])}`;
+  } else {
+    body = `<label class="ru-fl"><span class="ru-lbl">${kind === 'snooze' ? 'Refuse the snooze when' : 'Refuse the change when'}</span>
+        <textarea name="jev" rows="4" maxlength="1000" placeholder="${kind === 'snooze' ? 'It is not really waiting on a person or another task' : 'Describe it in your own words'}" aria-label="When">${esc(r?.jev ?? '')}</textarea></label>
+      ${hidden('then', 'block')}${hidden('hours', '6')}${hidden('timer_kind', 'quiet')}
+      ${says(kind === 'snooze' ? 'The bot is told' : 'They are told', 'Why, and what to do instead')}
+      ${only(narrowOwner + label, !!owner || !!cond['label'])}`;
+  }
+  return `${srHeadHTML(srFormTitle(r))}
+    <form class="ru-form sr-form sr-staged" data-sr-form="${esc(r?.id ?? '')}" data-sr-revision="${r?.revision ?? ''}">
+      ${shared ? `<p class="sr-form-shared muted">${srMarkHTML('sr-m-shared', 'dynamic_feed', shared)}${esc(shared)}</p>` : ''}
+      ${hidden('event', event)}
+      ${body}
+      <p class="sr-idle" data-sr-thenline hidden></p>
+      <p class="sr-costline muted" data-sr-costline></p>
+      <p class="ru-status" role="status"></p>
+      <div class="ru-foot"><span class="spacer"></span><button class="ghost" type="button" data-sr-back>Cancel</button><button class="primary" type="submit">Save</button></div>
+    </form>`;
+}
+
 /** The timer's fields show only for a timer; the cost line follows the Jev question (timers never call a model). */
 function srFormSync(form: HTMLFormElement | null): void {
   if (!form || !form.matches('[data-sr-form]')) return;
@@ -609,24 +701,42 @@ function srFormSync(form: HTMLFormElement | null): void {
   // An action When offers Block alone: Tell and Move back need a timer in step 1.
   // A Then the When no longer offers (an old rule that never acted) is never swapped for another in silence: the
   // choice is left empty, and the required select stops Save until the person picks.
-  const thens = timer ? SR_THENS : SR_ACTION_THENS, picked = f.then.value, offered = thens.some(([k]) => k === picked);
+  const staged = form.classList.contains('sr-staged');
+  // a timer never blocks: from a stage it offers what a timer does
+  const thens = timer ? (staged ? SR_THENS.filter(([k]) => k !== 'block') : SR_THENS) : SR_ACTION_THENS, picked = f.then.value, offered = thens.some(([k]) => k === picked);
   const shown = `${offered ? '' : '-,'}${thens.map(([k]) => k).join(',')}`;
-  if (f.then.dataset['srThens'] !== shown) {
+  if (f.then instanceof HTMLSelectElement && f.then.dataset['srThens'] !== shown) {
     f.then.dataset['srThens'] = shown;
     f.then.innerHTML = (offered ? '' : `<option value="" selected disabled>${esc(timer ? 'Pick a Then' : 'Pick Block, or a timer for Tell')}</option>`)
       + srOptions(thens, offered ? picked : '');
   }
+  // The yellow line shows only when the rule as set would not act: a Then an action cannot carry out (an old rule's,
+  // left empty above), or a Jev question on entering or an owner change (stage_rules.owner_check never asks Jev; only
+  // a bot's snooze does). A free rule says nothing about its cost.
+  const jev = !!f.jev.value.trim();
+  const idle = timer ? '' : !f.then.value ? 'Tell and Move back need a timer in step 1: pick N h in the stage, quiet or waiting on a person.'
+    : jev && !f.event.value.split(',').includes('bot_snoozes') ? 'A Jev question is asked only when a bot snoozes: on entering or an owner change this rule never acts.' : '';
   const thenLine = form.querySelector<HTMLElement>('[data-sr-thenline]');
   if (thenLine) {
-    thenLine.hidden = timer;
-    thenLine.textContent = timer ? '' : 'Tell and Move back need a timer in step 1: pick N h in the stage, quiet or waiting on a person.';
+    thenLine.hidden = !idle;
+    thenLine.textContent = idle;
   }
-  const jev = !!f.jev.value.trim();
   const line = form.querySelector<HTMLElement>('[data-sr-costline]');
-  if (line) line.textContent = jev ? 'Cost: one Jev call per event' : 'Cost: free';
+  if (line) {
+    line.hidden = !jev || timer;
+    line.textContent = jev && !timer ? (staged ? '' : 'Cost: one Jev call per event') : '';
+  }
 }
 
-const srFormTitle = (r: StageRule | null): string => r ? `Edit · ${r.name}` : `Add rule · ${SR?.stageName ?? ''}`;
+/** From a stage the form has no When: a rule in More rules is named for what it answers, the others plainly. */
+function srStagedTitle(r: StageRule | null): string {
+  const event = r?.event ?? (SR?.phase ? SR_PHASE_EVENTS[SR.phase][0]?.[0] : '') ?? '';
+  return event === 'timer' ? 'Timer' : event === 'bot_snoozes' ? 'Snooze rule' : event === 'owner_changes' ? 'Owner change rule' : r ? 'Edit rule' : 'New rule';
+}
+
+/** The form's title: from a stage, plain (its rows show no name either); elsewhere the rule's name, or the stage's. */
+const srFormTitle = (r: StageRule | null): string => SR?.stageId ? srStagedTitle(r)
+  : r ? `Edit · ${r.name}` : `Add rule · ${SR?.stageName ?? ''}`;
 
 /** Opens the form for a rule (a new one for null) in its dialog, over what it was opened from. */
 function srFormOpen(r: StageRule | null): void {
@@ -637,7 +747,8 @@ function srFormOpen(r: StageRule | null): void {
   if (!dlg.open) dlg.showModal();
   const form = dlg.querySelector<HTMLFormElement>('form');
   srFormSync(form);
-  form?.querySelector<HTMLInputElement>('[name=name]')?.focus();
+  // its first field has the focus: Name, or (from a stage) When
+  form?.querySelector<HTMLElement>('[name=name], select[name=event], input[name=hours]:not([type=hidden]), textarea[name=jev], select[name=owner_check]')?.focus();
 }
 
 function srBody(form: HTMLFormElement, editing: StageRule | null): Record<string, unknown> {
@@ -651,13 +762,16 @@ function srBody(form: HTMLFormElement, editing: StageRule | null): Record<string
   const label = f.label.value.trim();
   if (label) cond['label'] = label; else delete cond['label'];
   const body: Record<string, unknown> = {
-    name: f.name.value.trim(), event, cond, jev: f.jev.value.trim(), reason: f.reason.value.trim(),
+    name: f.name?.value.trim() ?? editing?.name ?? '', event, cond, jev: f.jev.value.trim(), reason: f.reason.value.trim(),
     timer: event === 'timer' ? {kind: f.timer_kind.value, hours: Number(f.hours.value) || 1} : {},
   };
   body['then'] = f.then.value;  // set apart: an object literal with a `then` key reads as a promise to the linter
+  // a new rule from a stage's form has no Name field: the server needs one, so it is the rule's own words
+  if (!body['name']) body['name'] = srSentence(body as unknown as StageRuleCore, true).slice(0, 200);
   if (!editing || editing.scope !== 'company') {
     body.pipeline = open.pipelineId;
-    const on = f.on?.value ?? 'stage';
+    // no On field (a stage's form): a new rule is the stage's, an edited one stays where it applies
+    const on = f.on?.value ?? editing?.scope ?? 'stage';
     body.stages = on === 'pipeline' ? [] : editing && editing.scope === 'stage' ? editing.stages : [open.stageId];
   }
   return body;
@@ -700,7 +814,7 @@ async function srRetire(r: StageRule, from: HTMLElement): Promise<void> {
   if (!await askConfirm(`Retire "${r.name}"? It stops applying.`, from)) return;
   const sec = from.closest<HTMLElement>('[data-sr-section]');
   const at0 = sec?.dataset['srPhase'];
-  if (at0 === 'enter' || at0 === 'here' || at0 === 'leave') open.phase = at0;
+  if (srIsPhase(at0)) open.phase = at0;
   const rows = [...(sec?.querySelectorAll<HTMLElement>('[data-sr-rule]') ?? [])].map(e => e.dataset['srRule'] ?? ''), at = rows.indexOf(r.id);
   const next = rows[at + 1] ?? rows[at - 1] ?? '';
   try {

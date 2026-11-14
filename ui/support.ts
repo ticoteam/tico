@@ -678,7 +678,7 @@
     dialog.querySelector<HTMLElement>('[data-close]')!.onclick = () => dialog.close();
     // Support off, each way to help closes this window first; the Assistant and the tour then open on their own clicks
     // (ask-panel.ts, getting-started.ts), the docs in a new tab.
-    dialog.querySelectorAll<HTMLElement>('[data-help-go]').forEach(b => b.addEventListener('click', () => dialog.close()));
+    dialog.querySelectorAll<HTMLElement>('[data-help-go]').forEach(b => { b.addEventListener('click', () => dialog.close()); });
     // Delete chat history: asked inside the chat, then every one of the person's tickets is deleted at HQ.
     const ask = dialog.querySelector<HTMLElement>('[data-confirm]')!, askErr = dialog.querySelector<HTMLElement>('[data-confirm-error]')!;
     const no = dialog.querySelector<HTMLElement>('[data-confirm-no]')!, yes = dialog.querySelector<HTMLButtonElement>('[data-confirm-yes]')!;

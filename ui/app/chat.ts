@@ -537,7 +537,7 @@ function v2RunHTML(m: ChatMessage, state: Pick<ChatState, 'openSteps' | 'steps' 
 const chatLine = (text: unknown, n: number) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // ---- times and lines every chat shares (the style guide's chat window, #sg-chat): a message's time is its clock on
 // its name line; one line names the day wherever it changes; a long message stops at ten lines with Show more.
-const chatDate = (iso: string | null | undefined) => { const d = new Date(iso || ''); return isNaN(Number(d)) ? null : d; };
+const chatDate = (iso: string | null | undefined) => { const d = new Date(iso || ''); return Number.isNaN(Number(d)) ? null : d; };
 const chatClock = (iso: string | null | undefined) => chatDate(iso)?.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) || '';
 const chatDayKey = (iso: string | null | undefined) => chatDate(iso)?.toDateString() || '';
 // "Today", "Yesterday", else "Thursday, November 12" (the year too when it is not this one).

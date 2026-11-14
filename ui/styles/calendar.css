@@ -59,6 +59,9 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-ib{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}
 .cal-ib .nav-icon{font-size:20px;margin:0}
 .cal-more{position:relative}
+/* ⋯ is the same quiet icon as on every other page head: no outline. */
+.cal-more>[data-cal-more]{border:0;background:none;color:var(--muted)}
+.cal-more>[data-cal-more]:hover,.cal-more>[data-cal-more][aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .cal-menu,.cal-addm{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px rgba(0,0,0,.25)}
 .cal-menu[hidden],.cal-addm[hidden]{display:none}
 .cal-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}

@@ -95,7 +95,7 @@ for tv in gvar.variations["zero"]:
     counter_at_peak, gap = fit_at(at_peak)
     print("  region %s: counter gap %.1f units" % (dict(tv.axes), gap))
     counter_deltas = [
-        (x - dx, y - dy) for (x, y, _), (dx, dy, _) in zip(counter_at_peak, default_counter)
+        (x - dx, y - dy) for (x, y, _), (dx, dy, _) in zip(counter_at_peak, default_counter, strict=True)
     ]
     outer_deltas = [deltas[i] for i in OUTER]
     phantom_deltas = deltas[len(coords):]

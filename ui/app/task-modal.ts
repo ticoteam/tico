@@ -487,7 +487,7 @@ function taskRunWords(run: ModalRunModel | null | undefined, rows: ModalModelRow
 // Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
 // /v2/tasks/{id}/model gives); anyone else reads what it runs on.
 const taskRunMay = (t: ModalTask) => t.can_set_run_model === true;
-function taskRunModelBody(run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null, pick: ModalRunPick) {
+function taskRunModelBody(_run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null, pick: ModalRunPick) {
   if (!rows) return '<p class="muted">Loading the models…</p>';
   const row = rows.find(m => m.id === pick.model), harnesses = (row?.harnesses || []).length > 1 ? row!.harnesses! : [];
   return `<form class="task-run-form" data-run-model-form aria-label="Runs on">

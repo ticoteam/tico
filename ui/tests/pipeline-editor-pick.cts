@@ -78,13 +78,17 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
       await dialog.locator('[data-pe-pf="goal"]').waitFor();
       await build.locator('> summary').click();
 
-      // Three phases in the order a task moves, each with its small leading mark.
-      assert.deepEqual(await build.locator('.pe-phase-h').evaluateAll(hs => hs.map(h => `${h.querySelector('.nav-icon')?.textContent} ${h.lastChild?.textContent}`)),
-        ['login On entering', 'schedule While here', 'logout To leave'], `${width}: the phases`);
+      // The phases in the order a task moves, each with its small leading mark.
+      assert.deepEqual(await build.locator('.pe-phase-h').evaluateAll(hs => hs.map(h => `${h.querySelector('.nav-icon')?.textContent} ${[...h.childNodes].find(n => n.nodeType === 3)?.textContent}`)),
+        ['login On entering', 'schedule While here', 'logout To leave', 'gavel More rules'], `${width}: the phases`);
       // Build's Limit is a row of On entering, its words, not a field
       assert.deepEqual(await build.locator('[data-pe-enter-row] .sr-text').allTextContents(), ['At most 4 tasks at once'], `${width}: the Limit row`);
 
       // One of several, with two Builders, taking turns, Prefer Anyone, owning the task.
+      // the owner is an action of On entering, none by default: + Action adds it, its editor open in place
+      assert.equal(await build.locator('[data-pe-no-owner]').innerText(), 'No owner set: the manager picks one.');
+      await build.locator('[data-pe-enter-add="act"]').click();
+      await dialog.locator('[data-pe-enter-pick="owner"]').click();
       await build.locator('[data-pe-sf="owner"]').selectOption('pick');
       const bot = (id: string) => build.locator(`[data-pe-pick-bot="bot:${id}"]`);
       await bot('builder-2').check();
@@ -116,10 +120,15 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
       assert.match(await bot('builder').locator('..').innerText(), /Builder\s+Claude/);
       await shot(page, `one-of-several-${width}`);
 
-      // Tasks leave by hand: a two-way switch, and the by-hand option appears with it.
-      await build.locator('[data-pe-seg="by_hand"][data-v="1"]').click();
+      // By hand is one more requirement, "OK from anyone": added from + Requirement, its row opens its one setting.
+      await build.locator('[data-pe-req-add]').click();
+      await dialog.locator('[data-pe-req-kind="by_hand"]').click();
+      const hand = build.locator('[data-pe-leave-row="hand"]');
+      assert.equal(await hand.locator('.sr-text').innerText(), 'OK from anyone');
+      await hand.locator('.sr-open').click();
       await build.locator('[data-pe-sf="requests_move_on"]').waitFor();
-      await build.locator('[data-pe-seg="by_hand"][data-v="0"]').click();
+      await build.locator('[data-pe-row-x="hand"]').click();
+      assert.equal(await hand.count(), 0);
 
       // Closed: "One of 2" where the owner's name was.
       await build.locator('> summary').click();

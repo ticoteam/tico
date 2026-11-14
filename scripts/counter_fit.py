@@ -72,7 +72,7 @@ def _smooth(pts, sigma_samples):
     out = []
     for i in range(n):
         sx = sy = sw = 0.0
-        for d, w in zip(offsets, weights):
+        for d, w in zip(offsets, weights, strict=True):
             p = pts[(i + d) % n]
             sx += w * p[0]
             sy += w * p[1]

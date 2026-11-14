@@ -244,7 +244,7 @@ async function meetSettingsOpen(state: MeetState): Promise<void> {
     const form = dialog.querySelector<HTMLFormElement>('form')!, controls = form.elements as unknown as MeetSettingsControls;
     controls.personal.value = personal;
     if (controls.team) controls.team.value = settings.review_default;
-    dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(b => b.onclick = () => dialog.close());
+    dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dialog.close(); });
     form.onsubmit = async (e: Event) => {
       e.preventDefault(); const submit = form.querySelector<HTMLButtonElement>('[type=submit]')!; submit.disabled = true;
       const body: {auto_share: boolean | null; review_default?: string} = {auto_share: controls.personal.value === 'default' ? null : controls.personal.value === 'auto'};

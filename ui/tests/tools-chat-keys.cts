@@ -26,7 +26,7 @@ const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as Mailbox
 const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFakeSupport.Api;
 
-const OWNER = 'tools-product-owner';
+const OWNER = 'it-support-specialist';
 const RULES: unknown = JSON.parse(fs.readFileSync(path.join(__dirname, '../../backend/secret_rules.json'), 'utf8'));
 // Made-up values, joined here so this file holds no key-shaped text.
 const PASSWORD = ['Tr0ub', '4dor&3'].join('');

@@ -245,7 +245,7 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     assert.equal(await page.locator('#pe-dialog [data-pe-sf="name"]').inputValue(), 'Build', 'its name is a field');
     assert.equal(await page.locator('#pe-dialog [data-pe-pf], #pe-dialog [data-pe-stage-add]').count(), 0, 'no pipeline fields, no + Stage');
     assert.equal(await page.locator('#pe-dialog .pe-tools, #pe-dialog [data-pe-up], #pe-dialog [data-pe-stage-x]').count(), 0, 'no moves or Remove');
-    assert.equal(await page.locator('#pe-dialog .pe-req').count(), 1, 'its requirement is open');
+    assert.equal(await page.locator('#pe-dialog [data-pe-leave-row]').count(), 1, 'its requirement is a row of To leave');
     assert.equal(await page.locator('#pe-dialog [data-pe-save]').isVisible(), true);
     await page.locator('#pe-dialog [data-pe-close]').click();
     await page.locator('#pe-dialog').waitFor({state: 'detached'});

@@ -201,32 +201,31 @@
 .pe-phase-h{display:flex;align-items:center;gap:6px}
 /* the mark's box is its glyph, so the heading starts at the fields' left edge */
 .pe-phase-h .nav-icon{flex:none;width:15px;height:15px;font-size:15px;line-height:1;letter-spacing:0;text-transform:none}
-/* On entering is one list (pipeline-editor.ts peEnterHTML): the Limit and the action as rule rows (stage-rules.css),
-   then the rules, one hairline between rows, then + Rule or action. A row's small editor opens under it, in line with
-   its text. */
+/* On entering is one list (pipeline-editor.ts peEnterHTML): the Limit and the actions as rule rows (stage-rules.css),
+   then the rules, one hairline between rows, then + Rule and + Action side by side. A row's small editor opens under
+   it, in line with its text. */
 .pe-list{display:flex;flex-direction:column;min-width:0}
 .pe-enter-list{border-top:1px solid var(--line)}
-.pe-list>.pe-add{margin-top:var(--s2)}
+.pe-adds{display:flex;flex-wrap:wrap;gap:var(--s2);margin-top:var(--s2)}
 .pe-row-ed{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--s2) var(--s3);padding:2px 6px 10px 30px}
 .pe-row-ed>.pe-f{flex:0 1 auto}
 .pe-row-ed>.pe-f-short{flex:0 0 96px}
 .pe-row-x{margin-left:auto}
+/* One of several's controls: their own lines under the Owner and Remove */
+.pe-row-ed>.pe-pick{flex:1 1 100%}
 .pe-phase-h:focus{outline:0}
 .pe-phase-h:focus-visible{outline:var(--focus-ring);outline-offset:2px}
-/* A requirement, always open (pipeline-editor.ts peReqHTML): what it needs as a label, its name and a quiet × on one line,
-   then only its kind's settings, then its switches on one wrapping line. Hairlines between them, dense. */
-.pe-reqs{display:flex;flex-direction:column}
-.pe-reqs:empty{display:none}
-.pe-req{display:flex;flex-direction:column;gap:6px;padding:8px 0;border-top:1px solid var(--line)}
-.pe-req:last-child{border-bottom:1px solid var(--line)}
-.pe-req-line{display:flex;align-items:center;gap:var(--s2);min-width:0}
-.pe-req-kind{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:var(--t-sm)}
-.pe-req-line input{flex:1 1 auto;min-width:0}
-.pe-req-x{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;min-height:0;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font-size:16px;line-height:1;cursor:pointer}
-.pe-req-x:hover{background:var(--hover);color:var(--ink)}
-.pe-req-x:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+/* To leave is one list (pipeline-editor.ts peLeaveHTML): a requirement a row, On entering's row look, its words, an OK's
+   faces right after them, a lock at the right on one that can't be pushed past; its small editor under it (its fields,
+   its switches on one wrapping line, Remove). With none, one quiet line. */
+.pe-leave-list{border-top:1px solid var(--line)}
+.pe-none{margin:0;font-size:var(--t-sm)}
+.pe-faces{flex:none;display:inline-flex;align-items:center}
+.pe-faces>*+*{margin-left:-5px}
+.pe-faces>*{box-shadow:0 0 0 2px var(--surface)}
+.pe-req-ed>.pe-req-sw,.pe-req-ed>.pe-row,.pe-req-ed>.pe-choices,.pe-req-ed>.pe-f:has(> input[data-pe-rf=question]){flex:1 1 100%}
 .pe-req-sw{display:flex;flex-wrap:wrap;align-items:center;gap:2px var(--s3)}
-.pe-req .pe-row{gap:var(--s2)}
+.pe-req-ed .pe-row{gap:var(--s2)}
 .pe-choices{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .pe-choice{display:inline-flex;align-items:center;gap:2px}
 .pe-choice input{width:120px}
@@ -253,15 +252,29 @@
 @media (max-width:720px){
   /* a stage's and a requirement's row open on a tap: 44 px targets */
   .pe-stage>summary{min-height:44px;box-sizing:border-box}
-  .pe-req-x{width:44px;height:44px}
   /* a switch or a tick is taken by its whole label: 44 px tall */
   .pe-dialog label:has(> input[type=checkbox]){display:inline-flex;align-items:center;min-height:44px}
   .pe-dialog{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:14px 14px 0 0}
   .pe-stage-owner:not(.pe-stage-pool)>span{display:none}
   .pe-stage-body{padding-left:var(--s3)}
   .pe-row>.pe-f-name{flex:1 1 100%}
-  /* the Owner's whole row (a bot's name is long); Expected time and Keep warm share the next */
-  .pe-row>.pe-f-owner{flex:1 1 100%}
   .pe-row-ed{padding-left:6px}
   .pe-seg{border-radius:12px}
 }
+
+/* More rules (pipeline-editor.ts peMoreHTML): the last phase is one shut line; it opens the snooze rules and the built-in ones. */
+.pe-more-h{width:100%;min-height:0;height:36px;margin:0;padding:0 6px 0 0;border:0;border-radius:var(--r-ctl);background:none;cursor:pointer;text-align:left}
+.pe-more-h .sr-cx{margin-left:auto;font-size:14px;letter-spacing:0;transition:transform .12s}
+.pe-more-h[aria-expanded=true] .sr-cx{transform:rotate(90deg)}
+@media (hover:hover){.pe-more-h:hover{color:var(--ink)}}
+.pe-more-h:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pe-more-body{display:flex;flex-direction:column;gap:var(--s3);min-width:0}
+.pe-more-body[hidden]{display:none}
+.sr-always-cap{margin:0 0 2px;font-size:var(--t-2xs)}
+@media (max-width:700px){.pe-more-h{height:44px}}
+
+/* Soon: drawn as it will be, not working yet. A small quiet pill beside the thing, which is off. */
+.pill.soon{margin-left:8px;padding:0 6px;font-size:var(--t-2xs);line-height:16px;background:none;border:1px solid var(--line);color:var(--muted);text-transform:none;letter-spacing:0;font-weight:400}
+.pe-mi-soon,.pe-soon-b{display:inline-flex;align-items:center}
+.tl-mi.pe-mi-soon{display:flex;justify-content:space-between;color:var(--muted);cursor:default}
+.pe-soon-b:disabled{opacity:1;color:var(--muted);cursor:default}

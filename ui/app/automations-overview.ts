@@ -521,10 +521,13 @@ function auOverviewClick(t: Element): boolean {
     return true;
   }
   // ⋯'s Group by and Sort by (auCtlDraw).
-  if ((m = t.closest<HTMLElement>('[data-group-v]'))) { AU.group = m.dataset.groupV || 'trigger'; AU.closed.clear(); auCtlDraw(); auDrawTable(); return true; }
-  if ((m = t.closest<HTMLElement>('[data-sort-v]'))) { AU.sort = m.dataset.sortV || 'last'; auCtlDraw(); auDrawTable(); return true; }
+  m = t.closest<HTMLElement>('[data-group-v]');
+  if (m) { AU.group = m.dataset.groupV || 'trigger'; AU.closed.clear(); auCtlDraw(); auDrawTable(); return true; }
+  m = t.closest<HTMLElement>('[data-sort-v]');
+  if (m) { AU.sort = m.dataset.sortV || 'last'; auCtlDraw(); auDrawTable(); return true; }
   // The Runs tab's status, in the rail: one at a time; the same again shows every run.
-  if ((m = t.closest<HTMLElement>('[data-frun]'))) {
+  m = t.closest<HTMLElement>('[data-frun]');
+  if (m) {
     const v = m.dataset.frun || '';
     AU.rstatus = AU.rstatus === v ? '' : v; AU.scroll.runs = 0;
     if (AU.id) { location.hash = auBase(); return true; }   // as every filter does: the list again, filtered
@@ -547,14 +550,16 @@ function auOverviewClick(t: Element): boolean {
   }
   if ((m = t.closest<HTMLElement>('[data-agrp]'))) { const k = m.dataset.agrp || ''; if (AU.closed.has(k)) AU.closed.delete(k); else AU.closed.add(k); auDrawTable(); return true; }
   if ((m = t.closest<HTMLElement>('[data-all-more]'))) { void auAllLoad(AU, true); return true; }
-  if ((m = t.closest<HTMLElement>('[data-arun]'))) {
+  m = t.closest<HTMLElement>('[data-arun]');
+  if (m) {
     const id = m.dataset.arun || '';
     if (id.startsWith('mnt_')) AU.mtOpenRun = id.slice(4);
     else if (!id.startsWith('sys_') && !id.startsWith('hb_')) AU.openRun = id;   // a Heartbeat run opens its log
     location.hash = auHref(m.dataset.aid, 'runs');
     return true;
   }
-  if ((m = t.closest<HTMLElement>('[data-row]')) && !t.closest('a')) { location.hash = auHref(m.dataset.row); return true; }
+  m = t.closest<HTMLElement>('[data-row]');
+  if (m && !t.closest('a')) { location.hash = auHref(m.dataset.row); return true; }
   return false;
 }
 function auOverviewWire(root: HTMLElement): void {

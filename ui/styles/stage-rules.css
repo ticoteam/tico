@@ -38,6 +38,8 @@
 .sr-open:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 /* a row with nothing to open (a stage's Limit or action, read only): the same row, not dimmed */
 .sr-open:disabled{opacity:1;color:var(--ink);cursor:default;background:none}
+/* a shared rule opened from a stage's form: where it applies, one quiet line with its mark */
+.sr-form-shared{display:flex;align-items:center;gap:6px;margin:0;font-size:var(--t-sm)}
 .sr-then{flex:none;display:inline-grid;place-items:center;width:16px;height:16px;color:var(--muted)}
 /* A rule's outcome mark draws its glyph from data-icon (stage-rules.ts ruleOutcomeIconHTML): no ligature word in the text. */
 .rule-outcome::before{content:attr(data-icon)}
@@ -91,3 +93,13 @@
 /* A suggested change on Rules › Suggested: what differs, old struck through. */
 .sr-diff{margin:4px 0 0;padding:0 0 0 16px;font-size:var(--t-sm)}
 .sr-diff-k{font-weight:600}
+
+/* A rule's form from a stage: narrowing is one quiet line that opens; the team is a picker beside its words. */
+.sr-only-for>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);list-style:none;width:max-content}
+.sr-only-for>summary::-webkit-details-marker{display:none}
+.sr-only-for>summary:hover,.sr-only-for[open]>summary{color:var(--ink)}
+.sr-only-rows{display:grid;gap:6px;margin-top:8px}
+.sr-staged .sr-row select[name=owner_team]{flex:1;min-width:0}
+
+/* a stage row's action, as a mark at the right (stage-rules.ts srRowHTML) */
+.sr-marks .rule-outcome{font-size:15px;line-height:1;width:15px;height:15px;overflow:hidden;color:var(--muted)}

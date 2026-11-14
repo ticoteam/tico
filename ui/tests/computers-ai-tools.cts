@@ -542,10 +542,11 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await page.clock.resume();
     presenceMode = 'fixed';
 
-    // On a phone the table scrolls inside its card, never the page; the queue line stays in the pop-up.
+    // On a phone each computer is a row of its own facts: nothing scrolls sideways, the page or the card; the queue line
+    // stays in the pop-up.
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways page scroll');
-    assert.ok(await page.locator('#set-machines .scroll').evaluate(el => el.scrollWidth > el.clientWidth), 'the table scrolls in its card');
+    assert.ok(await page.locator('#set-machines .scroll').evaluate(el => el.scrollWidth <= el.clientWidth), 'nothing is scrolled away in its card');
     await page.setViewportSize({width: 1440, height: 900});
 
     // 25. Revoked computers on request; Revoke lives in the pop-up only.

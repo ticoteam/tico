@@ -331,6 +331,8 @@ function pgcMarks(): void {
 }
 
 /** ⌘J is the page's chat here (a desktop page with an owner's column), not Ask's: the Ask row names it only otherwise. */
+/** A person set the page now shown to "No owner": it has no chat of any kind (the phone's board face too). */
+const pageChatNone = (): boolean => !!PGC && PGC.none;
 const pageChatKeyTaken = (): boolean => !!PGC && !!pgcOwner(PGC) && !pgcAsk(PGC) && !pgcPhone();
 
 /** Whether the page's chat column shows now (a desktop's; a phone's full screen is not a column). */

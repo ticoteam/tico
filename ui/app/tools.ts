@@ -353,10 +353,13 @@ function toolsWire(root: HTMLElement, state: ToolsListState): void {
     if (!t) return;
     let m: HTMLElement | null;
     if (menu && !menu.hidden && !t.closest('.au-newbox')) menuOpen(false, false);
-    if ((m = t.closest<HTMLElement>('[data-tl-show]'))) { state.show = m.dataset.tlShow ?? ''; toolsChanged(); return; }
+    m = t.closest<HTMLElement>('[data-tl-show]');
+    if (m) { state.show = m.dataset.tlShow ?? ''; toolsChanged(); return; }
     if (t.closest('[data-tl-fneeds]')) { state.needs = !state.needs; toolsChanged(); return; }
-    if ((m = t.closest<HTMLElement>('[data-tl-who]'))) { const ref = m.dataset.tlWho ?? ''; state.who = state.who === ref ? '' : ref; toolsChanged(); return; }
-    if ((m = t.closest<HTMLElement>('[data-tl-filters]'))) {
+    m = t.closest<HTMLElement>('[data-tl-who]');
+    if (m) { const ref = m.dataset.tlWho ?? ''; state.who = state.who === ref ? '' : ref; toolsChanged(); return; }
+    m = t.closest<HTMLElement>('[data-tl-filters]');
+    if (m) {
       // Opening starts with the sections that have a filter on open and the rest closed.
       const open = root.classList.toggle('filters-open');
       if (open) state.fopen = new Set([state.show ? 'kind' : '', state.needs ? 'needs' : '', state.who ? 'who' : ''].filter(Boolean));
@@ -364,17 +367,20 @@ function toolsWire(root: HTMLElement, state: ToolsListState): void {
       toolsFacetsDraw();
       return;
     }
-    if ((m = t.closest<HTMLElement>('[data-tl-fsec]'))) {
+    m = t.closest<HTMLElement>('[data-tl-fsec]');
+    if (m) {
       const k = m.dataset.tlFsec ?? '';
       if (state.fopen.has(k)) state.fopen.delete(k); else state.fopen.add(k);
       toolsFacetsDraw();
       root.querySelector<HTMLElement>(`[data-tl-fsec="${k}"]`)?.focus();
       return;
     }
-    if ((m = t.closest<HTMLElement>('[data-tl-grp]'))) { toolsGroupToggle(m.dataset.tlGrp ?? ''); return; }
+    m = t.closest<HTMLElement>('[data-tl-grp]');
+    if (m) { toolsGroupToggle(m.dataset.tlGrp ?? ''); return; }
     if (t.closest('[data-tl-add]')) { menuOpen(!!menu?.hidden); return; }
     if (t.closest('[data-tl-add-open]')) { menuOpen(true); return; }
-    if ((m = t.closest<HTMLElement>('[data-tl-add-item]'))) { menuOpen(false, false); toolsAdd(m.dataset.tlAddItem ?? ''); return; }
+    m = t.closest<HTMLElement>('[data-tl-add-item]');
+    if (m) { menuOpen(false, false); toolsAdd(m.dataset.tlAddItem ?? ''); return; }
     if (t.closest('[data-tl-add-key]')) { vaultEdit(); return; }
     if (t.closest('[data-tl-clear]')) { state.show = ''; state.needs = false; state.who = ''; state.q = ''; if (search) search.value = ''; toolsChanged(); return; }
     if (t.closest('[data-tl-retry]')) { void pageTools(); return; }

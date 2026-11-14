@@ -2,14 +2,16 @@
    Prefix (no Private: pipeline_settings refuses a private pipeline until one is defined), then its stages, one panel
    each, closed until clicked. A stage is edited as its phases, in the order a task moves (style guide, Stage editor):
    its Name and Goal (stored as `purpose`); On entering, one list of what happens as a task enters (its Limit, its
-   action, its rules: a row each, and one + Rule or action); While here (Owner, an Expected time, Keep warm); To leave
+   actions: the owner it changes to and what it opens or queues, its rules: a row each, then + Rule and + Action); While
+   here (Late after: the expected time); To leave
    (how tasks leave, and the requirements, always open: Responses, such as done, an OK or an answer with its name,
    question and type, and Links, such as a task, a page or a PR; each added from + Requirement's list, with a few
    presets, its kind fixed from then on). A rule sits in the phase where it acts, under its fields, with that phase's
    + Rule (stage-rules.ts stageRulesPhaseHTML); the built-in rules are one line at the end. A rule acts at once, in a
-   form over the editor, and Save saves the stage's fields alone (its Limit and action among them). An Owner can be "One of several"
-   (backend/stage_pick.py): the bots to pick from, how, a limit each, a preference and whether the pick owns the task; a
-   person sets it, and a bot's change is refused by the server. Done and Closed are not listed: every pipeline ends in them.
+   form over the editor, and Save saves the stage's fields alone (its Limit and actions among them). The owner a task
+   changes to as it enters (the stage's `owner`: a teammate, the task's assignee, or "One of several", backend/stage_pick.py:
+   the bots to pick from, how, a limit each, a preference and whether the pick owns the task) is set by a person; a bot's
+   change is refused by the server. With none set, the pipeline's manager is woken to pick one (C25). Done and Closed are not listed: every pipeline ends in them.
    It opens from a stage's header (that stage alone, its fields as the body), its rules mark (the same, at its first
    phase with rules) or
    ⋯ › Edit pipeline, for whoever may change the pipeline; anyone else who opens a stage's rules reads the same view with
@@ -42,7 +44,7 @@ interface PeState {
   only: string;
   /** The viewer may not change the pipeline (its `may_change` is false): the fields are shown off, with no Save. */
   readOnly: boolean;
-  /** On entering's row whose editor is open, as `<stage index>:limit` or `<stage index>:act`; '' for none. */
+  /** The row whose editor is open, as `<stage index>:<key>`: On entering's `limit`, `owner` or `act`, To leave's `req:<index>` or `hand`; '' for none. */
   rowOpen?: string;
 }
 
@@ -67,15 +69,25 @@ const PE_SWITCHES: Record<string, [string, string][]> = {
   page: [['at_head', 'Newest commit only'], ['with_release', 'With its release']],
   in_release: [['prereleases', 'Pre-releases count']],
 };
-/** The kinds + Requirement lists under Responses; the rest are Links. */
-const PE_RESPONSES = ['owner_done', 'ok', 'answer'];
+/** + Requirement's list, in plain words (Chris, Nov 14 mockup to-leave-requirements): an OK is a person's or a bot's (the
+ * same kind `ok`, told apart by who it names); "…" opens the new one's editor to choose. "Someone moves it by hand" is
+ * the stage's `by_hand`, shown as one more requirement. */
+const PE_REQ_PICKS: [string, string][] = [
+  ['by_hand', 'OK from anyone'], ['ok_person', 'OK from a person…'], ['ok_bot', 'OK from a bot…'], ['owner_done', 'Owner says done'], ['page', 'A page, checked by Jev…'],
+  ['answer', 'An answer…'], ['pr_open', 'PR open'], ['checks_pass', 'Checks pass'], ['pr_merged', 'PR merged'], ['in_release', 'In a release'],
+  ['linked_done', 'Linked work done'], ['related_input', 'Related input']];
+/** The picks whose new requirement opens its editor (something to choose or name); the rest are added as a row. */
+const PE_REQ_CHOOSE = ['ok_person', 'ok_bot', 'page', 'answer', 'in_release'];
+/** Kinds with nothing of their own to set: one of each is enough, so + Requirement no longer offers one that is there. */
+const PE_REQ_ONCE = ['owner_done', 'pr_open', 'checks_pass', 'pr_merged', 'linked_done', 'related_input'];
+/** By hand is an OK with nobody named (Chris, Nov 14: named approvers and by hand are the same thing). */
+const PE_BY_HAND = 'OK from anyone';
+/** The by-hand row's key in rowOpen and on its row (`<stage index>:hand`); a requirement's is `req:<index>`. */
+const PE_HAND = 'hand';
+const PE_LEAVE_NONE = 'Nothing required. Tasks move on when the next stage has room.';
 /** A stage's answer (kind `answer`): its types, and what its name looks like (task_requirements.ANSWER_NAME). */
 const PE_ANSWER_TYPES: [string, string][] = [['text', 'Text'], ['number', 'Number'], ['choice', 'Choice']];
 const PE_YES_NO = ['Yes', 'No'];
-/** + Requirement's presets: a requirement of a kind that exists, filled in as the default pipelines and their stages use
- * them (backend/pipeline_settings.py: a review page on the newest commit; answers and an OK as Product's stages ask). */
-const PE_PRESETS: [string, string][] = [['confidence', 'Confidence (0-100)'], ['yes_no', 'Yes / No answer'], ['manager_ok', "OK from the pipeline's manager"],
-  ['review_page', 'Review page, newest commit']];
 /** An answer's name from its title: "Confidence (0-100)" is confidence_0_100. */
 const peSlug = (title: string): string =>
   title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^[^a-z]+/, '').slice(0, 40).replace(/_+$/, '');
@@ -143,70 +155,150 @@ function peAnswerHTML(req: PipelineReqRec, at: string): string {
       + `<button type="button" class="ghost" data-pe-yes-no ${at}>Yes / No</button></div>` : '');
 }
 
-/** A requirement, always open (Chris, Nov 14: list them all, nothing to expand): what it needs as a plain label, its
- * name, and a quiet × last; then only the settings its kind has, and its switches on one wrapping line. A kind with no
- * settings (PR open, Checks pass) is two lines. Its kind is picked when it is added (+ Requirement), never changed. */
-function peReqHTML(state: PeState, req: PipelineReqRec, si: number, ri: number): string {
+/** To leave is one plain list of requirements (Chris, Nov 14 mockup to-leave-requirements): one line each in words
+ * ("PR open", "OK from Chris" with a face, "Page: Spec page"), the requirement mark first, a lock at the right only on
+ * one that can't be pushed past. A tap opens its small editor in place, as On entering's rows: only what its kind has
+ * (who OKs it, a page's or an answer's settings, a release's repo), Can be pushed past, and Remove. Its kind is picked
+ * when it is added (+ Requirement), never changed. "Someone moves it by hand" (the stage's by_hand) is its last row. */
+
+/** Who OKs an OK: the people or bots it names. One today (a requirement's person_id); several is the proposed backend
+ * change, the words below already read "OK from Chris or Ana". */
+const peApprovers = (req: PipelineReqRec): string[] => req.person_id ? [req.person_id] : [];
+/** "OK from Chris", "OK from Chris or Ana", "OK from Chris, Ana or Bo". */
+function peOkWords(who: string[]): string {
+  const names = who.map(w => actorLabel(w) || w);
+  return `OK from ${names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : names[0] ?? ''}`;
+}
+/** An OK from a bot (it names a bot); one naming nobody, or a person, is a person's. */
+const peOkByBot = (req: PipelineReqRec): boolean => peNeeds(req) === 'ok' && !!req.person_id?.startsWith('bot:');
+/** A requirement that can never be pushed past: by its kind (C3), or switched off. */
+const peLocked = (req: PipelineReqRec): boolean => PE_NEVER_PUSHED.includes(peNeeds(req)) || !req.can_push_past;
+
+/** A requirement in words, as its row says it. An OK naming nobody says what it asks (the default pipelines' "OK the
+ * pitch"), else who may give it. */
+function peReqText(req: PipelineReqRec): string {
+  const needs = peNeeds(req), line = req.line.trim();
+  if (needs === 'ok') {
+    const who = peApprovers(req);
+    return who.length ? peOkWords(who) : line || (req.who_oks === 'people_only' ? 'OK from a person' : 'OK from someone');
+  }
+  if (needs === 'page') return line ? `Page: ${line}` : 'A page, checked by Jev';
+  if (needs === 'answer') return line ? `Answer: ${line}` : 'An answer';
+  return line ? `${peKindName(needs)}: ${line}` : peKindName(needs);
+}
+
+/** A requirement's small editor, under its row: who OKs it (an OK: one person or one bot; a page: who OKs after Jev),
+ * its name where its kind has one (an OK's ask, a page's name, an answer's title), its kind's settings, its switches
+ * (Can be pushed past last, off and fixed on a kind that never is), and Remove. */
+function peReqEdHTML(state: PeState, req: PipelineReqRec, si: number, ri: number, id: string): string {
   const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
-  const needs = peNeeds(req);
-  const okKind = PE_OK_KINDS.includes(needs), never = PE_NEVER_PUSHED.includes(needs), answer = needs === 'answer';
-  const page = needs === 'page';
-  // A page's line is what Jev checks (S11); an answer's is its title, beside its name; on any other kind it is the
-  // requirement's name.
-  const lineName = page ? 'Jev checks' : answer ? 'Title' : 'Name';
-  const name = req.line || peKindName(needs);
-  return `<div class="pe-req" ${at}><div class="pe-req-line"><span class="pe-req-kind">${esc(peKindName(needs))}</span>`
-    + `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(lineName)}" aria-label="${esc(`${peKindName(needs)}: ${lineName}`)}" autocomplete="off">`
-    + (state.readOnly ? '' : `<button type="button" class="pe-req-x" data-pe-req-x ${at} aria-label="${esc(`Remove ${name}`)}" title="Remove">×</button>`) + '</div>'
-    // A page's person is optional: Jev checks, then that person OKs the version Jev passed.
-    + (okKind ? peRow(peF(page ? 'Then OK from' : 'From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, page ? 'Nobody' : 'Choose')}</select>`)
-      + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`)) : '')
-    + (answer ? peAnswerHTML(req, at) : '')
-    + (needs === 'in_release' ? peRow(peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`)
-      + peF('Release with', `<input data-pe-rf="release_with" ${at} maxlength="120" value="${esc(String(req.settings['release_with'] ?? ''))}" placeholder="workflow:release.yml or tag" autocomplete="off">`)) : '')
-    + '<div class="pe-req-sw">' + (PE_SWITCHES[needs] ?? []).map(([key, label]) => {
-      const on = needs === 'in_release' && key === 'prereleases' ? req.settings[key] !== false : req.settings[key] === true;
-      return `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${on ? ' checked' : ''}> ${esc(label)}</label>`;
-    }).join('')
-    + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
-    + '</div></div>';
+  const needs = peNeeds(req), never = PE_NEVER_PUSHED.includes(needs), page = needs === 'page', answer = needs === 'answer';
+  const line = (label: string, placeholder: string): string =>
+    peF(label, `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(placeholder)}" autocomplete="off">`);
+  const whoOks = peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`);
+  let fields = '';
+  if (needs === 'ok') {
+    // one person (or "Any person": nobody named) or one bot; a bot's OK names a bot, so it has no empty choice
+    const bot = peOkByBot(req);
+    const from = bot ? peChoice(peBots(), req.person_id, '').replace(/^<option value="">.*?<\/option>/, '') : peChoice(pePeople(), req.person_id, 'Any person');
+    fields = peF('From', `<select data-pe-rf="person_id" ${at}>${from}</select>`)
+      // several named people, the first to OK meets it: not on the server yet
+      + (bot ? '' : `<button type="button" class="ghost pe-add pe-soon-b" disabled>+ Person${PE_SOON}</button>` + whoOks) + line('Asks', 'OK');
+  } else if (page) {
+    // a page's person is optional: Jev checks, then that person OKs the version Jev passed
+    fields = line('Page', 'Review page')
+      + peF('Then OK from', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, 'Nobody')}</select>`) + whoOks;
+  } else if (answer) fields = line('Title', 'Confidence (0-100)') + peAnswerHTML(req, at);
+  else if (needs === 'in_release') {
+    fields = peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`)
+      + peF('Release with', `<input data-pe-rf="release_with" ${at} maxlength="120" value="${esc(String(req.settings['release_with'] ?? ''))}" placeholder="workflow:release.yml or tag" autocomplete="off">`);
+  }
+  const switches = (PE_SWITCHES[needs] ?? []).map(([key, label]) => {
+    const on = needs === 'in_release' && key === 'prereleases' ? req.settings[key] !== false : req.settings[key] === true;
+    return `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${on ? ' checked' : ''}> ${esc(label)}</label>`;
+  }).join('') + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`;
+  return `<div class="pe-row-ed pe-req-ed" id="${esc(id)}">${fields}<div class="pe-req-sw">${switches}</div>`
+    + (state.readOnly ? '' : `<button type="button" class="ghost pe-row-x" data-pe-row-x="req:${ri}" ${at}>Remove</button>`) + '</div>';
+}
+
+/** One row of To leave (a requirement's, `req:<index>`, or by hand's), On entering's row look (stage-rules.ts
+ * stageRuleRowHTML): the requirement mark, its words, an OK's faces, the lock; its editor under it when open. */
+function peLeaveRowHTML(state: PeState, stage: PipelineStageRec, si: number, sid: string, key: string): string {
+  const at = `data-pe-si="${si}"`, slug = `${sid}-${key.replace(':', '-')}`;
+  const id = `pe-ed-${slug}`, open = !state.readOnly && state.rowOpen === `${si}:${key}`;
+  const how = state.readOnly ? 'disabled' : `data-pe-row="${key}" ${at} aria-expanded="${open}" aria-controls="${esc(id)}"`;
+  const base = {key: slug, attrs: `data-pe-leave-row="${key}" ${at}`, icon: SR_ROW_ICONS.req, open: how};
+  if (key === PE_HAND) {
+    return stageRuleRowHTML({...base, text: PE_BY_HAND, below: open ? `<div class="pe-row-ed" id="${esc(id)}">`
+      // a person's request filed into a by-hand stage moves on by itself when the next stage has room
+      + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-sf="requests_move_on" ${at}${stage.requests_move_on ? ' checked' : ''}> A person's request moves on</label>`
+      + `<button type="button" class="ghost pe-row-x" data-pe-row-x="${PE_HAND}" ${at}>Remove</button></div>` : ''});
+  }
+  const ri = Number(key.slice('req:'.length)), req = stage.requirements[ri];
+  if (!req) return '';
+  const who = PE_OK_KINDS.includes(peNeeds(req)) ? peApprovers(req) : [];
+  return stageRuleRowHTML({...base, text: peReqText(req), below: open ? peReqEdHTML(state, req, si, ri, id) : '',
+    after: who.length ? `<span class="pe-faces" aria-hidden="true">${who.map(w => actorAvatar(w, 18)).join('')}</span>` : '',
+    marks: peLocked(req) ? srMarkHTML('pe-m-lock', SR_ROW_ICONS.lock, "Can't be pushed past", 'data-pe-lock') : ''});
+}
+/** To leave's list: a row per requirement, the by-hand row last, then + Requirement; with none, the one line that says
+ * what then happens (task_engine.advance: the task moves when the next stage has room). Read only, nothing opens. */
+function peLeaveHTML(state: PeState, stage: PipelineStageRec, si: number, sid: string): string {
+  const keys = [...stage.requirements.map((_, ri) => `req:${ri}`), ...(stage.by_hand ? [PE_HAND] : [])];
+  const rows = keys.map(k => peLeaveRowHTML(state, stage, si, sid, k)).join('');
+  return `<div class="pe-list">${rows ? `<ul class="sr-list pe-leave-list">${rows}</ul>` : `<p class="pe-none muted">${esc(PE_LEAVE_NONE)}</p>`}`
+    + (state.readOnly ? '' : `<div class="pe-adds"><button type="button" class="ghost pe-add" data-pe-req-add data-pe-si="${si}" aria-haspopup="menu" aria-expanded="false">+ Requirement</button></div>`)
+    // the rules that act as a task leaves follow it, as each phase's rules follow its fields
+    + stageRulesPhaseHTML(state.id, stage, 'leave') + '</div>';
+}
+/** A field of a requirement changed without a redraw: its row says it at once (words, faces, lock), its editor kept. */
+function peLeaveSay(state: PeState, si: number, ri: number): void {
+  const stage = state.draft.stages[si];
+  const btn = document.querySelector<HTMLElement>(`#pe-body [data-pe-leave-row="req:${ri}"][data-pe-si="${si}"] > .sr-line > .sr-open`);
+  if (!stage || !btn) return;
+  const made = document.createElement('template');
+  made.innerHTML = peLeaveRowHTML({...state, rowOpen: ''}, stage, si, '-', `req:${ri}`);
+  const fresh = made.content.querySelector('.sr-open');
+  if (!fresh) return;
+  // the row button keeps its own attributes (its editor's id, aria-expanded): only what it says changes, and the marks
+  btn.innerHTML = fresh.innerHTML;
+  btn.title = fresh.getAttribute('title') ?? '';
+  btn.parentElement?.querySelector(':scope > .sr-marks')?.remove();
+  const marks = made.content.querySelector('.sr-marks');
+  if (marks) btn.after(marks);
 }
 
 /** A new requirement of a kind (or a GitHub condition), as + Requirement adds it: its own settings, who OKs it, and
- * whether it can be pushed past. */
-function peReqNew(kind: string, line = ''): PipelineReqRec {
+ * whether it can be pushed past. A person's OK starts on the person editing (a person), else the first person; a bot's
+ * on the pipeline's manager, else the first bot. */
+function peReqNew(state: PeState, pick: string): PipelineReqRec {
+  const kind = pick === 'ok_person' || pick === 'ok_bot' ? 'ok' : pick;
   const github = PE_GITHUB.includes(kind), ok = PE_OK_KINDS.includes(kind);
+  const me = S.me?.id ? 'human:' + S.me.id : '';
+  const person = pick === 'ok_person' ? (pePeople().some(p => p.id === me) ? me : pePeople()[0]?.id ?? null)
+    : pick === 'ok_bot' ? (state.draft.manager_id ? prActor(state.draft.manager_id) : peBots()[0]?.id ?? null) : null;
   return {kind: github ? 'item' : kind, source: github ? 'github' : null, condition: github ? kind : null,
-    settings: kind === 'answer' ? {type: 'text', ...(peSlug(line) ? {name: peSlug(line)} : {})} : {},
-    can_push_past: !PE_NEVER_PUSHED.includes(kind), who_oks: ok ? 'people_with_exceptions' : 'none', person_id: null, line, choices: null};
+    settings: kind === 'answer' ? {type: 'text'} : {},
+    can_push_past: !PE_NEVER_PUSHED.includes(kind), who_oks: ok ? 'people_with_exceptions' : 'none', person_id: person, line: '', choices: null};
 }
-/** A preset: a requirement of a kind that exists, filled in (PE_PRESETS). */
-function peReqPreset(state: PeState, id: string): PipelineReqRec | null {
-  if (id === 'confidence') { const r = peReqNew('answer', 'Confidence (0-100)'); r.settings = {...r.settings, type: 'number', min: 0, max: 100}; return r; }
-  if (id === 'yes_no') { const r = peReqNew('answer', 'Yes or no'); r.settings = {...r.settings, type: 'choice'}; r.choices = [...PE_YES_NO]; return r; }
-  if (id === 'manager_ok') {
-    if (!state.draft.manager_id) return null;   // not offered without a manager (pePresets)
-    const r = peReqNew('ok', 'OK'); r.person_id = prActor(state.draft.manager_id); return r;
-  }
-  if (id === 'review_page') { const r = peReqNew('page', 'Review page'); r.settings = {at_head: true}; return r; }
-  return null;
+/** What + Requirement offers this stage now: every kind, less one of the plain kinds it has already and by hand when it
+ * is set. A bot's OK only where there is a bot. */
+function peReqPicks(stage: PipelineStageRec): [string, string][] {
+  const have = new Set(stage.requirements.map(peNeeds));
+  return PE_REQ_PICKS.filter(([k]) => !(PE_REQ_ONCE.includes(k) && have.has(k)) && !(k === 'by_hand' && stage.by_hand)
+    && !(k === 'ok_bot' && !peBots().length) && !(k === 'ok_person' && !pePeople().length));
 }
-/** The presets this pipeline can take: OK from the pipeline's manager only when it has one (an OK with nobody named is
- * refused on save). */
-const pePresets = (state: PeState): [string, string][] => PE_PRESETS.filter(([k]) => k !== 'manager_ok' || !!state.draft.manager_id);
-/** + Requirement's pick list, beside the button (the shared menu look, .tl-pop): Responses, Links and Presets. Arrow keys
+/** + Requirement's pick list, beside the button (the shared menu look, .tl-pop), one list in plain words. Arrow keys
  * move, Esc closes it and the button has the focus back; a second click on the button closes it; on a phone it is a
  * sheet of 44 px rows. */
 function peReqPickOpen(state: PeState, button: HTMLElement): void {
-  const si = button.dataset['peSi'] ?? '', at = `data-pe-si="${si}"`;
-  const item = (attr: string, label: string): string => `<button type="button" class="tl-mi" role="menuitem" ${attr} ${at}>${esc(label)}</button>`;
-  const group = (label: string, items: string): string => `<div class="tl-menu-h" aria-hidden="true">${esc(label)}</div>${items}`;
+  const si = peIndex(button, 'peSi'), stage = state.draft.stages[si];
+  if (!stage) return;
   pePickOpen(button, 'pe-req-pick', 'data-pe-req-add', `<div class="tl-menu" role="menu" aria-label="Add a requirement">`
-    + group('Responses', PE_KINDS.filter(([k]) => PE_RESPONSES.includes(k)).map(([k, l]) => item(`data-pe-req-kind="${k}"`, l)).join(''))
-    + group('Links', PE_KINDS.filter(([k]) => !PE_RESPONSES.includes(k)).map(([k, l]) => item(`data-pe-req-kind="${k}"`, l)).join(''))
-    + group('Presets', pePresets(state).map(([k, l]) => item(`data-pe-req-preset="${k}"`, l)).join('')) + '</div>');
+    + peReqPicks(stage).map(([k, l]) => `<button type="button" class="tl-mi" role="menuitem" data-pe-req-kind="${k}" data-pe-si="${si}">${esc(l)}</button>`).join('')
+    + peSoonItem('A question Jev answers…') + peSoonItem('In your own words…') + '</div>');
 }
-/** A stage's add button's pick list (+ Requirement, + Rule or action), beside it: the popover `id` in the dialog, made
+/** A stage's add button's pick list (+ Requirement, On entering's + Rule and + Action), beside it: the popover `id` in the dialog, made
  * once, with the menu's HTML. A second click on the button (`attr`) closes it; closed, the button has the focus back. */
 function pePickOpen(button: HTMLElement, id: string, attr: string, menu: string): void {
   const dialog = button.closest('dialog');
@@ -238,12 +330,28 @@ function pePickOpen(button: HTMLElement, id: string, attr: string, menu: string)
 }
 
 /** On entering is one list (Chris, Nov 14: "on entering rules and actions … limit is just another rule"): the Limit,
-    the action, then the rules that act as a task enters, one row each (stage-rules.ts stageRuleRowHTML), and one add
-    button. Stored as before: the stage's task_limit, and its on_enter {}, {file_into: id} or {act: 'github.queue'}. The
-    first stage has no Limit (tasks start there). */
-const PE_THEN_INTO = 'Open a linked task in…', PE_THEN_QUEUE = 'Add its PRs to the merge queue';
-/** The leading marks of On entering's own rows (icon subset: ui/vendor/fonts/icons.txt). */
-const PE_ENTER_ICONS: Record<string, string> = {limit: 'vertical_align_top', file_into: 'open_in_new', queue: 'merge', act: 'bolt'};
+    the actions (the owner it changes to: "tasks have owners … changing the owner is just another action that can occur
+    when they enter a stage"; then what it opens or queues), then the rules that act as a task enters, one row each
+    (stage-rules.ts stageRuleRowHTML), then + Rule (a rule, or the Limit: Chris, "limit is just another rule") and
+    + Action. Stored as before: the stage's task_limit, its owner (and pick),
+    and its on_enter {}, {file_into: id} or {act: 'github.queue'}. The first stage has no Limit (tasks start there). */
+const PE_THEN_INTO = 'Open a linked task in…', PE_THEN_QUEUE = 'Add its PRs to the merge queue', PE_THEN_OWNER = 'Change the owner…';
+/** The owner a task changes to as it enters, as its row says it; null for none set. One of several names its first two
+    bots, how many more, and how it picks. */
+function peOwnerOf(stage: PipelineStageRec): {text: string} | null {
+  if (!stage.owner) return null;
+  if (stage.owner === PE_ASSIGNEE) return {text: "Change the owner to the task's assignee"};
+  if (stage.owner === PE_PICK) {
+    const bots = (stage.pick?.bots ?? []).map(b => actorLabel(b) || b);
+    const names = bots.length ? `: ${bots.slice(0, 2).join(', ')}${bots.length > 2 ? ` +${bots.length - 2}` : ''}` : '';
+    const how = stage.pick?.how === 'random' ? 'at random' : 'takes turns';
+    return {text: `Change the owner to one of several${names} · ${how}`};
+  }
+  return {text: `Change the owner to ${actorLabel(stage.owner) || stage.owner}`};
+}
+/** Who a stage's owner can be: the task's assignee, One of several, a bot, a person. */
+const peOwners = (): {id: string; name: string}[] =>
+  [{id: PE_ASSIGNEE, name: "The task's assignee"}, {id: PE_PICK, name: 'One of several'}, ...peBots(), ...pePeople()];
 /** A Limit the add button starts with; its editor opens, the number chosen, to type over. */
 const PE_LIMIT_NEW = 3;
 const peLimitText = (n: number | null): string => n ? `At most ${n} task${n === 1 ? '' : 's'} at once` : 'No limit';
@@ -258,11 +366,16 @@ function peActOf(state: PeState, stage: PipelineStageRec): {kind: string; text: 
   if (act === 'github.queue') return {kind: 'queue', text: PE_THEN_QUEUE};
   return typeof act === 'string' && act ? {kind: 'act', text: act} : null;
 }
-/** A row's small editor, opened in place under it: the Limit's number, or the action and its Pipeline; Remove last. */
-function peEnterEdHTML(state: PeState, stage: PipelineStageRec, row: 'limit' | 'act', at: string, id: string): string {
+/** A row's small editor, opened in place under it: the Limit's number; the Owner, with One of several's controls under
+    it; or the action and its Pipeline. Remove last on the first line. */
+function peEnterEdHTML(state: PeState, stage: PipelineStageRec, row: 'limit' | 'owner' | 'act', at: string, id: string): string {
   const opt = (value: string, label: string, on: boolean): string => `<option value="${esc(value)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
   const x = `<button type="button" class="ghost pe-row-x" data-pe-row-x="${row}" ${at}>Remove</button>`;
   if (row === 'limit') return `<div class="pe-row-ed" id="${esc(id)}">${peF('Tasks at once', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}">`, 'short')}${x}</div>`;
+  // no empty choice: none set is no row (Remove)
+  const owners = peChoice(peOwners(), stage.owner, '').replace(/^<option value="">.*?<\/option>/, '');
+  if (row === 'owner') return `<div class="pe-row-ed" id="${esc(id)}">${peF('Owner', `<select data-pe-sf="owner" ${at}>${owners}</select>`)}${x}`
+    + (stage.owner === PE_PICK ? pePickHTML(state, stage, at) : '') + '</div>';
   const into = typeof stage.on_enter['file_into'] === 'string' ? stage.on_enter['file_into'] : null;
   const queue = stage.on_enter['act'] === 'github.queue';
   // Open a linked task in… only where there is another pipeline to open it in (or it is the action already)
@@ -271,51 +384,70 @@ function peEnterEdHTML(state: PeState, stage: PipelineStageRec, row: 'limit' | '
   const pipe = into !== null ? peF('Pipeline', `<select data-pe-sf="on_enter" ${at}>${peIntoTargets(state, into).map(p => opt('file_into:' + p.id, p.name, p.id === into)).join('')}</select>`) : '';
   return `<div class="pe-row-ed" id="${esc(id)}">${peF('Then', kind)}${pipe}${x}</div>`;
 }
-/** What + Rule or action can add to a stage now: a Rule (where the viewer may add one, on a saved stage), a Limit (none
-    set, not the first stage) and an action (none set; the stage stores one). Read only, rules alone. */
+/** What + Rule and + Action can add to a stage now: a Rule (where the viewer may add one, on a saved stage), a Limit (none
+    set, not the first stage), a change of owner (none set) and an action (none set; the stage stores one). Read only,
+    rules alone. */
 function peEnterPicks(state: PeState, stage: PipelineStageRec, si: number): [string, string][] {
   const ed = SR_ED, out: [string, string][] = [];
-  if (stage.id && ed?.pipelineId === state.id && ed.list?.may_add) out.push(['rule', 'Rule']);
+  if (stage.id && ed?.pipelineId === state.id && ed.list?.may_add) out.push(['rule', "The owner's team…"]);
   if (state.readOnly) return out;
   if (si > 0 && !stage.task_limit) out.push(['limit', 'Limit']);
+  if (!stage.owner) out.push(['owner', PE_THEN_OWNER]);
   if (!peActOf(state, stage)) {
     if (peIntoTargets(state, '').length) out.push(['file_into', PE_THEN_INTO]);
     out.push(['queue', PE_THEN_QUEUE]);
   }
   return out;
 }
-/** The add button's words: what it can add ("+ Rule" when that is all). */
-const peEnterAddWords = (picks: [string, string][]): string => picks.every(([k]) => k === 'rule') ? '+ Rule' : '+ Rule or action';
-/** On entering's list: the Limit row, the action row, the rules (stage-rules.ts), then + Rule or action. A row opens its
+/** Which add button offers a pick: + Rule a Rule and the Limit (a limit is a rule too), + Action the actions. */
+const PE_RULE_PICKS = ['rule', 'limit'];
+const peEnterGroup = (picks: [string, string][], add: string): [string, string][] =>
+  picks.filter(([k]) => PE_RULE_PICKS.includes(k) === (add === 'rule'));
+/** On entering's list: the Limit row, the action rows (the owner, then what it opens or queues), the rules
+    (stage-rules.ts), then + Rule and + Action side by side, each there while it has something to add. A row opens its
     editor in place; read only, the rows are shown with nothing to open. */
 function peEnterHTML(state: PeState, stage: PipelineStageRec, si: number, sid: string): string {
   const at = `data-pe-si="${si}"`;
-  const row = (kind: 'limit' | 'act', icon: string, text: string): string => {
+  const row = (kind: 'limit' | 'owner' | 'act', icon: string, text: string): string => {
     const id = `pe-ed-${sid}-${kind}`, open = !state.readOnly && state.rowOpen === `${si}:${kind}`;
     return stageRuleRowHTML({key: `${sid}-${kind}`, attrs: `data-pe-enter-row="${kind}" ${at}`, icon, text,
       open: state.readOnly ? 'disabled' : `data-pe-row="${kind}" ${at} aria-expanded="${open}" aria-controls="${esc(id)}"`,
       below: open ? peEnterEdHTML(state, stage, kind, at, id) : ''});
   };
-  const act = peActOf(state, stage);
-  const rows = (si > 0 && stage.task_limit ? row('limit', PE_ENTER_ICONS['limit']!, peLimitText(stage.task_limit)) : '')
-    + (act ? row('act', PE_ENTER_ICONS[act.kind]!, act.text) : '');
+  // the rules first (the Limit, then the rules that act as a task enters), then the actions: one mark for each kind
+  const act = peActOf(state, stage), owner = peOwnerOf(stage);
+  const limit = si > 0 && stage.task_limit ? row('limit', SR_ROW_ICONS.rule, peLimitText(stage.task_limit)) : '';
+  const acts = (owner ? row('owner', SR_ROW_ICONS.act, owner.text) : '') + (act ? row('act', SR_ROW_ICONS.act, act.text) : '');
   const picks = peEnterPicks(state, stage, si);
-  return `<div class="pe-list">${rows ? `<ul class="sr-list pe-enter-list">${rows}</ul>` : ''}${stageRulesPhaseHTML(state.id, stage, 'enter')}`
-    + (picks.length ? `<button type="button" class="ghost pe-add" data-pe-enter-add ${at} aria-haspopup="menu" aria-expanded="false">${peEnterAddWords(picks)}</button>` : '') + '</div>';
+  // + Rule goes straight to a new rule when that is all it offers; with a Limit to add too, it lists both
+  const add = (kind: string, words: string): string => {
+    const of = peEnterGroup(picks, kind);
+    if (!of.length) return '';
+    const menu = of.length > 1 || of[0]![0] !== 'rule' ? ' aria-haspopup="menu" aria-expanded="false"' : '';
+    return `<button type="button" class="ghost pe-add" data-pe-enter-add="${kind}" ${at}${menu}>${words}</button>`;
+  };
+  const adds = add('rule', '+ Rule') + add('act', '+ Action');
+  return `<div class="pe-list">${limit ? `<ul class="sr-list pe-enter-list">${limit}</ul>` : ''}${stageRulesPhaseHTML(state.id, stage, 'enter')}`
+    + (acts ? `<ul class="sr-list pe-enter-list pe-acts">${acts}</ul>` : '')
+    // what the server does with no owner set (task_engine.owner_for): the stage has nobody and the manager is woken to pick
+    + (owner ? '' : '<p class="pe-none muted" data-pe-no-owner>No owner set: the manager picks one.</p>') + (adds ? `<div class="pe-adds">${adds}</div>` : '') + '</div>';
 }
-/** + Rule or action's pick list (as + Requirement's): only what the stage can take now (peEnterPicks). */
+/** + Rule's or + Action's pick list (as + Requirement's): only what the stage can take now (peEnterPicks). */
 function peEnterPickOpen(state: PeState, button: HTMLElement): void {
-  const si = peIndex(button, 'peSi'), stage = state.draft.stages[si];
+  const si = peIndex(button, 'peSi'), stage = state.draft.stages[si], kind = button.dataset['peEnterAdd'] ?? '';
   if (!stage) return;
-  const items = peEnterPicks(state, stage, si).map(([k, l]) => `<button type="button" class="tl-mi" role="menuitem" data-pe-enter-pick="${k}" data-pe-si="${si}">${esc(l)}</button>`);
-  pePickOpen(button, 'pe-enter-pick', 'data-pe-enter-add', `<div class="tl-menu" role="menu" aria-label="Add on entering">${items.join('')}</div>`);
+  const items = peEnterGroup(peEnterPicks(state, stage, si), kind)
+    .map(([k, l]) => `<button type="button" class="tl-mi" role="menuitem" data-pe-enter-pick="${k}" data-pe-si="${si}">${esc(l)}</button>`);
+  pePickOpen(button, `pe-${kind}-pick`, `data-pe-enter-add="${kind}"`,
+    `<div class="tl-menu" role="menu" aria-label="${kind === 'rule' ? 'Add a rule' : 'Add an action'}">${items.join('')}${kind === 'rule' ? peSoonItem('A question Jev answers…') + peSoonItem('In your own words…') : ''}</div>`);
 }
-/** A Limit typed, or a Pipeline picked: its row says it at once (the editor stays open; a redraw would take the focus). */
-function peEnterSay(state: PeState, si: number, kind: 'limit' | 'act'): void {
+/** A Limit typed, an owner or a bot of several picked, or a Pipeline picked: its row says it at once (the editor stays
+    open; a redraw would take the focus). */
+function peEnterSay(state: PeState, si: number, kind: 'limit' | 'owner' | 'act'): void {
   const stage = state.draft.stages[si];
   const btn = document.querySelector<HTMLElement>(`#pe-body [data-pe-enter-row="${kind}"][data-pe-si="${si}"] .sr-open`);
   if (!stage || !btn) return;
-  const text = kind === 'limit' ? peLimitText(stage.task_limit) : peActOf(state, stage)?.text ?? '';
+  const text = kind === 'limit' ? peLimitText(stage.task_limit) : (kind === 'owner' ? peOwnerOf(stage) : peActOf(state, stage))?.text ?? '';
   btn.title = text;
   const said = btn.querySelector('.sr-text');
   if (said) said.textContent = text;
@@ -372,17 +504,44 @@ function pePickNextHTML(state: PeState, stage: PipelineStageRec): string {
 
 /** A stage's phases (style guide, Stage editor): a heading with a small leading mark, then what happens there. Icons
     from the subset (ui/vendor/fonts/icons.txt): On entering's login pairs with To leave's logout. */
-const PE_PHASE_ICONS: Record<SrPhase, [string, string]> = {enter: ['login', 'On entering'], here: ['schedule', 'While here'], leave: ['logout', 'To leave']};
+const PE_PHASE_ICONS: Record<SrPhase, [string, string]> = {enter: ['login', 'On entering'], here: ['schedule', 'While here'], leave: ['logout', 'To leave'], more: ['gavel', 'More rules']};
+
+/** "Soon": a small quiet pill beside something drawn as it will be but not working yet (Chris, Nov 14). */
+const PE_SOON = '<span class="pill soon">Soon</span>';
+/** A pick list's row for something not ready: shown, off, with Soon. */
+const peSoonItem = (label: string): string => `<button type="button" class="tl-mi pe-mi-soon" role="menuitem" aria-disabled="true" disabled>${esc(label)}${PE_SOON}</button>`;
+
+/** Stages whose More rules is open (by its id in the page): kept across the editor's redraws. */
+const PE_MORE_OPEN = new Set<string>();
+/** More rules: one shut line at the end of a stage that opens the rules that act on neither entering nor a timer (a
+    bot's snooze, + Rule) and, after them, the built-in ones (read only). */
+function peMoreHTML(state: PeState, stage: PipelineStageRec, sid: string): string {
+  if (!stage.id) return '';
+  const [icon, label] = PE_PHASE_ICONS.more, on = PE_MORE_OPEN.has(sid), body = `pe-more-${sid}`;
+  return `<section class="pe-phase pe-more" data-pe-phase="more">`
+    + `<button type="button" class="pe-h pe-phase-h pe-more-h" id="pe-ph-${esc(sid)}-more" data-pe-more="${esc(sid)}" aria-expanded="${on}" aria-controls="${esc(body)}">`
+    + `<span class="nav-icon" aria-hidden="true">${icon}</span>${label}<span class="sr-cx" aria-hidden="true">›</span></button>`
+    + `<div class="pe-more-body" id="${esc(body)}"${on ? '' : ' hidden'}>${stageRulesPhaseHTML(state.id, stage, 'more')}${stageRulesPhaseHTML(state.id, stage, 'always')}</div></section>`;
+}
+/** A click on More rules opens or shuts it. True when the click was its. */
+function peMoreClick(ev: Event): boolean {
+  const btn = eventElement(ev)?.closest<HTMLElement>('[data-pe-more]');
+  if (!btn) return false;
+  const sid = btn.dataset['peMore'] ?? '', on = !PE_MORE_OPEN.has(sid), body = document.getElementById(btn.getAttribute('aria-controls') ?? '');
+  if (on) PE_MORE_OPEN.add(sid); else PE_MORE_OPEN.delete(sid);
+  btn.setAttribute('aria-expanded', String(on));
+  if (body) body.hidden = !on;
+  return true;
+}
 
 /** A stage, as its phases in the order a task moves (spec "A stage picks its owner from several", 1): its name and goal;
-    On entering, one list (its Limit, its action, the rules that act as a task enters) and one add button; While here
-    (Owner, Expected time, Keep warm) and the rules that act while it is there; To leave (how tasks leave, then the
+    On entering, one list (its Limit, its actions, the rules that act as a task enters), + Rule and + Action; While here
+    (Late after: the stage's expected time; a stage's own keep-warm hours stay stored and are set through the API) and the rules that act while it is there; To leave (how tasks leave, then the
     requirements); then the built-in rules in one line. Read only, the fields are off and nothing is added or removed;
     the rules still open to be read. */
 function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count: number): string {
   const at = `data-pe-si="${si}"`;
   const ex = peExpected(stage.expected_minutes);
-  const owners = [{id: PE_ASSIGNEE, name: 'Whoever it is assigned to'}, {id: PE_PICK, name: 'One of several'}, ...peBots(), ...pePeople()];
   const picks = stage.owner === PE_PICK;
   // the fields are off for a viewer who may not change the pipeline; the rules beside them are not (they open to read)
   const ro = (html: string): string => state.readOnly ? `<fieldset class="pe-ro" disabled>${html}</fieldset>` : html;
@@ -398,25 +557,17 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
       // the stage's goal, stored as `purpose`
       + peF('Goal', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`)))
     + phase('enter', '', peEnterHTML(state, stage, si, sid))
-    // Owner takes a phone's whole row (its name is long); Expected time and Keep warm share the next
-    + phase('here', peRow(peF('Owner', `<select data-pe-sf="owner" ${at}>${peChoice(owners, stage.owner, 'Not set')}</select>`, 'owner')
-      + `<div class="pe-f pe-f-time"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
-      + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`
-      // Empty: the pipeline's hours.
-      + peF('Keep warm (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-sf="keep_warm_hours" ${at} value="${stage.keep_warm_hours ?? ''}" placeholder="${state.draft.keep_warm_hours ?? 8}">`, 'short'))
-      + (picks ? pePickHTML(state, stage, at) : ''))
-    + phase('leave', `<div class="pe-f"><span>Tasks leave</span>${peSeg('by_hand', 'Tasks leave', [['0', 'When requirements are met'], ['1', 'By hand']], stage.by_hand ? '1' : '0', at)}</div>`
-      // A by-hand stage only: whether a task a person files there moves on by itself when the next stage has room.
-      + (stage.by_hand ? `<label class="pe-check"><input type="checkbox" role="switch" data-pe-sf="requests_move_on" ${at}${stage.requests_move_on ? ' checked' : ''}> A person's request moves on</label>` : '')
-      + `<div class="pe-reqs">${stage.requirements.map((req, ri) => peReqHTML(state, req, si, ri)).join('')}</div>`
-      + (state.readOnly ? '' : `<button type="button" class="ghost pe-add" data-pe-req-add ${at} aria-haspopup="menu" aria-expanded="false">+ Requirement</button>`))
-    + stageRulesPhaseHTML(state.id, stage, 'always');
+    + phase('here', peRow(`<div class="pe-f pe-f-time"><span>Late after</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="Never" aria-label="Late after">`
+      + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`))
+    + phase('leave', '', peLeaveHTML(state, stage, si, sid))
+    // rules that answer something else than entering or a timer (a bot's snooze): their When is this place
+    + peMoreHTML(state, stage, sid);
   // One stage's editor (its name is the dialog's title): the stage's fields are the body, nothing to collapse or move.
   if (state.only && stage.id === state.only) return `<div class="pe-stage pe-stage-one" ${at}><div class="pe-stage-body">${inner}</div></div>`;
   // The closed row: its name, who owns it ("One of 2" for a stage that picks), and how many requirements it has to leave
   // (named when pointed at).
   const owner = stage.owner === PE_ASSIGNEE || picks ? '' : stage.owner;
-  const reqs = stage.requirements.map(r => r.line || peKindName(r.kind));
+  const reqs = [...stage.requirements.map(peReqText), ...(stage.by_hand ? [PE_BY_HAND] : [])];
   const pool = stage.pick?.bots ?? [];
   const meta = `<span class="pe-stage-meta">`
     + (reqs.length ? `<span class="pe-stage-reqs" title="${esc(reqs.join(', '))}" aria-label="${reqs.length} to leave">✓ ${reqs.length}</span>` : '')
@@ -447,7 +598,7 @@ function peBodyHTML(state: PeState): string {
     // An empty prefix shows the pipeline's first letter as the example.
     + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short')
     // Hours an active task's session is kept warm after its last work (backend/keep_warm.py); 0 is off.
-    + peF('Keep warm (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 8}">`, 'short'));
+    + peF('Keep bot sessions ready (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 8}">`, 'short'));
   // One stage's editor (opened from its header): that stage alone, with no pipeline fields, + Stage or moves.
   const one = state.only ? d.stages.findIndex(s => s.id === state.only) : -1;
   const stages = one >= 0 ? peStageHTML(state, d.stages[one]!, one, d.stages.length)
@@ -492,6 +643,9 @@ function peDraw(state: PeState): void {
 // ---------------------------------------------------------------- editing the draft
 
 const peIndex = (el: HTMLElement, key: string): number => Number(el.dataset[key] ?? -1);
+/** A stage's row by its key: On entering's (`limit`, `owner`, `act`) or To leave's (`req:<index>`, `hand`). */
+const peRowEl = (si: number, key: string): HTMLElement | null => document.querySelector<HTMLElement>(
+  `#pe-body [data-pe-${key === PE_HAND || key.startsWith('req:') ? 'leave' : 'enter'}-row="${key}"][data-pe-si="${si}"]`);
 
 /** A field changed: the draft follows it. A change that alters what the panel shows (an owner of several, an answer's
  * type) draws again; a stage's name is written in place (its row, or one stage's dialog title). */
@@ -519,7 +673,11 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
       stage.owner = value || null;
       if (value === PE_PICK) stage.pick = stage.pick ?? pePickFresh();
       else { delete stage.pick; delete stage.pick_next; }
-      if ((was === PE_PICK) !== (value === PE_PICK)) peDraw(state);
+      if ((was === PE_PICK) !== (value === PE_PICK)) {
+        // its controls come or go (and the row's mark): the keyboard stays on the Owner
+        peDraw(state);
+        document.querySelector<HTMLElement>(`#pe-body [data-pe-sf="owner"][data-pe-si="${peIndex(el, 'peSi')}"]`)?.focus();
+      } else peEnterSay(state, peIndex(el, 'peSi'), 'owner');
     }
     else if (sf === 'requests_move_on') stage.requests_move_on = checked;
     else if (sf === 'on_enter') { stage.on_enter = peOnEnter(value); peEnterSay(state, peIndex(el, 'peSi'), 'act'); }
@@ -561,6 +719,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
       const on = new Set(checked ? [...pick.bots, bot] : pick.bots.filter(b => b !== bot));
       const shown = peBots().map(b => b.id);
       pick.bots = [...shown.filter(b => on.has(b)), ...[...on].filter(b => !shown.includes(b))];
+      peEnterSay(state, peIndex(el, 'peSi'), 'owner');
     }
     else if (pk === 'limit_each') pick.limit_each = Number(value) > 0 ? Math.round(Number(value)) : null;
     else if (pk === 'owns_task') pick.owns_task = checked;
@@ -582,7 +741,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     const name = req.kind === 'answer' ? String(req.settings['name'] ?? '') : null;
     if (name !== null && (!name || name === peSlug(req.line))) {
       req.settings = peSetting(req.settings, 'name', peSlug(value) || null);
-      const box = el.closest('.pe-req')?.querySelector<HTMLInputElement>('[data-pe-rf="answer_name"]');
+      const box = el.closest('.pe-req-ed')?.querySelector<HTMLInputElement>('[data-pe-rf="answer_name"]');
       if (box) box.value = peSlug(value);
     }
     req.line = value;
@@ -607,6 +766,8 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   else if (rf === 'person_id') req.person_id = value || null;
   else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
   else if (rf === 'can_push_past') req.can_push_past = checked;
+  // what the row says follows: an OK's name and face, a page's or an answer's title, the lock
+  if (['line', 'person_id', 'who_oks', 'can_push_past'].includes(rf)) peLeaveSay(state, peIndex(el, 'peSi'), peIndex(el, 'peRi'));
 }
 
 /** The On enter choice as the record stores it. */
@@ -669,10 +830,7 @@ function peClick(state: PeState, target: Element): void {
   if (!stage) return;
   const seg = el.dataset['peSeg'], v = el.dataset['v'] ?? '';
   if (seg && el.hasAttribute('data-pe-seg')) {
-    if (seg === 'by_hand') {
-      stage.by_hand = v === '1';
-      if (!stage.by_hand) stage.requests_move_on = false;
-    } else if (seg === 'pick_how' && stage.pick && (v === 'turns' || v === 'random')) stage.pick.how = v;
+    if (seg === 'pick_how' && stage.pick && (v === 'turns' || v === 'random')) stage.pick.how = v;
     else if (seg === 'pick_prefer' && stage.pick && (v === 'anyone' || v === 'new' || v === 'family')) stage.pick.prefer = v;
     peDraw(state);
     // The redraw replaces the window's content: the keyboard stays on the choice just made.
@@ -690,11 +848,12 @@ function peClick(state: PeState, target: Element): void {
   if (el.hasAttribute('data-pe-up')) swap(-1);
   else if (el.hasAttribute('data-pe-down')) swap(1);
   else if (el.hasAttribute('data-pe-stage-x')) { if (d.stages.length > 1) { d.stages.splice(si, 1); state.rowOpen = ''; peDraw(state); } }
-  else if (el.hasAttribute('data-pe-enter-add')) peEnterPickOpen(state, el);
-  else if (el.dataset['peEnterPick']) {
-    // a pick in + Rule or action's list: a Rule opens its form over the editor (the draft stays as typed); a Limit or
-    // an action is a row of the draft, its editor open on what to choose (the queue has nothing to choose: its row)
-    const kind = el.dataset['peEnterPick'];
+  else if (el.hasAttribute('data-pe-enter-add') && el.hasAttribute('aria-haspopup')) peEnterPickOpen(state, el);
+  else if (el.dataset['peEnterPick'] || el.dataset['peEnterAdd'] === 'rule') {
+    // a pick in + Rule's or + Action's list, or + Rule with only a rule to add: a Rule opens its form over the editor
+    // (the draft stays as typed); a Limit or an action is a row of the draft, its editor open on what to choose (the
+    // queue has nothing to choose: its row)
+    const kind = el.dataset['peEnterPick'] ?? 'rule';
     el.closest<HTMLElement>('[popover]')?.hidePopover();
     if (kind === 'rule') {
       const sec = document.querySelector<HTMLElement>(`#pe-body .pe-stage[data-pe-si="${si}"] [data-sr-section][data-sr-phase="enter"]`);
@@ -702,44 +861,51 @@ function peClick(state: PeState, target: Element): void {
       return;
     }
     if (kind === 'limit') stage.task_limit = PE_LIMIT_NEW;
+    // a change of owner starts on the first bot (the task's assignee where there is none); its Owner pick has the focus
+    else if (kind === 'owner') stage.owner = peBots()[0]?.id ?? PE_ASSIGNEE;
     else if (kind === 'file_into') stage.on_enter = {file_into: peIntoTargets(state, '')[0]?.id ?? ''};
     else if (kind === 'queue') stage.on_enter = {act: 'github.queue'};
     else return;
-    state.rowOpen = kind === 'queue' ? '' : `${si}:${kind === 'limit' ? 'limit' : 'act'}`;
+    state.rowOpen = kind === 'queue' ? '' : `${si}:${kind === 'limit' || kind === 'owner' ? kind : 'act'}`;
     peDraw(state);
     if (kind === 'limit') { const n = enter('[data-pe-sf="task_limit"]') as HTMLInputElement | null; n?.focus(); n?.select(); }
+    else if (kind === 'owner') enter('[data-pe-sf="owner"]')?.focus();
     else if (kind === 'file_into') enter('[data-pe-sf="on_enter"]')?.focus();
     else enter('[data-pe-enter-row="act"]')?.querySelector<HTMLElement>('.sr-open')?.focus();
   } else if (el.dataset['peRow']) {
     // a row opens its editor in place, or closes it; the row keeps the focus closed, its first field has it open
-    const key = `${si}:${el.dataset['peRow']}`;
+    const of = el.dataset['peRow'] ?? '', key = `${si}:${of}`;
     state.rowOpen = state.rowOpen === key ? '' : key;
     peDraw(state);
-    const row = enter(`[data-pe-enter-row="${el.dataset['peRow']}"]`);
+    const row = peRowEl(si, of);
     (state.rowOpen ? row?.querySelector<HTMLElement>('.pe-row-ed :is(input, select)') : row?.querySelector<HTMLElement>('.sr-open'))?.focus();
   } else if (el.dataset['peRowX']) {
-    if (el.dataset['peRowX'] === 'limit') stage.task_limit = null; else stage.on_enter = {};
+    const x = el.dataset['peRowX'];
+    const leave = x === PE_HAND || x.startsWith('req:');
+    if (x === 'limit') stage.task_limit = null;
+    else if (x === 'owner') { stage.owner = null; delete stage.pick; delete stage.pick_next; }
+    // by hand off: a person's request no longer has anything to move on from (pipeline_settings: by-hand stages only)
+    else if (x === PE_HAND) { stage.by_hand = false; stage.requests_move_on = false; }
+    else if (x.startsWith('req:')) stage.requirements.splice(Number(x.slice('req:'.length)), 1);
+    else stage.on_enter = {};
     state.rowOpen = '';
     peDraw(state);
-    // what was removed can be added again: the add button has the focus
-    enter('[data-pe-enter-add]')?.focus();
+    // what was removed can be added again: its add button has the focus
+    (leave ? enter('[data-pe-req-add]') : enter(`[data-pe-enter-add="${x === 'limit' ? 'rule' : 'act'}"]`) ?? enter('[data-pe-enter-add]'))?.focus();
   }
   else if (el.hasAttribute('data-pe-req-add')) peReqPickOpen(state, el);
-  else if (el.dataset['peReqKind'] || el.dataset['peReqPreset']) {
-    // A pick in + Requirement's list: the requirement goes last, and its first field has the focus.
-    const made = el.dataset['peReqKind'] ? peReqNew(el.dataset['peReqKind']) : peReqPreset(state, el.dataset['peReqPreset'] ?? '');
+  else if (el.dataset['peReqKind']) {
+    // A pick in + Requirement's list: the requirement goes last (by hand is the stage's own, its row last of all); one
+    // with something to choose opens its editor, its first field with the focus; any other is its row, focused.
+    const pick = el.dataset['peReqKind'];
     el.closest<HTMLElement>('[popover]')?.hidePopover();
-    if (!made) return;
-    stage.requirements.push(made);
+    let key = PE_HAND;
+    if (pick === 'by_hand') stage.by_hand = true;
+    else { stage.requirements.push(peReqNew(state, pick)); key = `req:${stage.requirements.length - 1}`; }
+    state.rowOpen = PE_REQ_CHOOSE.includes(pick) ? `${si}:${key}` : '';
     peDraw(state);
-    const ni = stage.requirements.length - 1;
-    document.querySelector<HTMLElement>(`#pe-body .pe-req[data-pe-si="${si}"][data-pe-ri="${ni}"] :is(input:not([type=checkbox]), select)`)?.focus();
-  } else if (el.hasAttribute('data-pe-req-x')) {
-    stage.requirements.splice(ri, 1);
-    peDraw(state);
-    // the one now in its place has the focus (its ×); the last one gone, + Requirement
-    const next = ri < stage.requirements.length ? document.querySelector<HTMLElement>(`#pe-body .pe-req[data-pe-si="${si}"][data-pe-ri="${ri}"] [data-pe-req-x]`) : null;
-    (next ?? document.querySelector<HTMLElement>(`#pe-body [data-pe-req-add][data-pe-si="${si}"]`))?.focus();
+    const row = peRowEl(si, key);
+    (state.rowOpen ? row?.querySelector<HTMLElement>('.pe-row-ed :is(input:not([type=checkbox]), select)') : row?.querySelector<HTMLElement>('.sr-open'))?.focus();
   }
   else if (req && el.hasAttribute('data-pe-yes-no')) { req.choices = [...PE_YES_NO]; peDraw(state); }
   else if (req && el.hasAttribute('data-pe-choice-x')) { req.choices = (req.choices ?? []).filter((_, i) => i !== peIndex(el, 'peCi')); peDraw(state); }
@@ -879,6 +1045,7 @@ async function openPipelineEditor(pipelineId: string, stageId = '', at: '' | 'ru
     if (!t) return;
     if (t.closest('[data-pe-close]')) { dialog.close(); return; }
     // the phases' rule clicks: a rule's form opens over the editor, the stage's draft stays
+    if (peMoreClick(ev)) return;
     if (stageRulesSectionClick(ev)) return;
     // A button in a stage's summary (up, down, remove) does not also open or close the stage.
     if (t.closest('summary button')) ev.preventDefault();

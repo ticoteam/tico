@@ -75,8 +75,9 @@ function pipelineAskPaint(): void {
   const bots = paBots(state.rec, state.stage), first = bots[0]?.actor || '', one = bots.length === 1;
   const btn = paFace();
   if (btn) {
-    btn.hidden = !first;
-    if (first) {
+    const shown = !!first && !pageChatNone();
+    btn.hidden = !shown;
+    if (shown) {
       const words = one ? `Chat with ${actorLabel(first)}` : 'Chat with…', face = actorFace(first, 22);
       if (btn.dataset['face'] !== face) { btn.dataset['face'] = face; btn.innerHTML = face; }
       btn.setAttribute('aria-label', words); btn.title = words;
