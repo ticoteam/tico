@@ -718,6 +718,24 @@ def test_the_merge_gate_is_kept_on_the_link_apart_from_the_checks(api):
         state = G.apply_checks(c, link['id'], 'a' * 40, {'python': 'passing', 'tico/merge-ok': 'failing'})
     link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
     assert (state, _detail(link)['merge_gate']) == ('passing', 'waiting')
+    # A read whose checks match the stored copy still rewrites a stale gate; a gate run still going is waiting too.
+    stale = {**_detail(link), 'merge_gate': 'signed_off'}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(stale), link['id']))
+        G.apply_checks(c, link['id'], 'a' * 40, dict(stale['checks']))
+        assert (
+            _detail(dict(c.execute("SELECT detail FROM task_links WHERE id=?", (link['id'],)).fetchone()))['merge_gate']
+            == 'waiting'
+        )
+        G.apply_checks(c, link['id'], 'a' * 40, {**stale['checks'], 'tico/merge-ok': 'pending'})
+        assert (
+            _detail(dict(c.execute("SELECT detail FROM task_links WHERE id=?", (link['id'],)).fetchone()))['merge_gate']
+            == 'waiting'
+        )
+    # A sign-off belongs to its head: a push of a new head clears it until that head's gate is seen.
+    _merge_ok(api, 'success', suite=11)
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': 'b' * 40}))
+    assert 'merge_gate' not in _detail(get(api, 'tasks/' + task['id'] + '/links')['links'][0])
 
 
 def test_links_left_failing_only_for_the_gate_are_recomputed_once_and_wake_nobody(api):

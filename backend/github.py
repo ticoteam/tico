@@ -765,6 +765,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 detail.pop("checks_dropped", None)
                 detail.pop(SUITE_RUNS, None)
                 detail.pop(DROPPED_PENDING, None)
+                detail.pop("merge_gate", None)  # a new head was never queued: its gate is not the old head's
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
                 detail["health_reviewed_head"] = ""
