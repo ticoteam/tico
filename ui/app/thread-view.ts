@@ -277,8 +277,6 @@ interface ThvTimeline {
 }
 
 const THV_VIEWS = new Set<ThvView>();
-// The files a bot named that the server has now pinned down draw as links (file-mentions.ts).
-FM_REDRAW = () => { for (const view of THV_VIEWS) thvLater(view, ['list']); };
 // One author's messages within this long of each other share one header.
 const THV_GROUP_MS = 5 * 60 * 1000;
 // The reaction picker: these, then what the thread already uses.
@@ -814,7 +812,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   // A file the bot names is a link to it (file-mentions.ts).
-  else body = `<div class="th-body md">${fileMentionLinks(safeMd(m.body || '', {shortLinks: true}), bot ? String(m.sender_id).slice(4) : '')}</div>${
+  else body = `${messageMd('th-body md', m.body || '', bot ? m.sender_id : '', {shortLinks: true})}${
     // The notice a bot's manager got about its Home's closed history (no longer sent; old ones keep their button).
     m.refs?.earlier_messages?.thread_id ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // A bot's reply reads as Claude's does: one folded line of what its run did first (ui/app/chat.ts), then the words,

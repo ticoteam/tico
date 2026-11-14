@@ -487,7 +487,7 @@ async function personSlackLoad(p: RosterPerson) {
         ${msgs.map(m => `<div class="bubble ${String(m.sender_id || '').startsWith('bot:') ? 'bot reply' : 'you'}">
             <span class="who">${esc(actorLabel(m.sender_id))}</span>
             ${m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
-              : `<div class="md">${safeMd(m.body || '')}</div>`}${chatCopyHTML(m.body)}</div>`).join('') || '<div class="empty">No messages yet.</div>'}
+              : messageMd('md', m.body || '', m.sender_id)}${chatCopyHTML(m.body)}</div>`).join('') || '<div class="empty">No messages yet.</div>'}
         </div>`;
     }).join('');
   } catch (e) {

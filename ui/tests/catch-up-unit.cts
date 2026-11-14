@@ -22,6 +22,7 @@ const ctx = vm.createContext({
   ago: () => '',
   fmt: () => '',
   safeMd: (s: string) => s,
+  messageMd: (cls: string, s: string, _who: string, _o: unknown, tail = '') => `<div class="${cls}">${s}${tail}</div>`,
   document: {addEventListener() {}, querySelector: () => null},
   window: {addEventListener() {}},
 });

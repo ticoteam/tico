@@ -2,9 +2,11 @@
 
 A bot's page lists **Files** in its right rail: the useful things it created, revised or delivered, newest
 activity first, as a plain list of names. Three rows show by default; a small "N more" opens the rest in
-place, with a search field and the filter icon (the Library's kinds). Both ask the server, so they reach every file,
-not just the ones loaded, and the answer stays newest first and paged. "Less" folds the list and clears them. A bot with
-no files has no Files section. A stored file, or a Google Doc, Sheet, Slides or Drive file, opens in
+place. A bot with more than three files has a search mark and the filter mark (the Library's kinds) on the Files
+heading; the search mark opens its field in place. Typing or picking a kind asks the server, so it reaches every file,
+not just the ones loaded, and the answer is the whole list narrowed, newest first and paged. Esc, or an empty field
+with no kind, is the three newest again; "Less" folds the list and clears both. A bot with no files has no Files
+section. A stored file, or a Google Doc, Sheet, Slides or Drive file, opens in
 the [review view](#review); any other linked document opens at its provider in a new tab.
 
 ## Review
@@ -187,11 +189,13 @@ Pages, Library › Files, search and deleting for good are below and in [Pages](
 ## Files named in a message
 
 A path or file name a bot writes in a message (`reports/2026-11-12-legal-review-pack.docx`, or a bare
-`notes-for-chris.docx`) is a link that opens the file in the review view, as its Files rail does. The thread asks the
-server for every name it draws in one request, `GET /api/v2/bots/{bot}/files/mentions?m=…&m=…` (up to 60), which
+`notes-for-chris.docx`) is a link that opens the file in the review view, as its Files rail does, wherever the message
+shows: the bot's chat on its page, the Assistant, task chats and threads, Catch up and updates, in running text, lists
+and table cells alike. A page asks the server for every name it draws in one request, `GET /api/v2/bots/{bot}/files/mentions?m=…&m=…` (up to 60), which
 answers only names that are exactly one of the bot's files the viewer may see: a path by its path (or the end of it),
 a bare name only when no other file has it. A bare name after a folder in the same paragraph or list item is looked
-up in that folder first. Anything else stays text; web addresses are links as before.
+up in that folder first. Anything else stays text; web addresses are links as before. An answer that comes after the
+message is drawn links the names in place.
 
 ## Library › Files
 

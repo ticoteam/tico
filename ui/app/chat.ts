@@ -613,7 +613,7 @@ function v2MessageHTML(m: ChatMessage) {
   // A task's note is its work log: chat names the task and keeps the note one click away.
   if (m.refs?.note) {
     const title = Object.values(m.ref_tasks || {})[0]?.title || chatLine(plainActors(m.body), 80);
-    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>Note</b> · ${esc(title)} ${when}</summary><div class="md">${safeMd(plainActors(m.body), {shortLinks: true})}</div></details>`;
+    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>Note</b> · ${esc(title)} ${when}</summary>${messageMd('md', plainActors(m.body), m.sender_id, {shortLinks: true})}</details>`;
   }
   // A bot's reply held by an org rule: one line naming the rule, never the text (ui/app/org-rule-holds.js).
   if (m.refs?.org_rule && m.kind === 'notice') return ruleHeldNoteHTML(m);
@@ -623,7 +623,7 @@ function v2MessageHTML(m: ChatMessage) {
   if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
   if (String(m.sender_id || '').startsWith('bot:') && String(m.recipient_id || '').startsWith('bot:') && m.recipient_id !== m.sender_id)
-    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.sender_id))} → ${esc(actorLabel(m.recipient_id))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
+    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.sender_id))} → ${esc(actorLabel(m.recipient_id))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary>${messageMd('md', m.body || '', m.sender_id, {shortLinks: true})}</details>`;
   const pid = actorPerson(m.sender_id);
   const mine = !!pid;                       // any person's message sits on the right, under their name
   // The Assistant passing on a person's words: "Ana's Assistant", with the Assistant's face.
@@ -644,7 +644,7 @@ function v2MessageHTML(m: ChatMessage) {
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
         // bot's fields can't hide part of what the person says yes to.
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
-        : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body, fb)}</div>
+        : messageMd('md', m.body || '', m.sender_id, {shortLinks: true})}${chatCopyHTML(m.body, fb)}</div>
     ${v2DeliveryHTML(m)}
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
@@ -732,7 +732,7 @@ function chatSideItemHTML(m: ChatMessage) {
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
   return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
     <div class="cs-head">${chatSideHeadHTML(m)}${when}</div>
-    <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${messageMd(`cs-text md${open ? '' : ' clamp'}`, text, m.sender_id, {shortLinks: true})}${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
       m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }

@@ -373,9 +373,9 @@ function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
         <span class="upd-corner">${who.person ? (u.own && updCanWrite(state) ? updWriteBtn(u) : '') : updReplyBtn(u)}${updMoreBtn()}</span>${kids}</div>
-      ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(updNormalizeBody(body), {shortLinks: true})}</div>` : ''}
+      ${u.slides ? updDeck(u, state) : body ? messageMd('upd-body md', updNormalizeBody(body), who.person ? '' : `bot:${u.bot}`, {shortLinks: true}) : ''}
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
-          <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
+          <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? messageMd('md', m.body || '', m.sender_id, {shortLinks: true}) : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
           <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
         <form class="upd-reply" data-upd-form><textarea rows="1" placeholder="Reply to ${esc(who.label)}…" aria-label="Reply">${esc(UPD_DRAFTS.get(u.id) || '')}</textarea>
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
@@ -953,7 +953,7 @@ async function botLatestUpdate(slug: string): Promise<void> {
   if (!u) { host.hidden = true; host.innerHTML = ''; return; }
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
       <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}</header>
-    <div class="upd-body md">${safeMd(updNormalizeBody(u.body), {shortLinks: true})}</div>
+    ${messageMd('upd-body md', updNormalizeBody(u.body), `bot:${slug}`, {shortLinks: true})}
     <div class="rail-foot"><button type="button" class="rail-more" data-latest-more hidden>More</button><a class="rail-more" href="#/bot/${encodeURIComponent(slug)}/history" data-latest-all>All updates</a></div>`;
   host.hidden = false;
   const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
@@ -994,7 +994,7 @@ async function botHistoryLoad(slug: string, before?: string): Promise<void> {
   const html = items.map(u => `<article class="bot-history-item${u.read ? '' : ' unread'}">
       <div class="upd-meta"><b>${esc(new Date(u.day + 'T12:00:00').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</b>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${u.read ? '' : '<span class="upd-dot" aria-label="Unread"></span>'}</div>
-      <div class="upd-body md">${safeMd(updNormalizeBody(u.body), {shortLinks: true})}</div></article>`).join('');
+      ${messageMd('upd-body md', updNormalizeBody(u.body), `bot:${slug}`, {shortLinks: true})}</article>`).join('');
   const more = r.next_before ? `<button type="button" class="ghost upd-more" data-bot-history-more="${esc(r.next_before)}">Load older</button>` : '';
   if (before) { host.querySelector('[data-bot-history-more]')?.remove(); host.insertAdjacentHTML('beforeend', html + more); }
   else host.innerHTML = (html || '<div class="empty">No updates yet.</div>') + more;

@@ -2,9 +2,10 @@
 // the name without its extension, three rows and "N more" / "Less" inline, no counts, subtitle or buttons. The whole
 // row opens the file. A linked document opens at its provider
 // (a new tab), a stored file in the review view (ui/app/file-review.ts; a CSV as a table, a quoted comma kept in one cell),
-// a file that did not sync is plain text, never a storage address; on a computer and on a phone. Expanded, a search
-// field and the filter icon narrow the list on the server (q, kind). The files a bot names in a message are links to them
-// (ui/app/file-mentions.ts), asked of the server in one request; a bare name two files share stays text unless the
+// a file that did not sync is plain text, never a storage address; on a computer and on a phone. More than three files:
+// a search mark and the filter mark on the Files heading narrow the list on the server (q, kind); Esc or an empty field
+// is the three newest again. The files a bot names in a message are links to them wherever it is drawn (messageMd,
+// ui/app/file-mentions.ts), asked of the server in one request; a bare name two files share stays text unless the
 // folder named before it says which.
 // Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -17,7 +18,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
-declare function fileMentionLinks(html: string, bot: string): string;   // ui/app/file-mentions.ts, in the page
+declare function messageMd(cls: string, body: unknown, sender: unknown): string;   // ui/app/file-mentions.ts, in the page
 
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), min = 60e3;
 const bots = [{name: 'cmo', display_name: 'AI CMO', org_parent: '', host: 'keeper', status: 'active', can_chat: true,
@@ -44,7 +45,7 @@ const csvText = 'page,note,visits\r\n/home,"Hello, world",120\r\n/pricing,"Two\n
 interface State { rows: Row[]; listed: (string | null)[]; patched: unknown[]; opened: string[]; thumbs?: string[]; asked?: string[]; mentions?: string[][] }
 // What the mentions route knows, as the server would answer (backend/files.py Files.mentions): paths and unique names.
 const NAMED: Record<string, string> = {'reports/ticket-topics.csv': 'file-csv', 'ticket-topics.csv': 'file-csv',
-  'drafts/2026-11-10-paiva-reply/notes-for-chris.docx': 'file-titled'};
+  'drafts/2026-11-10-paiva-reply/notes-for-chris.docx': 'file-titled', 'custodian-statement.pdf': 'file-json'};
 // A 2x2 PNG, an image's thumbnail.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DwnwEIGBgY/jMwAAA3BAP9Wq7fJQAAAABJRU5ErkJggg==', 'base64');
 
@@ -115,6 +116,13 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
       assert.deepEqual(await card.locator('.bf-mark').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.bfIcon)), ['link', 'description', 'table_chart'], tag + ': a mark for each kind');
       assert.equal((await card.locator('[data-bf-all]').innerText()).trim(), '2 more', tag + ': "N more" for the rest');
       assert.equal(await card.locator('.sub, [data-bf-add], [data-bf-remove], [data-bf-promote], .bf-meta, .bf-open, button.ghost:not([data-bf-all])').count(), 0, tag + ': just icons and names');
+      // More than three files: the search and filter marks on the heading's line, marks only, a thumb's size on a phone.
+      const head = card.locator('.bf-head');
+      assert.ok(await head.locator('.bf-sbtn').isVisible() && await head.locator('.bf-fbtn').isVisible(), tag + ': search and filter on the heading');
+      assert.equal((await head.locator('.bf-tools').innerText()).trim(), '', tag + ': marks, no words');
+      const box = (await head.locator('.bf-sbtn').boundingBox())!, h2 = (await head.locator('h2').boundingBox())!;
+      assert.ok(Math.abs((box.y + box.height / 2) - (h2.y + h2.height / 2)) < 4, tag + ': on the Files line');
+      if (tag === 'phone') assert.ok(box.width >= 44 && box.height >= 44, 'phone: 44px targets');
       assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['Q4 launch plan', 'Weekly report', 'Budget'], tag + ': newest activity first');
       const link = card.locator('a.bf-row').nth(0);
       assert.equal(await link.getAttribute('href'), 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit');
@@ -230,43 +238,55 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 3);
     assert.equal((await card.locator('[data-bf-all]').innerText()).trim(), '16 more');
     assert.ok(state.thumbs!.length <= asked + 1, `kinds: thumbnails asked ${state.thumbs!.length} times`);
-    // Expanded: search and the filter icon (no word), asked of the server, still newest first; Less clears both.
-    assert.equal(await card.locator('.bf-tools').isVisible(), false, 'find: no search while folded');
-    await card.locator('[data-bf-all]').click();
-    await card.locator('.bf-q').fill('budget');
+    // The heading's search mark opens the field in its place, focused; typing asks the server (the whole list,
+    // narrowed, newest first, paged); a kind does too; Esc or an empty field is the three newest again.
+    assert.equal(await card.locator('.bf-q').isVisible(), false, 'find: the field waits behind its mark');
+    await card.locator('.bf-sbtn').click();
+    assert.ok(await card.locator('.bf-q').evaluate(el => el === document.activeElement), 'find: the field opens focused');
+    assert.equal(await card.locator('.bf-sbtn').isVisible(), false, 'find: the field in the mark\'s place');
+    await card.locator('.bf-q').pressSequentially('budget');
     await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 1);
     assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['Q4 budget / final'], 'find: the server\'s answer');
-    assert.ok(state.asked!.some(a => /[?&]q=budget(&|$)/.test(a)) && !state.asked!.some(a => /q=b(&|$)|q=bu(&|$)/.test(a)), 'find: one request once typing stops');
-    assert.equal((await card.locator('.bf-fbtn').innerText()).trim(), '', 'find: the filter icon, no word');
+    assert.ok(state.asked!.some(a => /[?&]q=budget(&|$)/.test(a) && /limit=20/.test(a)) && !state.asked!.some(a => /q=b(&|$)|q=bu(&|$)/.test(a)), 'find: one paged request once typing stops');
+    assert.equal(await card.locator('[data-bf-less]').count(), 1, 'find: results open');
+    if (shots) await card.screenshot({path: path.join(shots, 'bot-files-search.png')});
     await card.locator('.bf-q').fill('');
-    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 19);
+    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 3);
+    assert.equal((await card.locator('[data-bf-all]').innerText()).trim(), '16 more', 'find: an empty field is the three newest');
     await card.locator('.bf-fbtn').click();
     await card.locator('[data-bf-kind="data"]').click();
     await page.waitForFunction(() => [...document.querySelectorAll('#bot-files .bf-name')].map(el => el.textContent).join() === '.json');
-    assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['.json'], 'find: one kind');
-    assert.ok(state.asked!.at(-1)!.includes('kind=data'));
+    assert.ok(state.asked!.at(-1)!.includes('kind=data') && await card.locator('.bf-fbtn.active').count() === 1, 'find: one kind, the mark marked');
+    await card.locator('.bf-sbtn').click();
     await card.locator('.bf-q').fill('nothing like it');
     await card.locator('.bf-none').waitFor();
     assert.equal((await card.locator('.bf-none').innerText()).trim(), 'Nothing matches.');
-    await card.locator('[data-bf-less]').click();
+    await card.locator('.bf-q').press('Escape');
     await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 3);
-    assert.ok(!/[?&](q|kind)=/.test(state.asked!.at(-1)!) && await card.locator('.bf-tools').isHidden(), 'find: Less clears search and kind');
-    // A message's files: a path, a unique bare name, a bare name after its folder; a bare name two files share (no folder
-    // before it) and a web address stay as they are. One request asks them all.
+    assert.ok(!/[?&](q|kind)=/.test(state.asked!.at(-1)!) && await card.locator('.bf-q').isHidden() && await card.locator('.bf-sbtn').isVisible()
+      && await card.locator('.bf-fbtn.active').count() === 0, 'find: Esc clears search and kind, back to the marks');
+    // A message's files, drawn as every chat draws a bot's message (messageMd): a path, a unique bare name, a bare name
+    // after its folder, a name in a table cell; a bare name two files share (no folder before it) and a web address stay
+    // as they are. One request asks them all, and its answer links the names in place.
     const said = '<ul><li>See <code>reports/ticket-topics.csv</code> and ticket-topics.csv</li>'
       + '<li>In <code>drafts/2026-11-10-paiva-reply/</code>: <code>notes-for-chris.docx</code></li>'
-      + '<li>Also notes-for-chris.docx and <a href="https://example.test/a.pdf">https://example.test/a.pdf</a></li></ul>';
+      + '<li>Also notes-for-chris.docx and <a href="https://example.test/a.pdf">https://example.test/a.pdf</a></li></ul>'
+      + '<table><tbody><tr><td><code>custodian-statement.pdf</code></td></tr></tbody></table>';
     const linked = await page.evaluate(async said => {
-      const first = fileMentionLinks(said, 'cmo');
-      for (let i = 0; i < 100 && !fileMentionLinks(said, 'cmo').includes('data-file-ref'); i++) await new Promise(r => setTimeout(r, 50));
       const host = document.createElement('div');
       host.id = 'said';
-      host.innerHTML = fileMentionLinks(said, 'cmo');
+      host.innerHTML = messageMd('md', said, 'bot:cmo');
       document.body.append(host);
-      return {first, refs: [...host.querySelectorAll<HTMLElement>('a[data-file-ref]')].map(a => [a.textContent, a.dataset.fileRef])};
+      const first = host.querySelectorAll('a[data-file-ref]').length;
+      for (let i = 0; i < 100 && host.querySelectorAll('a[data-file-ref]').length < 4; i++) await new Promise(r => setTimeout(r, 50));
+      return {first, refs: [...host.querySelectorAll<HTMLElement>('a[data-file-ref]')].map(a => [a.textContent, a.dataset.fileRef]),
+        same: messageMd('md', said, 'bot:cmo') === host.innerHTML, person: messageMd('md', said, 'human:p1').includes('data-file-ref')};
     }, said);
-    assert.equal(linked.first, said, 'mentions: text until the server answers');
-    assert.deepEqual(linked.refs, [['reports/ticket-topics.csv', 'file-csv'], ['ticket-topics.csv', 'file-csv'], ['notes-for-chris.docx', 'file-titled']], 'mentions: one file each, never a guess');
+    assert.equal(linked.first, 0, 'mentions: text until the server answers');
+    assert.deepEqual(linked.refs, [['reports/ticket-topics.csv', 'file-csv'], ['ticket-topics.csv', 'file-csv'], ['notes-for-chris.docx', 'file-titled'],
+      ['custodian-statement.pdf', 'file-json']], 'mentions: one file each, never a guess, linked in place');
+    assert.ok(linked.same, 'mentions: the next draw is the same links');
+    assert.ok(!linked.person, 'mentions: a person\'s message stays as written');
     assert.equal(state.mentions!.length, 1, 'mentions: one request');
     // Clicked as a message's link is (the fixture's host sits under the sidebar, so the click is sent to it).
     await page.locator('#said a[data-file-ref="file-titled"]').evaluate(a => (a as HTMLElement).click());
@@ -277,7 +297,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (shots) await card.screenshot({path: path.join(shots, 'bot-files-kinds.png')});
     assert.deepEqual(errors, [], 'kinds: page errors');
     await page.close();
-    console.log('bot files card (kinds): marks, a thumbnail and its fallback, names without extensions, 16 more; search, kind, named files as links');
+    console.log('bot files card (kinds): marks, a thumbnail and its fallback, names without extensions, 16 more; heading search and kind, named files as links');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
 async function until(test: () => boolean, ms = 5000) { for (const end = Date.now() + t(ms); !test(); ) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 50)); } }
