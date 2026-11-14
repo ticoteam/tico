@@ -1113,6 +1113,11 @@ def test_new_commits_since_count_new_titles_and_changed_files(c):
     again = [["f" * 40, "Fix tests"], ["0" * 40, "Fix tests"]]
     F.save_diff(c, REPO, "new2", "d4", commits=again, files={"abs.py": "h3"})
     assert F.since(c, {ref: "old2"}, {ref: "new2"}) == {"commits": 1, "titles": ["Fix tests"], "files": 1}
+    # A rebase plus one new commit with the same title: the rewritten commit cancels only its own copy.
+    F.save_diff(
+        c, REPO, "new3", "d5", commits=[["1" * 40, "Fix tests"], ["2" * 40, "Fix tests"]], files={"abs.py": "h3"}
+    )
+    assert F.since(c, {ref: "old2"}, {ref: "new3"}) == {"commits": 1, "titles": ["Fix tests"], "files": 1}
 
 
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):
