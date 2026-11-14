@@ -1,3 +1,4 @@
+# pyright: strict
 """A page chat's card (spec chat-on-every-page, Release 2): the page's owner bot turns a list the person pasted into one
 Confirm card in their chat with it. Goals only: one row per goal, made only on the person's Confirm, as them.
 
@@ -16,7 +17,11 @@ that chat.
   writer(c, room)            the bot that speaks for a page card in its room
 """
 
+from typing import Any, cast
+
 from .store import H, Problem
+
+Row = dict[str, Any]
 
 RECENT_MIN = 30
 # The one route each row of a page's card runs: Goals adds goals.
@@ -25,60 +30,67 @@ PROPOSER = "page:"
 VIA = "page_chat"
 
 
-def proposer_page(proposer):
+def proposer_page(proposer: object) -> str | None:
     """The page a card's proposer names (`page:goals` -> `goals`), or None for any other proposer."""
     proposer = str(proposer or "")
     return proposer[len(PROPOSER) :] if proposer.startswith(PROPOSER) else None
 
 
-def steps_of(page, steps):
+def steps_of(page: str | None, steps: object) -> list[Row]:
     """A page card's steps, each exactly its page's route with a body: a stored card can hold nothing else."""
     method, path = PAGES.get(page or "", ("", ""))
-    if not isinstance(steps, list) or not 1 <= len(steps) <= 50:
+    given = cast("list[object]", steps) if isinstance(steps, list) else []
+    if not 1 <= len(given) <= 50:
         raise Problem("operation", "A page card carries 1 to 50 rows", 422)
-    out = []
-    for step in steps:
+    out: list[Row] = []
+    for item in given:
+        step = cast("Row", item) if isinstance(item, dict) else None
+        body = step.get("body") if step is not None else None
         if (
-            not isinstance(step, dict)
+            step is None
             or set(step) - {"method", "path", "body"}
             or step.get("method") != method
             or step.get("path") != path
-            or not isinstance(step.get("body"), dict)
+            or not isinstance(body, dict)
         ):
             raise Problem("operation", "A page card's rows are " + method + " " + path + " only", 422)
-        out.append({"method": method, "path": path, "body": dict(step["body"])})
+        out.append({"method": method, "path": path, "body": dict(cast("Row", body))})
     return out
 
 
-def members(c, room):
+def members(c: Any, room: Row | None) -> set[str]:
     """A chat's people and bots (a direct chat keeps them as thread members, not participants)."""
     from . import threads
 
-    row = threads.thread_row(c, room["id"]) if room else None
-    return set(threads._dm_members(c, row)) if row else set()  # pyright: ignore[reportPrivateUsage]
+    row = cast("Row | None", threads.thread_row(c, room["id"]) if room else None)  # pyright: ignore[reportUnknownMemberType]
+    found = cast("list[Any]", threads._dm_members(c, row) if row else [])  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
+    return {str(m) for m in found}
 
 
-def writer(c, room):
+def writer(c: Any, room: Row | None) -> str | None:
     """The bot in the person's chat with the page's owner: the card and its result are said by it."""
     bots = [p for p in members(c, room) if p.startswith("bot:")]
     return bots[0][4:] if len(bots) == 1 else None
 
 
-def _asked_from(c, person, bot, page):
+def _asked_from(c: Any, person: str, bot: str, page: str) -> Row | None:
     """The person's newest message to `bot` from `page` within RECENT_MIN minutes, in their own chat with it."""
-    since = H.shift(H.now(), minutes=-RECENT_MIN)
+    since: str = H.shift(H.now(), minutes=-RECENT_MIN)  # pyright: ignore[reportUnknownMemberType]
     for row in c.execute(
         "SELECT id, conversation_id FROM messages WHERE sender_id=? AND recipient_id=? AND deleted_at IS NULL "
         "AND created_at>=? AND json_extract(refs,'$.from_page.page')=? ORDER BY created_at DESC LIMIT 20",
         (person, bot, since, page),
     ):
-        room = H.conversation(c, row["conversation_id"])
+        room: Row | None = H.conversation(c, row["conversation_id"])  # pyright: ignore[reportUnknownMemberType]
         if room and not room.get("closed_at") and members(c, room) == {person, bot}:
             return room
     return None
 
 
-def propose(c, settings, auth, who, page, for_person, rows, routes):
+def propose(
+    c: Any, settings: Any, auth: Any, who: Any, page: str, for_person: str, rows: list[Row], routes: Any
+) -> Row:
+    """The card for `for_person`, proposed by `who` (the page's owner bot), from `rows` ({title, owner?, parent_id?})."""
     from . import assistant, page_owners
 
     if page not in PAGES:
@@ -88,7 +100,7 @@ def propose(c, settings, auth, who, page, for_person, rows, routes):
         raise Problem(
             "forbidden", "Only the " + page_owners.PAGES[page]["name"] + " page's owner bot proposes its card", 403
         )
-    person = H.resolve_actor(c, for_person)
+    person = H.resolve_actor(c, for_person) or ""
     room = _asked_from(c, person, owner, page) if person and person.startswith("human:") else None
     if not room:
         raise Problem(
@@ -100,21 +112,22 @@ def propose(c, settings, auth, who, page, for_person, rows, routes):
         )
     asker = auth.identity_for_actor(c, person)
     method, path = PAGES[page]
-    steps, shown = [], []
+    steps: list[Row] = []
+    shown: list[Row] = []
     for row in rows:
         try:
-            made_by = auth.target(c, asker, row["owner"]) if row.get("owner") else person
+            made_by = str(auth.target(c, asker, row["owner"])) if row.get("owner") else person
         except Problem:
             raise Problem("owner", "No person or bot " + repr(row["owner"]) + " to own a goal", 422) from None
-        body = {"title": row["title"], "owner": made_by}
+        body: Row = {"title": row["title"], "owner": made_by}
         if row.get("parent_id"):
             body["parent_id"] = row["parent_id"]
         steps.append({"method": method, "path": path, "body": body})
-        shown.append({"field": row["title"], "new": H.actor_name(c, made_by)})
+        shown.append({"field": row["title"], "new": H.actor_name(c, made_by)})  # pyright: ignore[reportUnknownMemberType]
     n = len(steps)
     count = f"{n} goal" + ("" if n == 1 else "s")
     mine = all(s["body"]["owner"] == person for s in steps)
-    return assistant.create_proposal(
+    return assistant.create_proposal(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         c,
         settings,
         asker,
