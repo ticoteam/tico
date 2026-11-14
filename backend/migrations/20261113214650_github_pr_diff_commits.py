@@ -10,9 +10,18 @@ item_sources.github.since compares two commits' rows: how many commits are new a
 
 
 def up(conn):
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "github_pr_diffs" not in tables:
-        return
+    # Pending migrations run in any order: when this one runs before the one that makes the table, it makes the whole
+    # table here (that one's CREATE TABLE IF NOT EXISTS then leaves it), so the schema is the same either way.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS github_pr_diffs ("
+        "repo TEXT NOT NULL, "
+        "sha TEXT NOT NULL, "
+        "diff_id TEXT, "
+        "read_at TEXT NOT NULL, "
+        "commits TEXT, "
+        "files TEXT, "
+        "PRIMARY KEY (repo, sha))"
+    )
     columns = {r[1] for r in conn.execute("PRAGMA table_info(github_pr_diffs)")}
     for column in ("commits", "files"):
         if column not in columns:
