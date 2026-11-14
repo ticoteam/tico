@@ -56,6 +56,8 @@ interface PipelineStageRec {
   pick?: PipelinePickRec;
   /** Who gets the next task, in one sentence, as last saved: the server writes it and a save never sends it. */
   pick_next?: string;
+  /** This stage's own "Keep warm for up to N hours" (backend/keep_warm.py); null takes the pipeline's. */
+  keep_warm_hours?: number | null;
 }
 /** A stage's "One of several". `families` is each listed bot's model family ("Claude", "GPT"; "" when unknown), read only. */
 interface PipelinePickRec {
@@ -78,6 +80,8 @@ interface PipelineRec {
   preset: string | null;
   settings_version: number;
   retired_at: string | null;
+  /** "Keep warm for up to N hours" (backend/keep_warm.py): 0 to 24, 0 is off. */
+  keep_warm_hours?: number;
   /** Each active bot's model family ("Claude", "GPT"; "" when unknown), for a stage's One of several: read only. */
   bot_families?: Record<string, string>;
   stages: PipelineStageRec[];

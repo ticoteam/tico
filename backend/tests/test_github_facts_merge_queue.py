@@ -943,7 +943,8 @@ def owner_wakes(c, task_id, who):
 @pytest.mark.parametrize("where", ["Build", "Merge"])
 def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(company, where):
     """Spec "The ladder": a GitHub wait that turns Not met is the owner's turn; the never-stuck check wakes them once
-    with what is missing (after its first gap, as for a failed check), and not again before its next try."""
+    with what is missing (15 minutes after the run that opened the PR finished, never 2), and not again before its next
+    try."""
     gh = FakeGitHub()
     with company.transaction() as c:
         if where == "Merge":
@@ -965,7 +966,7 @@ def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(compa
     F.refresh(company, gh, later())
     with company.transaction() as c:
         assert line(c, task_id, kind) == (R.NOT_MET, owner, f"{REF} was closed without merging")
-        for seconds in (10, 20, 30, 150, 160, 600):  # the check's passes, every 10 s, then up to 10 minutes on
+        for seconds in (10, 20, 30, 150, 160, 600, 910, 1200):  # the check's passes, every 10 s, then up to 20 min on
             NS.check(c, H.shift(now, seconds=seconds))
         added = [w for w in owner_wakes(c, task_id, owner) if w not in before]
         assert len(added) == 1, added

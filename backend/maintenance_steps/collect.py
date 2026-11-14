@@ -20,7 +20,8 @@ def did_work(c, since, until):
         bot_id
         for (bot_id,) in c.execute(
             "SELECT DISTINCT bot_id FROM attempts WHERE created_at>=? AND settled_at>=? AND settled_at<? "
-            "AND coalesce(did_nothing, 0)=0 AND coalesce(state, '') <> 'failed'",
+            "AND coalesce(did_nothing, 0)=0 AND coalesce(state, '') <> 'failed' "
+            "AND coalesce(purpose, '') <> 'keep warm'",  # a keep-warm turn is no work (backend/keep_warm.py)
             (H.shift(since, days=-1), since, until),
         )
     }

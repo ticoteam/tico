@@ -38,7 +38,9 @@ NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
 LOG = logging.getLogger("tico.task_engine")
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
-FIRST_TRY_S = 120  # seconds after a wake before the never-stuck check looks at a bot that stopped early
+# Seconds after a change before the never-stuck check looks at the task, and its gap before retrying a run that was cut
+# off. A run that finished is not woken this soon (never_stuck._ladder).
+FIRST_TRY_S = 120
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
 
@@ -1315,7 +1317,8 @@ def tell_owner(
     wake when it is the owner's turn (`_turn_of`), the task waits on no person first, and `wake`; else a quiet note
     it reads on its next run. Its run is
     held to the turn and the run cap like every engine wake (task_wakes.may_start). A person owner is told nothing:
-    the task is in their Needs you. Returns the message id, or None."""
+    the task is in their Needs you. A head's checks that passed start no run when the run would have nothing to do
+    (`_checks_need_no_run`). Returns the message id, or None."""
     row = task(conn, task_id)
     if not row or row["status"] != "open" or not is_bot(row.get("owner_id")):
         return None
@@ -1325,6 +1328,16 @@ def tell_owner(
     waits = W.of(conn, row)
     # A task that waits on a person first is theirs to move: the bot hears of it on its next run.
     run = wake and not (waits and waits[0].state == W.PERSON) and _turn_of(conn, row)[0] == owner
+    skipped = _checks_need_no_run(conn, row, owner, refs or {}, run) if wake else None
+    if skipped:
+        run = False
+        LOG.info(
+            "skipped: %s (task %s, bot %s, head %s)",
+            skipped,
+            row["id"],
+            _h().actor_id(owner),
+            str((refs or {}).get("pr_head") or "")[:12],
+        )
     return task_wakes.add(
         conn,
         row,
@@ -1336,6 +1349,47 @@ def tell_owner(
         refs=refs,
         trigger=trigger,
     )
+
+
+# Why a head's passed checks start no run (`_checks_need_no_run`), as the log line says it.
+PASSED_MOVES_ON = "checks passed and the stage moves on by itself"
+CHECKS_SEEN = "head and checks unchanged since the bot's last run"
+
+
+def _checks_need_no_run(conn: "sqlite3.Connection", row: Row, owner: str, refs: Row, turn: bool) -> str | None:
+    """Why a head's finished checks (`refs.pr_result`, from github.flush_wakes) start no run for the owner, or None.
+    Only a pass, never a failure or a cancelled run:
+
+    - PASSED_MOVES_ON: with the checks passed the stage asks for nothing more, so it is nobody's turn and the
+      never-stuck check moves the task on when the next stage has room. `turn` is already False then: this only names it.
+    - CHECKS_SEEN: it is the owner's turn, but its last run on the task (not a keep-warm turn) began after Tico had this
+      result (`refs.pr_done_at`), and the pull request's head is still this one: that run already had the head and its
+      checks. The result stays a note for its next run.
+
+    Anything it cannot read starts the run."""
+    from . import run_triggers
+
+    if refs.get("pr_result") != "pass":
+        return None
+    if not turn:
+        stage = _part(row, "stage")
+        return PASSED_MOVES_ON if not stage.get("by_hand") and not R.unmet(conn, row) else None
+    head, at = str(refs.get("pr_head") or ""), refs.get("pr_done_at")
+    if not head or not isinstance(at, str):
+        return None
+    last = conn.execute(
+        "SELECT started_at FROM attempts WHERE bot_id=? AND task_id=? AND started_at IS NOT NULL "
+        "AND coalesce(purpose,'')<>? ORDER BY rowid DESC LIMIT 1",
+        (_h().actor_id(owner), row["id"], cast("Any", run_triggers).KEEP_WARM),
+    ).fetchone()
+    if not last or str(last[0]) <= at:
+        return None
+    same_head = conn.execute(
+        "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND coalesce(state,'')<>'closed' "
+        "AND lower(json_extract(detail,'$.head_sha'))=lower(?) LIMIT 1",
+        (row["id"], head),
+    ).fetchone()
+    return CHECKS_SEEN if same_head else None
 
 
 def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) -> str | None:

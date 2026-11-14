@@ -282,6 +282,22 @@ fn thread_runtime(runtime: &str, harness: &str) -> String {
     }
 }
 
+/// Where a thread records what its cache was last written for (`warm_identity`), read by a keep-warm turn.
+fn warm_key(thread: &str) -> String {
+    format!("keep-warm:{thread}")
+}
+
+/// What a session's cache is for: its harness, model, effort and plan (the subscription the turn runs on). A turn on
+/// any other writes the whole context again, so a keep-warm turn runs only when this is the same as its last turn's.
+fn warm_identity(runtime: &str, config: &Value, plan: Option<&Profile>) -> String {
+    format!(
+        "{runtime}\n{}\n{}\n{}",
+        text_of(&config["model"]),
+        text_of(&config["reasoning_effort"]),
+        plan.map_or("", |p| p.name.as_str())
+    )
+}
+
 /// The provider thread this turn continues (clients/sessions.py session_key).
 pub fn session_key(attempt: &Value) -> String {
     // A shared page starts without any earlier private Assistant session's content.
@@ -2555,6 +2571,23 @@ impl Runner {
                 let why = if release_run { crate::continuity::FRESH } else { crate::continuity::NONE_SAVED };
                 session = Some(crate::continuity::Session::new(why, None));
             }
+            // A keep-warm turn (crate::prompt::keep_warm) only reads a session's cache. With no saved session here to
+            // read, or one cached for another model, effort or plan, there is nothing warm to keep: it ends done, with
+            // no model started, no session made or saved, and the thread's records as they were.
+            let warm = crate::prompt::keep_warm(&attempt);
+            let identity = warm_identity(&session_runtime, &config, selected.as_ref());
+            let skip_warm = warm
+                && (!resumed
+                    || !thread.as_deref().is_some_and(|t| h.session_saved(t))
+                    || self.state.repo_rules(&warm_key(thread.as_deref().unwrap_or_default()), None)?.as_deref() != Some(identity.as_str()));
+            if skip_warm {
+                log(&format!("Tico runner: {bot}: keep-warm turn {aid} ends with nothing to do: no warm session here"));
+                one_off = true;
+                session = None;
+                if thread.is_none() {
+                    thread = Some(previous.clone().unwrap_or_else(|| format!("keep-warm-{aid}")));
+                }
+            }
             if thread.is_none() {
                 self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
@@ -2661,7 +2694,9 @@ impl Runner {
             // It must also have clear room before the harness compacts it, so this turn is unlikely to compact the
             // short form's standing lines away before it acts on them: its last turn's context and the whole prompt
             // are under 60% of Compact at. Should it compact anyway, the host gives the turn what it left out.
-            let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
+            // A keep-warm turn is its one line and leaves the thread's records as they were: what it was given, the room
+            // cursor, what the next turn is sent.
+            let prompt_turn = !warm && !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
             let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
@@ -2673,8 +2708,11 @@ impl Runner {
                 crate::prompt::Seen::default()
             };
             // Until this turn completes with no compaction, the thread may not hold what it is given, repo rules included.
+            // A keep-warm turn gives it nothing new: the records stay unless it compacts (below).
             for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
-                self.state.repo_rules(&key, Some(""))?;
+                if !warm {
+                    self.state.repo_rules(&key, Some(""))?;
+                }
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = match crate::regular_file::read(crate::instructions::path(&execution_path).unwrap_or_else(|| execution_path.join(crate::instructions::FILE)), crate::regular_file::CONTENT) {
@@ -2697,18 +2735,21 @@ impl Runner {
                 built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
-            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
+            if let Some(note) = session.as_ref().filter(|_| !warm).and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
                 tail = format!("{tail}\n\n{note}");
             }
-            if side_ran {
+            if side_ran && !warm {
                 let after = if side_run { crate::continuity::SIDE_RESUMED } else { crate::continuity::AFTER_SIDE };
                 tail = format!("{tail}\n\n{after}");
             }
-            if after_interrupt {
+            if after_interrupt && !warm {
                 tail = format!("{tail}\n\n{}", crate::continuity::AFTER_INTERRUPT);
             }
-            if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
+            if let Some(line) = crate::afterwatch::still_running(&bot, &key).filter(|_| !warm) {
                 tail = format!("{tail}\n\n{line}");
+            }
+            if warm && !skip_warm {
+                h.one_turn(&th);
             }
             let prompt = format!("{}{tail}", built.text);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
@@ -2723,7 +2764,12 @@ impl Runner {
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
-            let t = if let Some(_one) = cold_guard {
+            let t = if skip_warm {
+                // Nothing to run: the turn ends at once, done, as a superseded goal control does.
+                let id = format!("keep-warm-{aid}");
+                let _ = own.send(hosts::event("turn_completed", Some(&th), Some(&id), json!({"status": "completed"})));
+                id
+            } else if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
                 let t = self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?;
@@ -2739,7 +2785,7 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
-            if side_ran || after_interrupt {
+            if (side_ran || after_interrupt) && !warm {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
                     let _ = self.state.repo_rules(&key, Some("0"));
@@ -2753,6 +2799,16 @@ impl Runner {
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            if drove.outcome == "completed" && !warm {
+                // What this session's cache is for: a keep-warm turn reads it only on the same model, effort and plan.
+                self.state.repo_rules(&warm_key(&th), Some(&identity))?;
+            }
+            if warm && !kept && !skip_warm {
+                // The keep-warm turn compacted it or began it anew: the next turn is given everything again.
+                for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
+                    self.state.repo_rules(&key, Some(""))?;
+                }
+            }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
             let held = resumed && !truthy(attempt.get("_repo_rules_changed"));
@@ -3695,8 +3751,9 @@ impl Runner {
             .await;
             match sent {
                 Ok(()) => {
-                    if drove.outcome == "completed" {
-                        // The next turn on this thread forwards only what the room said after this.
+                    if drove.outcome == "completed" && !crate::prompt::keep_warm(&attempt) {
+                        // The next turn on this thread forwards only what the room said after this. Not after a
+                        // keep-warm turn: it was given none of the room.
                         if let Some(th) = &thread {
                             let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
                             self.state.off(move |s| s.cursor(&th, Some(&message))).await?;
@@ -6402,6 +6459,7 @@ for line in sys.stdin:
         ));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
+        RIG_DIR.with(|d| *d.borrow_mut() = Some(dir.clone()));
         for n in compacting {
             // A process listed twice compacts twice.
             let mut marks =
@@ -6702,6 +6760,147 @@ for line in sys.stdin:
                 "turn {n} lost its message: {p}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_keep_warm_turn_sends_its_one_line_once_and_the_next_turn_is_sent_as_if_it_never_ran()
+    {
+        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
+        let turns = [json!({}), json!({}), keep_warm_turn(line), json!({})];
+        let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &turns,
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, _| {
+                if n == 2 {
+                    saved_transcript(&dir_of_args());
+                }
+            },
+        )
+        .await;
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        // The keep-warm turn is its line alone: no standing lines, no "unchanged" line, no tail.
+        assert!(
+            prompts[2].contains(line) && !prompts[2].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[2]
+        );
+        assert!(
+            !prompts[2].contains("an AI teammate at") && !prompts[2].contains("Tico-Run"),
+            "{}",
+            prompts[2]
+        );
+        // The turn after it is sent what it would have been without it: the short form, as turn 1 was.
+        for n in [1, 3] {
+            assert!(
+                prompts[n].contains(crate::prompt::STANDING_SEEN),
+                "turn {n}: {}",
+                prompts[n]
+            );
+        }
+        // Only the keep-warm process is limited to one model turn.
+        let args: Vec<String> = std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        for (n, a) in args.iter().enumerate() {
+            assert_eq!(a.contains("--max-turns 1"), n == 2, "process {n}: {a}");
+        }
+        assert!(
+            completions.iter().all(|c| c["outcome"] == "completed"),
+            "{completions:?}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A keep-warm turn's attempt fields (crate::prompt::keep_warm), saying `line`.
+    fn keep_warm_turn(line: &str) -> Value {
+        json!({"attempt": {"message": {"id": "m-warm", "from_actor": "keeper", "body": line, "refs": {"wake": "keep_warm"}}}})
+    }
+
+    thread_local! {
+        /// The rig's folder, for a `before_turn` that reads what the earlier turns ran (`dir_of_args`).
+        static RIG_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    }
+
+    /// The rig's folder while it runs: found from the args log the fake claude writes.
+    fn dir_of_args() -> PathBuf {
+        RIG_DIR
+            .with(|d| d.borrow().clone())
+            .expect("the rig's folder")
+    }
+
+    /// Claude's transcript of the session the last process ran, under the turn's HOME: the session is saved here.
+    fn saved_transcript(dir: &Path) {
+        let last = std::fs::read_to_string(dir.join("args.log")).unwrap();
+        let id = last
+            .lines()
+            .last()
+            .unwrap()
+            .split_whitespace()
+            .skip_while(|a| *a != "--session-id" && *a != "--resume")
+            .nth(1)
+            .unwrap()
+            .to_string();
+        let home = crate::env::tests::OPERATOR_HOME
+            .with(|h| h.borrow().clone())
+            .unwrap();
+        let projects = home.join(".claude/projects/rig");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::write(projects.join(format!("{id}.jsonl")), "{}\n").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_keep_warm_turn_with_no_warm_session_here_starts_no_model_and_ends_done() {
+        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
+        // 0: the first turn on the conversation is a keep-warm one (none saved). 1, 2: real turns. 3: keep-warm, but
+        // the session is not on this computer (no transcript). 4: real. 5: keep-warm on a saved session, but on another
+        // model than its cache's. 6: the same on another effort (a plan is checked the same way: warm_identity).
+        let mut other_model = keep_warm_turn(line);
+        other_model["model"] = json!("synthetic-other");
+        let mut other_effort = keep_warm_turn(line);
+        other_effort["reasoning_effort"] = json!("low");
+        let turns = [
+            keep_warm_turn(line),
+            json!({}),
+            json!({}),
+            keep_warm_turn(line),
+            json!({}),
+            other_model,
+            other_effort,
+        ];
+        let (_, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &turns,
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, _| {
+                if n >= 5 {
+                    saved_transcript(&dir_of_args());
+                }
+            },
+        )
+        .await;
+        // Only the three real turns started Claude; every keep-warm turn ended done without it.
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert!(prompts.iter().all(|p| !p.contains(line)), "{prompts:?}");
+        assert!(
+            completions.iter().all(|c| c["outcome"] == "completed"),
+            "{completions:?}"
+        );
+        // Skipping left the thread's records alone: turn 4 is still sent the short form after turn 3's skip.
+        assert!(
+            prompts[2].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[2]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

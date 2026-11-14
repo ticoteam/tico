@@ -96,7 +96,7 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_a_per
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     assert later(minutes=30) == {}  # its first wake still waits for a run: nothing more is sent
     X.ran(c, task_id, BUILDER)  # the run ended and nothing changed
-    assert later(seconds=119) == {}
+    assert later(seconds=899) == {}  # a run that finished is not woken 2 minutes on
     assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     X.ran(c, task_id, BUILDER)
     assert later(seconds=899) == {}
@@ -135,12 +135,24 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_a_per
     assert kinds.count("woken_again") == 6 and kinds.count("ladder") == 2
 
 
+@pytest.mark.parametrize("state", ["interrupted", "failed", "expired"])
+def test_a_run_cut_off_by_a_crash_or_a_limit_is_tried_again_2_minutes_on(c, general, later, state):
+    """Only a run that finished waits the 15 minutes: one that was cut off is retried after the first gap, and told so,
+    once its held job is let go (here: left, as POST jobs/{id}/reconcile does)."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER, state=state)
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
+    assert later(seconds=119) == {}
+    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "Your last run on this task was cut off. Try 1 of 3."
+
+
 def test_an_owner_who_never_answers_the_stages_question_climbs_the_same_ladder(c, general, later):
     settings = {"name": "confidence", "type": "number", "min": 0, "max": 100, "question": "How sure are you?"}
     stages = ({"name": "Build", "owner": BUILDER, "requirements": [{"kind": "answer", "settings": settings}]},)
     X.pipeline(c, "eng", "Engineering", stages, manager=MANAGER)
     task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
-    for seconds in (120, 900, 3000):
+    for seconds in (900, 900, 3000):
         X.ran(c, task_id, BUILDER)
         assert later(seconds=seconds) == {"woken": 1}
     X.ran(c, task_id, BUILDER)
@@ -213,23 +225,24 @@ def test_a_task_that_changed_starts_the_count_again_and_the_next_wake_is_not_a_t
     row = X.new_task(c, ANA, "Write the launch note", "notes")
     task_id = row["id"]
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     X.ran(c, task_id, BUILDER)
     # Something changed that nobody announced: here, an OK written straight into the table.
     X.answer(c, E.task(c, task_id), notes["requirements"]["Draft"][1], "ok", ANA)
     assert later(seconds=10) == {} and _ladder(c, task_id) == ("owner", 0)
-    assert later(seconds=119) == {}
-    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # woken, and no try counted
+    # The run that changed it finished: its "carry on" waits 15 minutes from its end, not the 2 minutes it once did.
+    assert later(seconds=110) == {} and later(seconds=769) == {}
+    assert later(seconds=11) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # woken, and no try counted
     assert _said(c, task_id, BUILDER)[-1] == "This task is not finished. Carry on."
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
 
 
 def test_a_new_version_alone_is_not_progress(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     X.ran(c, task_id, BUILDER)  # it stopped early again
     mark = _visit(c, task_id)["progress_mark"]
     c.execute("UPDATE tasks SET version = version + 1, title='Write the launch note today' WHERE id=?", (task_id,))
@@ -527,7 +540,7 @@ def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, genera
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     task_id = row["id"]
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1}
+    assert later(seconds=900) == {"woken": 1}
     X.ran(c, task_id, BUILDER)
     asked = E.add_requirement(
         c, task_id, BUILDER, "answer", ANA, "Card or invoice?", choices=["Card", "Invoice"], seen_version=row["version"]
@@ -538,7 +551,7 @@ def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, genera
     assert _said(c, task_id, BUILDER)[-1] == 'Ana answered "Card or invoice?": Card'
     assert later(hours=1) == {}  # that wake waits for its run
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
 
 
 @pytest.mark.parametrize("via", [None, "token"])
@@ -546,12 +559,13 @@ def test_a_persons_comment_that_wakes_the_owner_starts_the_count_again_so_a_run_
     c, general, later, via
 ):
     """The drill: two tries spent, a person writes to the bot, its run ends with "I'll install the test dependencies
-    and continue". The next look is the first gap away, not the hour a third try waits, and it is the bot's own try,
-    not a hand-over to the manager bot for runs spent before the person spoke."""
+    and continue". The next look is 15 minutes away (a run that finished is not woken 2 minutes on), not the hour a
+    third try waits, and it is the bot's own try, not a hand-over to the manager bot for runs spent before the person
+    spoke."""
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     for n in (1, 2):
         X.ran(c, task_id, BUILDER)
-        assert later(seconds=(120, 900)[n - 1]) == {"woken": 1} and _ladder(c, task_id) == ("owner", n)
+        assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", n)
     X.ran(c, task_id, BUILDER)
     later(minutes=20)
     mark = H.BY_TOKEN.set(True) if via else None
@@ -562,7 +576,7 @@ def test_a_persons_comment_that_wakes_the_owner_starts_the_count_again_so_a_run_
             H.BY_TOKEN.reset(mark)
     assert _ladder(c, task_id) == ("owner", 0)
     assert X.ran(c, task_id, BUILDER, comments=True) == 1  # it said it would carry on, and stopped
-    assert later(seconds=119) == {}
+    assert later(seconds=899) == {}
     assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
 
@@ -573,7 +587,7 @@ def test_a_comment_the_assistant_writes_or_one_that_wakes_no_bot_or_on_a_persons
 ):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     X.ran(c, task_id, BUILDER)
     if who == "person_level":
         c.execute(
@@ -594,7 +608,7 @@ def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
     E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the wording")
     assert _said(c, task_id, REVIEWER) == ["Ana asks you: OK the wording"]
     X.ran(c, task_id, REVIEWER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     c.execute("UPDATE visits SET tries=3, next_try_at=? WHERE task_id=?", (H.now(), task_id))
     X.ran(c, task_id, REVIEWER)
     assert later(seconds=120) == {"to_manager": 1, "woken": 1}
@@ -676,7 +690,7 @@ def test_a_run_is_on_the_side_of_a_change_it_came_on_whatever_the_clock_says(c, 
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     # Its start runs on a computer whose clock is a minute behind: the run reads as started before the visit began.
     X.ran(c, task_id, BUILDER, at=H.shift(H.now(), minutes=-1))
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a try, not a free start
+    assert later(seconds=840) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a try, not a free start
     assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
     # A change written with the clock gone back still starts the count over, by order.
     E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the wording")
@@ -765,7 +779,7 @@ def test_a_lost_wake_is_written_again_on_the_next_pass_and_is_not_a_try(c, gener
     assert _queued(c, task_id) == [BUILDER] and _said(c, task_id, BUILDER) == first * 2  # the same words
     assert later(seconds=10) == {}  # once: it is queued again
     X.ran(c, task_id, BUILDER)
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a run, then a try
+    assert later(seconds=900) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a run, then a try
     _lose(c, task_id)  # try 1's wake goes missing too: written again, and still try 1
     assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
@@ -854,7 +868,8 @@ def test_a_bot_that_runs_jobs_gets_one_free_wake_per_change_and_then_its_try(c, 
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     X.ran(c, task_id, BUILDER)  # its start
     E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the wording")  # a change, and no run since
-    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)
+    assert later(seconds=120) == {}  # its start finished just now: not woken 2 minutes on
+    assert later(seconds=780) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)
     assert _said(c, task_id, BUILDER)[-1] == "This task is not finished. Carry on."
     _lose(c, task_id)
     assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # lost: written again
@@ -930,7 +945,7 @@ def test_a_task_the_check_cannot_work_out_is_left_as_it_was_and_the_rest_still_h
 
     monkeypatch.setattr(NS.W, "of", of)
     failures = []
-    later_at = H.shift(H.now(), seconds=120)
+    later_at = H.shift(H.now(), seconds=900)
     done = NS.check(c, later_at, failures)
     assert [(task_id, type(error).__name__) for task_id, error in failures] == [(broken, "ValueError")]
     assert done["woken"] == 1 and _ladder(c, fine) == ("owner", 1)
@@ -1025,7 +1040,7 @@ def test_the_heartbeat_runs_the_check_and_reports_a_task_it_could_not_check(api,
         task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
         X.ran(c, task_id, BUILDER)
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    at = START + timedelta(seconds=120)
+    at = START + timedelta(seconds=900)
     time_machine.move_to(at, tick=False)
     words, quiet = S.step_never_stuck(HB.Context(scheduler, at))
     assert (words, quiet) == ("1 woken", False)
@@ -1088,7 +1103,7 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     assert later(seconds=10) == {"to_person": 1} and _visit(c, nobodys)["person_id"] == ANA
     assert H.task_readers(H.task(c, nobodys)) == [] and X.wakes(c, nobodys, MANAGER) == []
     built = _private(c, "Draft the salary review", BUILDER)
-    for gap in (0, 120, 900, 3000):
+    for gap in (0, 900, 900, 3000):
         if gap:
             assert later(seconds=gap) == {"woken": 1}
         X.ran(c, built, BUILDER)
@@ -1097,7 +1112,7 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     assert H.task_readers(H.task(c, built)) == [] and X.wakes(c, built, MANAGER) == []
     shared = _private(c, "Draft the bonus plan", BUILDER)
     H.set_task_readers(c, ANA, shared, add=[MANAGER])  # a person shared it with the manager bot
-    for gap in (0, 120, 900, 3000):
+    for gap in (0, 900, 900, 3000):
         if gap:
             assert later(seconds=gap) == {"woken": 1}
         X.ran(c, shared, BUILDER)
@@ -1196,7 +1211,7 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
     made = H.task_create(c, REVIEWER, "Draft the salary review", "Only us.", BUILDER, private=True, lint=False)
     task_id = made["id"]
     assert H.task_readers(H.task(c, task_id)) == [] and not NS._reads(c, ANA, E.task(c, task_id))
-    for gap in (0, 120, 900, 3000):
+    for gap in (0, 900, 900, 3000):
         if gap:
             assert step(seconds=gap) == {"woken": 1}
         X.ran(c, task_id, BUILDER)

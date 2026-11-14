@@ -134,14 +134,17 @@ def queue_note(c, task, item):
 def queue_checks_done(c, task, head, result, item, armed):
     """Every check on `head` finished with `result` (pass or fail): the one `pr_checks_done` event for it. `armed` is
     the link's `wake_once`, which the same event answers. A result still waiting to be sent for the same head is
-    replaced (a suite GitHub never announced finished late), and keeps an arming it already answered."""
+    replaced (a suite GitHub never announced finished late), and keeps an arming it already answered. `at` is when Tico
+    had the result: a run that began after it already saw it (rules._no_run_needed)."""
     from .repositories import metadata
 
     burst = metadata(c, "github-task-wake:" + task["id"])
     older = [d for d in burst.get("done", []) if d["head"] == head]
     done = [d for d in burst.get("done", []) if d["head"] != head]
     armed = armed or any(d.get("armed") for d in older)
-    done.append({"head": head, "result": result, "item": item[:1000], **({"armed": True} if armed else {})})
+    done.append(
+        {"head": head, "result": result, "item": item[:1000], "at": H.now(), **({"armed": True} if armed else {})}
+    )
     _save_burst(c, task, burst, done=done[-10:])
 
 
@@ -220,6 +223,7 @@ def flush_wakes(c):
                         refs={
                             "pr_head": done["head"],
                             "pr_result": done["result"],
+                            **({"pr_done_at": done["at"]} if done.get("at") else {}),
                             **({"pr_armed": True} if done.get("armed") else {}),
                         },
                         trigger="pr_checks",

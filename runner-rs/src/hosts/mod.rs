@@ -1335,6 +1335,23 @@ impl Host {
         }
     }
 
+    /// Whether the session a resumed thread continues is saved on this computer. Claude says only when a turn runs, so
+    /// it is asked here; every other harness refuses the resume of one it does not have (crate::continuity::missing).
+    pub fn session_saved(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.session_saved(thread_id),
+            _ => true,
+        }
+    }
+
+    /// The next turn makes one model turn and no more (a keep-warm turn, crate::prompt::keep_warm). Claude Code only
+    /// (`--max-turns 1`); the other harnesses take no such limit and rely on the turn's words.
+    pub fn one_turn(&self, thread_id: &str) {
+        if let Host::Claude(h) = self {
+            h.one_turn(thread_id);
+        }
+    }
+
     /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
     /// that does not confirm threads.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {

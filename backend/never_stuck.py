@@ -11,7 +11,8 @@ are on it:
 
 - Everything is met and there is room: the task moves.
 - A bot's turn: nothing while the bot has a live run or a wake queued for the task. Otherwise the ladder: the bot is
-  woken again 2 minutes after it stopped, then 15 minutes, then 50 minutes. After 3 tries with no change the pipeline's
+  woken again 15 minutes after a run that finished (2 minutes after one that was cut off, or a wake that never ran),
+  then 15 minutes, then 50 minutes. After 3 tries with no change the pipeline's
   manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
 - Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
   person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`). Nobody
@@ -54,8 +55,9 @@ _batch: Any = batch_work
 storage_error: Callable[[BaseException], bool] = _batch.storage_error
 SYSTEM: str = E.SYSTEM
 
-# Seconds a bot is left alone after it stopped, before try 1, try 2 and try 3. After try 3 the task goes up a level
-# once the first gap has passed. The third comes back while the bot's session is still cached (backend/prompt_cache.py).
+# Seconds a bot is left alone after it stopped, before try 1, try 2 and try 3. The first gap is only for a run that was
+# cut off (a crash, a limit) or a wake that never ran: after a run that finished, the first look waits the second gap
+# (`_ladder`). After try 3 the task goes up a level once the first gap has passed. The third comes back while the bot's session is still cached (backend/prompt_cache.py).
 GAPS = (E.FIRST_TRY_S, 900, CACHE_WARM_S)
 TRIES = len(GAPS)
 # Bot runs one visit may start between two changes: the owner's start and 3 tries, then the manager bot's 3 tries.
@@ -460,12 +462,17 @@ def _ladder(
         return
     read: str | None = inbox["read_at"] if inbox else None  # it took its wake then, and nothing ran on the engine
     spent = target in spent_by  # its wake for this try was lost twice: the try is spent
+    last = task_wakes.last_run(conn, row, target)
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
+    if tries == 0 and (last or {}).get("state") == "completed":
+        # Its last run finished and said where it stands: no wake 2 minutes on (it stopped on purpose, and a wake that
+        # soon finds nothing new). The first look waits the second gap. A run cut off (a crash, a limit) or a wake that
+        # never ran keeps the 2 minutes.
+        gap = GAPS[1]
     due: str | None = visit.get("next_try_at")
     if not due:
         conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=gap), visit["id"]))
         return
-    last = task_wakes.last_run(conn, row, target)
     stopped: str | None = (last or {}).get("finished_at") or read
     if stopped and not _snoozed_since(conn, visit, stopped):
         due = max(due, str(H.shift(stopped, seconds=gap)))  # the gap runs from when the bot stopped, or read its wake
