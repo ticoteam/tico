@@ -44,11 +44,19 @@ const rule = {source: 'tico', action_id: 'act_77aa01', kind: 'rule_create',
     outcome: {outcome: 'post', account_id: 'acc_5400'},
     examples: [{input: {counterparty: 'Keelson Freight Forwarding', amount: 192000}, expect: 'post', account_id: 'acc_5400'},
       {input: {counterparty: 'Acme Paper', amount: 4500}, expect: 'none'}]}};
-const edition = {url: '/p/e/ed1/3', title: 'November update', text: 'We shipped the phone review.', content_sha256: HASH('9'),
+const edition = {url: 'tico:editions/3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f/3', title: 'November update', text: 'We shipped the phone review.', content_sha256: HASH('9'),
   version: 3, audience: 'Investors', audience_id: 'aud_1', period: 'November 2026', disclosure_revision: 4, rules: HASH('8')};
 const proposal = {kind: 'spend_limit', change: {bot: 'ads', monthly_usd: 3000}};
 const webhook = {name: 'Ops alerts', url: 'https://hooks.acme.example/tico', events: ['task.created'], rate_per_hour: 60, allow_http: false, filter: {}};
-const raise = {project: 'Launch video', usd: '250.00'};
+const raise = {project: 'Launch video', usd: '250.00', task_id: 'T-42'};
+// A stats board, as editions.py _board_content builds it: its url ends in a 64-character hash.
+const board = {url: 'tico:stat-board/aud_1/' + HASH('c'), title: 'Investors stats board', text: 'Revenue: monthly, rounded',
+  content_sha256: HASH('d'), audience: 'Investors', audience_id: 'aud_1', disclosure_revision: 4};
+const cap = {kind: 'task_cap', change: {sender: 'bot:ads', receiver: 'bot:pm', per_day: 5}};
+// A euro book, for an approver who may not read pay-from (a manager, a budget owner): payments.py's own sentence.
+const euro = {source: 'tico', action_id: 'act_eu0001', kind: 'payment_create',
+  what: 'Pay 1920.00 EUR to Keelson Freight Forwarding by ach (Finance action act_eu0001)',
+  payload: {recipient_id: 'ct_91aa', amount: 192000, money_account_id: 'ma_eu1', account_id: 'acc_9999'}, amount: 192000, account: 'ma_eu1'};
 const OKS: Record<string, {subject: string; content: unknown; line: string}> = {
   r1: {subject: 'finance:act_8f3e2b1c9d', content: payment, line: 'OK this payment in Finance?'},
   r2: {subject: 'finance:act_77aa01', content: rule, line: 'OK this rule in Finance?'},
@@ -57,8 +65,11 @@ const OKS: Record<string, {subject: string; content: unknown; line: string}> = {
   r5: {subject: 'proposal:p1', content: proposal, line: 'Change a spend limit?'},
   r6: {subject: 'webhook:abc', content: webhook, line: 'Make this webhook endpoint?'},
   r7: {subject: 'budget_raise:Launch video', content: raise, line: 'Raise the budget?'},
+  r8: {subject: 'board:aud_1', content: board, line: 'Show these stats to Investors?'},
+  r9: {subject: 'proposal:p2', content: cap, line: 'Change how many tasks a teammate may send a manager a day?'},
+  r10: {subject: 'finance:act_eu0001', content: euro, line: 'OK this euro payment in Finance?'},
 };
-const SHOWN: Record<string, string> = {r1: HASH('1'), r2: HASH('2'), r3: HASH('3'), r4: HASH('4'), r5: HASH('5'), r6: HASH('6'), r7: HASH('7')};
+const SHOWN: Record<string, string> = {r1: HASH('1'), r2: HASH('2'), r3: HASH('3'), r4: HASH('4'), r5: HASH('5'), r6: HASH('6'), r7: HASH('7'), r8: HASH('8'), r9: HASH('9'), r10: HASH('e')};
 const email = {preview_complete: true, shown_hash: SHOWN.r3, body: 'Your replacement ships today.',
   bodies: [{type: 'text/plain', text: 'Your replacement ships today.'}],
   send: {id: 'S1', subject: 'Your replacement order', mailbox: 'support@acme.example', recipients: ['jo@customer.example'],
@@ -78,6 +89,7 @@ async function firstScreenClean(page: Page, label: string) {
   const errors: string[] = [];
   const needs = Object.entries(OKS).map(([rid, o], i) => need(rid, o.line, 10 + i));
   const writes: {p: string; body: Record<string, unknown>}[] = [];
+  let payFrom = true;                                 // false: this approver may not read pay-from (403)
   try {
     const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
     page.on('pageerror', (error: Error) => errors.push(error.message));
@@ -94,17 +106,19 @@ async function firstScreenClean(page: Page, label: string) {
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: '1', next: null});
-      const ok = /^\/api\/v2\/oks\/(r\d)$/.exec(p);
+      const ok = /^\/api\/v2\/oks\/(r\d+)$/.exec(p);
       if (ok && OKS[ok[1]!]) return json({requirement_id: ok[1], subject: OKS[ok[1]!]!.subject, content: OKS[ok[1]!]!.content,
         shown_hash: SHOWN[ok[1]!], standing: 'waiting', task_id: 't-' + ok[1]});
       if (p === '/api/v2/email/sends/S1') return json(email);
+      if (p === '/api/v2/finance/pay-from' && !payFrom) return json({error: 'forbidden'}, 403);
+      if (p === '/api/v2/task-caps') return json({caps: [{sender: 'bot:ads', receiver: 'bot:pm', per_day: 3, count: 0}]});
       if (p === '/api/v2/finance/pay-from') return json({accounts: [{id: 'ma_op1', name: 'Operating', last4: '1010'}], currency: 'USD', view_version: 1});
       if (p === '/api/v2/finance/chart') return json({accounts: [{id: 'acc_5400', number: '5400', name: 'Freight in'}], more: false, view_version: 1});
       if (p === '/api/v2/usage/limits') return json({bots: {ads: {monthly_usd: 2000}}, default: {}, pools: null});
       if (p === '/api/v2/event-types') return json({items: [{name: 'task.created', label: 'A task is filed', group: 'task'}]});
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
-        const m = /^\/api\/v2\/tasks\/(t-r\d)\/asks\/(r\d)\/(ok|answer)$/.exec(p);
+        const m = /^\/api\/v2\/tasks\/(t-r\d+)\/asks\/(r\d+)\/(ok|answer)$/.exec(p);
         if (m) return json({task: brief(m[1]!, 'x'), answer_id: 'a-' + m[2], requirement_id: m[2]});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -157,7 +171,7 @@ async function firstScreenClean(page: Page, label: string) {
     await open('r4');
     text = await firstScreenClean(page, 'edition');
     for (const s of ['November update', 'Investors', 'November 2026', 'We shipped the phone review.']) assert.ok(text.includes(s), `edition shows ${s}`);
-    assert.equal(await dialog.locator('.dc-doc .dc-facts a[href="/p/e/ed1/3"]').count(), 1, 'the link is a link');
+    assert.doesNotMatch(text, /tico:|3f2a9c1e/, 'an app-internal link (and the id in it) stays under Details');
     await details('r4');
 
     // r5: a spend limit: from and to in one line.
@@ -177,12 +191,35 @@ async function firstScreenClean(page: Page, label: string) {
     text = await firstScreenClean(page, 'budget raise');
     assert.match(text, /Project\s+Launch video/);
     assert.match(text, /Amount\s+\$250\.00/);
+    assert.doesNotMatch(text, /T-42/, 'an id field stays under Details');
     await details('r7');
 
+    payFrom = false;
     // Approve sends the same hash it always did.
     await dialog.locator('[data-dc="approve"]:not([disabled])').click();
     for (let i = 0; i < 50 && !writes.some(w => w.p === '/api/v2/tasks/t-r7/asks/r7/ok'); i++) await page.waitForTimeout(100);
     assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r7/asks/r7/ok')?.body, {shown_hash: SHOWN.r7});
+
+    // r8: a stats board: its tico:stat-board link and the hash in it are not on the first screen.
+    await open('r8');
+    text = await firstScreenClean(page, 'board');
+    for (const s of ['Investors stats board', 'Investors', 'Revenue: monthly, rounded']) assert.ok(text.includes(s), `board shows ${s}`);
+    assert.doesNotMatch(text, /tico:|Link/);
+    await details('r8');
+
+    // r9: a task cap: from and to.
+    await open('r9');
+    text = await firstScreenClean(page, 'task cap');
+    assert.match(text, /Tasks .+ may send .+: 3 a day → 5 a day/);
+    await details('r9');
+
+    // r10: a euro payment for an approver who may not read pay-from: never a dollar sign; the bank is named as unseen.
+    await open('r10');
+    text = await firstScreenClean(page, 'euro payment');
+    assert.match(text, /Amount\s+€1,920\.00/, "the currency Finance's own sentence names");
+    assert.doesNotMatch(text, /\$/, 'no guessed dollar sign');
+    assert.match(text, /Paid from\s+A bank account you can.t see here/);
+    await details('r10');
 
     assert.deepEqual(errors, []);
     console.log('PASS: every OK kind opens on what will happen in words; JSON and hashes only under Details; Approve sends the same hash.');

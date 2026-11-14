@@ -5,7 +5,8 @@
    - finance (backend/finance/actions.py _approval_payload): Finance's own sentence (`what`), the amount in the book's
      currency (minor units in the content), the bank it is paid from and the line it posts to by name, a rule's words and
      examples. Names read from GET /v2/finance/pay-from and /v2/finance/chart; one that does not load is left out.
-   - edition, board (backend/company_page/editions.py): title, who it goes to, the period, the link, the text.
+   - edition, board (backend/company_page/editions.py): title, who it goes to, the period, the text; the link only when it
+     is a web address (theirs are tico:editions/… and tico:stat-board/<hash>, which stay under Details).
    - proposal (backend/proposals.py): one line per change, from and to (GET /v2/usage/limits, /v2/task-caps).
    - webhook (backend/webhooks.py _spec): the endpoint's name, its address and what it sends (GET /v2/event-types).
    - anything else (budget raise, HQ reply, a new kind): its title and text, then its plain fields as labelled lines.
@@ -24,17 +25,25 @@ const DC_LABELS: Record<string, string> = {to: 'To', from: 'From', cc: 'Cc', bcc
 const dcLabel = (k: string) => DC_LABELS[k] || (k.charAt(0).toUpperCase() + k.slice(1)).replace(/_/g, ' ');
 const dcFacts = (rows: [string, string][]) => rows.length
   ? `<dl class="dc-facts">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>` : '';
-const dcLink = (url: string) => /^(https?:\/\/|\/)/.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>` : esc(url);
+// A web or same-site address, as a link; anything else (tico:editions/<id>/<n>, tico:stat-board/<id>/<hash>: no page
+// opens them) is '' and stays under Details.
+const dcWeb = (url: string) => /^(https?:\/\/|\/(?!\/))/.test(url);
+const dcLink = (url: string) => dcWeb(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>` : '';
 /** The exact content, as the OK is bound to it, behind a Details toggle. */
 function decideDetailsHTML(content: unknown): string {
   return `<details class="dc-details"><summary>Details</summary><pre class="dc-raw">${esc(JSON.stringify(content, null, 2))}</pre></details>`;
 }
-/** Money in minor units, in its currency ($1,920.00 for 192000 USD). */
-function decideMoney(minor: unknown, currency = 'USD'): string {
+/** Money in minor units, in its currency ($1,920.00 for 192000 USD). A currency nobody told us is never guessed: the
+    amount reads as a plain number with two decimals (1,920.00). */
+function decideMoney(minor: unknown, currency = ''): string {
   const n = Number(minor);
   if (minor == null || minor === '' || !Number.isFinite(n)) return '';
-  let f: Intl.NumberFormat;
-  try { f = new Intl.NumberFormat('en-US', {style: 'currency', currency}); } catch { f = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}); }
+  let f: Intl.NumberFormat | null = null;
+  if (currency) try { f = new Intl.NumberFormat('en-US', {style: 'currency', currency}); } catch { f = null; }
+  if (!f) {
+    const plain = new Intl.NumberFormat('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}).format(n / 100);
+    return currency ? `${plain} ${currency}` : plain;
+  }
   return f.format(n / 10 ** (f.resolvedOptions().maximumFractionDigits ?? 2));
 }
 const decideUsd = (x: unknown) => { const n = Number(x); return x == null || x === '' || !Number.isFinite(n) ? '' : new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(n); };
@@ -66,6 +75,7 @@ function decideFieldsHTML(content: unknown): string {
     const list = Array.isArray(v) && v.every(x => typeof x === 'string' || typeof x === 'number') ? v.map(String) : null;
     const s = list ? list.join(', ') : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : dcStr(v);
     if (!s.trim() || (!list && DC_HIDDEN_VALUE.test(s))) continue;
+    if (k === 'url' && !dcWeb(s)) continue;
     rows.push([dcLabel(k), k === 'usd' ? esc(decideUsd(v) || s) : k === 'url' ? dcLink(s) : esc(s)]);
   }
   return (titleKey ? `<h3 class="dc-title">${esc(String(o[titleKey]))}</h3>` : '') + dcFacts(rows)
@@ -74,21 +84,24 @@ function decideFieldsHTML(content: unknown): string {
 
 // ---- Finance
 interface DcFinNames { banks: Map<string, string>; lines: Map<string, string>; currency: string }
-async function decideFinanceNames(): Promise<DcFinNames> {
+/** The book's currency and the names of its banks and lines, as far as this person may read them. pay-from needs
+    finance.pay, which an approver (a manager, a budget owner) may not hold: then the currency is the one Finance's own
+    sentence names ("Pay 1920.00 EUR to …"), else unknown. */
+async function decideFinanceNames(what: string): Promise<DcFinNames> {
   const [pay, chart] = await Promise.all([
     get<{accounts?: {id: string; name: string; last4?: string | null}[]; currency?: string}>('/v2/finance/pay-from', {fresh: true}).catch(() => null),
     get<{accounts?: {id: string; number?: string | null; name: string}[]}>('/v2/finance/chart', {fresh: true}).catch(() => null)]);
   return {
     banks: new Map((pay?.accounts || []).map(a => [a.id, `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`])),
     lines: new Map((chart?.accounts || []).map(a => [a.id, a.number ? `${a.name} · ${a.number}` : a.name])),
-    currency: pay?.currency || 'USD'};
+    currency: pay?.currency || /\b\d[\d,.]*\s([A-Z]{3})\b/.exec(what)?.[1] || ''};
 }
 const DC_EXPECT: Record<string, string> = {post: 'posts', ask: 'asks', none: 'not matched', allow: 'allowed', deny: 'refused',
   needs_approval: 'needs approval', limit: 'limited'};
 async function decideFinanceHTML(content: unknown): Promise<string> {
   const o = dcObj(content), p = dcObj(o.payload);
   const what = dcStr(o.what).replace(/\s*\(Finance action [^)]*\)\s*$/, '').trim();
-  const names = await decideFinanceNames();
+  const names = await decideFinanceNames(what);
   const money = (n: unknown) => decideMoney(n, names.currency);
   const bank = (id: unknown) => names.banks.get(dcStr(id)) || '';
   const line = (id: unknown) => names.lines.get(dcStr(id)) || '';
@@ -96,7 +109,9 @@ async function decideFinanceHTML(content: unknown): Promise<string> {
   const amount = o.amount ?? p.amount;
   if (typeof amount === 'number') rows.push(['Amount', esc(money(amount))]);
   const from = bank(p.money_account_id) || bank(p.from_account) || bank(o.account);
+  const fromId = p.money_account_id ?? p.from_account ?? o.account;
   if (from) rows.push(['Paid from', esc(from)]);
+  else if (dcStr(fromId) && dcStr(fromId) !== 'bank') rows.push(['Paid from', 'A bank account you can’t see here (its id is under Details)']);
   if (bank(p.to_account)) rows.push(['Into', esc(bank(p.to_account))]);
   if (line(p.account_id)) rows.push(['Posts to', esc(line(p.account_id))]);
   if (typeof p.memo === 'string' && p.memo.trim()) rows.push(['Memo', esc(p.memo)]);
@@ -118,7 +133,7 @@ function decideEditionHTML(content: unknown): string {
   const o = dcObj(content), rows: [string, string][] = [];
   if (dcStr(o.audience)) rows.push(['Goes to', esc(dcStr(o.audience))]);
   if (dcStr(o.period)) rows.push(['Period', esc(dcStr(o.period))]);
-  if (dcStr(o.url)) rows.push(['Link', dcLink(dcStr(o.url))]);
+  if (dcWeb(dcStr(o.url))) rows.push(['Link', dcLink(dcStr(o.url))]);
   return (dcStr(o.title) ? `<h3 class="dc-title">${esc(dcStr(o.title))}</h3>` : '') + dcFacts(rows)
     + (dcStr(o.text) ? `<div class="md">${md(dcStr(o.text))}</div>` : '');
 }
@@ -166,5 +181,6 @@ async function decideWebhookHTML(content: unknown): Promise<string> {
   const rows: [string, string][] = [['Address', dcLink(dcStr(o.url))], ['Sends', esc(sends)]];
   if (typeof o.rate_per_hour === 'number') rows.push(['At most', esc(`${o.rate_per_hour} an hour`)]);
   if (o.allow_http === true) rows.push(['Plain http', 'Allowed (not encrypted)']);
+  if (Object.keys(dcObj(o.filter)).length) rows.push(['Only when', 'A filter narrows what it sends (under Details)']);
   return `<h3 class="dc-title">${esc(`Make the webhook endpoint "${dcStr(o.name)}"`)}</h3>` + dcFacts(rows);
 }
