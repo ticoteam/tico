@@ -4,6 +4,8 @@ pytest>=8,<10
 jsonschema>=4.23,<5  # checks the declared OpenAPI schemas are valid JSON Schema
 playwright>=1.50,<2
 pytest-xdist>=3.6,<4
+pytest-cov==7.1.0  # the merge queue's diff coverage gate (scripts/diff_coverage.py)
+coverage==7.17.0  # the same gate's statement analysis; pinned with pytest-cov
 time-machine>=2.16,<3  # the factory simulation's fake clock (evals/factory)
 
 websockets>=16,<17  # real Rust screen relay contract client

@@ -48,6 +48,10 @@ click==8.5.0
     # via
     #   -c requirements.txt
     #   uvicorn
+coverage[toml]==7.17.0
+    # via
+    #   -r requirements-dev.in
+    #   pytest-cov
 croniter==6.2.4
     # via
     #   -c requirements.txt
@@ -125,7 +129,9 @@ pillow==13.0.0
 playwright==1.64.0
     # via -r requirements-dev.in
 pluggy==1.7.0
-    # via pytest
+    # via
+    #   pytest
+    #   pytest-cov
 protobuf==7.36.2
     # via
     #   -c requirements.txt
@@ -173,7 +179,10 @@ pypdf==6.21.4
 pytest==9.1.1
     # via
     #   -r requirements-dev.in
+    #   pytest-cov
     #   pytest-xdist
+pytest-cov==7.1.0
+    # via -r requirements-dev.in
 pytest-xdist==3.8.0
     # via -r requirements-dev.in
 python-dateutil==2.9.0.post0
