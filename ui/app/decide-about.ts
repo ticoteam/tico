@@ -115,7 +115,9 @@ function decideAboutHTML(it: NeedsEntry, kind: AskKind): string {
   if (v.state === 'failed') return `<div class="dc-doc">${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
   const text = decideAboutText(t);
   const body = text ? `<div class="md dc-md">${md(text)}</div>` : '<p class="muted">No details.</p>';
-  return `<div class="dc-doc">${decideAboutWho(it, kind, t)}${quote}${body}${decideAboutChips(t!, text)}</div>`;
+  // Nothing to show (no text, links or files): marked, so a phone opens on the question instead (decide.css).
+  const chips = decideAboutChips(t!, text), bare = !text && !chips && !quote ? ' dc-bare' : '';
+  return `<div class="dc-doc${bare}">${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
 /** The task's links, files and the pages its text names (`page:<id>@<n>`), as chips: a file opens in the viewer, a page
     at its version. */

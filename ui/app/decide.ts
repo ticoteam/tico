@@ -113,6 +113,8 @@ let DECIDE_WANT = '';                       // a deep link's item (#/decide?item
 let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
 const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 const DEC_UNDO_MS = 10_000;
+const DEC_CALM_MS = 400;
+let DEC_CALM_TIMER = 0;
 // The two answers Tico adds to every bot's question to a person (backend/answers.py DONT_KNOW, GIVE_BACK).
 const DEC_DONT_KNOW = "I don't know, explain", DEC_GIVE_BACK = 'Give it back';
 const DEC_FILES_MAX = 10;                   // files on one note
@@ -244,6 +246,8 @@ function decideDialog(): HTMLDialogElement {
     if (ev.key === 'ArrowLeft') { ev.preventDefault(); decideStep(DEC, -1); }
     if (ev.key === 'ArrowRight') { ev.preventDefault(); decideStep(DEC, 1); }
   });
+  // The pinned row's height changes with the width (a row that wraps) and the safe area.
+  window.addEventListener('resize', () => { if (d?.open) decideBarRoom(); });
   d.addEventListener('cancel', ev => { ev.preventDefault(); decideStop(); });
   d.addEventListener('close', () => { if (!d.open) decideStop(); });
   document.body.appendChild(d);
@@ -378,11 +382,20 @@ function decideStep(st: DecState, dir: number) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + dir];
   if (next) { decideFilesLeft(st); decideGo(st, next); }
 }
-/** Skip (every width; a phone has no ‹ ›): the next item, nothing answered; from the last, the first one still waiting,
-    which is the first one skipped. */
+/** Skip (every width): the next item, nothing answered; from the last, the first one still waiting, which is the first
+    one skipped. */
 function decideSkip(st: DecState) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + 1] || live[0];
-  if (next && next !== st.at) { decideFilesLeft(st); decideGo(st, next); }
+  if (next && next !== st.at) { decideFilesLeft(st); decideGo(st, next); decideCalm(); }
+}
+/** After an answer or Skip the next item comes in where the last one's buttons were: for DEC_CALM_MS its buttons take no
+    taps (decide.css .dc-calm), so a second tap on the same spot answers nothing unread. */
+function decideCalm() {
+  const root = $('.decide');
+  if (!root) return;
+  clearTimeout(DEC_CALM_TIMER);
+  root.classList.add('dc-calm');
+  DEC_CALM_TIMER = window.setTimeout(() => root.classList.remove('dc-calm'), DEC_CALM_MS);
 }
 /** Moving on unsent: the note's files stay on the task's Files (each uploaded when added), and the toast says where. */
 function decideFilesLeft(st: DecState) {
@@ -395,6 +408,7 @@ function decideAfter(st: DecState, id: string) {
   st.answered++;
   const i = st.order.indexOf(id), live = (k: string) => !st.gone.has(k) && st.items.has(k);
   decideGo(st, st.order.slice(i + 1).find(live) || st.order.slice(0, Math.max(i, 0)).reverse().find(live) || null);
+  decideCalm();
 }
 
 // ---- drawing
@@ -453,6 +467,7 @@ function decideRender(st: DecState) {
   if (!it) {
     $('.dc-thing', root)!.innerHTML = '';
     $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
+    decideBarRoom();
     return;
   }
   // Coming to an ask: what it shows is read once; held content from other refs (a new version came while it was off
@@ -565,7 +580,9 @@ function decidePaintSide(st: DecState) {
     const checked = !page && it.task?.stage_id === 'product-validate' && decideAsker(it).startsWith('bot:')
       && /^page:/.test(it.ask?.shows?.[0] || '');
     body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"></textarea></label>
-      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
+      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
+        // On a phone Send back is always on; with no note it asks for one (decideClick). A wide screen keeps it off until then.
+        decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}</div>`;
   } else if (typed) {
     body = decideTypedHTML(typed, it.ask?.choices || [], st.busy);
   } else if (kind === 'question' && asker.startsWith('bot:')) {
@@ -623,6 +640,15 @@ function decidePaintSide(st: DecState) {
   if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
   decideHeldWire(st, host);
   decideNeedsText($('.decide')!);
+  decideBarRoom();
+}
+/** On a phone the answer row is pinned to the bottom (decide.css): the scroll keeps its height clear at the end and the
+    Undo bar sits above it. 0 where no row is pinned. */
+function decideBarRoom() {
+  const root = $('.decide');
+  if (!root) return;
+  const row = decidePhone() ? root.querySelector<HTMLElement>('.dc-side>div:not(.dc-done)>.dc-acts:last-child') : null;
+  root.style.setProperty('--dc-bar-h', `${row ? row.offsetHeight : 0}px`);
 }
 // ---- a page that comes back: the right side in parts
 const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['?', 'Unsure'], not_met: ['✗', "Doesn't"]};
@@ -715,8 +741,8 @@ function decideFilesPaint(st: DecState) {
 }
 // ---- the note: its size, and the screenshots and files that go with it
 const decidePhone = () => matchMedia('(max-width:760px)').matches;
-/** The note starts at 7 lines on a wide screen, 4 on a phone. */
-const decideNoteRows = () => decidePhone() ? 4 : 7;
+/** The note starts at 7 lines on a wide screen, 1 on a phone (it grows as it is typed in). */
+const decideNoteRows = () => decidePhone() ? 1 : 7;
 /** The note grows with its text, up to the answer column's height (half the screen on a phone), then scrolls. */
 function decideGrow(box: HTMLTextAreaElement) {
   const side = box.closest<HTMLElement>('.dc-side');
@@ -1199,9 +1225,14 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   switch (what) {
     case 'approve': await decideApprove(st, it); return;
     case 'sendback': {
-      // Send back still needs words; it waits for the files to be up, and sends nothing while one failed.
+      // Send back still needs words: with none it sends nothing and asks for them in Notes. It waits for the files to be
+      // up, and sends nothing while one failed.
       const note = decideNote('#dc-notes');
-      if (!note) return;
+      if (!note) {
+        const box = $('#dc-notes') as HTMLTextAreaElement | null;
+        if (box) { box.placeholder = 'Say what to change'; box.focus(); }
+        return;
+      }
       const files = await decideFilesReady(st, it.id);
       if (!files) { if (DEC === st) decidePaintSide(st); return; }
       const page = await decideShownPage(st, it);

@@ -10,11 +10,13 @@ import type {Page, Route} from 'playwright';
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
 //   line tall;
 // - an ask with nothing to show opens on its question, right under the header;
-// - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it.
+// - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
+// - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note.
 // Each check is collected, so a run on the old code lists every one that fails.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
@@ -37,7 +39,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
   stages: [{id: 'spec', name: 'Spec', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
     expected_bots_only: false, on_enter: {}, requirements: []}],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-const Q = ['Approve the invoice run', 'Approve the launch email', 'Which plan do new signups get?'];
+const Q = ['Approve the invoice run', 'Approve the launch email', 'Which plan do new signups get?', 'Approve the price change'];
 // Content like a real review: several screens of text.
 const long = (what: string) => ({title: what, body: Array.from({length: 40}, (_, i) => `${what}, paragraph ${i + 1}: the numbers, who gets it and when it goes out.`).join('\n\n')});
 const VIEW = {width: 390, height: 844};
@@ -61,11 +63,9 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
   const errors: string[] = [], fails: string[] = [], writes: string[] = [];
   const check = (ok: boolean, what: string) => { if (!ok) fails.push(what); };
-  let needs = [ok(1, Q[0]!), ok(2, Q[1]!), question(3, Q[2]!)];
-  try {
-    const page = await browser.newPage({viewport: VIEW, serviceWorkers: 'block', hasTouch: true});
-    page.on('pageerror', (error: Error) => errors.push(error.message));
-    await page.route('**/*', (route: Route) => {
+  const shots = process.env.TICO_UI_SHOTS;
+  let needs = [ok(1, Q[0]!), ok(2, Q[1]!), question(3, Q[2]!), ok(4, Q[3]!)];
+  const serve = (page: Page) => page.route('**/*', (route: Route) => {
       const r = route.request(), url = new URL(r.url()), p = url.pathname;
       const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
@@ -79,30 +79,42 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       const okRead = p.match(/^\/api\/v2\/oks\/(r\d)$/);
-      if (okRead) return json({requirement_id: okRead[1], subject: `spec:${okRead[1]}`, content: long(okRead[1] === 'r1' ? Q[0]! : Q[1]!),
-        shown_hash: (okRead[1] === 'r1' ? 'a' : 'b').repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
+      if (okRead) return json({requirement_id: okRead[1], subject: `spec:${okRead[1]}`, content: long(Q[Number(okRead[1]!.slice(1)) - 1]!),
+        shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
       // The question's task has no text of its own: nothing to show.
       if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: ''}});
       if (r.method() !== 'GET' && p.startsWith('/api/')) {
         writes.push(`${r.method()} ${p}`);
-        const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
+        const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/(?:answer|ok)$/);
         if (m) { needs = needs.filter(n => n.id !== m[2]); return json({task: brief(m[1]!, 'Task'), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
+  try {
+    const page = await browser.newPage({viewport: VIEW, serviceWorkers: 'block', hasTouch: true});
+    page.on('pageerror', (error: Error) => errors.push(error.message));
+    await serve(page);
     await page.goto('http://tico-ui.test/#/tasks');
     await page.locator('[data-need="r1"]').waitFor();
-    await page.locator('#task-play').click();
+    // Answers come first in the walk (the question is item 1); open on the first OK.
+    await page.locator('[data-need="r1"]').click();
     const dialog = page.locator('#need-card');
     const at = async (q: number) => { await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor(); };
     const approve = '#need-card [data-dc="approve"]', sendback = '#need-card [data-dc="sendback"]', skip = '#need-card [data-dc="skip"]';
     await at(1);
     await page.locator(`${approve}:not([disabled])`).waitFor();
+    if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-open.png')});
 
     // One scroll: only the screen's body scrolls; the thing and the question do not scroll on their own.
     const scrolling = await scrollers(page);
     check(scrolling.length === 1, `one scroll area, not ${scrolling.length}: ${JSON.stringify(scrolling)}`);
+    const scrolledBy = await page.evaluate(() => ['.dc-thing .dc-doc', '.dc-side .dc-q'].map(s => {
+      for (let el = document.querySelector<HTMLElement>(`#need-card ${s}`)?.parentElement; el; el = el.parentElement)
+        if (/auto|scroll/.test(getComputedStyle(el).overflowY)) return String(el.className);
+      return 'none';
+    }));
+    check(scrolledBy[0] === scrolledBy[1], `the thing and the question scroll together (${JSON.stringify(scrolledBy)})`);
 
     // The bar: pinned to the bottom, solid, each button at least 44 px and the one a tap at its centre reaches.
     const bar = (await box(page, `${approve} >> xpath=..`))!;
@@ -144,9 +156,9 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       await page.locator(prev).click();
       await at(1);
     } else {
-      // The old way to see item 2 first, so it is ready the moment it comes back: Skip there and Skip round.
-      await page.locator(skip).click(); await at(2);
-      await page.locator(`${approve}:not([disabled])`).waitFor();
+      // The old way to read items 2 and 4 first, so each is ready the moment it comes back: Skip through them, round
+      // the question and on to item 1.
+      for (const n of [2, 4]) { await page.locator(skip).click(); await at(n); await page.locator(`${approve}:not([disabled])`).waitFor(); }
       await page.locator(skip).click(); await at(3);
       await page.locator(skip).click(); await at(1);
     }
@@ -156,13 +168,10 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
     await at(2);
-    // The same spot again at once: item 2 is ready (read before), and nothing more is approved.
-    await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
-    await page.waitForTimeout(500);
-    check(JSON.stringify(writes) === JSON.stringify(['POST /api/v2/tasks/t1/asks/r1/answer']),
-      `a second tap within 400 ms approves nothing (${JSON.stringify(writes)})`);
-    await at(2);
+    await page.waitForTimeout(450);                                   // past the 400 ms a new item takes no taps
+    check(await dialog.locator('.dc-bar:not([hidden])').count() === 1, 'the message still shows');
+    if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
     check(toast.y + toast.height <= row.y, `"Approved · Undo" is above the bar (${toast.y + toast.height} > ${row.y})`);
     for (const sel of [approve, sendback, skip]) {
@@ -177,14 +186,46 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(up.y + up.height <= 481, `with the keyboard up the bar stays above it (${up.y + up.height})`);
     await page.evaluate(() => document.documentElement.style.removeProperty('--chat-viewport-height'));
 
-    // An ask with nothing to show opens on its question, right under the header.
+    // A second tap: with item 4 read once (so its Approve is on the moment it comes in), Approve item 2, then tap the
+    // same spot at once. Nothing more is approved.
     await page.waitForTimeout(450);
-    await page.locator(skip).click();
+    if (await page.locator(next).isVisible()) { await page.locator(next).click(); await at(4); await page.locator(`${approve}:not([disabled])`).waitFor(); await page.locator(prev).click(); }
+    await at(2);
+    await page.locator(`${approve}:not([disabled])`).waitFor();
+    const spot2 = (await box(page, approve))!;
+    await page.mouse.click(spot2.x + spot2.width / 2, spot2.y + spot2.height / 2);
+    await at(4);
+    await page.mouse.click(spot2.x + spot2.width / 2, spot2.y + spot2.height / 2);
+    await page.waitForTimeout(500);
+    check(JSON.stringify(writes) === JSON.stringify(['POST /api/v2/tasks/t1/asks/r1/ok', 'POST /api/v2/tasks/t2/asks/r2/ok']),
+      `a second tap within 400 ms approves nothing (${JSON.stringify(writes)})`);
+
+    // An ask with nothing to show opens on its question, right under the header (Skip from the last wraps to it).
+    if (!await dialog.locator('.dc-q', {hasText: Q[2]!}).count()) await page.locator(skip).click();
     await at(3);
     await dialog.locator('.dc-thing .dc-doc').waitFor({state: 'attached'});
     await page.waitForTimeout(100);
     const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-q'))!;
     check(q.y - (head.y + head.height) <= 24, `the question opens the screen (${q.y - (head.y + head.height)} px under the header)`);
+    if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
+    await page.close();
+
+    // 1440 px: as before.
+    needs = [ok(1, Q[0]!), ok(2, Q[1]!), question(3, Q[2]!), ok(4, Q[3]!)];
+    const wide = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+    wide.on('pageerror', (error: Error) => errors.push(error.message));
+    await serve(wide);
+    await wide.goto('http://tico-ui.test/#/tasks');
+    await wide.locator('[data-need="r1"]').click();
+    await wide.locator('#need-card .dc-q', {hasText: Q[0]!}).waitFor();
+    await wide.locator(`${approve}:not([disabled])`).waitFor();
+    const side = (await box(wide, '#need-card .dc-side'))!, thing = (await box(wide, '#need-card .dc-thing'))!;
+    check(Math.abs(side.width - 420) <= 1 && side.y === thing.y, `1440: two columns, the answer column 420 px (${side.width})`);
+    check(await wide.locator('#need-card [data-dc="next"]').isVisible(), '1440: › shows');
+    check(await wide.locator('#dc-notes').getAttribute('rows') === '7', '1440: Notes starts at 7 lines');
+    check(await wide.locator(sendback).isDisabled(), '1440: Send back is off with an empty note');
+    if (shots) await wide.screenshot({path: path.join(shots, 'ask-desktop-1440.png')});
+    await wide.close();
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);

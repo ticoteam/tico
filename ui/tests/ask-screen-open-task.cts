@@ -199,7 +199,7 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
       } finally { await page.close(); }
     }
 
-    // A phone: Notes starts at 4 lines, the buttons are on screen, nothing scrolls sideways.
+    // A phone: Notes starts at 1 line, the buttons are on screen, nothing scrolls sideways.
     {
       const tasks = fixtures();
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, tasks});
@@ -207,7 +207,7 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         await page.evaluate(() => { void taskModalOpen('t-1'); });
         await card(page).waitFor({timeout: 5000});
         const notes = page.locator('#dc-notes');
-        assert.equal(await notes.getAttribute('rows'), '4');
+        assert.equal(await notes.getAttribute('rows'), '1');
         await notes.fill('A note typed on a phone. '.repeat(8));
         await paste(page, [{name: 'image.png', type: 'image/png'}]);
         // Measured once the upload has settled, so no redraw runs under the measurement.
