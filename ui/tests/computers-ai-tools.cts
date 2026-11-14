@@ -183,7 +183,12 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await dialog.waitFor();
     assert.equal(await dialog.locator('[data-turn-counts]').innerText(), box.turn_summary);
     assert.deepEqual(await dialog.locator('section h3').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
-      ['connections', 'screen', 'bots on this computer', 'versions and updates', 'settings']);
+      ['connections', 'when plans run out', 'screen', 'bots on this computer', 'versions and updates', 'settings']);
+    // When plans run out (backend/models_preset.py computer_falls_back): off until an admin turns it on, and an admin may.
+    const fallback = dialog.locator('[data-detail-section=gateway]');
+    assert.equal(await fallback.locator('[data-gateway-fallback=box]').isChecked(), false);
+    assert.equal(await fallback.locator('[data-gateway-fallback=box]').isEnabled(), true, 'an admin may turn it on');
+    assert.match(await fallback.innerText(), /Fall back to Tico Gateway\s+When its plans run out, its bots wait for a plan to reset\./);
     // 7. One line per AI tool, the computer's login, used by all its bots on that tool.
     const conns = dialog.locator('[data-connection]');
     assert.deepEqual(await conns.evaluateAll(list => list.map(c => c.dataset.connection)), ['own:claude', 'own:codex', 'own:musecode']);
@@ -564,6 +569,19 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
       + '[data-computer-remove], [data-inbox-only], [data-member-bots], [data-turns-at-once], [data-computer-screen], '
       + '[data-harness-choice], [data-performance-mode], [data-computer-rename]').count(), 0);
     await page.keyboard.press('Escape');
+
+    // The computer's owner who is not an admin, and any other member, see When plans run out but cannot switch it: only an
+    // admin changes it (backend: POST /v2/runners/<id>/gateway-fallback is admin-only).
+    for (const who of [{id: 'cara', name: 'a member'}, {id: 'ana', name: "the computer's owner"}]) {
+      await page.evaluate(id => { S.me = {...S.me, id, role: 'member', bot_admin: false}; return loadSettings(); }, who.id);
+      await row('box').locator('.machine-name').click();
+      const gateway = dialog.locator('[data-detail-section=gateway]');
+      await gateway.waitFor();
+      assert.equal(await gateway.locator('h3').innerText().then(t => t.toLowerCase()), 'when plans run out');
+      assert.equal(await gateway.locator('[data-gateway-fallback=box]').isDisabled(), true, `${who.name} cannot switch it`);
+      assert.match(await gateway.innerText(), /its bots wait for a plan to reset/);
+      await page.keyboard.press('Escape');
+    }
 
     assert.deepEqual(errors, []);
     console.log('PASS: compact computer rows, connection chips, detail pop-up, one login per tool, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins, live/stale presence and draft preservation');
