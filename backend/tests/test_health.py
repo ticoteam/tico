@@ -1652,7 +1652,8 @@ def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(mo
     assert check_at(5)["status"] == "ok"
     stale = check_at(15)
     assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
-    assert re.search(r"since \d\d:\d\d UTC;", stale["summary"])  # a clock time, not the ISO stamp
+    # a clock time, not the ISO stamp; past midnight UTC it carries the day too ("since Nov 13 23:56 UTC;")
+    assert re.search(r"since ([A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d UTC;", stale["summary"])
     assert check_at(120)["status"] == "bad"
 
 
