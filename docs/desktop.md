@@ -112,7 +112,7 @@ Download your company's app from your own Tico page. It has your team's name and
 your Team directly, and updates itself from your server. Each company has a stable bundle ID,
 so its app can coexist with another company's app and the generic Tico app. The download API
 `GET /api/download/{mac|windows|linux}` returns `app_kind: company` or `generic`; a frontend
-can show **Download Tico for <team name>** for a company build. The web app offers only a
+can show **Download Mac app** (or Windows, Linux) for a company build. The web app offers only a
 company build; the generic app stays on the GitHub release page.
 
 If an older company app does not update itself, sign in to your team's Tico page, download the

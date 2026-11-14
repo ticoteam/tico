@@ -125,6 +125,10 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 #account .account-email{overflow:hidden;text-overflow:ellipsis}
 /* At least as wide as the account button, wider when an item needs it (Take the tour is a button in it). */
 #account-menu{width:max-content;min-width:100%;box-sizing:border-box}#account-menu .nav-link{white-space:nowrap}
+/* #side clips its overflow, which cut the end of a wider menu (the download row's Beta pill, #405). While the menu is open,
+   let it draw past the sidebar's edge, above the sidebar's resize handle (.rail-edge, z-index 21), which would otherwise
+   cover the menu's last 8 px and take its clicks; closed, the sidebar clips and stacks as before. */
+#side:has(#account-menu:not([hidden])){overflow:visible;z-index:22}
 #account-menu button.nav-link{width:100%;border:0;background:none;text-align:left;cursor:pointer}#account-menu button.nav-link:hover{background:var(--surface2)}
 .tree,.tree ul{list-style:none;margin:0;padding:0}
 /* The lines (tree-lines.css): a rail from each manager's avatar, an elbow into each report's. A row's avatar sits
