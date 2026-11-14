@@ -10,7 +10,8 @@ import type {Page, Route} from 'playwright';
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
 //   line tall;
 // - an ask with nothing to show opens on its question, right under the header: a question whose task has no text, and an
-//   OK with nothing attached (no grant, no shows: an empty .dc-doc, task #472);
+//   OK with nothing attached (no grant, no shows: an empty .dc-doc, task #472); an OK whose only show is a page keeps
+//   its pane, page and all;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
 // - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
@@ -27,10 +28,10 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
   owner_id: 'bot:pm', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-const ok = (n: number, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+const ok = (n: number, line: string, shows: string[] = []) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, `Task ${n}`),
   ask: {requirement_id: `r${n}`, kind: 'ok', line, who: 'human:ana', asked_by: 'human:bo', choices: null, may: ['ok', 'no'],
-    met: false, shows: [], standing: 'waiting', answer: null}});
+    met: false, shows, standing: 'waiting', answer: null}});
 const question = (n: number, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, `Task ${n}`),
   ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'human:bo', choices: ['Free', 'Pro trial'],
@@ -80,7 +81,10 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       // An OK with nothing attached: no grant to read.
-      if (p === '/api/v2/oks/r5') return json({detail: 'not found'}, 404);
+      if (p === '/api/v2/oks/r5' || p === '/api/v2/oks/r6') return json({detail: 'not found'}, 404);
+      // The only thing an OK shows can be a page (`page:<id>`, no version): no text of its own, but not empty.
+      if (p === '/api/v2/pages/p6') return json({page: {id: 'p6', title: 'Launch plan', body: 'Launch plan body.', kind: 'doc',
+        owner_id: 'bot:pm', updated_at: '2026-11-09T10:00:00Z'}});
       const okRead = p.match(/^\/api\/v2\/oks\/(r\d)$/);
       if (okRead) return json({requirement_id: okRead[1], subject: `spec:${okRead[1]}`, content: long(Q[Number(okRead[1]!.slice(1)) - 1]!),
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
@@ -251,6 +255,20 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(rule === '0px', `an empty OK has no hairline above its question (${rule})`);
     if (shots) await bare.screenshot({path: path.join(shots, 'ask-phone-390-empty-ok.png')});
     await bare.close();
+
+    // An OK whose only show is a page has no text, yet its pane shows the page: it is not bare.
+    needs = [ok(6, 'OK the launch plan?', ['page:p6'])];
+    const paged = await browser.newPage({viewport: VIEW, serviceWorkers: 'block', hasTouch: true});
+    paged.on('pageerror', (error: Error) => errors.push(error.message));
+    await serve(paged);
+    await paged.goto('http://tico-ui.test/#/tasks');
+    await paged.locator('[data-need="r6"]').click();
+    await paged.locator('#need-card .dc-q', {hasText: 'OK the launch plan?'}).waitFor();
+    await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().waitFor({state: 'attached'});
+    check(await paged.locator('#need-card .dc-thing').isVisible(), 'an OK showing only a page keeps its pane');
+    check(await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().isVisible(),
+      'an OK showing only a page shows the page');
+    await paged.close();
 
     // 1440 px: as before.
     needs = [ok(1, Q[0]!), ok(2, Q[1]!), question(3, Q[2]!), ok(4, Q[3]!)];
