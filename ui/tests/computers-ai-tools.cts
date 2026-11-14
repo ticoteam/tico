@@ -553,6 +553,12 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await row('old').waitFor();
     assert.equal(await row('old').locator('[data-machine-status]').innerText(), 'revoked');
     assert.equal(await page.locator('#set-machines table [data-computer-remove]').count(), 0);
+    // A revoked computer has no When plans run out: its bots run nowhere.
+    await row('old').locator('.machine-name').click();
+    await dialog.waitFor();
+    assert.equal(await dialog.locator('[data-detail-section=gateway], [data-gateway-fallback]').count(), 0, 'no fallback on a revoked computer');
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({state: 'detached'});
 
     // 22. A member who is neither admin nor operator sees everything and can change nothing. The server sends them no
     // accounts and no usage of the computer's own login.
@@ -570,15 +576,17 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
       + '[data-harness-choice], [data-performance-mode], [data-computer-rename]').count(), 0);
     await page.keyboard.press('Escape');
 
-    // The computer's owner who is not an admin, and any other member, see When plans run out but cannot switch it: only an
-    // admin changes it (backend: POST /v2/runners/<id>/gateway-fallback is admin-only).
-    for (const who of [{id: 'cara', name: 'a member'}, {id: 'ana', name: "the computer's owner"}]) {
-      await page.evaluate(id => { S.me = {...S.me, id, role: 'member', bot_admin: false}; return loadSettings(); }, who.id);
+    // Everyone sees When plans run out; only an admin changes it (the gateway-fallback route is admin_only: the company
+    // owner or an Admin). An Admin who is not the owner may; the computer's owner who is not an admin, and a member, may not.
+    for (const who of [{id: 'cara', name: 'a member', bot_admin: false, may: false},
+                       {id: 'ana', name: "the computer's owner", bot_admin: false, may: false},
+                       {id: 'cara', name: 'an Admin who is not the owner', bot_admin: true, may: true}]) {
+      await page.evaluate(({id, bot_admin}) => { S.me = {...S.me, id, role: 'member', bot_admin}; return loadSettings(); }, who);
       await row('box').locator('.machine-name').click();
       const gateway = dialog.locator('[data-detail-section=gateway]');
       await gateway.waitFor();
       assert.equal(await gateway.locator('h3').innerText().then(t => t.toLowerCase()), 'when plans run out');
-      assert.equal(await gateway.locator('[data-gateway-fallback=box]').isDisabled(), true, `${who.name} cannot switch it`);
+      assert.equal(await gateway.locator('[data-gateway-fallback=box]').isEnabled(), who.may, `${who.name} ${who.may ? 'may' : 'cannot'} switch it`);
       assert.match(await gateway.innerText(), /its bots wait for a plan to reset/);
       await page.keyboard.press('Escape');
     }
