@@ -50,8 +50,16 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
 
 
 def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_path):
+    from backend import website_tools
+    from backend.tests.helpers.credentials import setup
+
     r, _, a = setup_attempt(api)
     post(api, f"attempts/{a['id']}/started", {"thread_id": "pre-disaster"}, r["token"])
+    setup(api)
+    site = post(api, 'website-tools', {'sites': ['app.acme.example']})['id']
+    account = post(api, f'website-tools/{site}/accounts', {})['id']
+    with api.app.state.store.read() as c:
+        assert website_tools.can_use(c, 'bot:ops', website_tools._account(c, site, account))
     backup = tmp_path / "backup.sqlite"
     restored = tmp_path / "restored.sqlite"
     snapshot(api.app.state.store.settings.db_path, backup)
@@ -65,6 +73,7 @@ def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_pat
     with pytest.raises(Problem):
         auth.authenticate({"authorization": "Bearer " + a["token"]})
     with store.read() as c:
+        assert not website_tools.can_use(c, 'bot:ops', website_tools._account(c, site, account))
         assert c.execute("SELECT state FROM jobs WHERE id=?", (a["job_id"],)).fetchone()[0] == "uncertain"
         assert c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0] == 2
 
