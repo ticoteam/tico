@@ -1,6 +1,7 @@
 // Settings > Health's Checks (Amendment v3): what Check health still has open, from GET /api/v2/health/findings. A setup
 // problem is fixed by BotOps. A Tico bug that has a ticket says so; one nobody reported gets Report to Tico, which POSTs
-// the finding and then shows it as reported. Owners also see the team rule. Fixtures only.
+// the finding and then shows it as reported. Owners also see the team rule. Failed runs lists the newest five failed jobs
+// under its count, each with its bot, when and why (backend/health.py _failed). Fixtures only.
 import type {Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';
@@ -20,6 +21,9 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
       finding({key: 'setup:node', kind: 'setup', title: 'Node is missing on this computer', task_id: 'T-4'}),
       finding({key: 'tico:ticket', kind: 'tico', title: 'Upload fails for files over 2 GB', ticket_id: 'T-7'}),
       finding({key: 'disk_full:server', kind: 'tico', title: 'Disk is full on the server'})]};
+    const failed = (bot: string, minutes: number, why?: string) => ({bot, state: 'failed', at: new Date(Date.now() - minutes * 60000).toISOString(), ...(why ? {why} : {})});
+    const failures = [failed('ops', 5, "couldn't start on Studio Mac after 10 tries"), failed('ops', 20, 'Timeout: max_run_minutes (60 minutes)'),
+      failed('ops', 30), failed('ops', 40, 'a'), failed('ops', 50, 'b'), failed('ops', 60, 'the sixth is not shown')];
     const requests: {path: string; body: unknown}[] = [];
     const serve = async (route: Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
@@ -36,8 +40,9 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
       if (p === '/api/humans') return json({people: [{id: 'chris', name: 'Chris'}], org_groups: []});
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: []});
       if (p === '/api/issues') return json([]);
-      if (p === '/api/v2/health') return json({audience: 'owner', stuck: [], attention: 0, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [],
+      if (p === '/api/v2/health') return json({audience: 'owner', stuck: [], attention: 0, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures,
         checks: [{id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []},
+          {id: 'failed', label: 'Failed runs', status: 'warn', summary: '52 runs failed in the last day.', fixes: [{label: 'Open failed runs', href: '#/settings/history?view=runs&failed=1'}]},
           {id: 'never_stuck', label: 'Tasks', status: 'ok', summary: 'not this text', fixes: [], at: '2026-11-10T00:00:00Z',
             counts: {waiting_on_nothing: 0, retry: 2, manager: 1, person: 3, cant_run: 1, broken: 0}}]});
       if (p === '/api/v2/health/findings') return json(doc);
@@ -69,6 +74,14 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
     assert.deepEqual(await page.locator('#hl-page [data-hl-check="never_stuck"] .hl-ladder li').allInnerTexts(),
       ['0 waiting on nothing', '2 on a retry', '1 with a manager', '3 reached a person', "1 can't run", '0 broken']);
     assert.equal(await page.locator('#hl-page [data-hl-check="never_stuck"]', {hasText: 'not this text'}).count(), 0);
+    // Failed runs: under the count, the newest five failed jobs, each with its bot, when, and why when Health says.
+    const failedRows = page.locator('#hl-page [data-hl-check="failed"] [data-hl-failures] li');
+    assert.equal(await failedRows.count(), 5);
+    assert.match(await failedRows.nth(0).innerText(), /^ops\b.*\bago\s+couldn't start on Studio Mac after 10 tries$/s);
+    assert.equal(await failedRows.nth(1).locator('.hl-why').innerText(), 'Timeout: max_run_minutes (60 minutes)');
+    assert.equal(await failedRows.nth(2).locator('.hl-why').count(), 0, 'no why line when Health sends none');
+    assert.equal(await page.locator('#hl-page', {hasText: 'the sixth is not shown'}).count(), 0);
+    assert.equal(await page.locator('#hl-page h2', {hasText: 'Failed in the last day'}).count(), 0, 'listed once, under its check');
     const section = page.locator('#hl-page [data-hl-findings]');
     assert.equal(await section.locator('h2').innerText(), 'Checks');
     const row = (key: string) => section.locator(`[data-hl-finding="${key}"]`);
