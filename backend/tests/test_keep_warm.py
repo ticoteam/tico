@@ -149,6 +149,7 @@ WHY = {
     "queued": "a run is queued or going",
     "on_ice": "snoozed with no end",
     "goal": "worked as a goal",
+    "nothing_warm": "no warm session on its computer",
 }
 
 
@@ -182,6 +183,8 @@ def test_it_stops_when_the_task_or_session_is_no_longer_one_to_keep(c, case, cap
         )
     elif case == "on_ice":
         E.snooze(c, task_id, X.ANA, "On ice")
+    elif case == "nothing_warm":  # the last keep-warm turn ended on its computer without a model (0 tokens)
+        _ran(c, task_id, at=_at(1), purpose="keep warm", tokens=0)
     elif case == "goal":  # the Reviewer's own session, on a task it works as a goal
         c.execute("DELETE FROM attempts WHERE task_id=?", (task_id,))
         _ran(c, task_id, bot="reviewer")

@@ -195,12 +195,16 @@ def why_not(conn: "sqlite3.Connection", bot: str, task_id: str, at: str) -> str 
     if str(real[0]) < str(H.shift(at, hours=-n)):
         return f"{n} h since its last work"
     newest = conn.execute(
-        f"SELECT {_FALLBACK} FROM attempts a WHERE a.bot_id=? AND a.task_id=? AND a.started_at IS NOT NULL "
-        "ORDER BY a.rowid DESC LIMIT 1",
-        (bot, task_id),
+        f"SELECT {_FALLBACK}, coalesce(a.purpose,'')=? AND {_TOKENS}=0 AND a.state='completed' FROM attempts a "
+        "WHERE a.bot_id=? AND a.task_id=? AND a.started_at IS NOT NULL ORDER BY a.rowid DESC LIMIT 1",
+        (KEEP_WARM, bot, task_id),
     ).fetchone()
     if real[1] or (newest and newest[0]):
         return "on a fallback model"
+    if newest and newest[1]:
+        # Its computer found no warm session to keep (none saved there, or cached for another model or plan) and
+        # ended the last one without a model: nothing to keep until a real run makes one.
+        return "no warm session on its computer"
     if _busy(conn, bot, row):
         return "a run is queued or going"
     if task_wakes.cannot_run(conn, bot_actor(bot)):

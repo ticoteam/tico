@@ -736,6 +736,16 @@ impl ClaudeHost {
         };
     }
 
+    /// Whether the session `thread_id` resumes is saved on this computer (its transcript is here). Claude itself finds
+    /// out only when a turn runs; a keep-warm turn must know before, so it never starts a session that is not there.
+    pub fn session_saved(&self, thread_id: &str) -> bool {
+        let inner = self.inner();
+        inner
+            .threads
+            .get(thread_id)
+            .is_some_and(|t| transcript(&t.settings, &session_of(thread_id, t)).is_some())
+    }
+
     /// The next turn on `thread_id` makes one model turn and no more (a keep-warm turn).
     pub fn one_turn(&self, thread_id: &str) {
         if let Some(t) = self.inner().threads.get_mut(thread_id) {
