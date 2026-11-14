@@ -353,10 +353,11 @@ def test_the_eval_scores_each_case_on_its_checks_own_bar(monkeypatch):
     monkeypatch.setitem(P.BARS, "qa", (0.6, 0.3))
     qa = next(c for c in run.load() if P.check_of(c["requirement"]["rubric"]) == "qa")
     own = next(c for c in run.load() if P.check_of(c["requirement"]["rubric"]) is None)
-    assert run.verdict(0.65, "qa") == "met" and run.verdict(0.25, "qa") == "not_met"
-    assert run.verdict(0.65, None) == "unsure" and run.verdict(0.25) == "unsure"
+    # The scored rows come first: on the old code they fail on the bar itself, not on verdict's new second argument.
     result = run.score("qa-bar", lambda case: (0.65, 0.0, 5), [qa, own])
     assert [row["got"] for row in result["rows"]] == ["met", "unsure"]
+    assert run.verdict(0.65, "qa") == "met" and run.verdict(0.25, "qa") == "not_met"
+    assert run.verdict(0.65, None) == "unsure" and run.verdict(0.25) == "unsure"
 
 
 def _rows(check, parts_and_outcomes, today="met"):
