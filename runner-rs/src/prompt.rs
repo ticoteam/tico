@@ -492,6 +492,12 @@ fn parts(
             );
         }
     }
+    // Written from Goals (ui/app/page-chat.ts `refs.from_page`): a list of goals is a card the person confirms
+    // (backend/page_chat_cards.py), never goals the bot makes itself.
+    let from_page = &attempt["message"]["refs"]["from_page"];
+    if from_page["page"] == "goals" && from_human(&attempt["message"]) {
+        put(&mut lines, Part::Turn, format!("To add several goals, propose a card (`tico page card --page goals --for {} --rows <json>`); never create them yourself.", s(&attempt["message"]["from_actor"])));
+    }
     let context = task_context(&attempt["task_context"]);
     if !context.is_empty() {
         put(&mut lines, Part::Turn, context);
@@ -769,6 +775,25 @@ mod tests {
             false,
         );
         assert!(built.contains(&block) && !built.contains("SECRET"));
+    }
+
+    #[test]
+    fn a_message_from_goals_tells_the_owner_to_propose_a_card() {
+        // Spec chat-on-every-page, Release 2: the Goals owner's turn proposes a card (backend/page_chat_cards.py).
+        let from = |page: &str| {
+            json!({"id": "a", "bot": "strategy-owner", "message": {"id": "m1", "from_actor": "human:ana",
+                "body": "Add these goals", "refs": {"from_page": {"page": page, "label": "Goals"}}}})
+        };
+        let built = prompt(&from("goals"), &Names::from_config(None), None, false);
+        assert!(built.contains("To add several goals, propose a card (`tico page card --page goals --for human:ana --rows <json>`); never create them yourself."), "{built}");
+        for other in [
+            from("listening"),
+            json!({"id": "a", "bot": "strategy-owner"}),
+        ] {
+            assert!(
+                !prompt(&other, &Names::from_config(None), None, false).contains("tico page card")
+            );
+        }
     }
 
     #[test]
