@@ -44,6 +44,7 @@ ORDER = [
     "source_actions",
     "jev_verdicts",
     "idea_checks",
+    "related_input",
 ]
 
 
