@@ -3036,7 +3036,7 @@ def install_views(app, store, auth, mutate, task_view):
             runners = list(
                 c.execute(
                     "SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
-                    "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
+                    "accepts_member_bots,turns_at_once,screen,performance,capabilities,gateway_fallback,"
                     "restart_since,"
                     "readiness_at FROM runners_with_state ORDER BY created_at"
                 )
@@ -3063,6 +3063,8 @@ def install_views(app, store, auth, mutate, task_view):
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
+                # Its own "Fall back to Tico Gateway": everyone reads it, an admin changes it (models_preset).
+                value["gateway_fallback"] = bool(row["gateway_fallback"])
                 # What the computer may run at once now: its setting, or its capacity (start_places.turn_limit).
                 value["turn_limit"] = turn_limit(row)
                 # Since when it says it is restarting after a person pressed Restart; null when it is not.

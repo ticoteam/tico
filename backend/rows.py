@@ -380,6 +380,7 @@ class RunnerRow(TypedDict):
     performance: str
     turns_at_once: int | None
     device_id: str | None
+    gateway_fallback: int
 
 
 class RunnerStateRow(TypedDict):

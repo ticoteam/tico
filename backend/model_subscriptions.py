@@ -409,7 +409,7 @@ def in_effect(c, runner_id, runtime, loads=None):
     """The subscription a turn on `runtime` on this computer signs in with, or None for the computer's own login (none
     given, the one given needs reconnecting or is held at a usage limit until its reset, or a runner too old to take
     one). A held one is passed over like one that needs reconnecting: the turn runs on the computer's own login, else
-    the Gateway under the company's choice, else waits; it never waits on the subscription's hold. After the reset its
+    the Gateway where the computer falls back to it, else waits; it never waits on the subscription's hold. After the reset its
     first turn is the hold's probe as usual (backend/login_holds.py). A computer given a person's plans signs in with
     the one `_pick` names, and falls back the same way only when every one of them is passed over."""
     given = loads.given if loads is not None else _given(c)
@@ -427,6 +427,19 @@ def in_effect(c, runner_id, runtime, loads=None):
 
         runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
     return sub if runner_takes(runner) else None
+
+
+def passed_over(c, runner_id, runtime, loads=None):
+    """Whether this computer is given a plan (or a person's plans) for `runtime` and every one is passed over now: at
+    its usage limit or needing reconnecting. Its turns then run on its own login, else wait, unless the computer falls
+    back to the Gateway (backend/models_preset.py plans_out)."""
+    given = loads.given if loads is not None else _given(c)
+    sub = given.get((runner_id, runtime)) if given else None
+    if not sub:
+        return False
+    if sub.get("person"):
+        return _pick(c, runner_id, runtime, sub, loads) is None
+    return not available(c, sub, runtime, loads)
 
 
 def turn_runtimes(config, record=None):

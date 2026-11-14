@@ -653,6 +653,18 @@ ENTRIES = TEAM_RULES + [
         card=_card("devices"),
     ),
     S(
+        "computer.gateway_fallback",
+        "Fall back to Tico Gateway",
+        COMPUTERS,
+        "admin",
+        "direct",
+        "POST",
+        "computers/{computer}/gateway-fallback",
+        "on",
+        card=_card("devices"),
+        words="gateway fallback plan runs out limit",
+    ),
+    S(
         "computer.browser_host",
         "Browser host",
         COMPUTERS,

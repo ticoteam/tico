@@ -483,6 +483,26 @@ function machineSettingsHTML(machine: DetailMachine) {
   const body = rows.filter(Boolean).join('') + revoke;
   return body || `<p class="muted">${machine.revoked_at ? `Revoked ${esc(ago(machine.revoked_at))}.` : 'Nothing to change here.'}</p>`;
 }
+// Fall back to Tico Gateway: whether this computer's bots run on the Gateway when its plans run out (off until an admin
+// turns it on; backend/models_preset.py computer_falls_back). Everyone sees it; only an admin changes it.
+function machineGatewayFallbackHTML(machine: DetailMachine) {
+  if (machine.revoked_at) return '';
+  const id = esc(machine.id), on = !!machine.gateway_fallback;
+  return `<label class="computer-detail-check"><input type="checkbox" role="switch" class="people-switch" data-gateway-fallback="${id}"${on ? ' checked' : ''}${settingsIsAdmin() ? '' : ' disabled'}> Fall back to Tico Gateway</label>
+    <p class="muted">${on ? 'When its plans run out, its bots run on Tico Gateway until a plan resets.' : 'When its plans run out, its bots wait for a plan to reset.'}</p>`;
+}
+async function machineGatewayFallbackSave(box: HTMLInputElement) {
+  const id = box.dataset.gatewayFallback || '', on = box.checked;
+  box.disabled = true;
+  try {
+    await post(`/v2/runners/${encodeURIComponent(id)}/gateway-fallback`, {on});
+    toast(on ? 'Falls back to Tico Gateway' : 'Waits for a plan');
+    await loadSettings();
+  } catch (error) {
+    toast(errorMessage(error, ''), true);
+    box.checked = !on;
+  } finally { if (box.isConnected) box.disabled = false; }
+}
 // The browser host: the one computer whose Chrome runs website tools' shared logins (backend/browser_commands.py). An
 // admin picks it here; the hub refuses while other bots run on it. GET /v2/operations says which one it is.
 const machineBrowserHost = (machine: DetailMachine & {browser_host?: boolean | null}) => !!machine.browser_host;
@@ -535,6 +555,7 @@ function computerDetailHTML(machine: DetailMachine) {
     <div class="computer-detail-body">${notes}
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}
       ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, online, manage))}
+      ${machineGatewayFallbackHTML(machine) ? section('gateway', 'When plans run out', machineGatewayFallbackHTML(machine)) : ''}
       ${section('screen', 'Screen', machineScreenSectionHTML(machine, online))}
       ${machineBrowserExitHTML(machine) ? section('internet', 'Internet', machineBrowserExitHTML(machine)) : ''}
       ${section('bots', 'Bots on this computer', machineBotsHTML(machine))}
@@ -577,6 +598,7 @@ function computerDetailOpen(id: string) {
     });
     dialog.addEventListener('change', event => {
       if (event.target instanceof HTMLInputElement && event.target.matches('[data-browser-host]')) void machineBrowserHostSave(event.target);
+      if (event.target instanceof HTMLInputElement && event.target.matches('[data-gateway-fallback]')) void machineGatewayFallbackSave(event.target);
     });
     // Escape leaves the name as it was; the pop-up stays open.
     dialog.addEventListener('keydown', event => {

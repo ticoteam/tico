@@ -14,8 +14,8 @@ reports an app-salted hash of the OS device identity; the raw identity stays on 
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
-- **Tico Gateway**: one switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out). The
-  [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
+- **Tico Gateway**: one switch, **Use until a computer is signed in** (used while a computer has no subscription and no
+  login of its own). The [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
 - **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
 - **Limits**: the [company turn levels](#change-the-company-turn-levels).
 
@@ -26,7 +26,12 @@ Old links to AI providers, Subscriptions or the Models card on Computers open Mo
 
 A subscription is a login or key the company saves once and gives to computers. A bot doesn't pick one: it runs on its
 computer, and a run uses, in order, that computer's subscription for the run's AI tool, the login signed in on the
-computer, then Tico Gateway when it is on. Otherwise the run waits.
+computer, then Tico Gateway where that computer falls back to it. Otherwise the run waits.
+
+Each computer's window has **Fall back to Tico Gateway**, under Connections, off for every computer until an owner or
+admin turns it on. When every plan given to a computer for a tool is at its limit (or needs reconnecting) and it has no
+login of its own, its bots wait for the first plan to reset unless that switch is on; with it on they run on Tico
+Gateway meanwhile. The line under the computer's plan picker says which: "on the Gateway" or "waiting".
 
 1. Open **Settings → Models** and click **Add subscription**.
 2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none

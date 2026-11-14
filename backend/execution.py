@@ -2607,10 +2607,11 @@ def _claim_refusal(
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
     covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
     ready = model_subscriptions.covered(ready, covers)
+    # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
+    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out).
+    waits = models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
     access = loads.access if loads is not None else cloud_access.access(c)
-    if cloud_access.frozen(c, access) and (
-        gateway_connection.is_tico(filled.get("model")) or models_preset.waiting(record, ready, filled)
-    ):
+    if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model")) or waits):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
         # still runs; this one starts again once credit lands, with no restart.
         return "out_of_credit", None
@@ -2621,7 +2622,7 @@ def _claim_refusal(
         if why not in ignore_refusals:
             return why, None
     check = bot_readiness(ready, bot)
-    if models_preset.waiting(record, ready, filled):
+    if waits:
         # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
         # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
         # its settings and the Gateway's own runtime still have to be ready.
@@ -2783,7 +2784,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     else:
         record = providers.load(c, settings)
         gateway = "gateway_fallback" in models_preset.with_gateway_fallback(
-            record, ready, providers.fill(record, config)
+            record, ready, providers.fill(record, config), falls_back=models_preset.computer_falls_back(c, runner_id)
         )
         rows = [
             r
@@ -5268,8 +5269,14 @@ class Execution:
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
+        # The Gateway when its plans here run out only where this computer falls back to it (its own switch).
+        plans_out = models_preset.plans_out(c, runner["id"], config)
         config = models_preset.with_gateway_fallback(
-            record, here, models_preset.main_config(record, here, config, tier), tier
+            record,
+            here,
+            models_preset.main_config(record, here, config, tier, plans_out),
+            tier,
+            falls_back=models_preset.computer_falls_back(c, runner["id"]),
         )
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
