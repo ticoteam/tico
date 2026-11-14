@@ -1052,8 +1052,13 @@ def cohort_set(c, actor, body):
         c, "SELECT * FROM growth_cohorts WHERE coalesce(channel_id,'')=? AND month=?", (channel_id or "", body.month)
     )
     fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources")}
-    if "quality" in fields and fields["quality"] is None:
-        fields["quality"] = "actual"
+    # A month is actual only when someone says so: numbers typed with no mark (or a null one) are estimates. Unmarked,
+    # the call touches only the numbers it types; the row's mark then follows them (estimate while any is).
+    marked = fields.get("quality") is not None
+    if not marked:
+        fields.pop("quality", None)
+        if not row:
+            fields["quality"] = "estimate"
     GS.refuse_typed(c, row, [k for k in fields if k in GS.FIELDS], slug or UNKNOWN, body.month)
     sources = dict(json.loads(row["sources"] or "{}")) if row else {}
     if body.sources is not None:
@@ -1063,6 +1068,16 @@ def cohort_set(c, actor, body):
             else:
                 sources.pop(key, None)
     fields.update(sources=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
+    if row and not marked and any(k in GS.FIELDS for k in fields):
+        # A number saved before origins were kept takes its row's mark. Pin that mark on it before the row's mark can
+        # follow a new unmarked number, so the old number keeps the mark it was saved with.
+        for field in GS.FIELDS:
+            if row.get(field) is not None and field not in fields:
+                c.execute(
+                    "INSERT OR IGNORE INTO growth_origins (cohort_id, field, origin, quality, by, at) "
+                    "VALUES (?,?,'typed',?,?,?)",
+                    (row["id"], field, row["quality"], row.get("updated_by"), row["updated_at"]),
+                )
     if row:
         c.execute(
             f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
@@ -1076,12 +1091,14 @@ def cohort_set(c, actor, body):
             f"INSERT INTO growth_cohorts ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
             list(fields.values()),
         )
-    if "quality" in fields:
+    if marked:
+        # Said outright: every typed number of the month takes the mark, as when an estimate is confirmed actual.
         c.execute("UPDATE growth_origins SET quality=? WHERE cohort_id=? AND origin='typed'", (fields["quality"], cid))
+    typed = {k: v for k, v in fields.items() if k in GS.FIELDS}
+    GS.record_typed(c, cid, typed, fields["quality"] if marked else "estimate", actor)
+    if not marked and typed:
+        GS.settle_quality(c, {"id": cid})
     saved = H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)) or {}
-    GS.record_typed(
-        c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
-    )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
     if (saved.get("quality") or "actual") == "actual" and (
         "quality" in fields or any(k in COMPUTED_FIELDS for k in fields)

@@ -82,6 +82,8 @@ def test_the_next_step_follows_the_steps_in_order(api):
     setup = get(api, "growth/channels")["setup"]
     assert (setup["next"]["step"], setup["next"]["tool"]) == expected["source"]
     assert f"--channel search-ads --month {GS.last_full_month()}" in setup["next"]["command"]
+    # Typed with no mark the month is an estimate: the step says how to mark numbers from the books (#292, C9).
+    assert "saved as an estimate" in setup["next"]["says"] and "--quality actual" in setup["next"]["says"]
     # A month with only spend does not finish step 4; spend and new customers do.
     put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-10", "spend": 1800})
     assert get(api, "growth/channels")["setup"]["next"]["step"] == "month"

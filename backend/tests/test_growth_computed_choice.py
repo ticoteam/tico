@@ -70,7 +70,7 @@ def test_a_computed_figure_names_the_customers_source_it_came_from(api):
 
 def test_a_differing_typed_actual_asks_the_channels_owner_once(api):  # AC-14
     owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     row = sept(api)
     assert row["kept_d30"] == 75.0 and row["typed"] == {"kept_d30": 70}
@@ -98,7 +98,7 @@ def test_a_differing_typed_actual_asks_the_channels_owner_once(api):  # AC-14
 
 def test_only_the_channels_owner_or_an_admin_chooses(api):
     ops = owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     refused = post(api, "growth/cohorts/conflicts", {**CHOOSE, "keep": "computed"}, token="cara-test", expected=403)
     assert "Search ads" in refused["error"]["detail"]
@@ -108,7 +108,7 @@ def test_only_the_channels_owner_or_an_admin_chooses(api):
 
 def test_keeping_the_typed_number_sticks_across_later_loads(api):
     ops = owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     post(api, "growth/cohorts/conflicts", {**CHOOSE, "keep": "typed", "against": "computed"}, token=ops)
     load(api, september(kept=32))  # a later load changes the computed figure to 80%
@@ -123,7 +123,7 @@ def test_keeping_the_typed_number_sticks_across_later_loads(api):
 
 def test_keeping_the_computed_figure_sticks_and_drops_the_typed_one_from_beside_it(api):
     ops = owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     post(api, "growth/cohorts/conflicts", {**CHOOSE, "keep": "computed"}, token=ops)
     load(api, september(kept=32))
@@ -139,10 +139,10 @@ def test_keeping_the_computed_figure_sticks_and_drops_the_typed_one_from_beside_
 
 def test_a_new_typed_number_is_a_new_question(api):
     ops = owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     post(api, "growth/cohorts/conflicts", {**CHOOSE, "keep": "computed"}, token=ops)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 72})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 72, "quality": "actual"})
     row = sept(api)
     assert row["typed"] == {"kept_d30": 72} and row["origins"]["kept_d30"]["differs"]["chosen"] is None
     load(api, september())
@@ -161,7 +161,7 @@ def test_nothing_to_choose_when_the_typed_number_matches(api):
 
 def test_the_retention_card_shows_both_values_where_they_differ(api):
     owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     computed = card(api, "growth_retention")["computed"]
     search = next(r for r in computed["cohorts"] if r["value"] == "search-ads")
@@ -193,10 +193,14 @@ def test_a_synced_customers_source_is_named_with_its_id(api):
 def test_typing_an_actual_after_a_load_asks_the_owner_at_once(api):
     owned_channel(api)
     load(api, september())
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     said = asks(api)
     assert len(said) == 1 and "typed 70%, computed 75%" in said[0]
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "spend": 900})
+    put(
+        api,
+        "growth/cohorts",
+        {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "spend": 900, "quality": "actual"},
+    )
     assert len(asks(api)) == 1  # the same typed number: asked already
     put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 75, "quality": "estimate"})
     assert len(asks(api)) == 1  # an estimate is replaced by the computed figure, nothing to ask
@@ -204,7 +208,7 @@ def test_typing_an_actual_after_a_load_asks_the_owner_at_once(api):
 
 def test_a_channel_with_no_owner_is_asked_once_an_owner_is_set(api):
     post(api, "growth/channels", {"slug": "search-ads", "name": "Search ads"})
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     bot(api, "ops")
     r = api.patch("/api/v2/growth/channels/search-ads", json={"owner_ref": "ops"}, headers=headers("ana-test"))
@@ -216,7 +220,7 @@ def test_a_channel_with_no_owner_is_asked_once_an_owner_is_set(api):
 
 def test_a_member_sees_both_values_but_no_keep_or_use(api):
     owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "actual"})
     load(api, september())
     view = get(api, f"places/growth?month={SEPT}", token="cara-test")
     number = next(
@@ -236,7 +240,7 @@ def test_a_member_sees_both_values_but_no_keep_or_use(api):
 
 def test_a_sources_held_value_stays_on_a_computed_figure(api):
     owned_channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "new_customers": 120})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "new_customers": 120, "quality": "actual"})
     src = post(
         api,
         "growth/sources",
