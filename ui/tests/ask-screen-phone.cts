@@ -11,7 +11,7 @@ import type {Page, Route} from 'playwright';
 //   line tall;
 // - an ask with nothing to show opens on its question, right under the header;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
-// - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note.
+// - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -140,6 +140,11 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       await page.locator(sendback).click();
       check(await page.evaluate(() => document.activeElement?.id === 'dc-notes'), 'Send back with no note focuses Notes');
       check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Say what to change', 'Notes says "Say what to change"');
+      // A redraw of the side keeps it: attach a file, then take it off with ✕ (which draws the side again).
+      await page.locator('#need-card input[data-dc-pick]').setInputFiles({name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('png')});
+      await page.locator('#need-card [data-dc="file-drop"]').click();
+      await page.locator('#need-card [data-dc="file-drop"]').waitFor({state: 'detached'});
+      check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Say what to change', 'Notes still says "Say what to change" after a redraw');
       check(writes.length === 0, `an empty Send back sends nothing (${JSON.stringify(writes)})`);
     }
 
@@ -224,6 +229,10 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(await wide.locator('#need-card [data-dc="next"]').isVisible(), '1440: › shows');
     check(await wide.locator('#dc-notes').getAttribute('rows') === '7', '1440: Notes starts at 7 lines');
     check(await wide.locator(sendback).isDisabled(), '1440: Send back is off with an empty note');
+    // The 400 ms tap guard is a phone's: a desktop's buttons answer at once after Approve.
+    await wide.locator(approve).click();
+    await wide.locator('#need-card .dc-q', {hasText: Q[1]!}).waitFor();
+    check(!await wide.locator('#need-card .decide.dc-calm').count(), '1440: no tap guard after Approve');
     if (shots) await wide.screenshot({path: path.join(shots, 'ask-desktop-1440.png')});
     await wide.close();
 

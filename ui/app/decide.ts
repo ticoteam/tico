@@ -115,6 +115,7 @@ const DEC_OTHER = '-';                      // the walk of what is in no stage (
 const DEC_UNDO_MS = 10_000;
 const DEC_CALM_MS = 400;
 let DEC_CALM_TIMER = 0;
+let DEC_ASK_NOTE = '';                      // the item whose empty Send back asked for a note: Notes keeps saying so
 // The two answers Tico adds to every bot's question to a person (backend/answers.py DONT_KNOW, GIVE_BACK).
 const DEC_DONT_KNOW = "I don't know, explain", DEC_GIVE_BACK = 'Give it back';
 const DEC_FILES_MAX = 10;                   // files on one note
@@ -375,7 +376,7 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
 
 // ---- moving through
 function decideGo(st: DecState, id: string | null) {
-  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = '';
+  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = ''; DEC_ASK_NOTE = '';
   decideRender(st);
 }
 function decideStep(st: DecState, dir: number) {
@@ -388,11 +389,11 @@ function decideSkip(st: DecState) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + 1] || live[0];
   if (next && next !== st.at) { decideFilesLeft(st); decideGo(st, next); decideCalm(); }
 }
-/** After an answer or Skip the next item comes in where the last one's buttons were: for DEC_CALM_MS its buttons take no
-    taps (decide.css .dc-calm), so a second tap on the same spot answers nothing unread. */
+/** After an answer or Skip on a phone the next item comes in where the last one's buttons were: for DEC_CALM_MS its
+    buttons take no taps (decide.css .dc-calm), so a second tap on the same spot answers nothing unread. */
 function decideCalm() {
   const root = $('.decide');
-  if (!root) return;
+  if (!root || !decidePhone()) return;
   clearTimeout(DEC_CALM_TIMER);
   root.classList.add('dc-calm');
   DEC_CALM_TIMER = window.setTimeout(() => root.classList.remove('dc-calm'), DEC_CALM_MS);
@@ -579,7 +580,8 @@ function decidePaintSide(st: DecState) {
     // which sends the work back to In development. An OK bound to an action or a person's own keeps Approve and Send back.
     const checked = !page && it.task?.stage_id === 'product-validate' && decideAsker(it).startsWith('bot:')
       && /^page:/.test(it.ask?.shows?.[0] || '');
-    body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"></textarea></label>
+    const ask = DEC_ASK_NOTE === it.id ? ' placeholder="Say what to change"' : '';
+    body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"${ask}></textarea></label>
       ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
         // On a phone Send back is always on; with no note it asks for one (decideClick). A wide screen keeps it off until then.
         decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}</div>`;
@@ -645,11 +647,18 @@ function decidePaintSide(st: DecState) {
 /** On a phone the answer row is pinned to the bottom (decide.css): the scroll keeps its height clear at the end and the
     Undo bar sits above it. 0 where no row is pinned. */
 function decideBarRoom() {
-  const root = $('.decide');
-  if (!root) return;
-  const row = decidePhone() ? $('.decide .dc-side>div:not(.dc-done)>.dc-acts:last-child') as HTMLElement | null : null;
-  root.style.setProperty('--dc-bar-h', `${row ? row.offsetHeight : 0}px`);
+  const row = decideBarSet();
+  // Measured again whenever its height changes without a redraw (the font arriving, a long label wrapping).
+  DEC_BAR_WATCH?.disconnect();
+  if (row) DEC_BAR_WATCH?.observe(row);
 }
+const decideBarRow = () => decidePhone() ? $('.decide .dc-side>div:not(.dc-done)>.dc-acts:last-child') as HTMLElement | null : null;
+function decideBarSet(): HTMLElement | null {
+  const root = $('.decide') as HTMLElement | null, row = decideBarRow();
+  root?.style.setProperty('--dc-bar-h', `${row ? row.offsetHeight : 0}px`);
+  return row;
+}
+const DEC_BAR_WATCH = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { decideBarSet(); });
 // ---- a page that comes back: the right side in parts
 const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['?', 'Unsure'], not_met: ['✗', "Doesn't"]};
 /** Jev's verdict as a chip: ✓ Meets, ? Unsure or ✗ Doesn't, never a p-value; "Jev checking", muted, while it has none.
@@ -1230,6 +1239,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       const note = decideNote('#dc-notes');
       if (!note) {
         const box = $('#dc-notes') as HTMLTextAreaElement | null;
+        DEC_ASK_NOTE = it.id;
         if (box) { box.placeholder = 'Say what to change'; box.focus(); }
         return;
       }

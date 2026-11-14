@@ -101,9 +101,6 @@
 .dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
 .dc-chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;cursor:pointer}
 .dc-chip[aria-pressed="true"]{border-color:var(--wait-ink,var(--ink));background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink))}
-/* For 400 ms after an answer or Skip the next item's buttons take no taps, so a second tap on the same spot does not
-   answer an item not yet read (decideCalm) */
-.decide.dc-calm .dc-side button{pointer-events:none}
 .dc-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
 .dc-bar[hidden]{display:none}
 .dc-bar button{padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
@@ -159,7 +156,10 @@ button.dc-jev{cursor:pointer}
   .dc-dialog{inset:var(--chat-viewport-top,0) 0 auto;width:100%;height:var(--chat-viewport-height,100dvh);margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
   .dc-icon{width:44px;height:44px}
   /* ‹ › on a phone too, › kept 8 px clear of ✕ */
-  .dc-nav [data-dc="next"]{margin-right:6px}
+  .dc-nav [data-dc="next"]{margin-right:6px}         /* 6 px + .dc-nav's 2 px gap = 8 px */
+  /* For 400 ms after an answer or Skip the next item's buttons take no taps, so a second tap on the same spot does not
+     answer an item not yet read (decideCalm) */
+  .decide.dc-calm .dc-side button{pointer-events:none}
   .dc-count{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dc-chip{min-height:44px;padding:0 14px}
   .dc-more select,.dc-side select{min-height:44px}
