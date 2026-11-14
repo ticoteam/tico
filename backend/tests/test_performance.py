@@ -471,6 +471,8 @@ def test_the_alert_shows_each_bots_limit_beside_its_count_and_says_when_it_was_o
             )
     revision = get(api, "bots/ops")["revision"]
     post(api, "bots/ops/turns-at-once", {"turns_at_once": 2, "expected_revision": revision})
+    with api.app.state.store.transaction() as c:  # the limit was set before the three turns started
+        c.execute("UPDATE bot_settings SET updated_at=? WHERE bot_id='ops'", (P._iso(start - 120),))
     post(
         api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"]
     )
@@ -511,12 +513,9 @@ def test_the_busiest_processes_lead_with_the_bots_work_and_group_the_machines_ow
     assert "ariana-fswatch" not in load and "ariana-fswatch" not in seen["summary"]
 
 
-def test_a_limit_set_while_the_overload_is_open_is_not_called_over_for_turns_that_started_before_it(api):
-    """Lowering "Turns at once" is the natural answer to a Load alert. Three turns ran with no limit; a limit of 2 set
-    while the machine is still busy is not a breach, so the open overload never says "over" for them."""
+def _three_turns(api, start):
+    """The runner, and three turns of ops that started a minute before `start` with no limit set and still run."""
     r, _, attempt = setup_attempt(api)
-    rid = r["runner_id"]
-    start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Operations Lead' WHERE id='ops'")
         c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
@@ -527,13 +526,58 @@ def test_a_limit_set_while_the_overload_is_open_is_not_called_over_for_turns_tha
                 "FROM attempts WHERE id=?",
                 (f"t-{n}", f"tok-{n}", P._iso(start - 60), P._iso(start - 60), f"lane-{n}", attempt["id"]),
             )
-    post(
-        api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"]
+    return r
+
+
+def _limit(api, n):
+    post(api, "bots/ops/turns-at-once", {"turns_at_once": n, "expected_revision": get(api, "bots/ops")["revision"]})
+
+
+def _busy(api, r, start, minutes, cpu=97.0):
+    post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=cpu) for i in minutes]}, token=r["token"])
+
+
+def _overloads(api, r):
+    return sorted(
+        get(api, f"computers/{r['runner_id']}/performance?hours=1")["overloads"], key=lambda o: o["started_at"]
     )
-    revision = get(api, "bots/ops")["revision"]
-    post(api, "bots/ops/turns-at-once", {"turns_at_once": 2, "expected_revision": revision})
-    post(api, "runners/performance", {"samples": [sample(start + 600, cpu=97.0)]}, token=r["token"])
-    (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
-    assert o["bots"] == [{"bot": "ops", "runs": 3}]
-    load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
-    assert "running: Operations Lead x3)." in load and "limit" not in load
+
+
+def test_a_limit_set_while_the_overload_is_open_is_not_called_over_for_turns_that_started_before_it(api):
+    """Lowering "Turns at once" is the natural answer to a Load alert. Three turns ran with no limit; a limit of 2 set
+    while the machine is still busy is not a breach, so the open overload shows the limit but never says "over"."""
+    start = (int(time.time()) // 60 - 12) * 60
+    r = _three_turns(api, start)
+    _busy(api, r, start, range(10))
+    _limit(api, 2)
+    _busy(api, r, start, [10])
+    (o,) = _overloads(api, r)
+    assert o["bots"] == [{"bot": "ops", "runs": 3, "limit": 2}]
+    load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + r["runner_id"])["summary"]
+    assert "running: Operations Lead x3 (limit 2))." in load
+
+
+def test_a_limit_set_between_two_overloads_is_not_called_over_for_turns_that_started_before_it(api):
+    """The limit is lowered after one overload and before the next, while the same three turns still run: the second
+    overload first names the bot under the new limit, yet its turns started under none, so it is not "over"."""
+    start = (int(time.time()) // 60 - 25) * 60
+    r = _three_turns(api, start)
+    _busy(api, r, start, range(10))
+    _limit(api, 2)
+    _busy(api, r, start, [10], cpu=10.0)
+    _busy(api, r, start, range(11, 21))
+    first, second = _overloads(api, r)
+    assert first["bots"] == [{"bot": "ops", "runs": 3}]
+    assert second["bots"] == [{"bot": "ops", "runs": 3, "limit": 2}]
+
+
+def test_a_limit_set_before_the_overload_is_declared_is_not_called_over_for_turns_that_started_before_it(api):
+    """The limit is lowered five busy minutes in, before the overload's row exists: the row first names the bot under
+    the new limit, yet its turns started under none, so it is not "over"."""
+    start = (int(time.time()) // 60 - 12) * 60
+    r = _three_turns(api, start)
+    _busy(api, r, start, range(5))
+    _limit(api, 2)
+    _busy(api, r, start, range(5, 10))
+    (o,) = _overloads(api, r)
+    assert o["bots"] == [{"bot": "ops", "runs": 3, "limit": 2}]
