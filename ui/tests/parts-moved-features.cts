@@ -228,7 +228,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
     assert.ok(made.id, 'a thread to open');
     const thread = '#/thread/' + made.id;
     const made2 = await must(hub, 'dana', 'POST', 'tasks', {title: 'Moved code task', body: 'A task to open.', owner: 'dana'}) as {task?: {id: string}; id?: string};
-    const task = (made2.task || made2).id;
+    const task = (made2.task || made2).id || '';
     assert.ok(task, 'a task to open');
     // The Tools page's Chat opens its owner's chat, with the key drop (tools-key-drop.ts).
     const bot = await must(hub, 'dana', 'GET', 'bots/engineering-manager');
