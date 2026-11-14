@@ -213,18 +213,29 @@ def test_a_pause_that_cuts_a_claimed_run_is_not_called_the_computers_silence(api
 
 
 def test_a_job_failed_by_the_day_budget_is_not_called_silent_in_a_row(api, monkeypatch):
-    # Fewer than SAME silent lapses in a row, but the day's budget of missed starts is spent: the job fails and BotOps
-    # has it, worded as missed starts, never as "took this run SAME times" in silence.
-    monkeypatch.setattr(execution, "PRE_START_TRIES", start_holds.SAME - 1)
+    # The day's budget of missed starts is spent with fewer than SAME silent lapses in a row (a pause cut one row
+    # short): the job fails and BotOps has it, counted and worded as missed starts, never as silence.
+    tries = start_holds.SAME + 1
+    monkeypatch.setattr(execution, "PRE_START_TRIES", tries)
     machine, _, attempt = start(api)
     job_id = attempt["job_id"]
-    for n in range(start_holds.SAME - 1):
+
+    def control(action):
+        post(api, "bots/ops/control", {"action": action, "expected_revision": get(api, "bots/ops")["revision"]})
+
+    lapse(api, machine, attempt)  # silent
+    attempt = claim(api, machine)
+    control("pause")  # a missed start, but Tico's cut: it ends the silent row
+    control("resume")
+    ready(api, machine, ["ops"])
+    for n in range(tries - 2):  # silent again, fewer than SAME in a row
+        attempt = claim(api, machine)
+        assert attempt and attempt["job_id"] == job_id
         lapse(api, machine, attempt)
-        if n < start_holds.SAME - 2:
-            attempt = claim(api, machine)
     assert job_state(api, job_id) == "failed"
     [review] = botops_tasks(api)
     assert start_holds.LAPSED_WHY not in review["body"] and start_holds.MISSED_WHY in review["body"]
+    assert f"took its last {tries} runs" in review["body"]
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
     assert stop["needs_person"] is False and stop["text"].endswith(start_holds.BOTOPS_HAS_IT)
-    assert stop["reason"] == f"Its computer took this run {start_holds.SAME - 1} times and never started it."
+    assert stop["reason"] == f"Its computer took this run {tries} times and never started it."

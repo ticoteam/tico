@@ -43,7 +43,7 @@ BOTOPS_HAS_IT = "BotOps is checking why."  # ends the failed run's text: no pers
 LAPSED_WHY = "it took each run and never started it, renewed its lease or handed it back"
 # The reason when the day's budget of missed starts (execution.PRE_START_TRIES) runs out with fewer than SAME silent
 # lapses in a row: some of those runs may have been handed back or cut, so silence is not claimed.
-MISSED_WHY = "it never started any of them before its lease ran out"
+MISSED_WHY = "it never started the run on any try before its lease ran out"
 
 
 def reason(c: Any, aid: str) -> str:
