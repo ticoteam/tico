@@ -9,7 +9,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from .json_response import accepts_gzip
 from .ui_bundle import is_part
 
-VENDOR_TEXT = re.compile(r"/(?:tico/ui/)?vendor/.+\.(?:js|css|mjs)")
+VENDOR_TEXT = re.compile(r"/vendor/.+\.(?:js|css|mjs)")
 
 
 class UiCompression:
