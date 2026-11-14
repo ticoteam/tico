@@ -2661,7 +2661,10 @@ impl Runner {
             // It must also have clear room before the harness compacts it, so this turn is unlikely to compact the
             // short form's standing lines away before it acts on them: its last turn's context and the whole prompt
             // are under 60% of Compact at. Should it compact anyway, the host gives the turn what it left out.
-            let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
+            // A keep-warm turn (crate::prompt::keep_warm) is its one line and leaves the thread's records as they were:
+            // what it was given, the room cursor, what the next turn is sent.
+            let warm = crate::prompt::keep_warm(&attempt);
+            let prompt_turn = !warm && !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
             let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
@@ -2673,8 +2676,11 @@ impl Runner {
                 crate::prompt::Seen::default()
             };
             // Until this turn completes with no compaction, the thread may not hold what it is given, repo rules included.
+            // A keep-warm turn gives it nothing new: the records stay unless it compacts (below).
             for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
-                self.state.repo_rules(&key, Some(""))?;
+                if !warm {
+                    self.state.repo_rules(&key, Some(""))?;
+                }
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = match crate::regular_file::read(crate::instructions::path(&execution_path).unwrap_or_else(|| execution_path.join(crate::instructions::FILE)), crate::regular_file::CONTENT) {
@@ -2697,18 +2703,21 @@ impl Runner {
                 built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
-            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
+            if let Some(note) = session.as_ref().filter(|_| !warm).and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
                 tail = format!("{tail}\n\n{note}");
             }
-            if side_ran {
+            if side_ran && !warm {
                 let after = if side_run { crate::continuity::SIDE_RESUMED } else { crate::continuity::AFTER_SIDE };
                 tail = format!("{tail}\n\n{after}");
             }
-            if after_interrupt {
+            if after_interrupt && !warm {
                 tail = format!("{tail}\n\n{}", crate::continuity::AFTER_INTERRUPT);
             }
-            if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
+            if let Some(line) = crate::afterwatch::still_running(&bot, &key).filter(|_| !warm) {
                 tail = format!("{tail}\n\n{line}");
+            }
+            if warm {
+                h.one_turn(&th);
             }
             let prompt = format!("{}{tail}", built.text);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
@@ -2739,7 +2748,7 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
-            if side_ran || after_interrupt {
+            if (side_ran || after_interrupt) && !warm {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
                     let _ = self.state.repo_rules(&key, Some("0"));
@@ -2753,6 +2762,12 @@ impl Runner {
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            if warm && !kept {
+                // The keep-warm turn compacted it or began it anew: the next turn is given everything again.
+                for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
+                    self.state.repo_rules(&key, Some(""))?;
+                }
+            }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
             let held = resumed && !truthy(attempt.get("_repo_rules_changed"));
@@ -3695,8 +3710,9 @@ impl Runner {
             .await;
             match sent {
                 Ok(()) => {
-                    if drove.outcome == "completed" {
-                        // The next turn on this thread forwards only what the room said after this.
+                    if drove.outcome == "completed" && !crate::prompt::keep_warm(&attempt) {
+                        // The next turn on this thread forwards only what the room said after this. Not after a
+                        // keep-warm turn: it was given none of the room.
                         if let Some(th) = &thread {
                             let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
                             self.state.off(move |s| s.cursor(&th, Some(&message))).await?;
@@ -6702,6 +6718,51 @@ for line in sys.stdin:
                 "turn {n} lost its message: {p}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_keep_warm_turn_sends_its_one_line_once_and_the_next_turn_is_sent_as_if_it_never_ran()
+    {
+        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
+        let warm = json!({"attempt": {"message": {"id": "m-warm", "from_actor": "keeper", "body": line,
+                                                  "refs": {"wake": "keep_warm"}}}});
+        let turns = [json!({}), json!({}), warm, json!({})];
+        let (threads, prompts, completions, _, _, dir) =
+            claude_rig_kept(&turns, &[], &[], &[], json!({}), |_| ()).await;
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        // The keep-warm turn is its line alone: no standing lines, no "unchanged" line, no tail.
+        assert!(
+            prompts[2].contains(line) && !prompts[2].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[2]
+        );
+        assert!(
+            !prompts[2].contains("an AI teammate at") && !prompts[2].contains("Tico-Run"),
+            "{}",
+            prompts[2]
+        );
+        // The turn after it is sent what it would have been without it: the short form, as turn 1 was.
+        for n in [1, 3] {
+            assert!(
+                prompts[n].contains(crate::prompt::STANDING_SEEN),
+                "turn {n}: {}",
+                prompts[n]
+            );
+        }
+        // Only the keep-warm process is limited to one model turn.
+        let args: Vec<String> = std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        for (n, a) in args.iter().enumerate() {
+            assert_eq!(a.contains("--max-turns 1"), n == 2, "process {n}: {a}");
+        }
+        assert!(
+            completions.iter().all(|c| c["outcome"] == "completed"),
+            "{completions:?}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

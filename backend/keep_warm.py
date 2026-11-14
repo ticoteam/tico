@@ -14,8 +14,13 @@ cold, so it pays when the session is used again within about 20 hours.
   hours have passed since the bot's last real run on the task, when that run or the newest one ran on a fallback model
   (its session is not the one the next run resumes), or when the bot's next run on the task is already queued or
   running.
+- Only for a bot that has the task's current stage or owns a stage still ahead of it (`_ahead`): the Builder waiting
+  through a review, not a reviewer whose stage is behind the task.
 - Never for a bot that keeps one thread for everything (`session: bot`) or keeps nothing (stateless), a task worked as a
   goal (the harness would go on with it), or a task whose conversation is not its own.
+- Its notice is written as a thread's carrier is (no seq): no timeline, unread count or room history shows it. The
+  runner sends it as its one line, with `--max-turns 1` on Claude Code, and keeps its records of the session as they
+  were (runner-rs prompt::keep_warm), so the next real turn is sent what it would have been.
 - A keep-warm turn is marked: trigger `keep_warm`, purpose `keep warm` (run_triggers.KEEP_WARM). It is not a run on its
   task for the never-stuck ladder or the run cap (task_wakes), is never counted as acting or as doing nothing
   (run_triggers.SETTLE_SQL), and its claim checks again that it is still wanted (`may_start`).
@@ -39,7 +44,7 @@ LOG = logging.getLogger("tico.keep_warm")
 
 # The one line a keep-warm turn says. It asks for nothing: no tools, a one-word answer.
 PING = "Keep-warm turn: nothing has changed and there is nothing to do. Use no tools; reply with one word: ok."
-WAKE = "keep_warm"  # the notice's refs.wake (wake_rules.ALWAYS_WAKE)
+WAKE = "keep_warm"  # the notice's refs.wake (task_wakes.may_start, runner-rs prompt::keep_warm)
 # run_triggers and wake_presets are untyped: what this reads of them gets its type here.
 _RT: Any = run_triggers
 _WP: Any = wake_presets
@@ -62,6 +67,10 @@ _LIVE = ("queued", "leased", "running", "input", "stalled")
 _core: Any = hubdb_core
 bot_actor: Callable[[str], str] = _core.bot_actor
 _last_minute: dict[str, str] = {}  # database file -> the clock minute its last sweep ran in
+
+
+def _TH(module: object) -> Any:  # an untyped module, read as Any
+    return module
 
 
 def _h() -> Any:
@@ -89,6 +98,33 @@ def _snoozed_for_good(conn: "sqlite3.Connection", task_id: str) -> bool:
             "SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL AND until_at IS NULL LIMIT 1", (task_id,)
         ).fetchone()
     )
+
+
+def _ahead(conn: "sqlite3.Connection", row: Row, bot: str) -> bool:
+    """Whether the bot has the task's current stage (its owner or the bot holding it) or owns a work stage still ahead
+    in the pipeline: by name, as the task's assignee on an "assignee" stage, or on the list of a "One of several" stage.
+    Only such a session is likely to be used again (the Builder through a review); a reviewer whose stage is behind
+    the task is not."""
+    from . import stage_pick, task_engine
+
+    pick: Any = stage_pick
+    actor = bot_actor(bot)
+    visit: Row = row.get("visit") or {}
+    if actor in (row.get("owner_id"), visit.get("holder_id")):
+        return True
+    stages = task_engine.stages(conn, str(row.get("pipeline_id")))
+    current: Row = row.get("stage") or {}
+    here = next((n for n, s in enumerate(stages) if s["id"] == current.get("id")), None)
+    for stage in stages[here + 1 :] if here is not None else []:
+        if stage.get("kind") != "work" or stage.get("retired_at"):
+            continue
+        owner = stage.get("owner")
+        if owner == actor or (owner == "assignee" and row.get("assignee_id") == actor):
+            return True
+        listed = pick.config(stage)
+        if listed and (actor in listed.bots or bot in listed.bots):
+            return True
+    return False
 
 
 def _own_room(conn: "sqlite3.Connection", row: Row) -> bool:
@@ -140,6 +176,8 @@ def why_not(conn: "sqlite3.Connection", bot: str, task_id: str, at: str) -> str 
         return "not in an active stage" if row.get("status") == "open" else "task ended"
     if _snoozed_for_good(conn, task_id):
         return "snoozed with no end"
+    if not _ahead(conn, row, bot):
+        return "its stage is behind the task"
     if not _own_room(conn, row):
         return "not in its own conversation"
     config = _config(conn, bot)
@@ -185,24 +223,38 @@ def may_start(conn: "sqlite3.Connection", task: Row, bot: str, message_id: str) 
 
 
 def send(conn: "sqlite3.Connection", bot: str, task_id: str) -> str | None:
-    """Write the keep-warm notice for this bot's session on this task, in the task's conversation. Returns its id."""
+    """Write the keep-warm notice for this bot's session on this task, in the task's conversation, and queue its run.
+    Returns its id, or None when no run was queued. Like a thread's carrier (threads._carrier) it has no seq, so no
+    timeline, unread count, live view or later turn's room history shows it, and nothing else is told: nobody reads
+    it but the bot's claim. A carrier escapes the insert trigger's seq by `refs.carries`, which would make its run
+    answer the carried message; this one takes back what the trigger stamped (the seq, and the room's counters)."""
+    from . import enqueue, threads
+
     H = _h()
     row: Row | None = H.task(conn, task_id)
     if not row:
         return None
     refs: Row = _RT.stamp({"task": task_id, "wake": WAKE}, "keep_warm", purpose=KEEP_WARM)
-    message: Row | None = H._write_message(
-        conn,
-        H.KEEPER,
-        bot_actor(bot),
-        PING,
-        H.conversation(conn, row["conversation_id"]),
-        "notice",
-        refs,
-        None,
-        None,
+    mid, created, dumped = str(H.new_id()), str(H.now()), str(H._dump(refs))
+    counters = conn.execute(
+        "SELECT last_seq, last_unread_seq FROM conversations WHERE id=?", (row["conversation_id"],)
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
+        "origin_id,revision,restricted) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1)",
+        (mid, row["conversation_id"], H.KEEPER, bot_actor(bot), PING, dumped, created, _TH(threads).mint_origin(conn)),
     )
-    return str(message["id"]) if message else None
+    conn.execute("UPDATE messages SET seq=NULL WHERE id=?", (mid,))
+    if counters:
+        conn.execute(
+            "UPDATE conversations SET last_seq=?, last_unread_seq=? WHERE id=?",
+            (counters[0], counters[1], row["conversation_id"]),
+        )
+    message = {"id": mid, "sender_id": H.KEEPER, "recipient_id": bot_actor(bot), "refs": dumped, "created_at": created}
+    if not _TH(enqueue).enqueue(conn, message):
+        conn.execute("DELETE FROM messages WHERE id=?", (mid,))  # a row no run reads is no use to anyone
+        return None
+    return mid
 
 
 def sweep(conn: "sqlite3.Connection", at: str | None = None, *, every_minute: bool = True) -> int:

@@ -175,6 +175,13 @@ pub struct Built {
 /// Heads what a shortened turn's prompt left out when the harness compacts the session during that turn.
 pub const RESTORED: &str = "Your context was compacted during this turn; here again is what this turn's prompt left out because you already had it.";
 
+/// Tico's keep-warm turn (backend/keep_warm.py): a notice from Tico whose `refs.wake` is `keep_warm`. It only reads the
+/// session's cache, so it is sent as its one line: no standing lines, no task, no room history.
+pub fn keep_warm(attempt: &Value) -> bool {
+    let message = &attempt["message"];
+    s(&message["refs"]["wake"]) == "keep_warm" && s(&message["from_actor"]) == "keeper"
+}
+
 pub fn prompt(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool) -> String {
     replayed(attempt, names, after, resumed, "")
 }
@@ -206,8 +213,10 @@ pub fn build(
     let message = &attempt["message"];
     if crate::util::truthy(message["refs"].get("command"))
         || crate::appdriver::delivery(&attempt["config"]).is_some()
+        || keep_warm(attempt)
     {
-        // A command, or a bot in an app with its own instructions: it gets exactly what the person wrote.
+        // A command, or a bot in an app with its own instructions: it gets exactly what the person wrote. A keep-warm
+        // turn gets its one line, and its digests stay empty, so nothing it leaves out counts as seen.
         let text = s(&message["body"]);
         return Built {
             full: text.clone(),
@@ -1137,6 +1146,45 @@ mod tests {
             standing: b.standing.clone(),
             task: b.task.clone(),
         }
+    }
+
+    #[test]
+    fn a_keep_warm_turn_is_its_one_line_and_counts_nothing_as_seen() {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+        };
+        let (_, next) = task_turns();
+        let mut warm = next.clone();
+        let line = "Keep-warm turn: nothing has changed and there is nothing to do. Use no tools; reply with one word: ok.";
+        warm["message"] = json!({"id": "m4", "from_actor": "keeper", "body": line, "refs": {"wake": "keep_warm", "task": "t-41"}});
+        assert!(keep_warm(&warm));
+        let built = build(&warm, &names, Some("m1"), true, "", &Seen::default(), "ctx");
+        // No standing lines, no task, no room history: the line alone.
+        assert_eq!((built.text.as_str(), built.full.as_str()), (line, line));
+        assert!(
+            built.standing.is_empty()
+                && built.task.is_empty()
+                && built.restore.is_empty()
+                && !built.rules
+        );
+        // Only Tico's own notice is one: the same refs from a bot get the whole prompt.
+        let mut forged = warm.clone();
+        forged["message"]["from_actor"] = json!("bot:qa");
+        assert!(!keep_warm(&forged));
+        assert_ne!(
+            build(
+                &forged,
+                &names,
+                Some("m1"),
+                true,
+                "",
+                &Seen::default(),
+                "ctx"
+            )
+            .text,
+            line
+        );
     }
 
     #[test]

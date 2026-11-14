@@ -26,10 +26,11 @@ def c(company, time_machine):
     with company.transaction() as conn:
         for slug in ("builder", "reviewer", "manager"):
             X.bot(conn, slug)
+        # As Engineering: the Builder is the task's assignee, Review 1 is the Reviewer's, Fixes 1 the assignee's again.
         stages = (
-            {"name": "Build", "owner": BUILDER, "requirements": [{"kind": "owner_done"}]},
+            {"name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
             {"name": "Review 1", "owner": REVIEWER, "requirements": [{"kind": "owner_done"}]},
-            {"name": "Parked", "owner": BUILDER, "by_hand": True, "requirements": []},
+            {"name": "Fixes 1", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
         )
         X.pipeline(conn, pid="eng", name="Engineering", stages=stages, manager="bot:manager")
         yield conn
@@ -49,7 +50,7 @@ def _ran(c, task_id, bot="builder", at=None, purpose=None, result=None, tokens=5
 
 def _in_review(c):
     """The Builder built it (its run ended now) and it moved on to Review 1, where it waits on the Reviewer."""
-    task_id = X.new_task(c, BUILDER, "Add the export button", pipeline_id="eng")["id"]
+    task_id = X.new_task(c, X.ANA, "Add the export button", pipeline_id="eng", assignee=BUILDER)["id"]
     c.execute("DELETE FROM jobs")
     _ran(c, task_id)
     X.say_done(c, E.task(c, task_id), by=BUILDER)
@@ -193,6 +194,41 @@ def test_it_stops_when_the_task_or_session_is_no_longer_one_to_keep(c, case, cap
     assert said == [f"skipped: {WHY[case]} (keep warm, task {task_id}, bot {bot})"]
 
 
+def test_only_a_session_whose_bot_has_the_stage_or_one_ahead_is_kept(c, caplog):
+    """In Review 1 the Builder is kept warm: Fixes 1 is ahead of it, on the assignee. Once the task is in Fixes 1 the
+    Reviewer's session is not: Review 1 is behind the task."""
+    task_id = _in_review(c)
+    _ran(c, task_id, bot="reviewer")  # the review
+    X.say_done(c, E.task(c, task_id), by=REVIEWER)
+    E.advance(c, task_id)
+    assert E.task(c, task_id)["stage"]["name"] == "Fixes 1"
+    c.execute("DELETE FROM jobs")
+    _ran(c, task_id)  # the Builder's fixes began; its session is the current stage's
+    with caplog.at_level(logging.DEBUG, logger="tico.keep_warm"):
+        assert _sweep(c, 46) == 1
+    assert [to for to, _ in _pings(c, task_id)] == [BUILDER]
+    said = [r.getMessage() for r in caplog.records if r.getMessage().startswith("skipped:")]
+    assert said == [f"skipped: its stage is behind the task (keep warm, task {task_id}, bot reviewer)"]
+
+
+def test_the_notice_is_in_no_timeline_and_no_later_turns_history(c):
+    """Nobody sees a keep-warm turn: its notice has no seq, so the task's thread, its unread counts and the next turn's
+    room history leave it out."""
+    task_id = _in_review(c)
+    conversation = E.task(c, task_id)["conversation_id"]
+    counters = "SELECT last_seq, last_unread_seq FROM conversations WHERE id=?"
+    before = tuple(c.execute(counters, (conversation,)).fetchone())
+    assert _sweep(c, 46) == 1
+    assert tuple(c.execute(counters, (conversation,)).fetchone()) == before  # nothing new to read, nothing unread
+    row = c.execute("SELECT seq, restricted FROM messages WHERE json_extract(refs, '$.wake') = 'keep_warm'").fetchone()
+    assert row[0] is None and row[1] == 1
+    shown = c.execute(
+        "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND seq IS NOT NULL AND body=?",
+        (E.task(c, task_id)["conversation_id"], K.PING),
+    ).fetchone()[0]
+    assert shown == 0
+
+
 def test_a_stage_of_its_own_overrides_the_pipeline(c):
     task_id = _in_review(c)
     c.execute("UPDATE pipelines SET keep_warm_hours=0 WHERE id='eng'")
@@ -239,6 +275,7 @@ def test_a_computer_claims_the_turn_in_the_tasks_own_session_marked_keep_warm(ap
         stages = (
             {"name": "Build", "owner": "bot:cpo", "requirements": [{"kind": "owner_done"}]},
             {"name": "Review 1", "owner": "bot:ops", "requirements": [{"kind": "owner_done"}]},
+            {"name": "Fixes 1", "owner": "bot:cpo", "requirements": [{"kind": "owner_done"}]},
         )
         X.pipeline(c, pid="warm", name="Warm", stages=stages)
         task_id = X.new_task(c, "bot:cpo", "Add the export button", pipeline_id="warm")["id"]

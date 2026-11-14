@@ -40,7 +40,6 @@ CAUSE = contextvars.ContextVar("wake_cause", default="")
 # Never filtered. Each entry: (key, what it is). `always_wakes` returns the key that matched.
 ALWAYS_WAKE = (
     ("task_turn", "a task in a pipeline is the bot's to work: the one task engine's wake (backend/task_wakes.py)"),
-    ("keep_warm", "a one-line turn that keeps an active task's session cached (backend/keep_warm.py)"),
     ("person", "a person's message or comment, or a notice of a person's own act (an OK, a move)"),
     ("manager", "a task comment from a party’s org-chart manager"),
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
@@ -114,8 +113,6 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
     cause = CAUSE.get() if cause is None else cause
     if actor == "keeper" and refs.get("wake") == "task_turn":
         return "task_turn"  # the one task engine's wake (backend/task_wakes.py): the task is the bot's to work
-    if actor == "keeper" and refs.get("wake") == "keep_warm":
-        return "keep_warm"  # Tico's own keep-warm turn (backend/keep_warm.py): only Tico sends one
     if str(actor).startswith("human:") or str(cause).startswith("human:"):
         return "person"
     if refs.get("comment") and str(actor).startswith("bot:") and str(target).startswith("bot:"):

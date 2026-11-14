@@ -156,6 +156,9 @@ pub(crate) struct Thread {
     session_id: Option<String>,
     /// The saved session was not on this computer and the thread restarted as a new one under the same id.
     restored: bool,
+    /// The next turn is a keep-warm turn (crate::prompt::keep_warm): one model turn, `--max-turns 1`. The tools stay
+    /// as they are, so the cached prefix the turn is there to read is the same.
+    one_turn: bool,
 }
 
 /// One process's stdin: what is still to write, whether it takes more, and which messages Claude has not read.
@@ -671,6 +674,7 @@ impl ClaudeHost {
                 fork_from,
                 session_id: None,
                 restored: false,
+                one_turn: false,
             },
         );
         id
@@ -685,6 +689,7 @@ impl ClaudeHost {
                 fork_from: None,
                 session_id: None,
                 restored: false,
+                one_turn: false,
             },
         );
         thread_id.into()
@@ -731,6 +736,13 @@ impl ClaudeHost {
         };
     }
 
+    /// The next turn on `thread_id` makes one model turn and no more (a keep-warm turn).
+    pub fn one_turn(&self, thread_id: &str) {
+        if let Some(t) = self.inner().threads.get_mut(thread_id) {
+            t.one_turn = true;
+        }
+    }
+
     pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
         let mut inner = self.inner();
         match text {
@@ -775,6 +787,9 @@ impl ClaudeHost {
         }
         if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref())) {
             argv.extend(["--effort".into(), e]);
+        }
+        if t.one_turn {
+            argv.extend(["--max-turns".into(), "1".into()]);
         }
         // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
         // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
@@ -909,6 +924,9 @@ impl ClaudeHost {
             let (child, stderr, reaping) = self
                 .launch(thread_id, &t, effort)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
+            if let Some(kept) = inner.threads.get_mut(thread_id) {
+                kept.one_turn = false; // that turn only
+            }
             inner.reaping = reaping;
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
@@ -3647,5 +3665,24 @@ mod feature_tests {
             "a changed version runs no process either"
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_keep_warm_turn_runs_one_model_turn_with_the_same_tools() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let thread = host.resume_thread("s-1", &Settings::default());
+        let plain = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        host.one_turn(&thread);
+        let warm = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let at = warm
+            .iter()
+            .position(|a| a == "--max-turns")
+            .expect("--max-turns");
+        assert_eq!(warm[at + 1], "1");
+        // Only the limit is added: the tools and settings that make up the cached prefix are the same.
+        let mut without = warm.clone();
+        without.drain(at..at + 2);
+        assert_eq!(without, plain);
     }
 }
