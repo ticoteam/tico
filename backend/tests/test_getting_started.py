@@ -158,9 +158,32 @@ def test_the_step_never_blocks_setup_and_can_be_set_aside(api):
     before = items(api, bearer(OWNER))[0]["done"]
     post(api, "getting-started/state", {"skip": "subscription"}, token=OWNER)
     body, _ = items(api, bearer(OWNER))
-    assert body["done"] == before + 1  # a skipped step is settled, like the GitHub one
+    assert body["done"] == before + 1  # a skipped step is settled
     assert plan_step(api)["skipped"] is True and plan_step(api)["done"] is False
     post(api, "getting-started/state", {"skip": "model"}, token=OWNER, expected=422)  # required steps are not skippable
+
+
+def test_github_is_required_and_an_earlier_skip_of_it_no_longer_counts(api):
+    from types import SimpleNamespace
+
+    from backend import getting_started as GS
+
+    def github():
+        return items(api, bearer(OWNER))[1]["github"]
+
+    assert (github()["optional"], github()["href"]) == (False, "#/tools/github")
+    post(api, "getting-started/state", {"skip": "github"}, token=OWNER, expected=422)
+    # A skip saved while GitHub was optional is dropped on read: the step is open again until GitHub is installed.
+    with api.app.state.store.transaction() as c:
+        GS.save_state(
+            c,
+            SimpleNamespace(actor="human:ana"),
+            {"tour": True, "checklist": True, "skipped": ["github", "subscription"]},
+        )
+    body, rows = items(api, bearer(OWNER))
+    assert rows["github"]["skipped"] is False and rows["github"]["done"] is False
+    assert rows["subscription"]["skipped"] is True
+    assert body["dismissed"] is True and body["complete"] is False
 
 
 def test_on_tico_cloud_a_plan_or_key_is_required_and_a_saved_one_counts(api):
