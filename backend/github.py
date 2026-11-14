@@ -1081,7 +1081,9 @@ def recompute_stored_checks(c: Any) -> int | None:
     sends news of its head, and a failed link with no pending check is never read again (`refresh_pending_checks`),
     so such a link stayed "failing" with every real check passed (#426). The company App's suites count as the gate's
     (it posts only `tico/merge-ok`), as `pr_signal` keys them. Writes the state and the gate only: no wake, no event,
-    no "Checks finished". Returns how many links changed, or None when it had run already."""
+    no "Checks finished". The company App is read as `_own_app` reads it (the one `github_app` row): an install with no
+    row when the pass runs gets no second try, and its gate-only links wait for GitHub's next news of their heads.
+    Returns how many links changed, or None when it had run already."""
     from . import repositories as R
     from .item_sources.github import MERGE_OK
 

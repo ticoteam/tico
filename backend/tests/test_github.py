@@ -713,6 +713,11 @@ def test_the_merge_gate_is_kept_on_the_link_apart_from_the_checks(api):
     assert (link['checks'], _detail(link)['merge_gate']) == ('passing', 'waiting')
     _merge_ok(api, 'success', suite=10)
     assert _detail(get(api, 'tasks/' + task['id'] + '/links')['links'][0])['merge_gate'] == 'signed_off'
+    # A fresh read from GitHub keeps it too, even when the checks state itself does not change.
+    with api.app.state.store.transaction() as c:
+        state = G.apply_checks(c, link['id'], 'a' * 40, {'python': 'passing', 'tico/merge-ok': 'failing'})
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert (state, _detail(link)['merge_gate']) == ('passing', 'waiting')
 
 
 def test_links_left_failing_only_for_the_gate_are_recomputed_once_and_wake_nobody(api):
@@ -745,7 +750,11 @@ def test_links_left_failing_only_for_the_gate_are_recomputed_once_and_wake_nobod
                 "UPDATE task_links SET state='open',checks='failing',detail=? WHERE task_id=? AND kind='pr'",
                 (json.dumps({'head_sha': 'a' * 40, 'checks': checks}), task_id),
             )
-        assert G.recompute_stored_checks(c) == 2
+    # The GitHub heartbeat step is what runs it on a live install.
+    from backend import heartbeat as HB
+
+    HB.github_sync(SimpleNamespace(app=api.app, store=api.app.state.store))
+    with api.app.state.store.transaction() as c:
         assert G.recompute_stored_checks(c) is None
     gate_link = get(api, 'tasks/' + gate_only['id'] + '/links')['links'][0]
     real_link = get(api, 'tasks/' + real['id'] + '/links')['links'][0]
