@@ -147,8 +147,13 @@ figure is computed, typed, or both (every channel together, some of each), and t
 figures.
 
 **Computed beside typed.** A channel's month with customer facts shows the computed figures, each marked computed and
-with the number of customers it comes from. A typed estimate for the same month is replaced. A typed actual that differs
-is kept beside it. Channels and months with no customer facts read exactly as before. Every figure says which it is.
+with the number of customers it comes from and the customers source(s) they were loaded from (`origins` in
+`tico growth cohort list --json`: `computed`, `computed_from`, `sources`). A typed estimate for the same month is
+replaced. A typed actual that differs is kept beside it, on the Number cards and the Retention card, and the channel's
+owner or an admin keeps one (`tico growth cohort resolve ... --keep typed|computed --against computed`). After a load,
+the channel's owner gets one notice naming the numbers that differ; each channel, month and figure is asked about once.
+The choice holds across later loads; typing a new number for that month and figure asks again. Channels and months
+with no customer facts read exactly as before. Every figure says which it is.
 
 **The customers behind a figure.** On the Retention card, a day's figure opens to its customers. In the CLI,
 `--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
@@ -339,6 +344,7 @@ tico growth source campaigns [--months N]  Finance's ad campaigns and their keys
 tico growth source add --truth-for spend --system NAME --sync finance_ad_spend --campaign KEY=CHANNEL
 tico growth source add --truth-for customers --system NAME --sync file --map customers
 tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
+tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|computed --against computed
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]
                  [--segment LABEL] [--plan LABEL] [--customers] [--json]

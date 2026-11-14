@@ -54,7 +54,8 @@ type GrNumberData = { label?: string; channel_name?: string; value: number | nul
 // Where a Number's figure came from (backend/cards.py growth_origin): its synced sources, its typed numbers, the inputs a
 // worked-out figure is made from, and the numbers a source disagrees with.
 type GrOriginSource = { source_id: string; source: string; at: string; health: GrHealth | null; since: string | null };
-type GrConflict = { channel: string; channel_name: string; month: string; field: string; typed: number | null; value: number | null; source: string | null; may: boolean };
+// `against: computed`: a typed actual beside the figure computed from customer facts, which the channel's owner chooses.
+type GrConflict = { channel: string; channel_name: string; month: string; field: string; typed: number | null; value: number | null; source: string | null; may: boolean; against?: string };
 type GrOrigin = { fields: string[]; synced: GrOriginSource[]; typed: { count: number; by: string | null; at: string | null; quality: string } | null; conflicts: GrConflict[]; conflict_count: number };
 type GrNorthStar = { id: string; name: string; value: number | null; unit: string; prev: number | null; target: number | null };
 type GrFunnelStage = { stage: string; label: string; kpi: string | null; name: string | null; value: number | null; unit: string; prev: number | null; conv: number | null; series?: GrValue[]; north_star?: boolean };
@@ -335,12 +336,14 @@ function grOriginLine(o: GrOrigin | null | undefined) {
 }
 // The numbers a source disagrees with: one is said in the line (the typed value, the source's, Keep and Use for its
 // owner or an admin); more open a list.
-const grResolveAttrs = (c: GrConflict) => `data-gr-resolve data-channel="${esc(c.channel)}" data-month="${esc(c.month)}" data-field="${esc(c.field)}"`;
+const grResolveAttrs = (c: GrConflict) => `data-gr-resolve data-channel="${esc(c.channel)}" data-month="${esc(c.month)}" data-field="${esc(c.field)}"${c.against ? ` data-against="${esc(c.against)}"` : ''}`;
 function grConflictLine(c: GrConflict, withWhere: boolean) {
   const f = (v: number | null) => grFmt(GR_FIELD_FMT[c.field] || 'count', v);
   const where = withWhere ? `${esc(c.channel_name)} · ${esc(grMonthShort(c.month))} · ${esc(grFieldWord(c.field))}: ` : '';
-  return `<span>${where}typed ${esc(f(c.typed))}, ${esc(c.source || 'its source')} says ${esc(f(c.value))}</span>${c.may
-    ? `<span class="gr-c-acts"><button type="button" class="ghost small" ${grResolveAttrs(c)} data-keep="typed">Keep ${esc(f(c.typed))}</button><button type="button" class="ghost small" ${grResolveAttrs(c)} data-keep="source">Use ${esc(f(c.value))}</button></span>` : ''}`;
+  const computed = c.against === 'computed';
+  const said = computed ? `typed ${esc(f(c.typed))}, computed from ${esc(c.source || 'customers')} ${esc(f(c.value))}` : `typed ${esc(f(c.typed))}, ${esc(c.source || 'its source')} says ${esc(f(c.value))}`;
+  return `<span>${where}${said}</span>${c.may
+    ? `<span class="gr-c-acts"><button type="button" class="ghost small" ${grResolveAttrs(c)} data-keep="typed">Keep ${esc(f(c.typed))}</button><button type="button" class="ghost small" ${grResolveAttrs(c)} data-keep="${computed ? 'computed' : 'source'}">Use ${esc(f(c.value))}</button></span>` : ''}`;
 }
 function grConflicts(o: GrOrigin | null | undefined) {
   if (!o?.conflict_count) return '';
@@ -369,12 +372,12 @@ function grResolveWire(root: HTMLElement) {
   });
 }
 async function grResolve(btn: HTMLButtonElement) {
-  const {channel, month, field, keep} = btn.dataset;
+  const {channel, month, field, keep, against} = btn.dataset;
   const row = btn.closest<HTMLElement>('.gr-conflict');
   row?.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
   try {
-    await post('/v2/growth/cohorts/conflicts', {channel, month, field, keep});
-    toast(keep === 'typed' ? 'Kept the typed number' : "Using the source's number");
+    await post('/v2/growth/cohorts/conflicts', {channel, month, field, keep, ...(against ? {against} : {})});
+    toast(keep === 'typed' ? 'Kept the typed number' : keep === 'computed' ? 'Using the computed number' : "Using the source's number");
     const dlg = btn.closest<HTMLDialogElement>('dialog');
     if (dlg?.dataset.closeOnResolve) dlg.close();
     row?.remove();

@@ -774,8 +774,9 @@ def growth_cohort_set(api, args):
 
 @tool(
     "tico_growth_cohort_resolve",
-    "A number typed as actual that a synced source disagrees with: keep the typed number or use the source's. "
-    "The source's owner or an admin; the choice is logged.",
+    "A number typed as actual that a synced source disagrees with: keep the typed number or use the source's "
+    "(the source's owner or an admin). Against the figure computed from customers: keep typed or computed (the "
+    "channel's owner or an admin); it holds across later loads. The choice is logged.",
     {
         "channel": _s("A channel slug, or unknown"),
         "month": _s("YYYY-MM"),
@@ -784,13 +785,20 @@ def growth_cohort_set(api, args):
             "enum": list(COHORT_FIELDS[:-1]),
             "description": "The number",
         },
-        "keep": {"type": "string", "enum": ["typed", "source"], "description": "Which value stays"},
+        "keep": {"type": "string", "enum": ["typed", "source", "computed"], "description": "Which value stays"},
+        "against": {
+            "type": "string",
+            "enum": ["source", "computed"],
+            "description": "What the typed number differs from (default source)",
+        },
     },
     required=("channel", "month", "field", "keep"),
     writes=True,
 )
 def growth_cohort_resolve(api, args):
     body = {k: args[k] for k in ("channel", "month", "field", "keep")}
+    if args.get("against"):
+        body["against"] = args["against"]
     return api.post("growth/cohorts/conflicts", body, key=_key(args))
 
 
@@ -1052,12 +1060,14 @@ CLI = (
     ),
     Command(
         "growth cohort resolve",
-        "keep a typed number or use the synced source's value (the source's owner or an admin)",
+        "keep a typed number or use the synced source's value (the source's owner or an admin), or with --against "
+        "computed keep typed or computed (the channel's owner or an admin)",
         args=(
             Arg("channel", "--channel", metavar="SLUG"),
             Arg("month", "--month", metavar="YYYY-MM"),
             Arg("field", "--field"),
             Arg("keep", "--keep"),
+            Arg("against", "--against"),
         ),
         render=_growth_text,
         example="tico growth cohort resolve --channel search-ads --month 2026-10 --field new_customers --keep typed",

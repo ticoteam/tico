@@ -38,9 +38,13 @@ interface GrowthCohort {
 }
 // One number's origin (backend/growth_sync.py origins_view): synced by a source or typed by someone, and a value a source
 // brought that was held back because someone typed an actual.
+// A figure computed from customer facts (backend/growth.py beside) says `computed`, how many customers and the customers
+// sources they came from, and `differs` when a typed actual is beside it (`chosen` once the channel's owner chose).
 interface GrowthOrigin {
-  origin: 'synced' | 'typed'; quality: string; source_id: string | null; source: string | null; at: string | null; by: string | null;
+  origin: 'synced' | 'typed' | 'computed'; quality: string; source_id: string | null; source: string | null; at: string | null; by: string | null;
   conflict: { value: number | null; source_id: string | null; source: string | null; at: string | null } | null;
+  computed_from?: number; sources?: Array<{ source_id: string | null; source: string; at: string | null }>;
+  differs?: { typed: number | null; chosen: string | null; computed?: number | null } | null;
 }
 interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; kind?: string | null; fills?: string[]; }
 interface GrowthKpi { id: string; name: string; }
@@ -133,10 +137,14 @@ const gcValue = (c: Partial<GrowthCohort>, field: string): number | null => { co
 // Under a number in a month: where it came from, and Keep / Use when a source disagrees with what was typed.
 function gcOriginHint(ch: ChannelRef, month: string, field: string, c: Partial<GrowthCohort>, o: GrowthOrigin | undefined) {
   if (!o) return '';
+  const from = (o.sources || []).map(s => s.source).join(', ');
   const line = o.origin === 'synced' ? `From ${o.source || 'a source'}${o.at ? ` · ${ago(o.at)}` : ''} · actual`
-    : `Typed${o.by ? ` by ${grWho(o.by)}` : ''}${o.at ? `, ${grDay(o.at)}` : ''} · ${o.quality === 'estimate' ? 'estimate' : 'actual'}`;
-  const typed = gcValue(c, field);
-  const conflict: GrConflict | null = o.conflict ? {channel: ch.slug, channel_name: ch.name, month, field, typed: typed ?? null, value: o.conflict.value, source: o.conflict.source, may: true} : null;
+    : o.origin === 'computed' ? `Computed from ${o.computed_from ?? 0} customers${from ? ` · ${from}` : ''}`
+    : `Typed${o.by ? ` by ${grWho(o.by)}` : ''}${o.at ? `, ${grDay(o.at)}` : ''} · ${o.quality === 'estimate' ? 'estimate' : 'actual'}${o.differs?.chosen === 'typed' ? ' · kept over the computed number' : ''}`;
+  const typed = gcValue(c, field), d = o.differs;
+  // The server checks who may choose; the dialog offers Keep and Use to whoever opened it, as it does for a source's value.
+  const conflict: GrConflict | null = o.conflict ? {channel: ch.slug, channel_name: ch.name, month, field, typed: typed ?? null, value: o.conflict.value, source: o.conflict.source, may: true}
+    : d && !d.chosen ? {channel: ch.slug, channel_name: ch.name, month, field, typed: d.typed, value: typed ?? null, source: `${o.computed_from ?? 0} customers`, may: true, against: 'computed'} : null;
   return `<span class="gc-origin muted" data-gc-origin="${esc(field)}">${esc(line)}</span>${conflict ? `<span class="gr-conflict">${grConflictLine(conflict, false)}</span>` : ''}`;
 }
 
