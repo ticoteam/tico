@@ -146,3 +146,5 @@ remain the runner's reported choice; this does not discover an underlying model 
 A new runner talking to an older server falls back to the older final-portion usage report. Update the
 server and runners to get complete primary/fallback attribution. No provider credentials are stored
 with usage. This page is an estimate of Tico runs, not a provider invoice or a subscription quota meter.
+
+Why bots spend what they do, what was done to cut it, and the weekly review: [Token efficiency](token-efficiency.md).
