@@ -428,14 +428,14 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         answer = None
     if signoff and carried and answer is carried and (held := _queued_as_is(conn, task, requirement)):
         return held  # back from Merge at the commits the queue just ran: the OK waits for a fix (task #344)
-    lapsed, lapsed_by, since_ok = "", None, None
+    lapsed, lapsed_by, lapsed_ok, since_ok = "", None, None, None
     if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
         # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
         # once a bot read them and OK'd them (`_after_ok`). Otherwise it lapses: the same person is asked again.
         kept, since_ok = _after_ok(conn, task, requirement, answer)
         if kept:
             return kept
-        lapsed_by = str(answer["by_id"])
+        lapsed_by, lapsed_ok = str(answer["by_id"]), answer
         answer, lapsed = None, sentence(f"New commits since {_name(conn, lapsed_by)}'s OK") + " "
         if carried:
             # Back from Merge with no page of its own: the Builder fixes what was sent back and attaches the page again.
@@ -480,6 +480,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         person = person or str(back["by_id"])  # the person who sent it back is asked again, by Tico, not by the bot
     if lapsed_by and not requirement.get("person_id") and lapsed_by.startswith("human:"):
         person = person or (lapsed_by if active_person(conn, lapsed_by) else None)
+    if lapsed_ok:
+        lapsed = sentence(_since_ok(conn, task, lapsed_ok, person)) + " "
     after = sentence(f'Version {page["version"]}, after the send back: "{back["said"]}"') + " " if back else ""
     notices = tuple(part.strip() for part in (lapsed, first) if part.strip())
     after = lapsed + after + first
@@ -537,6 +539,49 @@ def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answe
         (answer["visit_id"], requirement["id"], answer["created_at"]),
     ).fetchone()
     return bool(shown) and shown[0] == page["file_id"] and shown[1] == answer.get("page_version")
+
+
+def short_heads(heads: dict[str, object] | None) -> str:
+    """The commits an OK was given at, as a person reads them: one PR's short head, or each PR's."""
+    found = sorted((heads or {}).items())
+    if len(found) == 1:
+        return str(found[0][1])[:7]
+    return ", ".join(f"{ref} at {str(sha)[:7]}" for ref, sha in found)
+
+
+def _since_ok(conn: "sqlite3.Connection", task: Row, ok: Row, person: str | None) -> str:
+    """Why `person` is asked again after new commits did not keep their OK (`ok`): "2 new commits since your OK at
+    b4b690b: 'card shows a pick wait's line' and 1 more, 1 file." (item_sources.github.since: GitHub's compare of each
+    commit). While Tico has not read what the commits are: "New commits since Ben's OK"."""
+    from .item_sources import github as F
+
+    kept = _heads_of(ok.get("heads")) or {}
+    whose = "your" if person and person == str(ok["by_id"]) else f"{_name(conn, ok['by_id'])}'s"
+    came = F.since(conn, kept, cast("dict[str, object]", heads_now(conn, task)))
+    if not came or not came["commits"]:
+        return f"New commits since {_name(conn, ok['by_id'])}'s OK"  # as before Tico kept what commits are
+    count, titles, files = came["commits"], came["titles"], came["files"]
+    what = f"{count} new commit{'s' if count != 1 else ''} since {whose} OK at {short_heads(kept)}"
+    if titles:
+        more = count - 1
+        what += f": '{titles[0]}'" + (f" and {more} more" if more else "")
+    return f"{what}, {files} file{'s' if files != 1 else ''}"
+
+
+def ok_kept(conn: "sqlite3.Connection", task: Row, requirement: Row, page: Row) -> Row | None:
+    """The person's OK that a page just attached (`page`, a `requirement_pages` row) keeps: given on an earlier version
+    of the same page on this visit, at the commits the PRs are at now (`_same_code_ok`), as `_page` counts it. None when
+    the requirement is not a person's OK, or no OK carries. task_pages.attach says so on the task and to the bot."""
+    settings: Row = requirement.get("settings") or {}
+    if settings.get("at_head") or not (requirement.get("person_id") or people_only(requirement)):
+        return None
+    visit_id = task["visit"]["id"]
+    answer = newest_answers(conn, visit_id).get(requirement["id"])
+    if answer and _reviews_new(requirement, answer):
+        answer = _newest_signoff(conn, visit_id, requirement)
+    if not answer or answer.get("page_version") == page["version"]:
+        return None
+    return answer if _same_code_ok(conn, task, requirement, answer, page) else None
 
 
 def _ok_line(conn: "sqlite3.Connection", person: str | None, page: Row) -> str:
