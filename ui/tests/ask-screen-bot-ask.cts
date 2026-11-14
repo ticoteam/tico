@@ -108,7 +108,7 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
           assert.ok(Math.abs(b.y + b.height / 2 - (row[0]!.y + row[0]!.height / 2)) <= 1 && b.height >= 40, `${label}: one row of tappable answers (${JSON.stringify(row)})`);
           assert.ok(b.x >= 0 && b.x + b.width <= viewport.width && b.y + b.height <= viewport.height, `${label}: in view`);
         }
-        // The answers come after Send. On a phone they stay pinned at the bottom while the side scrolls, so Send,
+        // The answers come after Send. On a phone they stay pinned at the bottom while the screen scrolls, so Send,
         // scrolled to, must not be under them.
         assert.ok(await dialog.locator('[data-dc="write"]').evaluate(el => !!(el.compareDocumentPosition(document.querySelector('[data-dc="dont-know"]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), label);
         if (label === 'desktop') assert.ok(row[0]!.y > send.y, `${label}: the answers come after Send`);
@@ -157,10 +157,11 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       // A question with no choices: the same screen without them (picture 3's vision ask).
       assert.equal(await dialog.locator('.dc-choice').count(), 0, label);
       assert.equal(await dialog.locator('.dc-why').innerText(), 'Why it matters: Every bot plans its work from it.', label);
+      await page.waitForTimeout(450);     // a new item's buttons take no taps for 400 ms (decideCalm, task #454)
       await layout('Write to Strategy Owner');
 
       // Send, then › before the answer comes: the next question's box keeps what is typed there, and nothing of the
-      // first text shows on it. On a phone the walk has no ›, so the desktop runs it.
+      // first text shows on it. The desktop runs it.
       if (label === 'desktop') {
         let release: () => void = () => {};
         gate = new Promise<void>(r => { release = r; });

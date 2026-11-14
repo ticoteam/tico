@@ -1345,7 +1345,7 @@ Mark met, Message Product Owner twice. New: Approve and Send back.
 task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
 opens its page. "Open task #N ↗" opens the task's page, which stays open; its Answer comes back here.
 
-**Notes** is 7 lines in a 420 px column (4 lines on a phone) and grows with its text before it scrolls. A screenshot
+**Notes** is 7 lines in a 420 px column (1 line on a phone) and grows with its text before it scrolls. A screenshot
 pasted into it, a file dropped on the right side or one picked with 📎 Attach (up to 10) uploads to the task's Files at
 once and shows under the note with ✕. Send back waits until they are up ("Uploading 1 of 2…"), names a failed one with
 Retry and sends nothing; the note it sends ends with each file's name and id, so the bot's wake lists them. A question's
@@ -1699,7 +1699,7 @@ Four phone screens:
    Home Pro to $479 for December?" · "1d"; "Which plan do new signups get?" · "2h". Group "Review", 2: "Approve the spec
    for Checkout flow" · "2h"; "Send this email to Dana about her replacement?" · "3m". Rows show the title and age only:
    no buttons, no avatar.
-2. **An ask.** Top bar: "2 of 7"; at the right 👍, 👎, ✕. The heading "Approve the spec for Checkout flow". The page:
+2. **An ask.** Top bar: "2 of 7"; at the right 👍, 👎, ‹, ›, ✕. The heading "Approve the spec for Checkout flow". The page:
    "Checkout flow: spec", "Guests can pay without making an account. The order summary stays visible." with the second
    sentence highlighted. A "Notes" box. Buttons "Approve" (main) and "Send back".
 3. **A pipeline.** Header: "Tasks"; "Engineering ▾"; at the right, search and +. A row of stage tabs: "On deck 2",
@@ -1712,7 +1712,11 @@ Four phone screens:
 Rules:
 
 - A long sentence wraps on a phone.
-- On an ask the buttons stay at the bottom while the page scrolls.
+- On an ask the screen scrolls as one: the thing asked about, then the question, Notes and Attach. Approve, Send back
+  and Skip (or the ask's own buttons) sit in a bar pinned to the bottom, solid, above the keyboard when it is up.
+  "Approved · Undo" shows above that bar, never over it. An ask with nothing to show opens on its question.
+- On a phone Send back is always on; with Notes empty it sends nothing and puts the cursor in Notes, "Say what to change".
+- After an answer or Skip, the next item's buttons take no taps for 400 ms, so a second tap does not answer it unread.
 - A pipeline shows one stage at a time.
 - A pipeline has an Ask bar above the bottom bar, in place of the manager's rail: a line saying what goes with the
   message ("Product › Spec · 3 tasks on screen"), a button for the manager (picked first) and one for the stage's

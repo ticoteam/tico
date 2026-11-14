@@ -1,6 +1,6 @@
 /* ui/styles/decide.css — the ask screen (ui/app/decide.ts, docs/pipelines-v3.md S3): "2 of 7" and 👍 👎 ‹ › ✕ on top,
-   the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, the
-   buttons at the bottom while the thing scrolls.
+   the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, one
+   scroll (the thing, then the sentence and Notes) with the buttons in a bar pinned to the bottom.
    The cascade runs in the order index.html links these files; keep rules in order. */
 .dc-dialog{width:min(1040px,calc(100vw - 32px));max-width:none;height:min(760px,calc(100dvh - 48px));max-height:none;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
 .dc-dialog::backdrop{background:rgba(0,0,0,.5)}
@@ -150,18 +150,32 @@ button.dc-jev{cursor:pointer}
 .dc-done{display:grid;place-content:center;justify-items:center;gap:14px;min-height:240px;text-align:center}
 .dc-done h2{margin:0;font-size:var(--t-xl)}
 @media (max-width:760px){
-  /* the whole screen; the sentence and the buttons stay at the bottom while the thing scrolls */
+  /* the whole screen, one scroll: the thing asked about, then the sentence, Notes and Attach; the answer row is a bar
+     pinned to the bottom of the screen (task #454) */
   /* The visible rectangle (viewport.ts): with the keyboard up, Approve and Send back stay above it. */
   .dc-dialog{inset:var(--chat-viewport-top,0) 0 auto;width:100%;height:var(--chat-viewport-height,100dvh);margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
   .dc-icon{width:44px;height:44px}
+  /* ‹ › on a phone too, › kept 8 px clear of ✕ */
+  .dc-nav [data-dc="next"]{margin-right:6px}         /* 6 px + .dc-nav's 2 px gap = 8 px */
+  /* For 400 ms after an answer or Skip the next item's buttons take no taps, so a second tap on the same spot does not
+     answer an item not yet read (decideCalm) */
+  .decide.dc-calm .dc-side button{pointer-events:none}
+  .dc-count{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dc-chip{min-height:44px;padding:0 14px}
   .dc-more select,.dc-side select{min-height:44px}
-  .dc-side>div>.dc-acts:last-child{position:sticky;bottom:0;z-index:1;margin:0 -16px;padding:8px 16px 0;background:var(--bg)}
-  .dc-wide{display:none}
-  .dc-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
-  .dc-thing{padding:16px}
-  /* a field scrolled to (focus, the keyboard opening) stops above the sticky buttons, not under them */
-  .dc-side{scroll-padding-bottom:72px;max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  /* The answer row: out of the scroll, pinned to the bottom of the screen (.decide), solid, over the safe area. The
+     scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom), and the Undo bar sits above it. */
+  .dc-side>div:not(.dc-done)>.dc-acts:last-child{position:absolute;left:0;right:0;bottom:0;z-index:1;margin:0;padding:8px 16px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg)}
+  .dc-bar{bottom:calc(var(--dc-bar-h,0px) + 8px)}
+  .dc-main{display:block;overflow-y:auto;overscroll-behavior:contain;padding-bottom:var(--dc-bar-h,0px);scroll-padding-bottom:calc(var(--dc-bar-h,0px) + 8px)}
+  .dc-thing{overflow:visible;padding:16px}
+  .dc-thing>.dc-doc{flex:none}
+  /* an ask with nothing to show opens on its question */
+  .dc-thing:empty,.dc-thing:has(>.dc-bare:only-child){display:none}
+  .dc-side{overflow:visible;border-left:0;border-top:1px solid var(--line);padding:12px 16px}
+  .dc-thing:empty+.dc-side,.dc-thing:has(>.dc-bare:only-child)+.dc-side{border-top:0}
+  /* Notes starts one line tall (rows in decide.ts) and grows with its text */
+  .dc-side textarea[data-dc-grow]{min-height:44px}
   .dc-q{font-size:var(--t-lg)}
   .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
   /* one row at 390 px: I don't know, explain · Give it back · Skip */
