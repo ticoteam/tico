@@ -223,7 +223,7 @@ function renderNewVersion() {
   if (!wrap) return;
   const u = S.config.update, show = nvUpdateShown();
   wrap.hidden = !show;
-  window.renderChangelogNotice?.();   // the "Updated to" row keeps out of the way while this one shows
+  renderChangelogNotice();   // the "Updated to" row keeps out of the way while this one shows
   if (!show) { setNewVersionPop(false); return; }
   $('#new-version-label').textContent = nvBusy ? 'Updating…' : 'Update to ' + nvVersion(u?.scheduled || u?.latest);
   if (!nvBusy) nvRenderPop();
@@ -337,3 +337,17 @@ window.ticoIsCloud = () => !!S.me?.cloud;
 // Modules loaded on their own still need the environment's names for anything a person reads.
 window.ticoAppName = () => appName();
 window.ticoAssistantName = () => assistantName();
+
+// The sidebar's "Updated to" row and the changelog badge (the What's new page itself is a page part, ui/changelog.ts).
+function renderChangelogNotice() {
+  const count = Number(S.config.changelog?.unread_count) || 0;
+  const notice = document.querySelector<HTMLElement>('#changelog-notice');
+  const badge = document.querySelector<HTMLElement>('#changelog-badge');
+  if (notice) {
+    // The sidebar's one version row (ui/app/notices.ts): while a newer release is offered, that row stands in for this one.
+    notice.hidden = !count || nvUpdateShown();
+    const label = notice.querySelector<HTMLElement>('.changelog-notice-label');
+    if (label) label.textContent = S.config.version ? `Updated to ${nvVersion(S.config.version)}` : "What's new";
+  }
+  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = String(count); }   // ticks (ui/app/motion.ts)
+}

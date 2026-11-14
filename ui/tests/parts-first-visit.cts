@@ -20,6 +20,7 @@ declare const S: {v2: {status: Record<string, unknown>}};
 declare function refresh(quiet: boolean): void;
 declare function liveEmit(topic: string, data: unknown): void;
 declare function decideTabPages(): {page: string}[];
+declare function uiPartLoad(name: string): Promise<void>;
 
 // Pages a cold open draws from the shell alone.
 const SHELL = ['#/home', '#/tasks', '#/threads'];
@@ -64,9 +65,6 @@ const SHELL = ['#/home', '#/tasks', '#/threads'];
       await open.page.addInitScript(() => { Object.defineProperty(Notification, 'permission', {get: () => 'granted'}); });
       await open.page.goto(hub.url + '/#/home');
       await drawn(open.page, '#/home');
-      // A "Page → Tab" phrase in Needs you links Rules' and Settings' tabs before either page has been opened.
-      assert.deepEqual(await open.page.evaluate(() => decideTabPages().map(p => p.page).filter(p => p !== 'Finance')), ['Rules', 'Settings'],
-        "a cold Home knows Rules' and Settings' tabs");
       await open.page.evaluate(() => {
         refresh(false);
         const bot = Object.keys(S.v2.status)[0] || 'ops';
@@ -76,6 +74,11 @@ const SHELL = ['#/home', '#/tasks', '#/threads'];
       await open.page.waitForLoadState('networkidle', {timeout: t(15000)}).catch(() => {});
       assert.deepEqual(open.errors, [], 'Home after a refresh: errors on the page');
       assert.deepEqual(open.parts, [], "Home's refresh, a bot's status change and notifications download no page part");
+      // A "Page → Tab" phrase in Needs you (the ask screen, its own part since P05b) links Rules' and Settings' tabs
+      // with neither page's code: opening the ask screen's code downloads that part alone.
+      assert.deepEqual(await open.page.evaluate(async () => { await uiPartLoad('decide'); return decideTabPages().map(p => p.page).filter(p => p !== 'Finance'); }),
+        ['Rules', 'Settings'], "the ask screen knows Rules' and Settings' tabs");
+      assert.deepEqual([...new Set(open.parts)].sort(), ['browser-view', 'decide'], "the ask screen's code downloads its own part and the browser view only");
       await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: false});
       await open.close();
     }

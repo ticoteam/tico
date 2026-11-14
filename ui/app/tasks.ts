@@ -146,3 +146,56 @@ async function goalOptions() {
   GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner_id: g.owner_id, parent_id: g.parent_id, rank: g.rank, status: g.status}));
   return GOAL_OPTIONS;
 }
+
+// ---- Needs you outside its ask screen: the screen's state, a deep link's item, the count and the lists that show it.
+// The ask screen itself (ui/app/decide.ts, decide-about.ts) is a page part, loaded when a person opens an item.
+
+let DEC: DecState | null = null;            // the open screen, null while it is shut
+let DECIDE_WANT = '';                       // a deep link's item (#/decide?item=<id>), opened once Tasks has read
+let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
+const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
+// The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
+function decideKind(it: NeedsEntry): AskKind {
+  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
+  if (it.kind === 'paused') return 'fix';
+  if (it.kind === 'mention') return 'mention';
+  // Stuck: the ladder brought it to the person (stuck or late with them), a bot is Paused on it, or it waits on someone
+  // being let in (turn.share). Its buttons are the stuck card's, never Done, Snooze or Give to (task #392).
+  const t = it.task;
+  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share?.length ? 'stuck' : 'yours';
+}
+// ---- the count, and the lists that show Needs you
+/** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */
+const decideNoFlow = (): boolean => S.me?.role === 'bot' || !!S.me?.read_only_view;
+function decideCount(): number {
+  if (decideNoFlow()) return 0;
+  return S.v2?.needsCount ?? (S.v2?.needs || []).length;
+}
+/** Flow's mark beside Tasks while something needs the person; no number (the Tasks header has the one count). */
+function needsBadgePaint() {
+  const n = decideCount();
+  for (const badge of document.querySelectorAll<HTMLElement>('[data-needs-badge]')) {
+    badge.hidden = !n;
+    if (!badge.firstElementChild) badge.innerHTML = flowMarkHTML(14);
+  }
+  flowTabPaint();
+}
+/** The phone bar's second slot: Flow, its mark grey like the other tabs and jade while something needs the person (no
+    number). A bot has no Flow: the slot keeps Threads, or Search on a server without threads (threads.ts THREADS.on). A
+    person's Threads and Search are in More (threads.ts threadsSideRender carries the count there). */
+function flowTabPaint() {
+  const off = decideNoFlow(), threads = typeof THREADS === 'undefined' || THREADS.on !== false;
+  const flow = document.querySelector<HTMLElement>('#mobile-flow');
+  if (flow) { flow.hidden = off; flow.toggleAttribute('data-waiting', decideCount() > 0); }
+  const tab = document.querySelector<HTMLElement>('#mobile-threads'), search = document.querySelector<HTMLElement>('#mobile-search');
+  if (tab) tab.hidden = !off || !threads;
+  if (search) search.hidden = !off || threads;
+}
+// Flow's taps: decideFlow is in the ask screen's page part (decide.ts), whose stand-in loads it on the first tap.
+for (const el of document.querySelectorAll<HTMLElement>('#mobile-flow, #side .nav-flow')) el.addEventListener('click', () => void decideFlow(el));
+/** Needs you changed: the badge, the Tasks page and a bot's rail draw again. */
+function needsListsRedraw() {
+  needsBadgePaint();
+  if (typeof TASKS_ST !== 'undefined' && TASKS_ST) tasksNeedsLive();
+  if (typeof BOT !== 'undefined' && BOT && $('#t-needs') && typeof botNeedsPaint === 'function') botNeedsPaint(BOT.slug);
+}

@@ -358,3 +358,15 @@ button.pgk-x:hover{background:var(--surface2);color:var(--ink)}
 
   window.assistantChat = {cards, off, settingsStrip};
 })();
+
+// This file is a page part (ui/parts.json "assistant"): a cold open does not download it. Code outside it calls these,
+// whose stand-ins in the shell load it first (ui/app/parts.ts).
+async function assistantCards(root: ParentNode | null, deps: AssistantCardsDeps): Promise<void> {
+  await window.assistantChat?.cards(root, deps);
+}
+function assistantOff(host: HTMLElement | null, info: {can_turn_on?: boolean | undefined}, deps: AssistantOffDeps): void {
+  window.assistantChat?.off(host, info, deps);
+}
+async function assistantSettingsStrip(host: HTMLElement | null, deps: AssistantSettingsDeps): Promise<void> {
+  await window.assistantChat?.settingsStrip(host, deps);
+}

@@ -63,7 +63,7 @@ JS_PATH, CSS_PATH = PREFIX + "app.bundle.js", PREFIX + "app.bundle.css"
 # The most JavaScript, in bytes, a cold open of Home may download before the app runs: the shell's parts and the
 # standalone scripts, gzip as a browser gets them (`cold_js`). The performance budget is 300 KB (P05b); lower this
 # whenever the shell shrinks, never raise it to let a change in: move code a click runs into a page part instead.
-SHELL_JS_CEILING = 340 * 1024
+SHELL_JS_CEILING = 300 * 1024   # the budget (P05b, 300 KB gzip); lower it whenever the shell shrinks, never raise it
 # The gzip level and floor backend/ui_compression.py sends the standalone scripts with (the parts carry their own).
 STANDALONE_GZIP_LEVEL, STANDALONE_GZIP_MIN = 3, 1024
 # The largest part (decoded): a WebKit cache of 4 MB or more keeps it. The files are cut between, never inside.
