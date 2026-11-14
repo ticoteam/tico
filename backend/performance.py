@@ -480,7 +480,8 @@ def _update(c, oid, runner_id, started, last, why):
         "AND span=? AND created_at>=? AND created_at<=?",
         (runner_id, MINUTE, started, last),
     ).fetchone()
-    bots = at_once(c, runner_id, started, last + MINUTE)[:8]
+    seen = c.execute("SELECT bots FROM perf_overloads WHERE id=?", (oid,)).fetchone()
+    bots = with_limits(c, runner_id, started, last + MINUTE, json.loads(seen[0]) if seen else [])
     procs = c.execute(
         "SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
         "span=? AND created_at>=? AND created_at<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
@@ -530,17 +531,21 @@ def ran(c, runner_id, start, end):
     return [{"bot": b, "model": m, "runs": n} for (b, m), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
-def at_once(c, runner_id, start, end):
+def at_once(c, runner_id, start, end, since=None):
     """Who ran during [start, end): each bot once, with the most of its turns that ran at the same moment, most first.
     `ran` counts every turn of the window and splits a bot by model (a turn still running has none yet), so a bot
-    limited to 3 turns at once read "x4, x4"."""
+    limited to 3 turns at once read "x4, x4". With `since` ({bot: stamp}), only those bots are read, counting only
+    their turns that started at or after their stamp."""
     edges = {}
     lo = _iso(start)
     for r in _runs(c, runner_id, start, end):
+        name = r["bot_id"].removeprefix("bot:")
+        if since is not None and (name not in since or r["started_at"] < since[name]):
+            continue
         # `_runs` reads finished_at>=start: a turn that ended exactly at the start ran before the window, not in it.
         if r["finished_at"] and r["finished_at"] <= lo:
             continue
-        bot = edges.setdefault(r["bot_id"].removeprefix("bot:"), [])
+        bot = edges.setdefault(name, [])
         bot.append((max(r["started_at"], lo), 1))
         # A turn with no end runs to the window's end, even a lease that lapsed and is not yet swept, which
         # start_places.bot_held no longer counts: the alert may read one turn high for a sweep interval at most.
@@ -556,6 +561,71 @@ def at_once(c, runner_id, start, end):
     return [{"bot": b, "runs": n} for b, n in sorted(peaks.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
+def with_limits(c, runner_id, start, end, seen=()):
+    """The overload's busiest bots (`at_once`, eight at most), each with its "Turns at once" as `limit` when it has one,
+    and `over` when it broke that limit. Only the bot's turns that started after its settings last changed count
+    towards `over`: a turn started before a limit was set or lowered started under no limit or a higher one. The
+    settings' last change stands in for when the limit was set, so a later, unrelated change can hide a breach, but
+    none is ever invented. `seen` is the overload's rows so far: a bot once found over keeps that limit and `over`, so
+    raising the limit while the overload is open does not erase the breach."""
+    from . import bot_settings as BS
+    from .start_places import bot_limit
+
+    bots = at_once(c, runner_id, start, end)[:8]
+    kept = {b["bot"]: b for b in seen if b.get("over")}
+    limits, since = {}, {}
+    for b in bots:
+        if b["bot"] in kept:
+            continue
+        row = c.execute(
+            f"SELECT {BS.CONFIG} AS config, s.updated_at FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (b["bot"],)
+        ).fetchone()
+        limit = bot_limit(H._json(row["config"], {}) if row else {})
+        if limit is not None:
+            limits[b["bot"]] = limit
+            since[b["bot"]] = row["updated_at"] or ""
+    under = {r["bot"]: r["runs"] for r in at_once(c, runner_id, start, end, since)} if since else {}
+    out = []
+    for b in bots:
+        if b["bot"] in kept:
+            out.append(b | {"limit": kept[b["bot"]]["limit"], "over": True})
+        elif b["bot"] in limits:
+            limit = limits[b["bot"]]
+            out.append(b | {"limit": limit, "over": True} if under.get(b["bot"], 0) > limit else b | {"limit": limit})
+        else:
+            out.append(b)
+    return out
+
+
+# Processes a cloud machine's host runs for itself, never a bot's work: grouped as one "machine services" row after the
+# bots' processes, so the alert leads with what the bots ran. ariana-fswatch watches the disk for the host's snapshots
+# (root runs it from three system units under the one process name). Another host service is one more entry: its
+# executable's name, as a sample carries it (runner-rs/src/perf.rs clean_name), and what it does in a few words.
+MACHINE_SERVICES = {"ariana-fswatch": "disk snapshots"}
+
+
+def grouped_procs(procs):
+    """An overload's busiest processes, the bots' work first in CPU order, then the machine's own services as one row."""
+    work = [p for p in procs if p["name"] not in MACHINE_SERVICES]
+    services = [p for p in procs if p["name"] in MACHINE_SERVICES]
+    if not services:
+        return work
+    what = ", ".join(sorted({MACHINE_SERVICES[p["name"]] for p in services}))
+    return work + [
+        {
+            "name": f"machine services ({what})",
+            "cpu": round(sum(p.get("cpu") or 0 for p in services), 1),
+            "mem": max(p.get("mem") or 0 for p in services),
+            "service": True,
+        }
+    ]
+
+
+def proc_names(procs, top=3):
+    """The names the alert gives: the busiest `top` of the bots' processes, then the machine services row if any."""
+    return [p["name"] for p in procs if not p.get("service")][:top] + [p["name"] for p in procs if p.get("service")]
+
+
 def overload_view(row):
     return {
         "started_at": row["started_at"],
@@ -566,8 +636,9 @@ def overload_view(row):
         "cpu_max": row["cpu_max"],
         "mem_max": row["mem_max"],
         "runs_max": row["runs_max"],
+        # `over`: the bot ran more turns at once than its limit, counting only turns started under that limit.
         "bots": json.loads(row["bots"]),
-        "procs": json.loads(row["procs"]),
+        "procs": grouped_procs(json.loads(row["procs"])),
     }
 
 
@@ -593,12 +664,20 @@ def recent_overloads(c, runner_ids, within=RECENT_S, now=None):
     return out
 
 
+def _over(b):
+    return b.get("limit") is not None and bool(b.get("over"))
+
+
 def _who_ran(bots, label=lambda b: b):
+    """ "Reviewer 1 x4 (limit 3, over), Builder x2": each bot's turns at once, beside its own limit when it has one."""
     names = []
     for b in bots[:3]:
         what = label(b["bot"])
-        if b.get("runs", 1) > 1:
-            what += f" x{b['runs']}"
+        runs, limit = b.get("runs", 1), b.get("limit")
+        if runs > 1 or limit is not None:
+            what += f" x{runs}"
+        if limit is not None:
+            what += f" (limit {limit}, over)" if _over(b) else f" (limit {limit})"
         names.append(what)
     return ", ".join(names)
 
@@ -611,7 +690,7 @@ def describe(o, label=lambda b: b):
     if ran:
         words += f"; running: {ran}"
     if o["procs"]:
-        words += "; busiest processes: " + ", ".join(p["name"] for p in o["procs"][:3])
+        words += "; busiest processes: " + ", ".join(proc_names(o["procs"]))
     return words
 
 
@@ -643,7 +722,7 @@ def summary(overloads, days, label=lambda b: b):
         common.append(
             ", ".join(label(b) for b in shared[:3]) + " " + ("was" if len(shared[:3]) == 1 else "were") + " running"
         )
-    procs = [{p["name"] for p in o["procs"]} for o in overloads]
+    procs = [set(proc_names(o["procs"], top=len(o["procs"]))) for o in overloads]
     busy = sorted(set.intersection(*procs)) if procs else []
     if busy:
         common.append(
