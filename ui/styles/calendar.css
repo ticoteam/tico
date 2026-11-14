@@ -13,11 +13,11 @@
 .cal-row>.nav-link{flex:none;padding-right:4px}
 .cal-next{flex:1;min-width:0;display:none;align-items:center;justify-content:flex-end}
 .cal-row.cal-on .cal-next{display:flex}
-.cal-nx{display:flex;gap:3px;min-width:0;padding:0 2px;font-size:var(--t-sm);color:var(--ink);white-space:nowrap}
+.cal-nx{display:flex;gap:3px;min-width:0;padding:0 2px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}   /* always subdued: the row's name leads */
 .cal-nx .cal-nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cal-nx .cal-tm{flex:none;font-variant-numeric:tabular-nums}
 a.cal-nx:hover{color:var(--accent);text-decoration:underline}
-.cal-nx.cal-none{display:block;padding:0;overflow:hidden;text-overflow:ellipsis}
+.cal-nx.cal-none{display:block;padding:0;opacity:.6}
 .cal-step{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:24px;padding:0;border:0;border-radius:4px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:1;cursor:pointer}
 .cal-step:hover{background:var(--surface2)}
 .cal-step:focus-visible{outline:var(--focus-ring);outline-offset:-1px}

@@ -73,13 +73,10 @@
   .lst-lim{grid-area:lim;white-space:normal}
   .lst-last{grid-area:last}
   .lst-run{grid-template-columns:minmax(0,1fr);gap:10px}
-  /* A listening open: the header hides, but the owner's face stays, at the right of the ‹ Listening row, so a
-     question can name the listening. */
+  /* A listening open: the header hides, but the owner's face (the chat mark, page-chat.ts) stays, at the right of the
+     ‹ Listening row, so a question can name the listening. */
   .au-lst[data-screen="detail"]{position:relative}
   .au.au-lst[data-screen="detail"]>.ph{display:block;position:absolute;z-index:2;top:4px;right:12px;margin:0;padding:0;min-height:0;border:0}
-  .au.au-lst[data-screen="detail"]>.ph>:not(.ph-tools),.au.au-lst[data-screen="detail"]>.ph>.ph-tools>:not(.au-chat){display:none}
+  .au.au-lst[data-screen="detail"]>.ph>:not(.ph-chat){display:none}
   .au-lst[data-screen="detail"] .au-crumb{min-height:44px;padding-right:60px}
 }
-/* The owner's Chat button (page-chat.ts); the chat itself is the shared column (page-chat.css). */
-.au-lst .au-chat{display:inline-flex;margin-left:6px}
-.au-lst .au-chat:empty{display:none}

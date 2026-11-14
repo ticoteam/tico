@@ -2,35 +2,30 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 .use-page{max-width:860px;margin:0}
 .use-bar-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:var(--s4)}
-.use-bar-row select{width:auto;min-width:150px}
-.use-bar-row input[type=date]{width:auto}
+.use-bar-row input{width:auto}   /* a custom period's two date fields */
 .use-custom{display:inline-flex;gap:var(--s2)}
 .use-seg{display:inline-flex;max-width:100%;overflow-x:auto}
-/* The pill track below is Replay's range only (replay.ts, not yet on the shared header); Usage's and Budget's are .ph-seg. */
-.use-seg:not(.ph-seg){background:var(--surface2);border-radius:999px;padding:3px}
-.use-seg:not(.ph-seg) button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
-.use-seg:not(.ph-seg) button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .use-total{font-size:var(--t-lg);margin-bottom:var(--s4)}
 .use-total strong{font-weight:600}
 .use-note{font-size:var(--t-sm);color:var(--muted);margin-right:var(--s1);letter-spacing:var(--track-normal)}
 .use-sub{color:var(--muted);font-size:var(--t-sm);font-weight:400;white-space:nowrap}
 .use-total .use-low{font-size:var(--t-sm);color:var(--muted);letter-spacing:var(--track-normal)}
 /* How the total is counted: a muted help button beside it, and the words under it once clicked. */
-button.use-why{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;width:24px;height:24px;margin-left:2px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);cursor:pointer}
-button.use-why .nav-icon{font-size:15px}
-button.use-why:hover,button.use-why[aria-expanded=true]{color:var(--ink);background:var(--surface2)}
+/* How the total is counted: its own words open it ("API-equivalent", dotted like the cache rate's), no info icon. */
+button.use-why{display:inline;min-height:0;height:auto;padding:0;border:0;border-radius:0;background:none;color:inherit;font:inherit;letter-spacing:inherit;cursor:pointer;
+  border-bottom:1px dotted var(--muted)}
+button.use-why:hover,button.use-why[aria-expanded=true]{color:var(--ink)}
 #use-why-text{margin:var(--s1) 0 0;font-size:var(--t-sm);letter-spacing:var(--track-normal);max-width:60ch}
-/* Filter: one button in the bar; its panel holds what narrows the list, then how it is grouped and sorted. */
-.use-filter-at{position:relative;display:inline-flex}
-button.use-filter{display:inline-flex;align-items:center;gap:6px}
-button.use-filter .nav-icon{font-size:18px}
-.use-filter-panel{position:absolute;z-index:5;top:calc(100% + 4px);left:0;width:min(320px, calc(100vw - 24px));display:flex;flex-direction:column;gap:var(--s2);
-  padding:var(--s3);background:var(--raised);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,.18)}
-.use-filter-panel[hidden]{display:none}
-.use-frow{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:center;gap:var(--s2);font-size:var(--t-base);color:var(--muted)}
-.use-frow[hidden]{display:none}
+/* The filter: the shared filter icon in the header (its count on its corner; folded into ⋯ on a phone it reads "Filter"
+   with the count at the row's end), and its menu, the shared popover, a short form: what narrows the list, a line, how
+   it is grouped and sorted, Reset. */
+.use-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}
+/* In the header the period never scrolls inside itself: when the row is short the header folds it into ⋯ instead. */
+.use-head .use-seg{flex:none;max-width:none;overflow:visible}
+.use-head>.ph-menu>.ph-tools .use-seg{flex-wrap:wrap}
+.use-filter-menu{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s1)}
+.use-frow{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:var(--s2);font-size:var(--t-base);color:var(--muted)}
 .use-frow select{width:100%;min-width:0}
-.use-fsep{width:100%;margin:var(--s1) 0;border:0;border-top:1px solid var(--line)}
 .use-ffoot{display:flex;justify-content:flex-end}
 .use-list{list-style:none;margin:0;padding:0;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .use-row+.use-row{border-top:1px solid var(--line)}
@@ -102,12 +97,23 @@ button.use-filter .nav-icon{font-size:18px}
 .use-row>.use-line{grid-column:1;grid-row:1}
 .use-row>.use-limit{grid-column:2;grid-row:1;justify-self:end;margin-right:var(--s3)}
 .use-row>.use-detail{grid-column:1/-1}
-button.use-limit{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;background:none;border:1px solid transparent;border-radius:6px;padding:3px 8px;cursor:pointer;color:var(--muted);font-size:var(--t-base);white-space:nowrap;min-width:0}
+/* The limit cell (pages-shell.ts useLimitButton; Settings > Bots draws it too): the limit as one line, the meter under
+   it, the words "86%" or "Paused" beside the limit in the meter's colour. Nothing inside it is a pill. */
+button.use-limit{display:inline-flex;flex-direction:column;align-items:stretch;justify-content:center;gap:4px;min-width:0;background:none;border:1px solid transparent;border-radius:6px;padding:3px 8px;cursor:pointer;color:var(--muted);font-size:var(--t-base);white-space:nowrap;text-align:right}
 button.use-limit:hover{border-color:var(--line);color:var(--ink)}
-button.use-limit.none{color:color-mix(in srgb,var(--muted) 70%,transparent)}
+button.use-limit .use-meter{position:static;display:block;width:100%;min-width:72px}
+.use-limit-w.warn{color:var(--wait-ink);font-weight:600}
+.use-limit-w.bad{color:var(--fail);font-weight:600}
 span.use-limit{display:block}
-/* No limit yet: "Set limit" waits for the row's hover or focus where there is a pointer (opacity, so Tab still reaches it). */
-@media (hover:hover){.use-row:not(:hover):not(:focus-within) button.use-limit.none{opacity:0}}
+/* No limit: nothing in the cell at rest. It is still the button that sets one: its words show while its row is hovered
+   or it has the keyboard's focus. A phone has no hover, so there the empty cell takes no room; a limit is set from the
+   Limits tab (Add limit). */
+@media (hover:hover){
+  button.use-limit.none>span{opacity:0}
+  :is(.use-row,tr):hover button.use-limit.none>span,button.use-limit.none:focus>span{opacity:1}
+}
+/* A touch screen of any width has no hover to show the words: the empty cell takes no room on a Usage row, as on a phone. */
+@media (hover:none){.use-row>button.use-limit.none{display:none}}
 .use-dialog{width:min(360px,92vw)}
 .use-dialog form{display:flex;flex-direction:column;gap:var(--s3)}
 .use-dialog label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
@@ -130,7 +136,7 @@ span.use-limit{display:block}
 .use-lim-head span{text-align:right;padding-right:8px}
 .use-lim-who{display:flex;align-items:center;gap:var(--s2);min-width:0}
 .use-lim-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-.use-lim-who .pill{flex:none}
+.use-lim-who .use-limit-w{flex:none;font-size:var(--t-sm)}
 .use-lim-icon{flex:none;width:20px;height:20px;font-size:18px;color:var(--muted);display:inline-flex;align-items:center;justify-content:center}
 .use-lim-cell{position:relative;display:flex;flex-direction:column;gap:3px}
 .use-lim-h{display:none}
@@ -152,7 +158,8 @@ span.use-limit{display:block}
 @media (max-width:760px){
   .use-row{grid-template-columns:1fr}
   .use-row>.use-limit,.use-row>.use-line{grid-column:1}
-  .use-row>.use-limit{grid-row:2;justify-self:start;margin:0 0 var(--s2) var(--s3)}
+  .use-row>.use-limit{grid-row:2;justify-self:stretch;margin:0 var(--s3) var(--s3);padding:0;align-items:flex-start;text-align:left}
+  .use-row>button.use-limit.none{display:none}
   span.use-limit{display:none}
   .use-row>.use-detail{grid-row:3}
   .use-lim-row.use-lim-head{display:none}
@@ -169,5 +176,5 @@ span.use-limit{display:block}
 }
 
 .use-line:not(button){cursor:default}
-.use-bar-row label{max-width:100%}
-.use-bar-row label select{max-width:100%}
+/* ⋯'s Clear automatic queue cannot be undone: last, in red, after a line. */
+.use-head .ph-menu .use-purge{color:var(--fail)}

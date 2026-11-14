@@ -583,6 +583,9 @@ const chatMoreHTML = (id: string | null | undefined, text: string | null | undef
 };
 function chatClampSync(root: ParentNode) {
   for (const el of root.querySelectorAll<HTMLElement>('.msg-clamp')) {
+    // Drawn out of sight (a task window's Chat tab while another tab shows) it measures nothing: it keeps its Show more
+    // until it is measured in sight.
+    if (!el.getClientRects().length) continue;
     const more = el.parentElement?.querySelector<HTMLElement>(':scope > .msg-more');
     const fits = el.scrollHeight <= el.clientHeight + 2;
     if (fits) el.classList.remove('msg-clamp');
@@ -625,8 +628,8 @@ async function v2StepsOpen(state: Pick<ChatState, 'openSteps' | 'steps'>, el: HT
   const list = (root || $('#conv-thread'))?.querySelector(`details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
   if (list) list.innerHTML = html;
 }
-// Copy the original message, not timestamps, action labels or rendered link shortcuts. `fb`: a bot's message's feedback
-// key, whose 👍 / 👎 follow Copy on the row under it (ui/app/feedback.js).
+// Copy the original message, not timestamps, action labels or rendered link shortcuts. `fb`: the feedback key of a bot's
+// or another person's message, whose 👍 / 👎 follow Copy on the row under it (ui/app/feedback.ts).
 function chatCopyHTML(text: string | null | undefined, fb = '') {
   return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button>${fbButtonsHTML(fb)}</div>` : '';
 }
@@ -702,7 +705,7 @@ function v2MessageHTML(m: ChatMessage) {
   const relay = src.kind === 'assistant_for';
   const who = relay ? esc(src.name) : pid ? esc(m.sender_id === myActor() ? 'You' : personHandle(pid)) : esc(actorLabel(m.sender_id));
   const me = m.sender_id === myActor();
-  const fb = !mine && m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
+  const fb = m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   // The message a new topic started a fresh session for (backend/topic_change.py): one quiet word above it.
   const fresh = mine && m.refs?.topic_changed ? CHAT_COMPACTED : '';
   // Every message is the same row (the style guide's chat window): avatar, then name, time and its marks on one line,

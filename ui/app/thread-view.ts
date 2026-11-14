@@ -772,6 +772,8 @@ function thvRoutedHTML(m: ThvMessage) {
 // page, and to what was open on it when the page can open it.
 const THV_FROM_PAGES: Record<string, (item?: PageChatItem) => string> = {
   listening: item => LISTENING + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  automations: item => AUTOMATIONS + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  docs: item => DOCS + (item?.kind === 'doc' && item.id ? '/' + encodeURIComponent(item.id) : ''),
   // the review view (file-review.ts), at the version that was on screen
   file: item => item?.kind === 'file' && item.id ? fileReviewHref(item.id, {version: Number(String(item.name || '').replace(/^v/, '')) || null}) : '',
   goals: item => goalsBase() + (item?.kind === 'goal' && item.id ? '/' + encodeURIComponent(item.id) : ''),
@@ -780,7 +782,8 @@ function thvFromHTML(m: ThvMessage) {
   const f = m.refs?.from_page;
   if (!f || typeof f !== 'object' || !f.label) return '';
   // The page name comes from the message, so only the table's own keys count (not Object's, such as constructor).
-  const href = Object.hasOwn(THV_FROM_PAGES, f.page) ? THV_FROM_PAGES[f.page]?.(f.item) : undefined;
+  // A page with no entry above leads to its own address (page-chat.ts pageChatHome).
+  const href = Object.hasOwn(THV_FROM_PAGES, f.page) ? THV_FROM_PAGES[f.page]?.(f.item) : pageChatHome(String(f.page)) || undefined;
   const words = esc('From ' + f.label) + (f.item?.name ? ' › ' + esc(f.item.name) : '');
   return `<div class="th-from">${href ? `<a href="${esc(href)}">${words}</a>` : words}</div>`;
 }
@@ -805,8 +808,9 @@ function thvMsgActsHTML(view: ThvView, m: ThvMessage) {
 function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   const relay = rowSource(m).kind === 'assistant_for';
   const bot = thvBot(m.sender_id);
-  // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.ts).
-  const fb = !m.deleted && m.id && bot ? fbKey('message', m.id) : '';
+  // A bot's or another person's words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions
+  // (ui/app/feedback.ts).
+  const fb = !m.deleted && m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', cont && 'th-cont', view.focus === m.id && 'th-focus', view.flash === m.id && 'th-flash', m.refs?.follow_up && 'th-followup',
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
@@ -1884,7 +1888,7 @@ function thvPressWire(view: ThvView) {
 }
 function thvSheet(view: ThvView, m: ThvMessage) {
   const d = fbDialog('fb-menu thv-sheet', 'Message actions');
-  const key = thvBot(m.sender_id) ? fbKey('message', m.id) : '', mine = key ? fbMine(key)?.rating || '' : '';
+  const key = fbRates(m.sender_id) ? fbKey('message', m.id) : '', mine = key ? fbMine(key)?.rating || '' : '';
   d.innerHTML = `<div class="thv-sheet-emoji" role="group" aria-label="React">${thvEmojiChoices(view).slice(0, 6).map(e =>
       `<button type="button" data-pick-emoji="${esc(e)}" aria-label="${esc(e)}">${esc(e)}</button>`).join('')}</div>
     <div class="fb-menu-row">${thvCanPost(view) ? `<button type="button" data-pick="reply" aria-label="Reply">${THV_SVG.reply}</button>` : ''}${

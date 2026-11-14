@@ -67,8 +67,12 @@ function replayScopes(): {label: string; rows: [string, string][]}[] {
           {label: 'Bots', rows: bots.map((e): [string, string] => ['bot:' + e.id, botDisplayName(e.id)])},
           {label: 'People', rows: people.map((p): [string, string] => ['human:' + p.id, p.name || p.id])}].filter(g => g.rows.length);
 }
+// The Who filter's icon in the header (in the row, or folded into ⋯ on a phone).
+const replayWhoBtn = (): HTMLElement | null => document.querySelector<HTMLElement>('#rp-filter');
 // The name of the scope in force, for its chip and the filter's label ('' for everyone).
-const replayScopeName = (scope: string): string => !scope ? '' : replayScopes().flatMap(g => g.rows).find(([v]) => v === scope)?.[1] || scope.replace(/^[a-z]+:/, '');
+// '' when the roster that names it has not loaded yet (a link opened cold): replayWhoPaint asks again shortly.
+const replayScopeKnown = (scope: string): string => replayScopes().flatMap(g => g.rows).find(([v]) => v === scope)?.[1] || '';
+const replayScopeName = (scope: string): string => !scope ? '' : replayScopeKnown(scope) || scope.replace(/^[a-z]+:/, '');
 
 function pageReplay() {
   replayStop();
@@ -85,8 +89,7 @@ function pageReplay() {
     tools: `<div class="use-seg ph-seg rp-seg" role="tablist" aria-label="Range">${REPLAY_RANGES.map(([k, label]) =>
         `<button type="button" role="tab" data-rp-range="${k}" aria-selected="${k === state.range}">${label}</button>`).join('')}</div>`
       + `<button type="button" class="tl-ib" id="rp-filter" aria-haspopup="true" aria-expanded="false" aria-label="Who" title="Who">${filterIcon(13)}<span class="ph-fold-word" aria-hidden="true">Who</span><span class="tl-fbadge tnum" aria-hidden="true" hidden>1</span></button>`
-      + '<span class="rp-actions"><button type="button" class="ghost" id="rp-present" aria-pressed="false">Present</button></span>',
-    more: '<button type="button" id="rp-link">Copy link</button>'});
+      + '<span class="rp-actions"><button type="button" class="ghost" id="rp-present" aria-pressed="false">Present</button></span>'});
   $('#main').innerHTML = `<div class="rp-page">${head}
     <div class="rp-under">
       <span class="rp-custom" hidden><input type="datetime-local" id="rp-from" aria-label="From"><input type="datetime-local" id="rp-to" aria-label="To"></span>
@@ -107,20 +110,13 @@ function pageReplay() {
     const f = replayIso($('#rp-from').value), t = replayIso($('#rp-to').value);
     if (f && t && f < t) { state.from = f; state.to = t; replayLoad(state); }
   };
+  // The Who icon (pages-shell.ts phFilterWire); its chip's ✕ shows everyone and leaves the focus on the icon. ⋯ holds the
+  // header's own Copy link: the address is kept up to date on every load and speed change (replaySync).
   const filterBtn = $('#rp-filter') as HTMLElement, pop = $('#task-filter-pop') as HTMLElement;
-  filterBtn.onclick = () => replayWhoMenu(state);
+  phFilterWire(REPLAY_MENU, filterBtn, pop, anchor => replayWhoMenu(state, anchor));
   $('#rp-chips').onclick = (ev: MouseEvent) => {
-    if (eventElement(ev)?.closest('[data-rp-drop]')) { state.scope = ''; replayLoad(state); if (!filterBtn.closest('.ph-menu')) filterBtn.focus(); return; }
-    if (eventElement(ev)?.closest('[data-rp-edit]')) replayWhoMenu(state);
-  };
-  pop.addEventListener('keydown', tasksMenuKeys);
-  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
-    filterBtn.setAttribute('aria-expanded', String(ev.newState === 'open'));
-    if (ev.newState === 'closed' && (pop.contains(document.activeElement) || document.activeElement === document.body) && !filterBtn.closest('.ph-menu')) filterBtn.focus();
-  });
-  $('#rp-link').onclick = async () => {
-    replaySync(state);
-    try { await copyText(location.href); toast('Link copied'); } catch (e) { toast(errorMessage(e, 'Could not copy the link.'), true); }
+    if (eventElement(ev)?.closest('[data-rp-drop]')) { state.scope = ''; replayLoad(state); phFocusHome(filterBtn); return; }
+    if (eventElement(ev)?.closest('[data-rp-edit]')) replayWhoMenu(state, phFilterAnchor(filterBtn));
   };
   $('#rp-present').onclick = () => replayPresent(state, !state.presenting);
   state.onKey = ev => {
@@ -133,11 +129,7 @@ function pageReplay() {
 
 // Who to show: everyone, or one team, bot or person, picked from a list with a search (the shared popover). A pick
 // loads the replay for them.
-function replayWhoMenu(state: ReplayState): void {
-  const btn = $('#rp-filter') as HTMLElement | null;
-  if (!btn) return;
-  // Opening the menu closes the header's ⋯; a filter icon folded into it is hidden then, so the menu goes under ⋯.
-  const anchor = btn.closest('.ph-menu') ? $('#main header.rp-head > .ph-more') || btn : btn;
+function replayWhoMenu(state: ReplayState, anchor: HTMLElement): void {
   const opt = (v: string, label: string) => `<label class="tl-opt" data-label="${esc(label.toLowerCase())}"><input type="radio" name="rp-who" value="${esc(v)}"${v === state.scope ? ' checked' : ''}><span>${esc(label)}</span></label>`;
   tasksMenu(REPLAY_MENU, anchor, `<div class="tl-menu rp-who" role="group" aria-label="Who">
     <input type="search" class="tl-menu-q" placeholder="Search" aria-label="Search teams, bots and people" autocomplete="off" spellcheck="false">
@@ -149,9 +141,9 @@ function replayWhoMenu(state: ReplayState): void {
       const want = find.value.trim().toLowerCase();
       for (const o of p.querySelectorAll<HTMLElement>('.tl-opt')) o.hidden = !!want && !(o.dataset.label || '').includes(want);
       for (const h of p.querySelectorAll<HTMLElement>('.tl-menu-h')) {
-        let n = h.nextElementSibling, any = false;
-        while (n && !n.matches('.tl-menu-h')) { if (!(n as HTMLElement).hidden) any = true; n = n.nextElementSibling; }
-        h.hidden = !any;
+        let n = h.nextElementSibling, shown = false;
+        while (n && !n.matches('.tl-menu-h')) { if (!(n as HTMLElement).hidden) shown = true; n = n.nextElementSibling; }
+        h.hidden = !shown;
       }
     };
     p.onchange = ev => {
@@ -164,8 +156,11 @@ function replayWhoMenu(state: ReplayState): void {
   });
 }
 // The filter icon's badge and label, and a chip under the header naming who is shown (its ✕ shows everyone again).
-function replayWhoPaint(state: ReplayState): void {
-  const name = replayScopeName(state.scope), btn = $('#rp-filter') as HTMLElement | null, chips = $('#rp-chips') as HTMLElement | null;
+function replayWhoPaint(state: ReplayState, tries = 0): void {
+  // Opened from a link before the roster has loaded, the scope has no name yet: ask again for a few seconds.
+  if (state.scope && !replayScopeKnown(state.scope) && tries < 20)
+    setTimeout(() => { if (REPLAY === state && state.scope) replayWhoPaint(state, tries + 1); }, 400);
+  const name = replayScopeName(state.scope), btn = replayWhoBtn(), chips = $('#rp-chips') as HTMLElement | null;
   const badge = btn?.querySelector<HTMLElement>('.tl-fbadge');
   if (badge) badge.hidden = !name;
   btn?.classList.toggle('active', !!name);

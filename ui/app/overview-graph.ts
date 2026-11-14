@@ -548,7 +548,7 @@ function ogRuleHtml(r: OGRule, key: string, side: 'who' | 'with'): string {
   const on = ogNow().rule === r.id;
   return `<li class="og-rule${on ? ' on' : ''}">
       <button type="button" class="og-rule-t" data-og-rule="${esc(r.id)}" aria-pressed="${on}">${ruTextHTML(r.text, 'plain')}</button>
-      <div class="og-rule-m">${r.if_broken === 'block' || r.if_broken === 'escalate' ? `<span class="og-flag ${r.if_broken}">${r.if_broken === 'block' ? 'Stop' : 'Ask first'}</span>` : ''}
+      <div class="og-rule-m">${r.if_broken ? `<span class="og-flag ru-outcome ${esc(r.if_broken)}">${ruleOutcomeIconHTML(r.if_broken, 'Stop')}</span>` : ''}
         ${others.length && ogGoList(others) ? `<span class="og-with-l">${side === 'who' ? 'With' : 'Who'}</span>${ogGoList(others)}` : ''}
         <span class="spacer"></span><a class="og-rule-a" href="${ruHref(r.kind, {rule: r.id})}">${edit ? 'Edit' : 'Open'}</a></div></li>`;
 }

@@ -13,7 +13,7 @@
 section.card > header .ph-add, section.card > header .tag-edit { margin-left: auto; }
 .tag-more { margin-top: var(--s2); }
 .tag-form { display: grid; gap: 12px; }
-.tag-form-btns { display: flex; gap: var(--s2); }
+.tag-form-btns { display: flex; justify-content: flex-end; gap: var(--s2); }
 .tag-form label { display: grid; gap: 6px; }
 .tag-form input:not([type=checkbox]), .tag-form textarea { width: 100%; min-width: 0; }
 .tag-form label:has(input[type=checkbox]) { display: flex; align-items: center; }
@@ -26,3 +26,9 @@ section.card > header .ph-add, section.card > header .tag-edit { margin-left: au
 .tag-advanced[open] { display: grid; gap: 12px; }
 .tag-key-line { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
 .tags-empty { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* The bots that may set a tag: a muted line of their faces under the header. */
+.tag-writers { display: flex; align-items: center; gap: var(--s2); margin: -4px 0 var(--s3); font-size: var(--t-sm); }
+.tag-writer-faces { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.tag-writer { position: relative; display: inline-flex; border-radius: 50%; }
+/* a phone: each face keeps its size with a 44px hit area (.tap-mark), spaced so no two hit areas overlap */
+@media (max-width: 760px) { .tag-writer-faces { gap: 22px; margin-left: 8px; } }

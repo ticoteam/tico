@@ -56,7 +56,8 @@ interface PropMenuOptions<T extends PropMenuItem> {
   search?: (q: string) => Promise<T[]>;
 }
 // A "…" menu entry: a label and what it does.
-interface PropMenuAction { text: string; danger?: boolean; run: () => unknown; icon?: string; sep?: boolean; checked?: boolean; }
+/** `read`: the item only moves, copies or shows, so a bot's read-only view (view-only.ts) keeps it; the rest are left out there. */
+interface PropMenuAction { text: string; danger?: boolean; run: () => unknown; icon?: string; sep?: boolean; checked?: boolean; read?: boolean; }
 interface PropRowOptions { edit?: boolean; empty?: boolean; popup?: string; words?: string; title?: string; extra?: string; hidden?: boolean; }
 
 const PROP_ICON = {
@@ -543,15 +544,15 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     const phone = matchMedia('(max-width:600px)').matches;
     // The owning bot's screen (computer-screen.ts), where its session can be watched.
     const screen = !taskFinished(task) ? botScreenComputer(actorSlug(task.owner_id)) : '';
-    if (screen) items.push({text: 'Watch the session', icon: 'computer', run: () => { location.hash = screenHref(screen); }});
-    items.push({text: 'Copy link', icon: 'link', run: async () => {
+    if (screen) items.push({text: 'Watch the session', icon: 'computer', read: true, run: () => { location.hash = screenHref(screen); }});
+    items.push({text: 'Copy link', icon: 'link', read: true, run: async () => {
       try { await navigator.clipboard.writeText(`${location.origin}/#/task/${encodeURIComponent(task.id)}`); toast('Link copied'); } catch { toast('Could not copy the link', true); }
     }});
     // The owning bot's session id, for resuming or restoring that session by hand.
     const primary = (cur.links || []).filter(l => l.kind === 'session').map(l => {
       try { return JSON.parse(l.detail || '{}'); } catch { return {}; }
     }).find(s => s.primary && s.thread_id);
-    if (primary) items.push({text: 'Copy session ID', icon: 'content_copy', run: async () => {
+    if (primary) items.push({text: 'Copy session ID', icon: 'content_copy', read: true, run: async () => {
       try { await navigator.clipboard.writeText(primary.thread_id); toast('Session ID copied'); } catch { toast('Could not copy the session ID', true); }
     }});
     if (r.snooze) items.push(taskSnoozed(task) ? {text: 'Unsnooze', icon: 'schedule', run: () => save('snooze', {unsnooze: true})}
@@ -596,7 +597,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     }});
     const age = $('.tmodal-age', d)?.textContent || '';
-    propMenu(d, more, {label: phone && age ? `Updated ${age}` : 'Task', items: items.map(({checked, ...it}) => ({...it, html: `${it.icon ? `<span class="nav-icon" aria-hidden="true">${it.icon}</span>` : ''}<span>${esc(it.text)}</span>${checked ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}`})), onPick: it => it.run()});
+    // A bot's read-only view offers only what reads: nothing it picks could be saved, so none of it shows.
+    const shown = S.me?.read_only_view ? items.filter(it => it.read) : items;
+    propMenu(d, more, {label: phone && age ? `Updated ${age}` : 'Task', items: shown.map(({checked, ...it}) => ({...it, html: `${it.icon ? `<span class="nav-icon" aria-hidden="true">${it.icon}</span>` : ''}<span>${esc(it.text)}</span>${checked ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}`})), onPick: it => it.run()});
   };
 }
 // The Stage row's menu: Move on, the earlier stages (Move back), Done; `only: 'back'` lists just the earlier ones.

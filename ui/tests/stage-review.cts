@@ -65,8 +65,7 @@ async function playOnStages(browser: Browser) {
   const {page, errors} = await opened(browser, {hash: '#/tasks?pipeline=product&layout=columns'});
   await page.locator('[data-pv-play]').first().waitFor();
   assert.deepEqual(await plays(page), [['spec', '3'], ['review', '2']], 'Spec and Review show ▶ with their counts; Build none');
-  await page.locator('#task-menu').click();
-  await page.locator('#task-mi-layout [data-layout="list"]').click();
+  await page.locator('#task-mi-layout [data-layout="list"]').click();   // List/Columns on the header's row
   await page.locator('.pv-group-head [data-pv-play]').first().waitFor();
   assert.deepEqual(await plays(page), [['spec', '3'], ['review', '2']], 'the list layout\'s group headers too');
   assert.deepEqual(errors, []);
@@ -125,7 +124,7 @@ async function nothingMoves(browser: Browser) {
     const before = await layoutOf(page);
     release(); rulesGo();
     await page.locator('.pv-tab-dot').first().waitFor();
-    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-mark')?.getAttribute('aria-label') === 'Build: No rules');
+    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-mark')?.getAttribute('aria-label') === 'Build: none of its own');
     const after = await layoutOf(page);
     assert.deepEqual([after.tabs, after.strip], [before.tabs, before.strip], 'the tabs keep their widths when the dots arrive');
     assert.deepEqual(await page.locator('.pv-tab:has(.pv-tab-dot)').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.pvTab)), ['spec', 'review']);
@@ -134,7 +133,9 @@ async function nothingMoves(browser: Browser) {
       await page.locator(`.pv-tab[data-pv-tab="${id}"]`).click();
       const now = await layoutOf(page);
       assert.deepEqual([now.tabs, now.strip], [before.tabs, before.strip], `the tabs do not move on ${id}`);
-      if (id === 'spec') assert.equal(await page.locator('.pv-phone-head .sr-mark').getAttribute('aria-label'), 'Spec: 12 rules', 'twelve rules, same strip');
+      if (id === 'spec') assert.equal(await page.locator('.pv-phone-head .sr-mark').getAttribute('aria-label'), 'Spec: 12 rules of its own', 'twelve rules, same strip');
+      // a mark only on a stage with rules of its own; Build's place is kept, empty
+      assert.equal(await page.locator('.pv-phone-head .sr-mark').isVisible(), id !== 'build', `${id}: the mark ${id === 'build' ? 'hidden' : 'shown'}`);
     }
     assert.deepEqual(errors, []);
     await page.close();

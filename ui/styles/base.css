@@ -86,6 +86,12 @@ body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
 /* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
 :where(button,input,select,textarea){font:inherit;color:inherit}
+/* iPhone and iPad zoom the page in when a field whose text is under 16px takes focus, and do not zoom back out, so
+   the page ends up cut off at the right. Fields there are 16px: tapping one leaves the page as it was. Only iOS
+   matches this @supports; every other screen keeps the type scale. */
+@supports (-webkit-touch-callout:none){
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea,[contenteditable]:not([contenteditable="false"]){font-size:var(--t-lg) !important}
+}
 h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
 /* The type scale (tokens.css): 13px text, page titles 16px, card headings 13-14px, one 11px uppercase label. Three
    weights: 400 text, 500 emphasis and controls, 600 names, titles and labels (bold text is 600 too). Set apart from

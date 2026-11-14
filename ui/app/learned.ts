@@ -35,10 +35,11 @@ const LEARNED_MENU: TasksMenuHost = {};
 // Where it came from and when it last changed (no "edited" mark: the age is the last change's).
 const learnedWhen = (e: LearnedEntry) => `${e.taught_in_chat ? 'Taught in chat' : 'Added by you'} · ${ago(e.updated_at || e.created_at)}`;
 // An entry: its words, then one muted line with where it came from and ⋯ last (Edit, then Delete in red after a line).
+// A bot's read-only view (view-only.ts) has no ⋯: both its items write.
 const learnedItemHTML = (e: LearnedEntry) => `<li class="learned-item" data-learned="${esc(e.id)}">
     <div class="learned-text">${esc(e.text)}</div>
     <div class="learned-meta"><span class="muted" title="${esc(fmt(e.updated_at || e.created_at))}">${esc(learnedWhen(e))}</span>
-      <button type="button" class="tl-ib learned-more" data-learned-more aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></li>`;
+      ${S.me?.read_only_view ? '' : `<button type="button" class="tl-ib learned-more" data-learned-more aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}</div></li>`;
 const learnedListHTML = (entries: LearnedEntry[], empty: string) => entries.length
   ? `<ul class="learned-list">${entries.map(learnedItemHTML).join('')}</ul>` : `<p class="muted learned-empty">${esc(empty)}</p>`;
 
@@ -69,17 +70,19 @@ async function pageLearned() {
   learnedRender(d, name);
 }
 
-function learnedRender(d: LearnedPage, name: string) {
+// `focus`: where the focus goes once the list is drawn again (an entry's id: its ⋯; a section's id: its heading), so a
+// save, cancel or delete never leaves it on the page's body.
+function learnedRender(d: LearnedPage, name: string, focus = '') {
   const body = $('#learned-body') as HTMLElement | null;
   if (!body) return;
   const co = d.company;
   body.innerHTML = `
     <section class="card learned-sec" id="learned-personal" aria-labelledby="learned-personal-h">
-      <h2 id="learned-personal-h">About you${learnedLock('Only you see this')}</h2>
+      <h2 id="learned-personal-h" tabindex="-1">About you${learnedLock('Only you see this')}</h2>
       ${learnedListHTML(d.personal || [], `Nothing yet. Tell ${name} in your chat what matters most to you.`)}
     </section>
     ${co ? `<section class="card learned-sec" id="learned-company" aria-labelledby="learned-company-h">
-      <h2 id="learned-company-h">About the company${learnedLock(`Only you change this, and only ${name} uses it`)}</h2>
+      <h2 id="learned-company-h" tabindex="-1">About the company${learnedLock(`Only you change this, and only ${name} uses it`)}</h2>
       <h3>Vision</h3>
       <p class="learned-vision">${co.vision ? esc(co.vision) : '<span class="muted">Not written yet.</span>'} <a href="${STRATEGY}">Edit on Strategy</a></p>
       <h3>Priorities</h3>
@@ -95,11 +98,14 @@ function learnedRender(d: LearnedPage, name: string) {
     const more = target?.closest<HTMLButtonElement>('[data-learned-more]');
     if (more) learnedMenu(more, item, d, name);
   };
+  if (focus) (body.querySelector<HTMLElement>(`[data-learned="${CSS.escape(focus)}"] [data-learned-more]`) || body.querySelector<HTMLElement>('#' + CSS.escape(focus)))?.focus();
 }
 // Who sees a section, as a mark rather than a caption: a lock with the words for hover and screen readers.
 const learnedLock = (words: string): string => ` <span class="nav-icon learned-lock" role="img" aria-label="${esc(words)}" title="${esc(words)}">lock</span>`;
 // An entry's ⋯: Edit, then Delete in red after a line (the shared popover, task-list-menus.ts).
 function learnedMenu(button: HTMLButtonElement, item: HTMLElement, d: LearnedPage, name: string): void {
+  // Another entry's ⋯ still open says so no longer (its menu is about to be this one's).
+  if (LEARNED_MENU.menuAnchor && LEARNED_MENU.menuAnchor !== button) LEARNED_MENU.menuAnchor.setAttribute('aria-expanded', 'false');
   tasksMenu(LEARNED_MENU, button, `<div class="tl-menu" role="menu" aria-label="Entry"><button type="button" class="tl-mi" role="menuitem" data-learned-edit>Edit</button>`
     + '<div class="tl-menu-sep" role="separator"></div><button type="button" class="tl-mi danger" role="menuitem" data-learned-delete>Delete</button></div>', pop => {
     pop.onclick = ev => {
@@ -127,14 +133,14 @@ function learnedEdit(item: HTMLElement, d: LearnedPage, name: string) {
   const save = async () => {
     const text = input.value.trim();
     if (!text) { toast('Say what it learned, or delete it', true); return; }
-    if (text === entry.text) { learnedRender(d, name); return; }
+    if (text === entry.text) { learnedRender(d, name, entry.id); return; }
     const btn = item.querySelector<HTMLButtonElement>('[data-learned-save]');
     if (!btn) throw new Error('learned edit: the save button was not drawn');
     btn.disabled = true;
     try {
       const r: {entry: LearnedEntry} = await patch(`/v2/assistant/learned/${encodeURIComponent(entry.id)}`, {text});
       Object.assign(entry, r.entry);
-      learnedRender(d, name);
+      learnedRender(d, name, entry.id);
       toast('Saved');
     } catch (e) { btn.disabled = false; toast(errorMessage(e, ''), true); }
   };
@@ -142,11 +148,11 @@ function learnedEdit(item: HTMLElement, d: LearnedPage, name: string) {
     ev.stopPropagation();
     const target = eventElement(ev);
     if (target?.closest('[data-learned-save]')) void save();
-    else if (target?.closest('[data-learned-cancel]')) learnedRender(d, name);
+    else if (target?.closest('[data-learned-cancel]')) learnedRender(d, name, entry.id);
   };
   input.onkeydown = ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); void save(); }
-    else if (ev.key === 'Escape') learnedRender(d, name);
+    else if (ev.key === 'Escape') learnedRender(d, name, entry.id);
   };
 }
 
@@ -158,9 +164,12 @@ async function learnedDelete(item: HTMLElement, btn: HTMLButtonElement, d: Learn
   const id = item.dataset.learned ?? '';
   try {
     await writeRequest('DELETE', `/v2/assistant/learned/${encodeURIComponent(id)}`);
+    // The focus goes to the next entry's ⋯ (else the one before), or to the section's heading when it was the last.
+    const list = [...(item.closest('.learned-list')?.querySelectorAll<HTMLElement>('[data-learned]') || [])], at = list.indexOf(item);
+    const next = list[at + 1] || list[at - 1], section = item.closest('section')?.querySelector('h2')?.id || '';
     d.personal = (d.personal || []).filter(e => e.id !== id);
     if (d.company) d.company.entries = (d.company.entries || []).filter(e => e.id !== id);
-    learnedRender(d, name);
+    learnedRender(d, name, next?.dataset.learned || section);
     toast('Deleted');
   } catch (e) { btn.disabled = false; toast(errorMessage(e, ''), true); }
 }

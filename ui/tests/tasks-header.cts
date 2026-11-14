@@ -3,10 +3,14 @@
 //  - a phone (390×844) on a pipeline: one 44 px row of the picker, Search, Filter, ▶ n and ⋯, nothing accent, the title for
 //    screen readers only (the UI Owner's call; page-head.cts); at 320 px with a long pipeline name it is still one row
 //    and the name ends in "…" (AC-1);
-//  - a computer (1440×900, and 1000×800 with the manager's panel open): one 56 px row of Tasks, the picker, a 280 px
-//    search, Filter, ▶ n, the manager's 22 px face and ⋯, nothing sideways; the face opens and closes the panel (AC-2);
-//  - ⋯ holds New task, Archived, Edit pipeline and, on a computer on a pipeline, List and Columns with the current one
-//    ticked; each does what its button did; C still makes a task; closed, ⋯ is aria-expanded="false" (AC-3);
+//  - a computer (1440×900 with the manager's chat docked open, and 1000×800 and 900×800 with it folded to its tab): one
+//    56 px row of Tasks, the picker, the search, Filter, ▶ n, List/Columns, New task and ⋯, nothing sideways; no chat
+//    button in the row: the manager is the page chat, docked open or the tab on the right edge (page-chat.ts, style guide
+//    "Where chat lives") (AC-2);
+//  - List/Columns and New task sit on the row whenever there is room: the search shrinks to its icon first (900), New
+//    task goes into ⋯ only on the phone's row (Chris, round 2 C);
+//  - ⋯ holds Archived and Edit pipeline on a computer, and New task too on a phone; each does what its button did; C
+//    still makes a task; closed, ⋯ is aria-expanded="false" (AC-3);
 //  - ▶ on a pipeline opens the review on the open stage; with nothing waiting it is quiet, keeps its width and says
 //    "Nothing waits on you in Product" without walking anything (AC-10);
 //  - nothing on the row moves when Needs you arrives 2 s late (AC-6, the header's part);
@@ -23,7 +27,7 @@ const box = (page: Page, sel: string) => page.locator(sel).first().evaluate(el =
 // Every control shown on the header's row, with its box: the picker, the tools and ⋯.
 const rowControls = (page: Page) => page.evaluate(() => {
   const h = document.querySelector<HTMLElement>('#main header.ph')!;
-  return [...h.querySelectorAll<HTMLElement>(':scope > #task-scope, :scope > .ph-tools > *, :scope > .ph-more, :scope > .ph-act *')]
+  return [...h.querySelectorAll<HTMLElement>(':scope > #task-scope, :scope > .ph-tools > *, :scope > .ph-act > *, :scope > .ph-more')]
     // shown: a field folded out of sight (the narrowest phone's search, 1 px and clipped) is not on the row
     .filter(el => el.getClientRects().length && el.getBoundingClientRect().width > 1)
     .map(el => { const r = el.getBoundingClientRect(); return {id: el.id || el.className, top: r.top, bottom: r.bottom, left: r.left, right: r.right, w: r.width, h: r.height}; });
@@ -172,8 +176,8 @@ async function menu(page: Page): Promise<string[]> {
       await page.close();
     }
     {
-      // A computer on Product with a manager: one 56 px row, the manager's face, ⋯ with List/Columns; nothing moves when
-      // Needs you arrives 2 s after the board draws.
+      // A computer on Product with a manager: one 56 px row, the manager's chat docked open, List/Columns and New task on
+      // the row; nothing moves when Needs you arrives 2 s after the board draws.
       (product as {manager_id: string | null}).manager_id = 'bot:pm';
       try {
         const late = async (pg: Page) => pg.route('**/api/v2/needs-you*', async route => { await new Promise(r => setTimeout(r, 2000)); await route.fallback(); });
@@ -185,29 +189,33 @@ async function menu(page: Page): Promise<string[]> {
         assert.deepEqual(after.map(c => [c.id, Math.round(c.left), Math.round(c.w)]), before.map(c => [c.id, Math.round(c.left), Math.round(c.w)]),
           'no header control moves or changes size when Needs you arrives');
         assert.deepEqual(await oneRow(page, 56), []);
-        assert.deepEqual(after.map(c => c.id), ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-manager', 'task-menu']);
+        assert.deepEqual(after.map(c => c.id), ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-mi-layout', 'task-new', 'task-menu']);
         const searchW = (await box(page, '#main header.ph .tl-search')).width;
         assert.ok(Math.abs(searchW - 280) < 1, `a 280 px search: ${searchW}`);
-        assert.equal(await page.locator('#task-manager').getAttribute('aria-label'), 'Chat with PM');
-        await page.locator('#task-manager').click();
-        await page.locator('#task-rail .pm-head').waitFor();
-        await page.locator('#task-manager').click();
-        await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-rail')!.hidden);
+        // The manager's chat is docked open at 1440 (Chris, round 2 A); closed, the tab on the right edge brings it back.
+        await page.locator('aside.pgc:not([hidden]) .pgc-head').waitFor();
+        await page.locator('aside.pgc [data-pgc-close]').click();
+        await page.waitForFunction(() => document.querySelector<HTMLElement>('aside.pgc')!.hidden);
+        assert.equal(await page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').getAttribute('aria-label'), 'Chat with PM');
 
-        // ⋯: each item does what its button did.
-        assert.deepEqual(await menu(page), ['New task', 'Archived', 'Edit pipeline', '✓ List', 'Columns']);
-        await page.locator('#task-menu-pop [data-layout="columns"]').click();
+        // List/Columns on the row, the current one pressed; ⋯ keeps Archived and Edit pipeline.
+        const pressed = () => page.locator('#task-mi-layout [aria-pressed="true"]').getAttribute('data-layout');
+        assert.equal(await pressed(), 'list');
+        assert.deepEqual(await menu(page), ['Archived', 'Edit pipeline']);
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');
+        await page.locator('#task-mi-layout [data-layout="columns"]').click();
         await page.waitForFunction(() => location.hash.includes('layout=columns'));
-        await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');   // a pick closes ⋯
-        assert.deepEqual(await menu(page), ['New task', 'Archived', 'Edit pipeline', 'List', '✓ Columns']);
+        assert.equal(await pressed(), 'columns');
+        await page.locator('#task-menu').click();
+        await page.locator('#task-menu-pop:popover-open').waitFor();
         await page.locator('#task-mi-archive').click();
         await page.waitForFunction(() => location.hash.includes('archive=snoozed'));
         assert.equal(await page.locator('#task-bar #task-archive-x').isVisible(), true, '✕ Leave Archived at the bar\'s left');
-        assert.deepEqual(await menu(page), ['New task', 'Leave Archived']);
+        assert.deepEqual(await menu(page), ['Leave Archived']);
         await page.locator('#task-mi-archive').click();
         await page.waitForFunction(() => !location.hash.includes('archive='));
-        await page.locator('#task-menu').click();
-        await page.locator('#task-mi-new').click();
+        await page.locator('#task-new').click();
         await page.locator('#task-create-form').waitFor();
         await page.keyboard.press('Escape');
         await page.locator('#task-create-form').waitFor({state: 'hidden', timeout: 5000});
@@ -218,23 +226,42 @@ async function menu(page: Page): Promise<string[]> {
         assert.deepEqual(errors, []);
         await page.close();
 
-        // 1000×800 with the manager's panel open: still one row, nothing sideways.
+        // 1000×800 with the manager's chat folded to its tab: still one row, nothing sideways, and the tab covers none
+        // of the row (it has its own gutter on the right edge, past ⋯). Open, the chat lies over the page by design.
         const small = await open(browser, {viewport: {width: 1000, height: 800}, hash: '#/tasks?pipeline=product&layout=columns'});
         await small.page.locator('#task-body .pv').waitFor();
-        await small.page.locator('#task-manager').click();
-        await small.page.locator('#task-rail .pm-head').waitFor();
+        await small.page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').waitFor();
         await small.page.waitForTimeout(100);
         assert.deepEqual(await oneRow(small.page, 56), []);
+        const edge = await box(small.page, 'body > .pgc-edge'), more = await box(small.page, '#task-menu');
+        assert.ok(more.right <= edge.left, `⋯ ends before the tab's gutter: ${JSON.stringify({more, edge})}`);
+        assert.deepEqual((await rowControls(small.page)).map(c => c.id),
+          ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-mi-layout', 'task-new', 'task-menu']);
         assert.deepEqual(small.errors, []);
         await small.page.close();
+
+        // 900×800, narrow: the search has shrunk to its icon, List/Columns and New task are still on the row.
+        const narrow = await open(browser, {viewport: {width: 900, height: 800}, hash: '#/tasks?pipeline=product'});
+        await narrow.page.locator('#task-body .pv').waitFor();
+        await narrow.page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').waitFor();
+        assert.deepEqual(await oneRow(narrow.page, 56), []);
+        assert.deepEqual((await rowControls(narrow.page)).map(c => c.id),
+          ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-mi-layout', 'task-new', 'task-menu']);
+        const icon = (await box(narrow.page, '#main header.ph .tl-search')).width;
+        assert.ok(icon < 50, `the search folds to its icon first: ${icon}px`);
+        assert.deepEqual(await menu(narrow.page), ['Archived', 'Edit pipeline']);
+        assert.deepEqual(narrow.errors, []);
+        await narrow.page.close();
       } finally { (product as {manager_id: string | null}).manager_id = null; }
     }
     {
-      // Tasks › You: the count once, in ▶; the picker reads "You". ⋯ has no List/Columns off a pipeline.
+      // Tasks › You: the count once, in ▶; the picker reads "You". No List/Columns off a pipeline; New task on the row.
       const {page, errors} = await open(browser, {hash: '#/tasks?pipeline='});
       await page.waitForFunction(() => document.querySelector('#task-play .tl-review-n')?.textContent === '3');
       assert.equal((await page.locator('#task-scope').innerText()).trim(), 'You');
-      assert.deepEqual(await menu(page), ['New task', 'Archived']);
+      assert.equal(await page.locator('#task-mi-layout').isVisible(), false);
+      assert.equal(await page.locator('#task-new').isVisible(), true);
+      assert.deepEqual(await menu(page), ['Archived']);
       await page.keyboard.press('Escape');
       assert.deepEqual(errors, []);
       await page.close();

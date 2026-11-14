@@ -177,8 +177,9 @@ async function rulesMode(browser: import('playwright').Browser) {
   await node(page, 'b:builder').click();
   const panel = page.locator('#og-panel');
   await panel.waitFor();
-  assert.deepEqual(await panel.locator('.og-flag').allInnerTexts(), ['Ask first', 'Stop'], 'what a broken rule does, per rule');
-  assert.equal(await panel.locator('.og-flag').first().evaluate(f => getComputedStyle(f).backgroundColor), 'rgba(0, 0, 0, 0)', 'plain words, no pill');
+  // what a broken rule does, per rule, in the mark every rule uses (stage-rules.ts ruleOutcomeIconHTML): its word is its name
+  assert.deepEqual(await panel.locator('.og-flag [role=img]').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Ask first', 'Stop'], 'what a broken rule does, per rule');
+  assert.equal(await panel.locator('.og-flag').first().evaluate(f => getComputedStyle(f).backgroundColor), 'rgba(0, 0, 0, 0)', 'a mark, no pill');
   // Escape with the header's ⋯ open closes ⋯ only; the panel stays until the next Escape.
   await page.locator('#main header.ph > .ph-more').click();
   const menu = page.locator('#main header.ph > .ph-menu');

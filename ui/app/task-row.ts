@@ -85,10 +85,12 @@ interface TaskRowOptions {
   key?: string;
   /** Drawn where the age goes (a blocked task's stop mark and "#304"). */
   tail?: string;
+  /** An empty mark space instead of the mark: a list where every row would carry the same one (a bot's Needs you). */
+  noMark?: boolean;
 }
 /** One row, one line (S1). A row in your own list has no mark and no mark space; snoozed and finished rows are dimmed,
     with a date and no avatar. */
-function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = '', tail = ''}: TaskRowOptions = {}): string {
+function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = '', tail = '', noMark = false}: TaskRowOptions = {}): string {
   const id = esc(key || t.id), title = esc(text || t.title || '');
   const line = taskLine(t);
   const tip = esc([taskHolder(t) ? actorLabel(taskHolder(t)) : '', line].filter(Boolean).join(' · '));
@@ -100,7 +102,7 @@ function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''
   }
   const holder = taskHolder(t);
   return `<div class="tk-row" data-task="${id}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}>`
-    + (look === 'you' ? '' : taskMarkHTML(t))
+    + (look === 'you' ? '' : taskMarkHTML(noMark ? null : t))
     + `<span class="tk-title">${title}</span>${lateTagHTML(t)}${blocksTagHTML(t)}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${holder ? actorFace(holder, 16) : ''}</span>`
@@ -167,12 +169,12 @@ function taskFilterMatch(t: TaskAny, q: string, f: TaskFilters = {}): boolean {
 }
 /** How a pipeline is drawn on the Tasks page (task-pipelines.ts sets it as it loads). The page (tasks-page.ts) owns the
     header, reading the pipeline and its open tasks, search, filter, the archive and opening a task (any [data-task]);
-    it calls `html` again whenever it has read again. `bind` wires the root once drawn, `rail` draws the manager's rail
-    into its host, `ask` the phone's floating face into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
+    it calls `html` again whenever it has read again. `bind` wires the root once drawn, `rail` makes the pipeline's
+    manager the page's chat (pipeline-rail.ts), `ask` the phone's floating face into its own (pipeline-ask.ts), `edit` opens the pipeline's settings. */
 interface PipelineViewHooks {
   html(p: PipelineRec, tasks: TaskAny[], opts: {layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters}): string;
   bind?(root: HTMLElement, p: PipelineRec): void;
-  rail?(host: HTMLElement, p: PipelineRec): void;
+  rail?(p: PipelineRec, drawn: boolean): void;   // drawn: the board is on screen (not loading, not failed)
   ask?(host: HTMLElement, p: PipelineRec, phone: boolean): void;
   edit?(p: PipelineRec): void;
 }

@@ -398,9 +398,15 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.setViewportSize({width: 390, height: 844});
     await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
-    // My bots is an icon on a phone; Daily and Weekly are the header's tabs, in words on their own row.
-    assert.equal(await p.locator('#upd-mine .nav-icon').isVisible(), true, '#upd-mine shows its icon');
-    assert.equal(await p.locator('#upd-mine .upd-lbl').isVisible(), false, '#upd-mine hides its word');
+    // On a phone the header's tools give way only as every header's do (page-head.ts): words while they fit, then their
+    // icons (.ph-icons), then ⋯; Updates has no phone rule of its own. Daily and Weekly are the header's tabs, in words
+    // on their own row.
+    const scope = await p.locator('#upd-scope').evaluate(b => {
+      const head = b.closest('header.ph')!, folded = !!b.closest('.ph-menu'), icons = head.classList.contains('ph-icons');
+      const word = getComputedStyle(b.querySelector('.upd-lbl')!).display !== 'none', icon = getComputedStyle(b.querySelector('.nav-icon')!).display !== 'none';
+      return folded || (icons ? icon && !word : word && !icon);
+    });
+    assert.equal(scope, true, 'Whole org follows the shared header: words, its icon, or folded into ⋯');
     for (const kind of ['daily', 'weekly']) assert.equal(await p.locator(`.upd-head .ph-tab[data-upd-kind="${kind}"]`).isVisible(), true, kind + ' tab shows');
     assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').count(), 0, 'Updates is in More');
     assert.equal(await p.locator('#mobile-more').evaluate(el => el.classList.contains('cur')), true, 'More is the current tab on Updates');

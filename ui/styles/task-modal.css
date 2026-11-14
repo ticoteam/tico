@@ -8,10 +8,14 @@
 .tlink a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis}
 .tlink .tcopy{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;display:inline-flex;align-items:center}
 .tlink.session.primary{color:var(--ink)}
-/* Sessions on a phone: Copy and Remove are 40 px tap areas (padding round the same icon) with a gap between them, so a
-   thumb that misses Copy does not land on Remove; a long session name is cut short instead of pushing them out. */
-@media (max-width:760px){.task-sessions .tlink{gap:8px;border-radius:12px}.task-sessions .tlink .tsess-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .task-sessions .tlink .tcopy,.task-sessions .tlink .x{flex:none;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0}}
+/* Sessions on a phone: every chip is the same compact height, Copy and Remove keep their small icons, and each takes a
+   44px tap area round it (.tap-mark, forms.css; the chip lets it reach past its edge). Remove sits far enough from Copy
+   that the two areas do not overlap, and the rows of chips far enough apart that no area reaches the next row; a long
+   session name is cut short instead of pushing them out. */
+@media (max-width:760px){.task-sessions .tlinks{gap:20px 16px}
+  .task-sessions .tlink{gap:8px;min-height:26px;overflow:visible}.task-sessions .tlink .tsess-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .task-sessions .tlink :is(.tcopy,.x){position:relative;flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;min-height:0;padding:0}
+  .task-sessions .tlink .tcopy+.x{margin-left:22px}}
 .tlink.task .linkish{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;font-size:inherit}
 .tlink.pr{border-color:color-mix(in srgb,var(--run) 45%,var(--line));color:var(--run)}
 .tlink.pr.merged,.tlink.pr.shipped{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}

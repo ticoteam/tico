@@ -1,6 +1,6 @@
 import type {Route} from 'playwright';
 // Offline browser check of a stage whose Owner is "One of several" (spec "A stage picks its owner from several"): the
-// stage reads in task order (When a task arrives, Who works on it, To leave); choosing One of several shows the bots
+// stage reads in task order (On entering, While here, To leave); choosing One of several shows the bots
 // with their model family, Pick and Prefer as switches, Limit each, the owner switch and the next-task sentence; a save
 // sends the pick as the record stores it, without what the server writes (families, the sentence); the closed row
 // says "One of 2". Tasks leave is a two-way switch. Desktop and phone widths. TICO_UI_SHOTS=<dir> keeps screenshots.
@@ -78,8 +78,11 @@ const FAMILY: Record<string, string> = {'bot:builder': 'Claude', 'bot:builder-2'
       await dialog.locator('[data-pe-pf="goal"]').waitFor();
       await build.locator('> summary').click();
 
-      // Three groups in the order a task moves.
-      assert.deepEqual(await build.locator('.pe-h').allInnerTexts(), ['WHEN A TASK ARRIVES', 'WHO WORKS ON IT', 'TO LEAVE'], `${width}: the groups`);
+      // Three phases in the order a task moves, each with its small leading mark.
+      assert.deepEqual(await build.locator('.pe-phase-h').evaluateAll(hs => hs.map(h => `${h.querySelector('.nav-icon')?.textContent} ${h.lastChild?.textContent}`)),
+        ['login On entering', 'schedule While here', 'logout To leave'], `${width}: the phases`);
+      // Build's Limit is a row of On entering, its words, not a field
+      assert.deepEqual(await build.locator('[data-pe-enter-row] .sr-text').allTextContents(), ['At most 4 tasks at once'], `${width}: the Limit row`);
 
       // One of several, with two Builders, taking turns, Prefer Anyone, owning the task.
       await build.locator('[data-pe-sf="owner"]').selectOption('pick');

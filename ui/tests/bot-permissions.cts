@@ -224,7 +224,7 @@ async function access(browser: import('playwright').Browser) {
   await page.locator('#btabs').waitFor({state: 'attached'});
   assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks']);
   // The details are ⋯'s list, last in the line: Info and Rules for someone who may not read the bot.
-  assert.deepEqual(await page.locator('#bot-more-menu [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules']);
+  assert.deepEqual(await page.locator('#bot-more-menu .bot-mgroup [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
   assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
@@ -241,7 +241,7 @@ async function access(browser: import('playwright').Browser) {
   await page.waitForFunction(() => S.route === '#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
   assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), [], 'see only: no DM, no tasks');
-  assert.deepEqual(await page.locator('#bot-more-menu [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules'], 'see only: Info and Rules in ⋯');
+  assert.deepEqual(await page.locator('#bot-more-menu .bot-mgroup [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules'], 'see only: Info and Rules in ⋯');
   assert.equal(await page.locator('#bot-more-menu [data-bot-incognito], #bot-dm-arch').count(), 0, 'see only: no private chat');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);
   assert.deepEqual(errors, []);
@@ -323,8 +323,13 @@ async function roles(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=jira-manager]').waitFor();
-  // A bot is edited on its own page: the row's name goes there, and Settings is a tab.
-  await page.evaluate(() => { location.hash = '#/bot/jira-manager/settings'; });
+  // A bot is edited on its own page: the row's name goes there, and Settings is in its ⋯ (then a tab).
+  await page.locator('tr[data-settings-bot=jira-manager] a.sb-name').click();
+  await page.waitForFunction(() => location.hash === '#/bot/jira-manager');
+  await page.locator('#bot-more-btn').click();
+  await page.locator('#bot-more-menu [data-bot-mtab="settings"]').click();
+  await page.waitForFunction(() => location.hash === '#/bot/jira-manager/settings');
+  assert.equal(await page.locator('#bot-detail-tabs .ph-tab.cur').innerText(), 'Settings');
   const owned = page.locator('#bot-editor [data-bot-owners]');
   assert.match(await owned.innerText(), /Cara/);
   await page.locator('#bot-editor [data-edit-bot-owners=jira-manager]').click();

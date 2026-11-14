@@ -1,6 +1,7 @@
-// Offline browser regression: on a phone (390 px) each row of a task's Sessions list has a Copy and a Remove button
-// a thumb can hit. Each is at least a 40x40 px tap area (padding, not a bigger icon), and the two do not touch, so a
-// miss on Copy does not land on Remove. Remove asks once before it takes the session off: Cancel keeps it, OK removes it.
+// Offline browser regression: on a phone (390 px) each chip of a task's Sessions list has a Copy and a Remove button
+// a thumb can hit. Every chip is the same compact height; each mark keeps its small icon with a 44x44 px tap area round
+// it (.tap-mark), and the two areas do not overlap, so a miss on Copy does not land on Remove. Remove asks once before
+// it takes the session off: Cancel keeps it, OK removes it.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -64,29 +65,29 @@ async function run(viewport: Viewport, shot: string) {
     const rows = page.locator('#task-modal .task-sessions .tlink.session');
     await rows.first().waitFor();
     assert.equal(await rows.count(), 2);
+    // Every chip is the same compact height, whichever buttons it has.
+    const heights = await rows.evaluateAll(els => els.map(e => Math.round(e.getBoundingClientRect().height)));
+    assert.equal(new Set(heights).size, 1, `every chip is one height: ${heights}`);
+    assert.ok(heights[0]! < 44, `the chips stay compact (${heights[0]} px)`);
+    // The 44x44 square round a mark (.tap-mark), as a thumb would hit it.
+    const area = (b: Box): Box => ({x: b.x + b.width / 2 - 22, y: b.y + b.height / 2 - 22, width: 44, height: 44});
     for (let i = 0; i < 2; i++) {
       const row = rows.nth(i);
       await row.scrollIntoViewIfNeeded();
       const copy = (await row.locator('button.tcopy').boundingBox())!, drop = (await row.locator('button.x').boundingBox())!;
-      for (const [name, box] of [['Copy', copy], ['Remove', drop]] as const) {
-        assert.ok(box.width >= 40 && box.height >= 40, `row ${i + 1}: ${name} is a 40x40 tap area, not ${box.width}x${box.height}`);
-      }
-      // A long session name is cut short, so neither button is pushed out of its row (the row clips what overflows).
+      // A long session name is cut short, so neither button is pushed out of its row.
       const box = (await row.boundingBox())!;
       for (const b of [copy, drop]) assert.ok(b.x >= box.x && b.x + b.width <= box.x + box.width + 0.5 && b.x + b.width <= 390, `row ${i + 1}: both buttons are inside the row`);
-      assert.ok(apart(copy, drop), `row ${i + 1}: Copy and Remove do not overlap`);
-      const gap = Math.max(drop.x - (copy.x + copy.width), copy.x - (drop.x + drop.width));
-      assert.ok(gap >= 4, `row ${i + 1}: Copy and Remove have space between them (${gap} px)`);
-      // The icons stay their size: the tap area is padding.
+      // The two 44px areas do not overlap, so a miss on Copy does not land on Remove.
+      assert.ok(apart(area(copy), area(drop)), `row ${i + 1}: Copy's and Remove's tap areas do not overlap`);
+      // The icons stay their size: the tap area reaches past the mark.
       assert.ok(((await row.locator('button.tcopy svg').boundingBox())!).width <= 12, 'the copy icon is not enlarged');
-      // The whole 40x40 takes the tap: the row's rounded, clipped end must not cut off a corner (a tap 2 px in from each).
-      for (const [name, sel] of [['Copy', 'button.tcopy'], ['Remove', 'button.x']] as const) {
-        const missed = await row.locator(sel).evaluate(btn => {
-          const r = btn.getBoundingClientRect();
-          return [[r.left + 2, r.top + 2], [r.right - 2, r.top + 2], [r.left + 2, r.bottom - 2], [r.right - 2, r.bottom - 2]]
-            .filter(([x, y]) => !btn.contains(document.elementFromPoint(x!, y!))).length;
-        });
-        assert.equal(missed, 0, `row ${i + 1}: every corner of ${name}'s tap area takes the tap`);
+      // The whole 44x44 takes the tap: the chip must not clip it (a tap 2 px in from each corner of the square).
+      for (const [name, sel, b] of [['Copy', 'button.tcopy', copy], ['Remove', 'button.x', drop]] as const) {
+        const a = area(b);
+        const missed = await row.locator(sel).evaluate((btn, a) => [[a.x + 2, a.y + 2], [a.x + a.width - 2, a.y + 2], [a.x + 2, a.y + a.height - 2], [a.x + a.width - 2, a.y + a.height - 2]]
+          .filter(([x, y]) => !btn.contains(document.elementFromPoint(x!, y!))).length, a);
+        assert.equal(missed, 0, `row ${i + 1}: every corner of ${name}'s 44px tap area takes the tap`);
       }
     }
     if (shot) await page.screenshot({path: shot});

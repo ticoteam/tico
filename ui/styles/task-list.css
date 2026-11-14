@@ -19,7 +19,8 @@
 .tl-status:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
 /* ---- the header is the shared page header (ui/app/page-head.ts, hook .tl-head): the title, the scope ▾ after it, the
-   view tools and ⋯ (New task is in it). Below: the scope button, the icon buttons and the search it holds. */
+   view tools (a pipeline's List/Columns switch among them), the quiet + for New task, and ⋯. Below: the scope button, the
+   icon buttons and the search it holds. */
 .tl-scope{flex:0 1 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-scope:hover,.tl-scope[aria-expanded=true]{background:var(--surface2)}
 .tl-scope:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
@@ -46,13 +47,13 @@
 .tl-review:hover{background:var(--surface2);color:var(--ink)}
 .tl-review:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 #task-manager .avatar,#task-manager img{border-radius:50%}
-/* ⋯: New task's key, and List/Columns as a choice under a line */
+/* ⋯: New task (a phone's: a computer's is the + on the row) with its key */
+@media (min-width:761px){.ph-menu #task-mi-new{display:none}}
+@media (max-width:760px){.ph.tl-head>.ph-act{display:none}}
 .ph-menu .tl-mi-k::after{content:attr(data-key);float:right;margin-left:16px;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:var(--t-xs)/16px var(--sans)}
 @media (max-width:760px){.ph-menu .tl-mi-k::after{content:none}}
 /* ⋯'s Search is for the narrowest phones only (the end of this file) */
 .ph-menu #task-mi-search{display:none}
-.ph-menu .tl-mi-layout hr{margin:4px 0;border:0;border-top:1px solid var(--line)}
-.ph-menu .tl-mi-layout [aria-pressed=true]::after{content:"✓";float:right;margin-left:16px;color:var(--ink)}
 /* the layout pair and the finished views are single-choice filters: .ph-seg (page-head.css) draws them */
 .tl-pair{flex:none}
 .tl-pair button{display:inline-grid;place-items:center;min-width:26px}

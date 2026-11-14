@@ -290,24 +290,24 @@ function botTaskTabShow(slug: string, key: string | undefined, picked = false) {
   else if (at.right > shown.right) bar.scrollLeft += at.right - shown.right;
 }
 // The tab bar keeps to one line in the rail (style guide: tabs that fit, or ⋯): the tabs that fit show in their order,
-// the current one always among them, and the rest wait behind a ⋯ at the bar's end, listed in the shared popover
+// the current one always among them, and the rest wait behind a ⋯ beside the bar (outside the tab list: it opens a
+// list of plain buttons, not a tab), listed in the shared popover
 // (task-list-menus.ts tasksMenu). While the sidebar is edited every tab shows and the bar scrolls, so each can be dragged.
 function botTaskTabsFit(slug: string) {
   const bar: HTMLElement | null = $('#pane-tasks .bot-task-tabs');
-  if (!bar || BOT?.slug !== slug) return;
+  const more: HTMLElement | null = $('#pane-tasks .bot-tab-more');
+  if (!bar || !more || BOT?.slug !== slug) return;
   const tabs = [...bar.querySelectorAll<HTMLElement>('[data-bot-task-tab]')];
-  let more = bar.querySelector<HTMLElement>(':scope > .bot-tab-more');
   for (const tab of tabs) tab.classList.remove('bot-tab-over');
+  // Measured without ⋯: it comes back only when the tabs overflow the whole line.
+  const wasShown = !more.hidden;
+  more.hidden = true;
   const room = () => bar.scrollWidth <= bar.clientWidth + 1;
   if (bar.hidden || BOT_EDIT?.slug === slug || !bar.clientWidth || room()) {
-    if (more?.contains(document.activeElement)) tabs.find(t => t.classList.contains('cur'))?.focus({preventScroll: true});
-    more?.remove();
+    if (wasShown && more.contains(document.activeElement)) tabs.find(t => t.classList.contains('cur'))?.focus({preventScroll: true});
     return;
   }
-  if (!more) {
-    bar.insertAdjacentHTML('beforeend', '<button type="button" class="bot-tab-more" aria-label="More lists" title="More lists" aria-haspopup="true" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>');
-    more = bar.lastElementChild as HTMLElement;
-  }
+  more.hidden = false;
   // From the last tab back, each but the current one leaves the line until the rest fit beside ⋯.
   for (const tab of [...tabs].reverse()) {
     if (room()) break;
@@ -524,8 +524,8 @@ function botTasksRender(slug: string, owned: {tasks: BotListTask[]}) {
 // read "To do" on nearly every row. In Needs you every row is the viewer's to act on, so a row waiting on them has no
 // "!" there: a mark on every row says nothing. Elsewhere the "!" is the exception it marks.
 function botRailRowHTML(t: TaskAny, needs = false): string {
-  const me = myActor(), mine = needs && taskMark(t) === 'person' && (!t.turn?.who || t.turn.who === me);
-  return taskRowHTML(mine ? {...t, turn: {...t.turn, state: 'yours'}} as unknown as TaskAny : t);
+  const me = myActor();
+  return taskRowHTML(t, {noMark: needs && taskMark(t) === 'person' && (!t.turn?.who || t.turn.who === me)});
 }
 // A pane's list, patched row by row (patchHTML on the list itself): a poll that moved one task redraws that row, not the
 // pane. `empty` stands in for no rows; `tail` follows the list (Done's Show more).

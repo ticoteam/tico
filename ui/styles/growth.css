@@ -220,6 +220,7 @@ button.gsrc-row:hover{background:var(--surface2)}
 .gsrc-row>span{min-width:0;overflow-wrap:anywhere}
 .gsrc-t{font-weight:600}
 .gsrc-ref{overflow-wrap:anywhere}
+.gsrc-who{display:inline-flex;align-items:center;gap:6px;min-width:0;vertical-align:middle}
 /* the list's heads: the same columns as a row, in the table heads' small uppercase label */
 .gsrc-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr) minmax(0,.9fr);gap:4px 14px;padding:10px var(--s4) 6px;color:var(--muted);font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps)}
 .gsrc-sync:empty{display:none}
@@ -341,6 +342,7 @@ button.gsrc-row:hover{background:var(--surface2)}
   .gsrc-t{flex:1 1 auto}
   .gsrc-r,.gsrc-m,.gsrc-o{flex-basis:100%;font-size:var(--t-xs)}
   .gsrc-m:empty,.gsrc-o:empty{display:none}
+  .gsrc-row>[data-k]::before{content:attr(data-k) ' ';color:var(--muted);font-weight:400}
 }
 
 /* ---------- Get started (ui/app/growth-start.ts): the four steps over the cards while Growth is not set up, the next

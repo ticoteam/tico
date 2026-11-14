@@ -476,18 +476,12 @@ function dashEditing(state: DashState, on: boolean, {focus = false}: {focus?: bo
   if (!on) dashMenuClose(state);
   if (!root) return;
   root.classList.toggle('dash-editing', on);
+  // Every place draws the shared header (pageDashboard), whose parts follow edit mode.
   const head = root.querySelector<HTMLElement>(':scope > header.ph');
-  if (head) {
-    dashHeadDraw(state, head);
-    // Edit lives in ⋯: leaving edit mode puts the focus back on ⋯, entering it on Done.
-    if (focus) head.querySelector<HTMLElement>(on ? '[data-dash-mode="done"]' : ':scope > .ph-more')?.focus();
-    return;
-  }
-  root.querySelectorAll<HTMLElement>('[data-dash-add], [data-dash-mode="done"]').forEach(b => { b.hidden = !on; });
-  const edit = root.querySelector<HTMLElement>('[data-dash-mode="edit"]');
-  if (!edit) return;
-  edit.hidden = on;
-  if (focus) root.querySelector<HTMLElement>(`[data-dash-mode="${on ? 'done' : 'edit'}"]`)?.focus();
+  if (!head) return;
+  dashHeadDraw(state, head);
+  // Edit lives in ⋯: leaving edit mode puts the focus back on ⋯, entering it on Done.
+  if (focus) head.querySelector<HTMLElement>(on ? '[data-dash-mode="done"]' : ':scope > .ph-more')?.focus();
 }
 // The shared header's parts for the reader: someone who may arrange the place has Edit in ⋯ (arranging is not a daily
 // thing, style guide "Top bars: one line"); while editing, + Card and + Page are the tools and Done the one filled
@@ -531,8 +525,6 @@ function dashDraw(state: DashState) {
   if (!v || !root || !S.lastRead.places) return;
   S.lastRead.places[String(state.key)] = v;
   if (v.kind === 'team') { const h1 = root.querySelector('h1'); if (!h1) return; h1.textContent = v.name ?? ''; }
-  const actions = root.querySelector<HTMLElement>('.dash-actions');
-  if (actions) actions.hidden = !v.can_edit;
   dashEditing(state, state.editing);
   const grid = root.querySelector('#dash-grid');
   if (!grid) return;

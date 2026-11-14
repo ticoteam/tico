@@ -384,6 +384,11 @@ async function shot(page: Page, name: string) {
       await page.waitForFunction(() => (document.querySelector('[data-gr-month]') as HTMLSelectElement | null)?.value === '2026-09');
       assert.equal(fake.reads.at(-1), '2026-09');
       await page.waitForFunction(() => document.querySelector('#dash-grid .grc-num-v')?.textContent === '41');
+      // Edit and Done draw the header's tools again: the picker keeps the month the address opened on.
+      await headTool(page, '[data-dash-mode="edit"]');
+      await page.locator('[data-dash-mode="done"]').click();
+      assert.equal(await page.locator('[data-gr-month]').inputValue(), '2026-09', 'Edit then Done: the picker still reads the month');
+      assert.equal(await page.locator('[data-gr-month] option[selected]').getAttribute('value'), '2026-09', 'its month is the selected option, not only the value');
 
       // Add a Number from its form: a metric for one channel, a tile by default; the defaults are saved first.
       await headTool(page, '[data-dash-mode="edit"]');

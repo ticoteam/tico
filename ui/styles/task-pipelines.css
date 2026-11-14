@@ -1,5 +1,5 @@
 /* ui/styles/task-pipelines.css — One pipeline on the Tasks page (ui/app/task-pipelines.ts: columns, the list grouped
-   by stage, the phone's stage tabs, the refused-move bar), the manager's rail beside it (ui/app/pipeline-rail.ts) and the
+   by stage, the phone's stage tabs, the refused-move bar) and the
    board's bots on a phone (ui/app/pipeline-ask.ts). The pipeline editor's styles are pipeline.css. Rows and boxes
    themselves are task-row.css. */
 .pv{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0}
@@ -71,8 +71,7 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-play:hover{filter:brightness(1.08)}
 .pv-play:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .pv-play-none{visibility:hidden}
-/* in the list, the rules mark stays beside the count and ▶ still takes the right edge, as in columns (stage-rules.css) */
-.pv-group-head .sr-mark + .pv-play{margin-left:auto}
+/* ▶ (or its kept slot) goes right; the rules mark, where a stage has rules of its own, ends the header (stage-rules.css) */
 .pv-stage-n[title]{cursor:help}
 
 /* A phone: a row of stage tabs (the only thing that scrolls sideways), ▶ for the stage shown, then its tasks. Every
@@ -91,19 +90,6 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
 .pv-bar-text{flex:1 1 240px;min-width:0}
 .pv-bar input{flex:1 1 180px;min-width:0;height:30px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
-
-/* The manager's rail (ui/app/pipeline-rail.ts): the manager's name and close, then its direct chat filling the column. */
-.pm-rail{min-width:0;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:var(--t-sm)}
-.pm-shell{display:flex;flex-direction:column;flex:1;min-height:0}
-.pm-panel{display:flex;flex-direction:column;flex:1;min-height:0}
-.pm-head{display:flex;align-items:center;gap:8px;padding:12px 14px}
-.pm-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pm-chat{flex:1 1 0;min-height:0;display:flex;flex-direction:column;border-top:1px solid var(--line)}
-/* The chat fills the column, its box at the bottom (a card's chat is otherwise its own height, threads.css), as the
-   page owner's chat does (page-chat.css). */
-.pm-chat > .thv{flex:1 1 auto;min-height:0}
-.pm-chat > .thv-card .thv-scroll{max-height:none}
-.pm-chat > .thv-card .thv-composer{padding:0 10px 10px}
 
 /* The board's bots on a phone and the chat they open over the board (ui/app/pipeline-ask.ts). The face is the header's
    (#task-manager); this host holds only its menu, fixed under the face (placed by paMenu). Every tap target is 44px. */

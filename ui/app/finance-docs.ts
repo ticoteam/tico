@@ -92,8 +92,12 @@ const finPill = ([cls, label]: FinPair) => `<span class="pill ${cls}">${esc(labe
 const FIN_DOC_PLAIN = new Set(['open', 'sent', 'paid']);
 const finDocStatus = (d: {status: string}) => FIN_DOC_PLAIN.has(d.status) ? esc(FIN_DOC_STATUS[d.status]?.[1] || d.status)
   : d.status === 'void' ? '<span class="muted">Void</span>' : finPill(FIN_DOC_STATUS[d.status] || ['', d.status]);
-// In a list the normal status says nothing at all; the rest as above.
-const finDocStatusCell = (d: {status: string}) => FIN_DOC_PLAIN.has(d.status) ? '' : finDocStatus(d);
+// In a list an unpaid document's normal status (open, sent) says nothing; paid is a muted word, so under All a paid
+// bill and an open one never read the same (under the Paid filter every row is paid, and it says nothing); the rest as
+// above.
+const FIN_DOC_QUIET = new Set(['open', 'sent']);
+const finDocStatusCell = (d: {status: string}) => FIN_DOC_QUIET.has(d.status) ? ''
+  : d.status === 'paid' ? (FIN?.doc && FIN_DOC_F[FIN.doc.kind].status === 'paid' ? '' : '<span class="muted">Paid</span>') : finDocStatus(d);
 // An unpaid bill's payment worth showing: one on its way, or one that ended without paying an open bill.
 const finBillPay = (d: FinDocAny) => {
   const p = d.payment;
@@ -186,14 +190,23 @@ const finEmailSetter = () => !finCaps()?.viewing && (S.me?.role === 'owner' || !
 // The bills address and Direct send are set rarely, so they are items in the header's ⋯ (style guide "Top bars: one
 // line"): the address's item opens it (or copies it, for whoever cannot set it), Direct send is a choice that is on or
 // off (aria-pressed). Drawn again whenever either is known or changes.
+// What finDocEmailDraw last put in each header's ⋯ (not a data attribute: a data-fin-* on the header would match the
+// list's own click hooks).
+const FIN_DOC_MORE = new WeakMap<HTMLElement, string>();
 function finDocEmailDraw() {
   const state = FIN?.doc;
   if (!state) return;
   const email = state.email || '';
-  const address = finEmailSetter() ? `<button type="button" data-fin-email-set title="${esc(email || 'No bills address')}">Bills address</button>`
-    : email ? `<button type="button" data-fin-copy="${esc(email)}" title="${esc(email)}">Copy bills address</button>` : '';
-  const direct = state.direct == null ? '' : `<button type="button" data-fin-direct aria-pressed="${state.direct}">Direct send</button>`;
-  finHeadMore(state.kind === 'bill' ? address + direct : '');
+  // The address is in the item's own words, so a touch screen (no hover title) can read it too.
+  const address = finEmailSetter() ? `<button type="button" class="fin-mi-2" data-fin-email-set>Bills address<span class="muted">${esc(email || 'None')}</span></button>`
+    : email ? `<button type="button" data-fin-copy="${esc(email)}">Copy ${esc(email)}</button>` : '';
+  // A choice that is on or off: its check mark is the visible state, the shared look of a ⋯ choice (automations.css .au-mi).
+  const direct = state.direct == null ? '' : `<button type="button" class="au-mi" data-fin-direct aria-pressed="${state.direct}"><span class="nav-icon" aria-hidden="true">check</span>Direct send</button>`;
+  // Set only when it changes: a list read again (each search keystroke) leaves ⋯ and the focus in it alone.
+  const more = state.kind === 'bill' ? address + direct : '', head = $('#fin-head') as HTMLElement | null;
+  if (!head || FIN_DOC_MORE.get(head) === more) return;
+  FIN_DOC_MORE.set(head, more);
+  finHeadMore(more);
 }
 // One input: an address sets it, empty clears it. An address no Tico address has is kept but named here.
 function finDocEmailSet() {
@@ -307,19 +320,19 @@ function finDocDraw() {
   const origins = new Set([...state.rows, ...paid].map(r => r.origin || ''));
   const cameIn = (r: FinDocRow) => origins.size > 1 ? esc(FIN_CAME_IN[r.origin ?? ''] || r.origin || '') : '';
   const open = !state.rows.length ? finNote(bill ? 'No bills.' : 'No invoices.') : bill
-    ? `<table class="fin-t fin-doc-t fin-rows"><thead><tr><th>Vendor</th><th>Bill</th><th>Due</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>Status</th><th>Came in</th></tr></thead><tbody>${state.rows.map(r => tr(r,
-      `<td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap" data-k="Due">${esc(finDayLabel(r.due_date))}</td><td class="fin-n fin-amt">${finCents(r.total)}</td>
-      <td>${cell(finDocAccount(r))}</td><td>${cell(finDocTeam(r))}</td><td>${status(r)}</td><td>${cameIn(r)}</td>`)).join('')}</tbody></table>`
-    : `<table class="fin-t fin-doc-t fin-rows"><thead><tr><th>Customer</th><th>Invoice</th><th>Sent</th><th>Due</th><th class="fin-n">Amount</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => tr(r,
-      `<td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap" data-k="Sent">${r.sent_at ? esc(finDayLabel(r.sent_at)) : ''}</td>
-      <td class="fin-nowrap" data-k="Due">${esc(finDayLabel(r.due_date))}</td><td class="fin-n fin-amt">${finCents(r.total)}</td><td>${status(r)}</td>`)).join('')}</tbody></table>`;
+    ? `<table class="fin-t fin-doc-t fin-doc-open fin-rows"><thead><tr><th>Vendor</th><th>Bill</th><th>Due</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>Status</th><th>Came in</th></tr></thead><tbody>${state.rows.map(r => tr(r,
+      `<td class="muted" data-sk="Bill">${esc(r.number || '')}</td><td class="fin-nowrap" data-k="Due">${esc(finDayLabel(r.due_date))}</td><td class="fin-n fin-amt">${finCents(r.total)}</td>
+      <td data-k="Account">${cell(finDocAccount(r))}</td><td data-k="Team">${cell(finDocTeam(r))}</td><td data-sk="Status">${status(r)}</td><td data-k="Came in">${cameIn(r)}</td>`)).join('')}</tbody></table>`
+    : `<table class="fin-t fin-doc-t fin-doc-open fin-rows"><thead><tr><th>Customer</th><th>Invoice</th><th>Sent</th><th>Due</th><th class="fin-n">Amount</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => tr(r,
+      `<td class="muted" data-sk="Invoice">${esc(r.number || '')}</td><td class="fin-nowrap" data-k="Sent">${r.sent_at ? esc(finDayLabel(r.sent_at)) : ''}</td>
+      <td class="fin-nowrap" data-k="Due">${esc(finDayLabel(r.due_date))}</td><td class="fin-n fin-amt">${finCents(r.total)}</td><td data-sk="Status">${status(r)}</td>`)).join('')}</tbody></table>`;
   box.innerHTML = open + (state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : '')
-    + (paid.length ? `<h2 class="fin-h2">Recently paid</h2><table class="fin-t fin-doc-t fin-rows"><thead><tr><th>Vendor</th><th>Paid</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>By</th></tr></thead><tbody>${paid.map(r => tr(r,
-      `<td class="fin-nowrap" data-k="Paid">${r.paid_on ? esc(finDayLabel(r.paid_on)) : ''}</td><td class="fin-n fin-amt">${finCents(r.total)}</td><td>${cell(finDocAccount(r))}</td>
-      <td>${cell(finDocTeam(r))}</td><td data-k="By">${r.paid_by ? esc(finWho(r.paid_by)) : ''}</td>`)).join('')}</tbody></table>` : '');
-  const [list, recent] = box.querySelectorAll('table');
-  finTrim(list, state.kind);
-  finTrim(recent, state.kind + '-paid');
+    + (paid.length ? `<h2 class="fin-h2">Recently paid</h2><table class="fin-t fin-doc-t fin-doc-paid fin-rows"><thead><tr><th>Vendor</th><th>Paid</th><th class="fin-n">Amount</th><th>Account</th><th>Team</th><th>By</th></tr></thead><tbody>${paid.map(r => tr(r,
+      `<td class="fin-nowrap" data-k="Paid">${r.paid_on ? esc(finDayLabel(r.paid_on)) : ''}</td><td class="fin-n fin-amt">${finCents(r.total)}</td><td data-k="Account">${cell(finDocAccount(r))}</td>
+      <td data-k="Team">${cell(finDocTeam(r))}</td><td data-k="By">${r.paid_by ? esc(finWho(r.paid_by)) : ''}</td>`)).join('')}</tbody></table>` : '');
+  // Each table by its own class: with no open documents, the first table is Recently paid's.
+  finTrim(box.querySelector('table.fin-doc-open') as HTMLTableElement | null, state.kind);
+  finTrim(box.querySelector('table.fin-doc-paid') as HTMLTableElement | null, state.kind + '-paid');
 }
 // The selected document: drawn from its row at once, then whole (lines, files, payments, approvals, decisions).
 async function finDocOne() {

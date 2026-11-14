@@ -431,11 +431,9 @@ function pageGoals() {
     actions.innerHTML = pageHeadAdd('New goal', 'id="goal-new"');
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
-  // Chat with the page's owner (page-chat.ts), the Strategy Owner by default: the goal last opened rides along. It is a
-  // quiet tool, so it sits with the header's tools and "New goal" stays last (page-head.ts).
-  pageHeadTools($('#main header.ph'))?.insertAdjacentHTML('beforeend', '<span class="goal-chat"></span>');
-  const chat = $('#main .goal-chat');
-  if (chat) void pageChatMount({page: 'goals', label: 'Goals', button: chat, stays: r => rdUnder(r, goalsBase()), item: () => goalsPicked(state)});
+  // The page's owner's chat (page-chat.ts, mounted by the router), the Strategy Owner by default: the goal last opened
+  // rides along.
+  pageChatUse('goals', {item: () => goalsPicked(state)});
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
   const search = $('#goal-search');
   search.oninput = () => { state.q = search.value; goalsRender(state); };

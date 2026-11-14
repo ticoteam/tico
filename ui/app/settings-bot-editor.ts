@@ -170,9 +170,8 @@ function settingsUpdateSubscriptions(e: BotEditRow | null | undefined) {
   const templateNote = !feeds.templates?.feed ? feeds.templates?.status || 'No feed yet.'
     : !e?.template ? feeds.templates?.no_template || '' : `Changes to its template, ${e.template}: public source changes, which may not be released yet.`;
   return `<h3 class="bot-editor-sec bot-editor-wide">Subscribe to updates${unreleased}</h3>
-        <p class="bot-editor-hint bot-editor-wide">Each update waits as a note for the bot's next run and wakes nothing. It never changes the bot's Instructions, settings or access.</p>
         <label class="bot-editor-check"><input type="checkbox" name="update_templates" ${chosen.has('templates') ? 'checked' : ''}><span>Default employee settings<small>${esc(templateNote)}</small></span></label>
-        <label class="bot-editor-check"><input type="checkbox" name="update_tico" ${chosen.has('tico') ? 'checked' : ''}><span>Tico updates<small>Published Tico releases, including MCP and tool changes.</small></span></label>`;
+        <label class="bot-editor-check"><input type="checkbox" name="update_tico" ${chosen.has('tico') ? 'checked' : ''}><span>Tico updates</span></label>`;
 }
 function settingsUpdateSubscriptionsChange(form: {elements: Record<string, HTMLInputElement | undefined>}, e: BotEditRow | null | undefined) {
   const picked = ['templates', 'tico'].filter(name => form.elements['update_' + name]?.checked);
@@ -221,11 +220,11 @@ function settingsEditBot(slug = '', inline = false) {
         <h3 class="bot-editor-sec bot-editor-wide">Working with others</h3>
         <label>Other bots<select name="bot_contact"><option value="open" ${(e?.bot_contact || 'open') === 'open' ? 'selected' : ''}>May chat and assign</option><option value="replies" ${e?.bot_contact === 'replies' ? 'selected' : ''}>Replies only</option><option value="tasks" ${e?.bot_contact === 'tasks' ? 'selected' : ''}>Tasks only</option></select><small>Applies to bots only. Humans are never affected.</small></label>
         <label>Conversation<select name="thread_mode"><option value="personal" ${(e?.thread_mode || 'personal') === 'personal' ? 'selected' : ''}>Private per human</option><option value="shared" ${e?.thread_mode === 'shared' ? 'selected' : ''}>Shared room</option></select></label>
-        <label class="bot-editor-check bot-editor-wide"><input type="checkbox" name="private_tasks_default" ${e?.private_tasks_default ? 'checked' : ''}><span>Create private tasks by default<small>Tasks created by or assigned to this bot start private. A human requester can choose company visibility.</small></span></label>
-        <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
-        <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
+        <label class="bot-editor-check bot-editor-wide"><input type="checkbox" name="private_tasks_default" ${e?.private_tasks_default ? 'checked' : ''}><span>Create private tasks by default</span></label>
+        <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches</span></label>
+        <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot</span></label>
         ${editing ? settingsUpdateSubscriptions(e) : ''}
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Save bot saves your changes.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceBox({kind: 'new', name: 'Model', current: currentModel, mode: 'bot'})}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">

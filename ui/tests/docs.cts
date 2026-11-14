@@ -278,9 +278,10 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
       docs.delete('doc-000000000099'); versions.delete('doc-000000000099');
     }
     await shot(page, 'list');
-    // Ask opens the Ask panel with this page; nothing of the Librarian: no rail, settings link or sidebar gear.
-    assert.equal(await page.locator('#docs-ask').getAttribute('aria-label'), 'Ask');
-    assert.equal(await page.locator('#docs-ask').getAttribute('data-ask-open'), '');
+    // No Ask button in the header (style guide "Where chat lives"): questions go to the page's owner chat (page-chat.ts,
+    // the tab on the right edge, page-chat-pages.cts), and the Assistant is in the sidebar. Nothing of the Librarian
+    // either: no rail, settings link or sidebar gear.
+    assert.equal(await page.locator('#docs-ask, #main header.ph [data-ask-open]').count(), 0, 'no Ask button');
     assert.equal(await page.locator('[data-docs-ask], #docs-librarian-settings, #side .nav-librarian, #nav-strategy-librarian').count(), 0);
 
     // ---- read an internal doc, and its relative link to another doc stays in the app
@@ -461,7 +462,7 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
     addLinked('https://drive.google.com/drive/folders/brand', 'Brand assets', 'google_drive', 'Logos and the tone guide');
     page = await open('#/docs', {width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    assert.equal(await page.locator('#docs-ask .docs-ask-word').isVisible(), false);
+    assert.equal(await page.locator('#docs-ask').count(), 0, 'no Ask button on a phone either');
     await shot(page, 'phone-list');
     await page.locator('.docs-item').first().click();
     await page.locator('.docs-reader-head h2').waitFor();

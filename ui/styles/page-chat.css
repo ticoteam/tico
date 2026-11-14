@@ -1,13 +1,31 @@
-/* A page's owner's chat (ui/app/page-chat.ts): Chat in the page's header; on a desktop one shared column at the right of
-   the window, from the top of #main down, floating over the page below 1600 px and beside it from 1600 px
-   (body.pgc-docked); full screen over the page and the tab bar on a phone. Above the page's content and its menus,
-   below Ask's panel, scrims, the task window and dialogs. */
-.pgc-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px 0 5px;border-radius:16px}
-.pgc-btn[aria-pressed="true"]{background:var(--surface2)}
+/* A page's owner's chat (ui/app/page-chat.ts): on a desktop one shared column at the right of the window, from the top
+   of #main down, beside the page wherever it fits (body.pgc-docked), else folded to a slim tab on the right edge
+   (.pgc-edge, body.pgc-tabbed) that opens it over the page; on a phone the header's chat mark (.ph-chat-mark) opens it
+   full screen over the page and the tab bar. Above the page's content and its menus, below Ask's panel, scrims, the task
+   window and dialogs. */
 .pgc-face{display:inline-flex;flex:none}
+/* The folded column: a strip of its own at the right edge, the owner's face at its top. #main makes room for it, so it
+   covers no control of the page and no scrollbar. */
+.pgc-edge{position:fixed;z-index:34;top:var(--pgc-top,0px);right:0;bottom:0;width:var(--pgc-tab,28px);box-sizing:border-box;display:flex;flex-direction:column;align-items:center;padding-top:8px;border-left:1px solid var(--line);background:var(--surface)}
+.pgc-edge[hidden]{display:none}
+body.pgc-tabbed #main{margin-right:var(--pgc-tab,28px)}
+button.pgc-tab{display:inline-grid;place-items:center;box-sizing:border-box;width:28px;height:44px;min-height:0;padding:0;border:0;border-radius:var(--r-ctl);background:none}
+button.pgc-tab:hover,button.pgc-tab[aria-expanded="true"]{background:var(--surface2)}
+.pgc-tab .avatar,.pgc-tab img,.ph-chat-mark .avatar,.ph-chat-mark img{border-radius:50%}
+/* The phone's chat mark, in the shared header's row just before ⋯ (page-head.ts .ph-chat): the owner's face, 22 px in a
+   44 px button. */
+button.ph-chat-mark{display:inline-grid;place-items:center;box-sizing:border-box;width:44px;height:44px;min-height:0;padding:0;border:0;border-radius:var(--r-ctl);background:none}
+button.ph-chat-mark:hover{background:var(--surface2)}
+/* The mark's slot in a header a page draws itself (page-chat.ts pageChatSlot: Calendar, a computer's pages, Live
+   meetings): a phone's only, as in the shared header (page-head.css). */
+#main .ph-chat{display:none}
+/* A toast stays clear of the chat: above the column and beside it, or beside the tab's strip. */
+.toast{z-index:36}
+body.pgc-tabbed .toast{right:calc(var(--pgc-tab,28px) + 20px)}
+body.pgc-open .toast{right:calc(var(--pgc-w,340px) + 20px)}
 .pgc{position:fixed;z-index:35;top:var(--pgc-top,0px);right:0;bottom:0;width:var(--pgc-w,340px);box-sizing:border-box;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:var(--t-sm);box-shadow:-10px 0 28px rgba(0,0,0,.14)}
 .pgc[hidden]{display:none}
-/* From 1600 px the page makes room: it sits beside the column, narrower by its width, and the column needs no shadow. */
+/* Docked, the page makes room: it sits beside the column, narrower by its width, and the column needs no shadow. */
 body.pgc-docked #main{margin-right:var(--pgc-w,340px)}
 body.pgc-docked .pgc{box-shadow:none}
 .pgc-shell{display:flex;flex-direction:column;flex:1;min-height:0}
@@ -15,7 +33,10 @@ body.pgc-docked .pgc{box-shadow:none}
 .pgc-grip:hover,.pgc-grip:focus-visible,.pgc-dragging .pgc-grip{background:var(--line)}
 body.pgc-dragging{cursor:col-resize;user-select:none}
 .pgc-head{display:flex;align-items:center;gap:8px;min-height:52px;padding:0 12px 0 6px;border-bottom:1px solid var(--line)}
-.pgc-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0}
+/* Close (›, a phone's ‹): a quiet icon button, no outline of its own; a hover background and the usual focus ring. */
+.pgc-head button.pgc-x{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:32px;height:32px;min-height:0;padding:0;border:0;border-radius:var(--r-ctl);background:none;box-shadow:none;color:var(--muted)}
+.pgc-head button.pgc-x:hover{background:var(--surface2);color:var(--ink)}
+.pgc-head button.pgc-x:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .pgc-who{display:flex;align-items:center;gap:8px;min-width:0}
 .pgc-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pgc-chat{flex:1 1 0;min-height:0;display:flex;flex-direction:column}
@@ -27,18 +48,26 @@ body.pgc-dragging{cursor:col-resize;user-select:none}
 .pgc-chat > .thv-card .thv-scroll{max-height:none}
 /* The column has no padding of its own, so the composer keeps its rounded border clear of the edges. */
 .pgc-chat > .thv-card .thv-composer{padding:0 10px 10px}
+/* Settings > General > Page owners (ui/app/settings.ts renderSettingsPageOwners): the shared table, compact, the page
+   then its owner's select. */
+#set-page-owners .po-search{max-width:280px;margin:0 0 8px}
+#set-page-owners .po-table td{padding:4px 12px 4px 0;vertical-align:middle}
+#set-page-owners .po-page{width:40%;white-space:nowrap}
+#set-page-owners .po-owner select{max-width:320px}
 /* What is selected on the page, above the composer: the next message carries it (refs.from_page.item). */
 .pgc-chip{flex:none;align-self:flex-start;max-width:calc(100% - 20px);margin:0 10px 6px;padding:3px 8px;border-radius:6px;background:var(--surface2);color:var(--ink);font-size:12px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
 .pgc-chip[hidden],.thv:has(> .thv-composer[hidden]) > .pgc-chip{display:none}
 @media (max-width:760px){
-  .pgc-word{display:none}
-  .pgc-btn{width:36px;height:36px;padding:0;justify-content:center;border-radius:50%}
-  .pgc:not(.pgc-full){display:none}
-  .pgc.pgc-full{position:fixed;z-index:60;inset:0;width:auto;display:flex;border:0;box-shadow:none;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  .pgc:not(.pgc-full),.pgc-edge{display:none}
+  body.pgc-tabbed #main{margin-right:0}
+  .pgc.pgc-full{position:fixed;z-index:60;inset:var(--pgc-top,0px) 0 0 0;width:auto;display:flex;border:0;box-shadow:none;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
   body.pgc-docked #main{margin-right:0}
   .pgc-full .pgc-grip{display:none}
   .pgc-full .pgc-head{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;padding:0 6px}
-  .pgc-full .pgc-x{width:44px;height:44px}
+  .pgc-full .pgc-head button.pgc-x{width:44px;height:44px}
   .pgc-full .pgc-who{justify-content:center}
   body.pgc-phone-open #mobile-nav{display:none}
+  #main .ph-chat:not(:empty){flex:none;display:flex}
+  .cal-h>.ph-chat{order:5}   /* Calendar's phone row orders its parts: the mark just before its ⋯ */
+  body.pgc-phone-open .toast{z-index:61}
 }

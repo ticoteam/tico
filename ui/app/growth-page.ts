@@ -108,7 +108,10 @@ const grDay = (iso: string | null | undefined) => {
 const grKpiVal = (k: GrKpiVal | null | undefined) => k?.latest == null ? '—' : kpiNum(k.latest, k.unit);
 const grTaskHref = (id: string) => '#/task/' + encodeURIComponent(id);
 const grGoalHref = (id: string) => `${GR_GOALS}?kpi=${encodeURIComponent(id)}`;
-const grFail = (e: unknown) => `<p class="muted gr-note">${esc(errorStatus(e) === 403 ? 'Not in your view.' : errorMessage(e, 'Did not load.'))}</p>`;
+// A read that failed says what happened and carries the fix: Try again draws the page again (none for a refusal).
+const grFail = (e: unknown) => errorStatus(e) === 403 ? '<p class="muted gr-note">Not in your view.</p>'
+  : `<p class="muted gr-note" role="alert">${esc(errorMessage(e, 'Did not load.'))} <button type="button" class="linkish tap-mark" data-gr-retry>Try again</button></p>`;
+document.addEventListener('click', ev => { if (eventElement(ev)?.closest('#main [data-gr-retry]')) route(); });
 const grOpts = (pairs: string[][], value: string | number | null | undefined, blank: string | null = '') => (blank !== null ? `<option value="">${esc(blank)}</option>` : '')
   + pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(value ?? '') ? ' selected' : ''}>${esc(l)}</option>`).join('');
 // A segmented switch: [[value, label]], the chosen one aria-checked.
@@ -228,12 +231,14 @@ const grKpiFig = (v: number | null | undefined, unit?: string) => ['$', '€', '
 // the Growth board), then ⋯ with Settings (or Sources, for whoever cannot change the numbers) and the dashboard's Edit.
 // Settings and arranging the cards are rarer than daily, so they are ⋯ items; nothing sits in both places. The North
 // Star is the Funnel card's to show (marked there, with its target), not a line beside the title.
-// The month picker's options are the months with numbers, newest first; which one is picked is set on the element
-// (drawn), not in this HTML, so a new month picked never redraws the picker under the focus.
+// The month picker's options are the months with numbers, newest first, the one the cards read selected: the header
+// draws its tools again (Edit, Done), so the picker must carry its month. A month picked redraws it; the focus is put
+// back on it then (drawn).
 const grMonthTool = (state: DashState) => {
   const v = state.view, months = [...new Set([...(v?.months || []), ...(v?.month ? [v.month] : [])])].sort().reverse();
-  return `<label class="grh-month"${months.length < 2 ? ' hidden' : ''}><span class="sr-only">Month</span><select data-gr-month>${months.map(m => `<option value="${esc(m)}">${esc(grMonth(m))}</option>`).join('')}</select></label>`;
+  return `<label class="grh-month"${months.length < 2 ? ' hidden' : ''}><span class="sr-only">Month</span><select data-gr-month>${months.map(m => `<option value="${esc(m)}"${m === v?.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>`;
 };
+let GR_MONTH_FOCUS = false;   // the picker had the focus when a month was picked
 const grHeadTools = (state: DashState) => grMonthTool(state) + grBoardLink('gr-btn grh-btn', 'Growth board', '', ' data-gr-board title="Growth board"', `${TL_ICON.board}<span class="ph-w">Growth board</span>`);
 const grHeadMore = () => grAdmin() ? '<button type="button" data-gr-settings>Settings</button>' : `<a href="${GR_SOURCES}" data-gr-sources>Sources</a>`;
 DASH_PLACES.growth = {
@@ -259,6 +264,7 @@ DASH_PLACES.growth = {
       if (!sel) return;
       const month = sel.value;
       if (!GR_MONTH_RE.test(month) || DASH !== state) return;
+      GR_MONTH_FOCUS = document.activeElement === sel;
       state.month = month; state.key = dashKey(state);
       if (GR) GR.month = month;
       const hash = `${GR_ROUTE}?m=${encodeURIComponent(month)}`;
@@ -275,6 +281,7 @@ DASH_PLACES.growth = {
     // The month the cards read is the one the picker shows (its options are the header's tools, grMonthTool).
     const sel = root.querySelector<HTMLSelectElement>('select[data-gr-month]');
     if (sel && sel.value !== (v.month || '')) sel.value = v.month || '';
+    if (sel && GR_MONTH_FOCUS) { GR_MONTH_FOCUS = false; if (document.activeElement !== sel) sel.focus(); }
   },
 };
 

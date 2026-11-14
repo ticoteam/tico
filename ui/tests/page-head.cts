@@ -14,6 +14,10 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
+// The app's own globals, used in the page to set each page's owner (ui/app/state.ts, ui/app/api.ts).
+declare const S: {emps?: {id?: string; state?: string}[]};
+declare function get(url: string, opts?: object): Promise<{pages?: Record<string, unknown>}>;
+declare function put(url: string, body: object): Promise<unknown>;
 
 // `iconRow`: on a phone the header is one dense row of icons with the title kept for screen readers only (Tasks).
 // `row`: the header's own one-row height where it is not the shared 41px (Tasks' 56px row, spec "Pipeline board: one-row header").
@@ -24,7 +28,8 @@ const SCREENS: Screen[] = [
   {name: 'Strategy', hash: '#/strategy', tabs: true},
   {name: 'Goals', hash: '#/strategy/goals', tabs: true},
   {name: 'Budget', hash: '#/strategy/budget', tabs: true},
-  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true, more: ['New task', 'Archived'], row: 56},
+  // New task sits on the row on a computer (pageHead `add`), in ⋯ on a phone only.
+  {name: 'Tasks', hash: '#/tasks', button: false, iconRow: true, more: ['Archived'], row: 56},
   {name: 'Automations', hash: '#/automations', button: false},
   {name: 'Listening', hash: '#/listening', button: false},
   {name: 'Rules', hash: '#/rules', tabs: true},
@@ -51,6 +56,8 @@ async function open(page: Page, s: Screen) {
   await page.evaluate(h => { location.hash = h; }, s.hash);
   await page.locator('#main header.ph > h1.ph-t').first().waitFor({timeout: t(15000)});
   await page.waitForTimeout(t(800));   // buttons and counts a page fills once its data is in
+  // A page that draws again once its data is in (Learnings) replaces its header meanwhile: the new one is there too.
+  await page.locator('#main header.ph > h1.ph-t').first().waitFor({timeout: t(15000)});
   await page.mouse.move(1, 1);         // no hover look on a tab
 }
 
@@ -72,11 +79,14 @@ function desktopProblems(page: Page, s: Screen) {
     for (const b of prim) {
       const act = b.closest('.ph-act');
       const after = act ? [...head.children].slice([...head.children].indexOf(act) + 1) : [];
-      if (!act || act.parentElement !== head || after.some(x => !x.matches('.ph-more, .ph-menu'))) bad.push('the filled button is not last but for ⋯, in .ph-act');
+      // Only the page's chat mark (a phone's, page-chat.ts) and ⋯ come after it.
+      if (!act || act.parentElement !== head || after.some(x => !x.matches('.ph-chat, .ph-more, .ph-menu'))) bad.push('the filled button is not last but for ⋯, in .ph-act');
       const words = (b.textContent || '').trim();
       if (!/[A-Za-z]{2}/.test(words) || words.includes('+')) bad.push(`button words "${words}"`);
       if (Math.abs(b.getBoundingClientRect().height - 32) > 0.5) bad.push(`button ${b.getBoundingClientRect().height}px high`);
     }
+    // No chat button in a computer's header (style guide "Where chat lives"): the page's chat mark is a phone's only.
+    if (head.querySelector(':scope > .ph-chat')?.getClientRects().length) bad.push('the chat mark shows on a computer');
     // ⋯ is the last control wherever the header has tools (AC-7).
     const shown = [...head.children].filter(x => x.getClientRects().length && !x.matches('[popover]'));
     if (head.querySelector(':scope > .ph-tools > *, :scope > .ph-menu > .ph-tools > *') && !shown.at(-1)?.matches('.ph-more')) bad.push('a header with tools does not end in ⋯');
@@ -289,8 +299,38 @@ const titleLeft = (page: Page) => page.evaluate(() =>
       const page = await pageAs(browser, hub, 'dana', {phone: true});
       try {
         await ready(page);
+        // Every page's owner set to one of the hub's bots (the seed has none of the defaults, nor the General Manager
+        // they fall back to), so each header has its chat mark. Dana owns the hub (Settings › General › Page owners).
+        await page.evaluate(async () => {
+          const bot = (S.emps || []).find(e => e.id && e.state !== 'archived' && e.state !== 'planned')?.id;
+          const pages = Object.keys((await get('/v2/page-owners', {fresh: true})).pages || {});
+          for (const key of pages) await put('/v2/page-owners/' + key, {bot});
+        });
         for (const s of SCREENS) {
           try { await open(page, s); } catch { say(s, '390', ['no header']); continue; }
+          // The page's chat mark (page-chat.ts): the owner's face, 22 px in a 44 px button, in the header's one row just
+          // before ⋯, overlapping nothing. Tasks' is its own (#task-manager, pipeline-ask.ts) on a pipeline.
+          const mark = page.locator('#main header.ph > .ph-chat > [data-pgc-open]');
+          if (!s.iconRow) {
+            await mark.waitFor({timeout: t(5000)}).catch(() => say(s, '390', ['no chat mark']));
+            if (await mark.count()) say(s, '390', await mark.evaluate(el => {
+              const bad: string[] = [], head = el.closest('header.ph')!, r = el.getBoundingClientRect();
+              const face = el.firstElementChild?.getBoundingClientRect();
+              if (Math.round(r.width) !== 44 || Math.round(r.height) !== 44) bad.push(`the chat mark is ${r.width}x${r.height}`);
+              if (!face || Math.round(face.width) !== 22) bad.push(`the chat mark's face is ${face?.width}px`);
+              const h1 = head.querySelector(':scope > h1.ph-t')!.getBoundingClientRect();
+              if (Math.abs((r.top + r.bottom) / 2 - (h1.top + h1.bottom) / 2) > 4) bad.push('the chat mark is not on the title row');
+              const more = head.querySelector(':scope > .ph-more');
+              if (more && (el.parentElement!.nextElementSibling !== more || r.right > more.getBoundingClientRect().left + 0.5)) bad.push('the chat mark is not just before ⋯');
+              const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+              if (!hit || !el.contains(hit)) bad.push('the chat mark is covered');
+              for (const other of head.querySelectorAll(':scope > :not(.ph-chat):not([popover]):not(.ph-tabs)')) {
+                const o = other.getBoundingClientRect();
+                if (o.width && o.left < r.right - 0.5 && o.right > r.left + 0.5 && o.top < r.bottom - 0.5 && o.bottom > r.top + 0.5) bad.push(`the chat mark overlaps ${other.className}`);
+              }
+              return bad;
+            }));
+          }
           if (s.iconRow) {
             for (const width of [390, 360]) {
               await page.setViewportSize({width, height: 844});

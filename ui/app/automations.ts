@@ -48,8 +48,8 @@ function automationsStop() {
   if (!AU) return;
   if (AU.list && !AU.listError && !AU.lst) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint, heart: AU.heart};
   clearTimeout(AU.hbPoll ?? undefined);
-  if (AU.lst) pageChatLeave();
   AU = null;
+  AU_HELD = null;
 }
 
 // #/automations[/<id>[/runs]]; an old #/automations/bot or <id>/bot link opens the list or the flow.
@@ -226,7 +226,7 @@ function auShell() {
     ${pageHead({title: lst ? 'Listening' : 'Automations', hook: 'au-ph', pad: true,
       tabs: lst ? undefined : [{label: 'Automations', cur: true, attrs: 'data-tab="list"'}, {label: 'Runs', attrs: 'data-tab="runs"'}],
       tabsHook: lst ? undefined : 'au-tabs', tabsAttrs: 'aria-label="View"',
-      tools: `${lst ? '' : '<div class="au-seg au-range ph-seg" role="group" aria-label="Time range"></div>'}<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>${lst ? '<span class="au-chat"></span>' : ''}`,
+      tools: `${lst ? '' : '<div class="au-seg au-range ph-seg" role="group" aria-label="Time range"></div>'}<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>`,
       primary: `<span class="au-newbox"><button class="ghost ph-go au-new au-plus" type="button" aria-label="${lst ? 'New listening' : 'New automation'}" title="${lst ? 'New listening' : 'New automation'}"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}><span class="nav-icon" aria-hidden="true">add</span></button>`
         + `<div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>`})}
     <div class="au-body">
@@ -259,13 +259,13 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
-  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (auEdDraw).
-  if (lst) void pageChatMount({page: 'listening', label: 'Listening', button: root.querySelector('.au-chat'), stays: r => auUnder(r, LISTENING),
-    item: () => {
-      const a = AU;
-      if (!a || a.root !== root || !a.lst || !a.cur || !a.id) return null;
-      return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
-    }});
+  // The page's owner's chat (page-chat.ts, mounted by the router): the listening or automation open rides along. An
+  // editor takes the chat's place while open (auEdDraw).
+  pageChatUse(lst ? 'listening' : 'automations', {item: () => {
+    const a = AU;
+    if (!a || a.root !== root || !!a.lst !== lst || !a.cur || !a.id) return null;
+    return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
+  }});
 }
 
 // + New's menu: New inbox (automations-new.js), or which trigger a blank one starts with.
@@ -425,6 +425,9 @@ function auDrawPane() {
 // A redraw while a field is being typed in (a late load of question sets or the last run) keeps that field focused.
 // The focused element as auDrawSide reads it: any element; a text field's binding and caret where it has them.
 type AuTyping = Element & {dataset?: DOMStringMap; selectionStart?: number | null; selectionEnd?: number | null};
+// The editor that last took the page chat's place (page-chat.ts pageChatHold): only another editor, or none, moves it
+// again, so a redraw of the same one keeps a chat the person opened over it.
+let AU_HELD: AuEd | null = null;
 function auDrawSide() {
   auDrawn(AU);
   const ed = auEl(AU.root, '.au-ed'), html = AU.ed ? auEdHTML() : '';
@@ -435,7 +438,8 @@ function auDrawSide() {
   const again = b && html ? ed.querySelector<HTMLInputElement>(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
-  if (AU.lst) pageChatHold(!!html);
+  const held = html ? AU.ed : null;
+  if (held !== AU_HELD) { AU_HELD = held; pageChatHold(!!held); }
   // The board's pop-ups float over it on a computer; a phone keeps the sheet.
   AU.root.classList.toggle('ed-pop', !!html && AU.ed?.kind === 'board');
   auEl(AU.root, '.au-scrim').hidden = !html;

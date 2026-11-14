@@ -5,10 +5,6 @@
 /* the filter icon's count sits on the icon's top-right corner, clear of the icon itself */
 .dir-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}
 /* folded into ⋯ (page-head.ts): the filter is one of the menu's rows, its icon, its name, then its count */
-.dir-head .ph-fold-word{display:none}
-.dir-head>.ph-menu>.ph-tools>.tl-ib{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:auto;padding:6px 10px}
-.dir-head>.ph-menu>.ph-tools>.tl-ib .ph-fold-word{display:inline}
-.dir-head>.ph-menu>.ph-tools>.tl-ib .tl-fbadge{position:static;margin-left:auto}
 .dir-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:8px;color:var(--muted);cursor:pointer}
 .dir-icon:hover,.dir-icon.on{color:var(--ink);background:var(--surface2)}
 .dir-q{width:min(320px,100%)}

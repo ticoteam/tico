@@ -2,19 +2,9 @@
    medium a half, large the row), halves on a narrow screen, one column on a phone. The bot sidebar's card and page widgets reuse the card bodies. */
 #main.dash-layout{max-width:none;padding:0}
 .dash{display:flex;flex-direction:column;min-height:100%}
-/* Company's views and team pages draw the shared header (ui/app/page-head.ts, .ph); the grid keeps the header's gap. A
-   place with a head of its own (Growth, ui/app/growth-page.ts) keeps .dash-head and .dash-actions below. */
+/* Every place (Company's views, team pages, Growth) draws the shared header (ui/app/page-head.ts, .ph); the grid keeps
+   the header's gap. */
 .dash>.ph.ph-pad{margin-bottom:14px}
-.dash-head:not(.ph){display:flex;align-items:center;gap:8px;padding:8px 28px;min-height:48px;flex-wrap:wrap}
-.dash-head:not(.ph) h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.dash-head:not(.ph) h1:empty{display:none}
-.dash-head:not(.ph) .spacer{flex:1}
-.dash-actions{display:flex;gap:4px;flex-wrap:wrap}
-.dash-actions[hidden]{display:none}
-.dash-actions button[hidden]{display:none}
-.dash-actions button{display:inline-flex;align-items:center;gap:4px}
-.dash-actions .nav-icon{font-size:16px;width:16px;height:16px}
-.dash-actions button{gap:6px}
 .ph [data-dash-add] .dash-plus{margin-right:4px}
 /* "Seen by" is a quiet tool, no border, as the header's other icon buttons; its icon at the size they use */
 .ph button.dash-audience{display:inline-flex;align-items:center;box-sizing:border-box;height:var(--ctl);border-color:transparent;color:var(--muted)}
@@ -127,7 +117,6 @@
   .dash-pin[data-size=medium]{grid-column:1/-1}
 }
 @media(max-width:760px){
-  .dash-head:not(.ph){padding:10px 12px}
   .dash-grid{grid-template-columns:minmax(0,1fr);padding:0 12px 24px;gap:10px}
   .dash-pin,.dash-pin[data-size]{grid-column:1/-1}
   .dash-error{margin:0 16px 8px}

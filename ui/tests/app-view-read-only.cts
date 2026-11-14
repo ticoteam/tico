@@ -2,7 +2,8 @@
 // opens a view and the page is signed in with the view's token, as `tico bot app-shot` does. On Tasks, a task window,
 // Company › Mine, Company › Dashboard and a thread, every visible, enabled button and field is a read on this test's
 // allowlist: New task, Follow, the page +, answer buttons and the message box do not show, and the box is a grey
-// "Read-only view" line. Tasks reads the bot's name and its open tasks by stage, with a line that Needs you is a
+// "Read-only view" line. The task window shows no greyed write either (👍 👎, the + and × on Sessions, Edit), and no
+// heading with nothing under it. Tasks reads the bot's name and its open tasks by stage, with a line that Needs you is a
 // person's list; Company › Mine is one card of the bot's tasks. A Company place that fails to load says "This page
 // couldn't load." with Try again, never the server's text. A person sees New task and the message box as before.
 // The bot's list keeps up through the refresh (an edit, a new task, one closed or given away) and pages with More, and C
@@ -41,7 +42,13 @@ const READS = [
   // The shared page header's ⋯ opens a menu: a read. What it holds is checked open (headerMenu below).
   'header.ph > .ph-more', '.ph-menu > .ph-mtabs > .ph-mtab', '.ph-menu .ph-copy',
   // A bot's ⋯ and its rail's ⋯ open lists of views (its detail tabs, Incognito, the task lists that did not fit).
-  '#bot-more-btn', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
+  '#bot-more-btn', '#bot-incognito', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
+  // The task window: open a subtask or a related task (or unfold the subtasks), Show more, open a file, copy a session,
+  // and the head's ⋯ (in a view it holds only Copy link; checked open below).
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-msg-more]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  // Retry after a failed load, a page's filter icon, and a filter's choices and search in the shared popover.
+  '[data-use-retry]', '[data-rp-retry]', '[data-learned-retry]', '[data-roadmap-retry]', '[data-retry-changes]',
+  '.use-filter', '#rp-filter', '[data-cl-filter]', '#task-filter-pop .tl-opt input', '#task-filter-pop .tl-menu-q',
 ];
 
 // Every visible, enabled control under the main page and any open dialog, as a short description, when it is not a read.
@@ -83,8 +90,10 @@ const ready = (page: Page) => page.waitForFunction(() => {
   let browser: import('playwright').Browser | undefined;
   try {
     const dana = hub.tokens.dana!;
-    // The bot owns one open task, and an owner turns its view on.
-    const own = taskId(await call(hub, dana, 'POST', '/v2/tasks', {title: OWN, body: 'Its own work.', owner: BOT}));
+    // The bot owns one open task, asked for by its lead (a bot, so the task window has 👍 👎) and with a session linked
+    // (so it has Sessions, with its + and ×), and an owner turns its view on.
+    const own = taskId(await call(hub, hub.tokens['engineering-manager']!, 'POST', '/v2/tasks', {title: OWN, body: 'Its own work.', owner: BOT}));
+    await call(hub, dana, 'POST', `/v2/tasks/${own}/links`, {url: 'claude --resume th-view-1', kind: 'session'});
     await call(hub, dana, 'POST', `/v2/bots/${BOT}/app-view`, {on: true});
     // Its run, claimed and started as its computer would, opens the view.
     const {attempt} = await call<{attempt?: {id: string; token: string}}>(hub, hub.runner, 'POST', '/v2/jobs/claim', {bot: BOT, start_places: true});
@@ -115,7 +124,8 @@ const ready = (page: Page) => page.waitForFunction(() => {
     assert.match(await page.locator('#task-body').innerText(), /Needs you is a person's list/);
     assert.ok(await page.locator('#task-body .tk-group').count() >= 1, 'its tasks are grouped by stage');
     assert.deepEqual(await writesShown(page), [], 'Tasks offers nothing that writes');
-    // Its ⋯ menu keeps Archived and drops New task, and C opens no New task dialog.
+    // No New task on the header's row, its ⋯ menu keeps Archived and drops New task, and C opens no New task dialog.
+    assert.equal(await page.locator('#task-new').isVisible(), false, 'no New task on the row');
     await page.locator('#task-menu').click();
     await page.locator('#task-mi-archive').waitFor({state: 'visible', timeout: t(15000)});
     assert.equal(await page.locator('#task-mi-new').isVisible(), false, 'no New task in ⋯');
@@ -158,6 +168,18 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await row('Second for the bot').waitFor({state: 'detached', timeout: t(15000)});
     assert.ok(await row(OWN).count() === 1, 'its own open task stays');
 
+    // What the window's reads need: a subtask (Dana's, so the bot's list keeps its count), a long comment (Show more)
+    // and a file. A copy is recorded rather than read back from the clipboard.
+    await call(hub, dana, 'POST', '/v2/tasks', {title: 'A part of it', body: 'One part.', owner: 'dana', parent: own});
+    await call(hub, dana, 'POST', `/v2/tasks/${own}/comments`, {text: Array.from({length: 30}, (_, i) => `Step ${i + 1} of the plan.`).join('\n\n')});
+    await call(hub, dana, 'POST', `/v2/tasks/${own}/files`, {name: 'notes.txt', text: 'The notes for the work.'});
+    await page.evaluate(() => {
+      const w = window as unknown as {copied: string[]};
+      w.copied = [];
+      Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (s: string) => { w.copied.push(s); }}});
+    });
+    const copied = () => page.evaluate(() => (window as unknown as {copied: string[]}).copied);
+
     // A task window: no Follow, no page +, no answer buttons, no box; the box is a grey "Read-only view" line.
     await page.locator('#task-body .tk-row', {hasText: OWN}).click();
     await page.locator('.tmodal[open]').waitFor({timeout: t(15000)});
@@ -166,8 +188,52 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await page.locator('.tmodal[open] .view-only-line').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('.tmodal[open] .view-only-line').innerText(), 'Read-only view');
     assert.deepEqual(await writesShown(page), [], 'the task window offers nothing that writes');
-    // Nothing that only writes shows, even greyed out: the page +, Ask someone and Follow are gone; × still closes.
-    assert.equal(await page.locator('.tmodal[open] :is([data-tp-add], [data-req-ask], [data-prop-follow])').evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth > 0).length), 0, 'no greyed-out write in the task window');
+    // Nothing that only writes shows, even greyed out: the page +, Ask someone and Follow are gone, and so are 👍 👎 (the
+    // task was asked for by a bot) and the + and × on Sessions; × still closes. Kept apart from view-only.ts's list.
+    await page.waitForFunction(() => document.body.classList.contains('fb-on') && !!document.querySelector('.tmodal[open] [data-fb-rate]'), null, {timeout: t(15000)});
+    await page.locator('.tmodal[open] [data-task-tab="details"]').click();
+    await page.locator('.tmodal[open] .task-sessions .tlink').waitFor({timeout: t(15000)});
+    const inert = '.tmodal[open] :is([data-tp-add], [data-req-ask], [data-prop-follow], [data-fb-rate], [data-session-add], [data-link-add], '
+      + '[data-drop-link], [data-related-add], [data-tf-add], [data-tp-unlink], [data-req-withdraw], [data-task-body-edit], .prop-add, .prop-x)';
+    assert.deepEqual(await page.locator(inert).evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => e.outerHTML.slice(0, 80))), [], 'no greyed-out write in the task window');
+    // No heading stands alone: Pages with no page and an empty To leave go with their +; Activity and links has its Sessions.
+    assert.deepEqual(await page.locator('.tmodal[open] .task-side .rail-h').evaluateAll(hs => hs.filter(h => (h as HTMLElement).offsetWidth > 0)
+      .filter(h => { const sec = h.closest('section'); return !!sec && ![...sec.children].some(c => c !== h && (c as HTMLElement).offsetWidth > 0); }).map(h => (h as HTMLElement).innerText)),
+    [], 'no heading with nothing under it');
+    assert.equal(await page.locator('.tmodal[open] [data-task-activity] > .rail-h').isVisible(), true, 'Activity and links heads its Sessions');
+    await page.locator('.tmodal[open] [data-task-tab="desc"]').click();
+    assert.equal(await page.locator('.tmodal[open] [data-task-body-edit]').isVisible(), false, 'no Edit on the description');
+
+    // The reads work in a view, not only show. ⋯ holds only Copy link, and it copies.
+    const win = page.locator('.tmodal[open]');
+    await win.locator('[data-task-more]').click();
+    const menu = page.locator('.prop-pop:popover-open');
+    await menu.waitFor({timeout: t(15000)});
+    assert.deepEqual((await menu.locator('.tl-mi').allInnerTexts()).map(s => s.replace(/^\S+\s+/, '').trim()), ['Copy link'], 'the task ⋯ holds only what a viewer can use');
+    assert.deepEqual(await writesShown(page), [], 'the task ⋯ offers nothing that writes');
+    await menu.locator('.tl-mi', {hasText: 'Copy link'}).click();
+    await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 1, null, {timeout: t(15000)});
+    assert.match((await copied())[0]!, new RegExp(`/#/task/${own}$`), 'Copy link copied the task');
+    // Show more opens a long message.
+    await win.locator('[data-task-tab="chat"]').click();
+    const more = win.locator('[data-msg-more]').first();
+    await more.click();
+    assert.equal(await more.innerText(), 'Show less', 'Show more opened the message');
+    // Copy session copies its resume command; a file opens, and its ✕ closes it.
+    await win.locator('[data-task-tab="details"]').click();
+    await win.locator('[data-copy-session]').click();
+    await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 2, null, {timeout: t(15000)});
+    assert.equal((await copied())[1], 'claude --resume th-view-1', 'Copy session copied the resume command');
+    await win.locator('[data-tf-file]').first().click();
+    const viewer = page.locator('dialog[open] [data-tf-close]');
+    await viewer.waitFor({timeout: t(15000)});
+    assert.match(await page.locator('dialog[open] .tf-view-name').innerText(), /notes\.txt/, 'the file opened');
+    await viewer.click();
+    await viewer.waitFor({state: 'detached', timeout: t(15000)}).catch(() => viewer.waitFor({state: 'hidden', timeout: t(15000)}));
+    // A subtask opens in the window.
+    await win.locator('[data-sub-open]', {hasText: 'A part of it'}).click();
+    await page.locator('.tmodal[open] .tmodal-title', {hasText: 'A part of it'}).waitFor({timeout: t(15000)});
+    assert.deepEqual(await writesShown(page), [], 'the subtask offers nothing that writes either');
     await page.locator('.tmodal[open] [data-modal-close]').click();
     await page.locator('.tmodal[open]').waitFor({state: 'detached', timeout: t(15000)});
 
@@ -195,8 +261,17 @@ const ready = (page: Page) => page.waitForFunction(() => {
     assert.deepEqual(await writesShown(page), [], 'the bot\'s ⋯ offers nothing that writes');
     await page.keyboard.press('Escape');
     await page.locator('#bot-more-menu').waitFor({state: 'hidden', timeout: t(15000)});
-    // A phone: the bottom bar moves between places (Team, Assistant, More), so none of it is greyed out.
+    // A phone: Incognito in ⋯ still moves between the bot's chats (a read); the private chat's Archive is not offered.
     await page.setViewportSize({width: 390, height: 844});
+    const incognito = page.locator('#bot-more-menu [data-bot-incognito]');
+    await page.locator('#bot-more-btn').click();
+    await incognito.waitFor({state: 'visible', timeout: t(15000)});
+    assert.equal(await incognito.isEnabled(), true, 'Incognito is a read');
+    assert.equal(await page.locator('#bot-more-menu #bot-dm-arch').isVisible(), false, 'no Archive item for a view-only reader');
+    assert.deepEqual(await writesShown(page), [], 'the bot\'s ⋯ on a phone offers nothing that writes');
+    await incognito.click();
+    await page.waitForFunction(() => location.hash.endsWith('/dm'), null, {timeout: t(15000)});
+    // The bottom bar moves between places (Team, Assistant, More), so none of it is greyed out.
     await go(page, '#/tasks');
     await page.locator('#task-body .tk-row').first().waitFor({timeout: t(15000)});
     assert.deepEqual(await page.locator('#mobile-nav button:visible').evaluateAll(bs => bs.filter(b => (b as HTMLButtonElement).disabled).map(b => b.id)), [], 'the phone bar is all reads');
@@ -208,9 +283,9 @@ const ready = (page: Page) => page.waitForFunction(() => {
     const person = await pageAs(browser, hub, 'dana');
     await ready(person);
     await go(person, '#/tasks');
-    // New task sits in ⋯ (a first-run tour covers the page, so the menu is read rather than opened).
-    await person.locator('#task-mi-new').waitFor({state: 'attached', timeout: t(15000)});
-    assert.equal(await person.locator('#task-mi-new').evaluate(b => getComputedStyle(b).display !== 'none' && !(b as HTMLButtonElement).disabled), true, 'a person keeps New task');
+    // New task sits on the header's row on a computer (a first-run tour covers the page, so it is read, not clicked).
+    await person.locator('#task-new').waitFor({state: 'attached', timeout: t(15000)});
+    assert.equal(await person.locator('#task-new').evaluate(b => getComputedStyle(b).display !== 'none' && !(b as HTMLButtonElement).disabled), true, 'a person keeps New task');
     await person.route('**/api/v2/places/dashboard*', r => r.fulfill({status: 404, contentType: 'application/json',
       body: JSON.stringify({error: {code: 'not_found', message: 'No such place: places are dashboard, team:<group>'}})}));
     await go(person, '#/overview');

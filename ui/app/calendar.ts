@@ -132,7 +132,7 @@ function pageCalendar(r: string): void {
         <input type="search" id="cal-q" placeholder="Find a person, event or question" autocomplete="off" spellcheck="false" aria-label="Search calendars and events" aria-keyshortcuts="/" aria-controls="cal-dd" aria-autocomplete="list">
         <div class="cal-dd" id="cal-dd" role="listbox" hidden></div></div>
       <div class="theme-seg cal-views" role="radiogroup" aria-label="View" data-cal-views></div>
-      <div class="cal-more"><button type="button" class="ghost small cal-ib" data-cal-more aria-label="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
+      ${pageChatSlot()}<div class="cal-more"><button type="button" class="ghost small cal-ib" data-cal-more aria-label="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
         <div class="cal-menu" role="menu" data-cal-menu hidden><button type="button" role="menuitemcheckbox" data-cal-record aria-checked="true">Record calls I join</button></div></div>
     </header>
     <div class="cal-strip" data-cal-strip></div>

@@ -18,6 +18,7 @@ const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
 // The page's own globals the test reaches in the browser (ui/app/hub-v2.ts S, ui/app/bot-page.ts botAlertDraw).
 declare const S: {v2: {status: Record<string, Record<string, unknown> | undefined>}};
 declare function botAlertDraw(): void;
+declare function botTaskTabsFit(slug: string): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const at = (min: number) => new Date(Date.now() - min * 60e3).toISOString();
 const BOT = {name: 'spo', display_name: 'Skills Owner', org_parent: '', host: 'keeper', status: 'active', can_chat: true, runtime: 'codex',
@@ -40,7 +41,8 @@ const benTasks = [
 const TABS = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Open'}, {builtin: 'blocked', name: 'Waiting'},
   {name: 'Assigned to other teammates', conditions: [{field: 'assigned_to', value: 'others'}]}, {builtin: 'done', name: 'Done recently'}];
 
-async function open(browser: Browser, {phone = false, talk = false, theme = 'dark'}: {phone?: boolean; talk?: boolean; theme?: string} = {}) {
+// `dm`: the viewer's DM with the bot as the server answers it: there, archived, or a read that fails.
+async function open(browser: Browser, {phone = false, talk = false, theme = 'dark', dm = 'ok'}: {phone?: boolean; talk?: boolean; theme?: string; dm?: 'ok' | 'archived' | 'fail'} = {}) {
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, serviceWorkers: 'block',
     reducedMotion: 'reduce', ...(phone ? {isMobile: true, hasTouch: true} : {})});
   await context.addInitScript((t: string) => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
@@ -66,7 +68,8 @@ async function open(browser: Browser, {phone = false, talk = false, theme = 'dar
     if (p === '/api/v2/bots/spo') return json({display_name: 'Skills Owner', access: {}, cant_run: null});
     if (p === '/api/v2/bots/spo/task-tabs') return json({tabs: TABS, widgets: [{id: 'tasks', hidden: false, height: null}, {id: 'updates', hidden: false, height: null}, {id: 'files', hidden: false, height: null}], can_edit: true});
     if (p === '/api/v2/threads/home/bot:spo' || p === '/api/v2/threads/home/' + encodeURIComponent('bot:spo')) return json(HOME);
-    if (p === '/api/v2/threads/dm') return json(DM);
+    if (p === '/api/v2/threads/dm') return dm === 'fail' ? json({error: {code: 'unavailable', message: 'The hub is restarting.'}}, 503)
+      : json(dm === 'archived' ? {...DM, archived_at: at(1)} : DM);
     if (p === '/api/v2/threads/h-spo/timeline') return json({thread: HOME, breadcrumb: [], next_cursor: null, messages: homeMessages(talk), bot_status: []});
     if (p === '/api/v2/threads/d-spo/timeline') return json({thread: DM, breadcrumb: [], next_cursor: null, messages: dmMessages, bot_status: []});
     if (/^\/api\/v2\/threads\/[^/]+\/(read|members|calls|reach)$/.test(p)) return json(p.endsWith('calls') ? {calls: [], next_before: null, available: false} : p.endsWith('members') ? {members: [], next_cursor: null} : p.endsWith('reach') ? {reaches: []} : {ok: true});
@@ -91,15 +94,36 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
     // ---- Which chat the page opens on, on a computer.
     {
       const {page, seen, context} = await open(browser);
-      await page.goto('https://tico-ui.test/#/bot/spo');
+      await page.goto('https://tico-ui.test/#/person/ben');   // where the person was before the bot (Back returns here)
+      await page.locator('#main > header.person-ph').waitFor();
+      await page.evaluate(() => { location.hash = '#/bot/spo'; });
       // The Home holds only an update card, the DM a message: the page opens on the DM, the address stays bare.
       await page.getByText('Just us here.').waitFor();
       await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();   // the DM shows: the lock is pressed
+      // Across 1100px (a window dragged narrower, a tablet turned) the chat on show stays the DM, and from 761 to 1099px
+      // the lock is an icon in the top line.
+      await page.setViewportSize({width: 1000, height: 900});
+      await page.waitForTimeout(200);
+      assert.equal(await page.getByText('Just us here.').isVisible(), true, 'still the DM below 1100px');
+      const lock = page.locator('#bot-incognito');
+      assert.equal(await lock.getAttribute('aria-pressed'), 'true');
+      assert.equal(await lock.isVisible(), true, 'the lock is in the line at 1000px');
+      assert.equal(await lock.locator('.bi-label').isVisible(), false, 'an icon, no word');
+      assert.ok(((await lock.boundingBox())?.width ?? 99) <= 44, 'an icon\'s width');
+      await shot(page, 'dm-1000');
+      await page.setViewportSize({width: 1440, height: 900});
+      await page.waitForTimeout(200);
+      assert.equal(await page.getByText('Just us here.').isVisible(), true, 'still the DM back above 1100px');
       assert.equal(await page.evaluate(() => location.hash), '#/bot/spo', 'nothing is rewritten');
       assert.equal(await page.locator('#bot-thread .th-empty', {hasText: 'No messages yet'}).count(), 0, 'never an empty Home');
       await shot(page, 'dm-1440');
-      // The lock names the Home in the address, and Home is what shows.
+      // The lock names the Home in the address, in place of the plain one: Back then leaves the bot (never a dead Back).
       await page.locator('#bot-incognito').click();
+      await page.waitForFunction(() => location.hash === '#/bot/spo/home');
+      await page.locator('#bot-incognito[aria-pressed="false"]').waitFor();
+      await page.goBack();
+      await page.waitForFunction(() => location.hash === '#/person/ben');
+      await page.goForward();
       await page.waitForFunction(() => location.hash === '#/bot/spo/home');
       await page.locator('#bot-incognito[aria-pressed="false"]').waitFor();
       // ⋯ is the line's last control; its list is the details, then the private chat's Archive after a line.
@@ -109,7 +133,7 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       await page.keyboard.press('Enter');
       await menu.waitFor({state: 'visible'});
       await page.locator('#bot-more-btn[aria-expanded="true"]').waitFor();
-      assert.deepEqual(await menu.locator('[data-bot-mtab]').allInnerTexts(), ['Info', 'Rules', 'Instructions', 'History', 'Settings']);
+      assert.deepEqual(await menu.locator('.bot-mgroup [data-bot-mtab]').allInnerTexts(), ['Info', 'Rules', 'Instructions', 'History', 'Settings']);
       assert.equal(await menu.locator('[data-bot-incognito]').isVisible(), false, 'a computer has the lock in the line, not in ⋯');
       await menu.locator('#bot-dm-arch').waitFor();
       assert.equal((await menu.locator('#bot-dm-arch .bot-mi-w').innerText()).trim(), 'Archive private chat');
@@ -121,21 +145,22 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'bot-more-btn', 'Esc gives the focus back to ⋯');
       // The rail's tabs keep to one line: those that fit, the current one among them, the rest behind the bar's ⋯.
       const rail = page.locator('#pane-tasks'), bar = rail.locator('.bot-task-tabs');
-      const tabsMore = bar.locator('.bot-tab-more');
+      const tabsMore = rail.locator('.bot-task-tabline > .bot-tab-more');
       await tabsMore.waitFor();
       assert.equal(await bar.evaluate(b => b.scrollWidth <= b.clientWidth + 1), true, 'the tab bar does not scroll sideways');
-      assert.equal(await bar.evaluate(b => (b.lastElementChild as HTMLElement).classList.contains('bot-tab-more')), true, '⋯ is the bar\'s last control');
+      assert.equal(await tabsMore.evaluate(m => !m.closest('[role=tablist]') && m.previousElementSibling?.getAttribute('role') === 'tablist' && !m.nextElementSibling), true, '⋯ is last on the line, outside the tab list');
+      assert.equal(await tabsMore.getAttribute('aria-haspopup'), null, 'no menu announced: it opens plain buttons');
       const folded = await bar.locator('.bot-tab-over').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.botTaskTab));
       assert.ok(folded.length > 0, 'a tab waits behind ⋯');
       await tabsMore.click();
       const pop = page.locator('#task-filter-pop');
       await pop.waitFor({state: 'visible'});
-      await bar.locator('.bot-tab-more[aria-expanded="true"]').waitFor();
+      await rail.locator('.bot-tab-more[aria-expanded="true"]').waitFor();
       assert.deepEqual(await pop.locator('[data-bot-tab-pick]').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.botTabPick)), folded);
       await page.keyboard.press('Escape');
       await pop.waitFor({state: 'hidden'});
       assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('bot-tab-more')), true, 'Esc gives the focus back to the bar\'s ⋯');
-      await bar.locator('.bot-tab-more[aria-expanded="false"]').waitFor();
+      await rail.locator('.bot-tab-more[aria-expanded="false"]').waitFor();
       // Picking a folded tab shows it on the line, current and focused.
       await tabsMore.click();
       await pop.locator(`[data-bot-tab-pick="${folded.at(-1)}"]`).click();
@@ -145,6 +170,19 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       assert.equal(await picked.evaluate(el => el === document.activeElement), true, 'the picked tab has the focus');
       assert.equal(await bar.evaluate(b => b.scrollWidth <= b.clientWidth + 1), true, 'still one line');
       await shot(page, 'rail-1440');
+      // Tabs that fit only once ⋯ is gone fit without it: ⋯ is measured out, never kept for its own width.
+      const fits = await page.evaluate(() => {
+        const bar = document.querySelector<HTMLElement>('#pane-tasks .bot-task-tabs')!, more = document.querySelector<HTMLElement>('#pane-tasks .bot-tab-more')!;
+        const tabs = [...bar.querySelectorAll<HTMLElement>('[data-bot-task-tab]')];
+        for (const tab of tabs) { tab.classList.remove('bot-tab-over'); tab.firstChild!.textContent = 'T '; }
+        more.hidden = true;
+        const last = tabs.at(-1)!, spare = bar.clientWidth - bar.scrollWidth - 4;   // the line's room less 4px: no room for ⋯
+        last.style.width = `${last.offsetWidth + spare}px`;
+        more.hidden = false;
+        botTaskTabsFit('spo');
+        return {more: !more.hidden, over: bar.querySelectorAll('.bot-tab-over').length, spare};
+      });
+      assert.deepEqual({more: fits.more, over: fits.over}, {more: false, over: 0}, 'every tab fits without ⋯: ' + JSON.stringify(fits));
 
       // The detail views: the header's tab look, no "‹ Home" link, the Chat mark the way back, no repeated card title.
       await page.goto('https://tico-ui.test/#/bot/spo/info');
@@ -210,6 +248,17 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       assert.deepEqual(seen.errors, []);
       await context.close();
     }
+    // ---- A DM that cannot be read, or one that is archived: the page opens on the Home, never an endless Loading.
+    for (const dm of ['fail', 'archived'] as const) {
+      const {page, seen, context} = await open(browser, {dm});
+      await page.goto('https://tico-ui.test/#/bot/spo');
+      await page.locator('#pane-chat:not(.bot-picking) #bot-thread .th-empty', {hasText: 'No messages yet'}).waitFor();
+      assert.equal(await page.locator('#pane-chat .bot-pick-wait').isVisible(), false, dm + ': no Loading left');
+      assert.equal(await page.locator('#bot-incognito').getAttribute('aria-pressed'), 'false', dm + ': the Home');
+      assert.equal(await page.evaluate(() => location.hash), '#/bot/spo');
+      assert.deepEqual(seen.errors, []);
+      await context.close();
+    }
     // ---- A phone: back, the bot, Chat and Tasks, then ⋯; Incognito is in ⋯ and the name is whole.
     {
       const {page, seen, context} = await open(browser, {phone: true, theme: 'light'});
@@ -227,6 +276,15 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       assert.equal(await item.getAttribute('aria-pressed'), 'true');
       assert.equal(await page.locator('#bot-more-menu [data-bot-members]').isVisible(), true, 'Members is in ⋯ instead');
       await shot(page, 'more-390-light');
+      // Members from ⋯: the list closes and ⋯ has the focus, so closing the dialog gives the focus back to ⋯.
+      await page.locator('#bot-more-menu [data-bot-members]').tap();
+      const members = page.locator('dialog[open]', {has: page.locator('text=Members')});
+      await members.waitFor();
+      assert.equal(await page.locator('#bot-more-menu').isVisible(), false, 'the list closed');
+      await members.locator('[aria-label^="Close"]').first().tap();
+      await members.waitFor({state: 'hidden'});
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'bot-more-btn', 'the focus is back on ⋯');
+      await page.locator('#bot-more-btn').tap();
       await item.tap();
       await page.waitForFunction(() => location.hash === '#/bot/spo/home');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'nothing scrolls sideways');

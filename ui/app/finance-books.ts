@@ -100,7 +100,7 @@ function finBsDraw(): void {
       const k = finBsKey(r), was = prevOf(k, sec), ch = was == null ? null : finDiff(r.sum - was);
       const from = [...(r.sources || []).map(source), ...finBsFrom(r).map(finBsSrc)].join('');
       out.push(`<tr class="fin-ln${r.kids ? ' fin-parent' : ''}${b.sel === k ? ' fin-on' : ''}" style="--d:${r.depth}" data-fin-line="${esc(k)}" tabindex="0"><td>${esc(r.name)}</td><td class="fin-n fin-amt">${finNum(r.sum)}</td>${prev
-        ? `<td class="fin-n" data-k="${esc(finDayLabel(prev.as_of || b.compare))}">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}" data-k="Change">${ch?.text || ''}</td>` : ''}<td>${from ? `<div class="fin-from">${from}</div>` : ''}</td></tr>`);
+        ? `<td class="fin-n" data-k="${esc(finDayLabel(prev.as_of || b.compare))}">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}" data-k="Change">${ch?.text || ''}</td>` : ''}<td data-k="From">${from ? `<div class="fin-from">${from}</div>` : ''}</td></tr>`);
     }
     const t = totals[key], tp = prev?.totals?.[key], ch = prev && t != null && tp != null ? finDiff(t - tp) : null;
     out.push(`<tr class="fin-subt"><td>${esc(`Total ${label.toLowerCase()}${d.scoped ? finOwnSlice(finNeed(finCaps(), 'the finance caps')) : ''}`)}</td><td class="fin-n fin-amt">${finNum(t)}</td>${prev ? `<td class="fin-n" data-k="${esc(finDayLabel(prev.as_of || b.compare))}">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}" data-k="Change">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
@@ -133,7 +133,13 @@ function finBsRail(): void {
 const FIN_ENTRY_SRC: Record<string, string> = {manual: 'Journal', import: 'Import', bank: 'Bank', card: 'Cards', bill: 'Bills', invoice: 'Invoices',
   payment: 'Payments', usage: 'Gateway', sync: 'Books sync', pnl: 'P&L'};
 const finBsFrom = (r: FinBsRow): string[] => (r.entry_sources || []).filter(s => !((r.sources || []).length && (s === 'bank' || s === 'card')));
-const finBsSrc = (s: string): string => s === 'pnl' ? `<a class="fin-src" href="${finHref('/pnl')}">P&amp;L</a>` : `<span class="fin-src">${esc(FIN_ENTRY_SRC[s] || s)}</span>`;
+// Where a line's entries come from, as plain quiet words (not pills); one whose tab the viewer has is a link to it, and on
+// a phone .tap-mark gives that link a 44px hit area (forms.css).
+const FIN_ENTRY_TAB: Record<string, string> = {pnl: 'pnl', bill: 'payables', invoice: 'receivables'};
+const finBsSrc = (s: string): string => {
+  const tab = FIN_ENTRY_TAB[s], word = esc(FIN_ENTRY_SRC[s] || s);
+  return tab && finTabShown(tab, finCaps(), FIN?.acc) ? `<a class="fin-src tap-mark" href="${finHref('/' + tab)}">${word}</a>` : `<span class="fin-src">${word}</span>`;
+};
 // The provider's name: the labels are a fixed table, anything else is shown as it came.
 const FIN_PROVIDERS: Record<string, string> = {mercury: 'Mercury', stripe: 'Stripe', quickbooks: 'QuickBooks', xero: 'Xero'};
 const finProvider = (p: string): string => FIN_PROVIDERS[p] || p || '';
@@ -208,9 +214,9 @@ function finCardsDraw(): void {
   const state = FIN?.cards, box: HTMLElement | null = $('#fin-cards'); if (!box || !state) return;
   if (!state.rows.length) { box.innerHTML = finNote('No cards yet.'); return; }
   box.innerHTML = `<table class="fin-t fin-card-t fin-rows"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
-    return `<tr data-fin-card="${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
-      <td>${c.budget ? esc(c.budget.name) : ''}</td><td class="fin-n" data-k="Limit">${c.limit == null ? '' : finNum(c.limit)}</td><td class="fin-n" data-k="Spent">${finNum(c.spent)}</td>
-      <td>${finCardStatus(c)}${c.sync_status && c.sync_status !== 'ok' ? ` <span class="muted fin-small">${esc(c.sync_status)}</span>` : ''}</td></tr>`;
+    return `<tr data-fin-card="${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td data-k="Holder"><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
+      <td data-k="Budget">${c.budget ? esc(c.budget.name) : ''}</td><td class="fin-n" data-k="Limit">${c.limit == null ? '' : finNum(c.limit)}</td><td class="fin-n" data-k="Spent">${finNum(c.spent)}</td>
+      <td data-sk="Status">${finCardStatus(c)}${c.sync_status && c.sync_status !== 'ok' ? ` <span class="muted fin-small">${esc(c.sync_status)}</span>` : ''}</td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
   finTrim(box.querySelector('table'), 'cards');
 }
@@ -526,10 +532,10 @@ function finTxDraw(): void {
     const {tags, vendor} = finTxTags(r), key = finTxKey(r);
     const account = r.kind === 'feed' ? `${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}` : '';
     const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status === 'ignored' && FIN_TX_GONE[r.provider_status ?? ''] || r.status) : r.reversed ? 'reversed' : 'posted';
-    return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.date))}</td>
-      <td class="fin-tt"><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut">${account ? esc(account) : ''}</td><td>${finTxLineCell(r)}</td>
-      <td class="fin-n fin-amt">${finCents(r.amount)}</td><td>${r.split?.length ? finShareChips(r.split) : tags.teammate ? esc(finWho(tags.teammate)) : ''}</td><td class="fin-cut">${vendor ? esc(vendor) : ''}</td>
-      <td>${finTxStatusCell(status ?? '')}</td></tr>`;
+    return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap" data-sk="Date">${esc(finDayLabel(r.date))}</td>
+      <td class="fin-tt"><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut" data-k="Account">${account ? esc(account) : ''}</td><td data-sk="Line">${finTxLineCell(r)}</td>
+      <td class="fin-n fin-amt">${finCents(r.amount)}</td><td data-k="Teammate">${r.split?.length ? finShareChips(r.split) : tags.teammate ? esc(finWho(tags.teammate)) : ''}</td><td class="fin-cut" data-k="Vendor">${vendor ? esc(vendor) : ''}</td>
+      <td data-sk="Status">${finTxStatusCell(status ?? '')}</td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
   finTrim(box.querySelector('table'), 'tx');
 }
@@ -866,9 +872,9 @@ function finXferDraw(): void {
     const key = finTxKey(r), [cls, label] = FIN_XFER_STATUS[r.status ?? ''] || ['idle', r.status ?? ''];
     // Posted is the normal end of a transfer: plain; the rest wait on the bank or went wrong, and say so.
     const status = r.status === 'posted' ? '' : cls === 'idle' ? `<span class="muted">${esc(label)}</span>` : `<span class="pill ${cls === 'fail' ? 'blocked' : cls}">${esc(label)}</span>`;
-    return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.created_at))}</td>
+    return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap" data-sk="Date">${esc(finDayLabel(r.created_at))}</td>
       <td class="fin-tt"><button type="button" class="fin-link">${esc(finAcctName(r.from))}</button></td><td data-k="To">${esc(finAcctName(r.to))}</td><td class="fin-n fin-amt">${finCents(r.amount)}</td>
-      <td>${r.memo ? esc(r.memo) : ''}</td><td>${status}</td></tr>`;
+      <td data-k="Memo">${r.memo ? esc(r.memo) : ''}</td><td data-sk="Status">${status}</td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
   finTrim(box.querySelector('table'), 'xfer');
 }

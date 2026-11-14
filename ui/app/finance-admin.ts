@@ -95,7 +95,8 @@ function finSourcesPage() {
     const add = at?.closest<HTMLElement>('[data-fin-connect]');
     if (add) { finPop(add, $('#fin-connect')); return; }
     const pick = at?.closest<HTMLElement>('[data-fin-connect-item]');
-    if (pick) { $('#fin-connect').hidden = true; (add as HTMLElement | null | undefined)?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem ?? ''); return; }
+    // The menu closes and its + says so (the + is not the clicked item's ancestor, so it is found on its own).
+    if (pick) { $('#fin-connect').hidden = true; $('#fin-head [data-fin-connect]')?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem ?? ''); return; }
     if (at?.closest('[data-fin-collapse]')) {
       if (finSrcAllShut()) for (const g of finNeed(FIN?.src, 'the sources').groups) s.open.add(g.group); else s.open.clear();
       finSrcDraw(); return;
@@ -170,8 +171,8 @@ function finSrcDraw() {
     for (const r of rows) {
       const c = finSrcCols(r), k = finSrcKey(r);
       out.push(`<tr data-fin-src="${esc(k)}"${s.sel === k ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link fin-src-name">${esc(r.name || r.provider || '')}${r.last4 ? ` <span class="muted">••${esc(r.last4)}</span>` : ''}</button></td>
-        <td>${c.has === '—' || !c.has ? '' : esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap" data-k="Synced">${esc(c.last)}</td>
-        <td>${[finSrcStatus(c.status), finSrcMoney(r) && r.off_by ? `<span class="pill needs">Off by ${finStmtUsd(Math.abs(r.off_by))}</span>` : ''].filter(Boolean).join(' ')}</td></tr>`);
+        <td data-k="Has">${c.has === '—' || !c.has ? '' : esc(c.has)}</td><td data-k="Feeds">${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td data-k="Sync">${esc(c.how)}</td><td class="fin-nowrap" data-k="Synced">${esc(c.last)}</td>
+        <td data-sk="Status">${[finSrcStatus(c.status), finSrcMoney(r) && r.off_by ? `<span class="pill needs">Off by ${finStmtUsd(Math.abs(r.off_by))}</span>` : ''].filter(Boolean).join(' ')}</td></tr>`);
     }
   }
   box.innerHTML = `<table class="fin-t fin-src-t fin-rows"><thead><tr><th>Source</th><th>Has</th><th>Feeds</th><th>Sync</th><th>Last</th><th>Status</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
@@ -565,7 +566,7 @@ function finAccDraw() {
   const grants = (t: FinAccMate) => (t.grants || []).map(g => `<span class="fin-chip fin-grant${g.status !== 'active' ? ' muted' : ''}">${esc(finGrantLabel(g))}${g.status !== 'active' ? ' · suspended' : ''}</span>${g.granted_by
     ? `<span class="muted fin-small">by ${esc(finWho(g.granted_by))}</span>` : ''}`).join(' ');
   const row = (t: FinAccMate, d: number) => `<tr data-fin-mate="${esc(t.teammate)}"${FIN_ACC.sel === t.teammate ? ' class="fin-on"' : ''} style="--d:${d}"><td><span class="fin-who fin-ind">${finAvatar(t.teammate, 20)}<button type="button" class="fin-link">${esc(finWho(t.teammate))}</button>${role(t) ? `<span class="muted fin-small">${role(t)}</span>` : ''}</span></td>
-    <td><span class="fin-s ${finDefaultCls(t)}">${esc(finDefaultLabel(t))}</span></td><td>${grants(t)}</td></tr>`;
+    <td data-k="Sees"><span class="fin-s ${finDefaultCls(t)}">${esc(finDefaultLabel(t))}</span></td><td data-k="Granted">${grants(t)}</td></tr>`;
   const out = finAccRows(acc).map(r => r.t ? row(r.t, r.d) : `<tr class="fin-grp" style="--d:${r.d}"><td colspan="3"><span class="fin-ind">${esc(r.group)}</span></td></tr>`);
   box.innerHTML = `<table class="fin-t fin-acc-t fin-rows"><thead><tr><th>Teammate</th><th>By default</th><th>Granted</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
   // backend/finance/tab.py access: others_see totals|hidden; full_detail the teammates who see it all (owners only).

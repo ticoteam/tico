@@ -25,7 +25,7 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
   version, created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z'});
 
 // Task #339: columns are at least 300px, so a board whose stages don't fit scrolls sideways. Each redraw replaced the
-// columns and put the board back at its first stage. At 1440×900 with the manager's panel open, scrolled to 300px, the
+// columns and put the board back at its first stage. At 1700×900 with the manager's chat docked, scrolled to 300px, the
 // board stays there through a search typed and cleared, a live update, a drop on another stage, the refused-move bar
 // closed, a reload and Threads and back; another pipeline keeps its own position. The board's edges fade where stages lie
 // beyond them; a stage with no task is its header's height, and every column stretches while a task is held. Runs on the
@@ -38,11 +38,11 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
   product.stages.push(more('ship', 'Ship'), more('learn', 'Learn'));
   ops.stages.push(more('check', 'Check'), more('tell', 'Tell'), more('file', 'File'));
   const tasks = [...fixtures(), task('t-8', 'Stale version', 'build'), task('t-9', 'Sent back', 'review')];
-  const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=product&layout=columns'});
+  const {page, errors} = await open(browser, {viewport: {width: 1700, height: 900}, tasks, needs: [], hash: '#/tasks?pipeline=product&layout=columns'});
   const cols = page.locator('#task-body .pv-cols');
   await cols.waitFor();
-  await page.locator('#task-manager').click();
-  await page.locator('#task-rail .pm-head').waitFor();
+  // The manager's chat docked beside the stages, open at first from 1600 px (page-chat.ts): the stages do not fit.
+  await page.locator('aside.pgc .pgc-head').waitFor();
   const x = () => cols.evaluate(el => el.scrollLeft);
   const settled = async (want: number, what: string) => {
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
@@ -148,6 +148,9 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
   const tasks = [brief('t1', 'Saved carts', 'spec'), brief('t2', 'Refund flow', 'spec')];
   const moves: {id: string; body: Record<string, unknown>}[] = [];
   const saves: Record<string, unknown>[] = [];
+  // Knobs on the fake server: saves refused as if someone saved just before each one, and a re-read held back.
+  let refuseNext = 0;
+  let readGate: Promise<void> | null = null;
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     page.on('pageerror', (error: Error) => errors.push(error.message));
@@ -167,6 +170,11 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
       if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
         saves.push(body);
+        if (refuseNext > 0) {
+          refuseNext -= 1;
+          pipeline.settings_version += 1;   // someone else saved first, leaving Build as it was
+          return json({error: 'task_changed', detail: 'The pipeline changed since you looked. Read it again.'}, 409);
+        }
         // As backend/pipeline_settings.py save: a save at a version that is no longer the record's is refused.
         if (body['settings_version'] !== pipeline.settings_version) {
           return json({error: 'task_changed', detail: 'The pipeline changed since you looked. Read it again.'}, 409);
@@ -175,7 +183,7 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
         Object.assign(pipeline, JSON.parse(JSON.stringify(given)), {settings_version: pipeline.settings_version + 1});
         return json({pipeline});
       }
-      if (p === '/api/v2/pipelines/product') return json({pipeline});
+      if (p === '/api/v2/pipelines/product') return readGate ? readGate.then(() => json({pipeline})) : json({pipeline});
       if (p === '/api/v2/factories') return json({factories: [], pipelines: []});
       if (p === '/api/v2/tasks' && r.method() === 'GET') return json({tasks});
       const move = p.match(/^\/api\/v2\/tasks\/([^/]+)\/move$/);
@@ -229,14 +237,15 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     assert.equal(await page.locator('.pv-bar').count(), 0, 'closed');
 
     // A stage's header opens that stage's editor, and only that stage (style guide, Pipeline stage): its name in the
-    // title, its panel open, no pipeline fields, + Stage or moves.
+    // title and nowhere else, its fields as the body (no row to open or close), no pipeline fields, + Stage or moves.
     await page.locator('[data-pv-settings="build"]').click();
-    await page.locator('#pe-dialog .pe-stage[open]').waitFor();
+    await page.locator('#pe-dialog .pe-stage-one').waitFor();
     assert.equal(await page.locator('#pe-title').innerText(), 'Product › Build');
-    assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Build']);
-    assert.equal(await page.locator('#pe-dialog .pe-stage[open] .pe-stage-name').innerText(), 'Build');
+    assert.equal(await page.locator('#pe-dialog details, #pe-dialog summary, #pe-dialog .pe-stage-name').count(), 0, 'no stage row, nothing to collapse');
+    assert.equal(await page.locator('#pe-dialog [data-pe-sf="name"]').inputValue(), 'Build', 'its name is a field');
     assert.equal(await page.locator('#pe-dialog [data-pe-pf], #pe-dialog [data-pe-stage-add]').count(), 0, 'no pipeline fields, no + Stage');
-    assert.equal(await page.locator('#pe-dialog .pe-tools').isVisible(), false, 'no moves or Remove');
+    assert.equal(await page.locator('#pe-dialog .pe-tools, #pe-dialog [data-pe-up], #pe-dialog [data-pe-stage-x]').count(), 0, 'no moves or Remove');
+    assert.equal(await page.locator('#pe-dialog .pe-req').count(), 1, 'its requirement is open');
     assert.equal(await page.locator('#pe-dialog [data-pe-save]').isVisible(), true);
     await page.locator('#pe-dialog [data-pe-close]').click();
     await page.locator('#pe-dialog').waitFor({state: 'detached'});
@@ -278,7 +287,7 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
     const oneStage = async (sid: string) => {
       await page.locator(`[data-pv-settings="${sid}"]`).click();
-      await page.locator('#pe-dialog .pe-stage[open]').waitFor();
+      await page.locator('#pe-dialog .pe-stage-one').waitFor();
     };
     const purpose = page.locator('#pe-dialog [data-pe-sf="purpose"]');
     const specRead = clone(pipeline.stages[0]!);
@@ -294,24 +303,90 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     await page.locator('#pe-dialog [data-pe-close]').click();
     await page.locator('#pe-dialog').waitFor({state: 'detached'});
 
-    // Someone else saves while Build is open on its own (a new Goal, another requirement on Spec): Save mine sends their
-    // record with only this person's Build in it, so nothing they never saw is undone.
+    // Someone else saves while Build is open on its own, and leaves Build as it was (a new Goal, another requirement on
+    // Spec): no clash for this person. The save goes again on their record with this Build in it, with no banner, so
+    // nothing they never saw is undone.
     await oneStage('build');
     const theirReq = {...req, kind: 'page', line: 'Spec page'};
     Object.assign(pipeline, {goal: 'Theirs', settings_version: pipeline.settings_version + 1});
     pipeline.stages[0]!.requirements = [...pipeline.stages[0]!.requirements, theirReq];
     const specTheirs = clone(pipeline.stages[0]!);
     await purpose.fill('Mine');
-    const before = saves.length;
+    let before = saves.length;
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    for (let i = 0; i < 150 && saves.length < before + 2; i++) await page.waitForTimeout(20);
+    assert.equal(saves.length, before + 2, 'refused once, then saved again by itself');
+    const quiet = saves.at(-1)!;
+    assert.equal(quiet['settings_version'], pipeline.settings_version - 1, 'at their version');
+    assert.equal(quiet['goal'], 'Theirs', 'their Goal is kept');
+    assert.deepEqual((quiet['stages'] as unknown[])[0], specTheirs, 'their Spec is kept');
+    assert.equal((quiet['stages'] as {purpose: string}[])[1]!.purpose, 'Mine', 'and this person\'s Build is saved');
+    await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
+    assert.equal(await page.locator('#pe-dialog .pe-clash').count(), 0, 'no banner');
+
+    // Their save added a stage before Build, so Build sits at a new place: still no clash; Build goes in where it is now.
+    pipeline.stages = [{...clone(pipeline.stages[0]!), id: 'qa', name: 'QA'}, ...pipeline.stages];
+    pipeline.settings_version += 1;
+    await purpose.fill('Shifted');
+    before = saves.length;
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    for (let i = 0; i < 150 && saves.length < before + 2; i++) await page.waitForTimeout(20);
+    const shifted = saves.at(-1)!;
+    assert.deepEqual((shifted['stages'] as {id: string; purpose: string}[]).map(x => [x.id, x.purpose === 'Shifted']), [['qa', false], ['spec', false], ['build', true]]);
+    await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
+    assert.equal(await page.locator('#pe-dialog .pe-clash').count(), 0, 'no banner');
+    // ...and removed it again: Build is back at its old place, still quietly.
+    pipeline.stages = pipeline.stages.filter(x => x.id !== 'qa');
+    pipeline.settings_version += 1;
+    await purpose.fill('Back');
+    before = saves.length;
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    for (let i = 0; i < 150 && saves.length < before + 2; i++) await page.waitForTimeout(20);
+    assert.deepEqual((saves.at(-1)!['stages'] as {id: string; purpose: string}[]).map(x => [x.id, x.purpose === 'Back']), [['spec', false], ['build', true]]);
+    await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
+
+    // Saves land before each try four times running: three quiet tries, then the banner (no endless retrying), and Save
+    // stays off while it is tried.
+    refuseNext = 4;
+    before = saves.length;
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    assert.equal(await page.locator('#pe-dialog [data-pe-save]').isDisabled(), true, 'Save is off while it is tried');
+    await page.locator('#pe-dialog .pe-clash').waitFor();
+    assert.equal(saves.length, before + 4, 'four tries, then the banner');
+    refuseNext = 0;
+    await page.locator('#pe-dialog [data-pe-close]').click();
+    await page.locator('#pe-dialog').waitFor({state: 'detached'});
+
+    // The editor closed while a refused save's re-read is out: nothing is saved after it is gone.
+    await oneStage('build');
+    let release = () => {};
+    readGate = new Promise<void>(r => { release = r; });
+    refuseNext = 1;
+    await purpose.fill('Gone before it saved');
+    before = saves.length;
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    for (let i = 0; i < 100 && saves.length < before + 1; i++) await page.waitForTimeout(20);
+    await page.locator('#pe-dialog [data-pe-close]').click();
+    await page.locator('#pe-dialog').waitFor({state: 'detached'});
+    release(); readGate = null;
+    await page.waitForTimeout(400);
+    assert.equal(saves.length, before + 1, 'only the refused save; none after the editor closed');
+    await oneStage('build');
+
+    // They changed Build itself: that is a clash, with the banner; Save mine sends their record with this Build in it.
+    pipeline.stages[1]!.purpose = 'Their purpose';
+    pipeline.settings_version += 1;
+    await purpose.fill('Mine, again');
+    before = saves.length;
     await page.locator('#pe-dialog [data-pe-save]').click();
     await page.locator('#pe-dialog .pe-clash [data-pe-mine]').waitFor();
+    assert.match(await page.locator('#pe-dialog .pe-clash p').innerText(), /They changed: Build/);
     assert.equal(saves.length, before + 1, 'the first save was refused');
     await page.locator('#pe-dialog [data-pe-mine]').click();
     for (let i = 0; i < 100 && saves.length < before + 2; i++) await page.waitForTimeout(20);
     const mine = saves.at(-1)!;
     assert.equal(mine['goal'], 'Theirs', 'their Goal is kept');
-    assert.deepEqual((mine['stages'] as unknown[])[0], specTheirs, 'their Spec is kept');
-    assert.equal((mine['stages'] as {purpose: string}[])[1]!.purpose, 'Mine', 'and this person\'s Build is saved');
+    assert.equal((mine['stages'] as {purpose: string}[])[1]!.purpose, 'Mine, again', 'this person chose theirs over Build');
     await page.locator('#pe-dialog .pe-clash').waitFor({state: 'detached'});
     await page.locator('#pe-dialog [data-pe-close]').click();
     await page.locator('#pe-dialog').waitFor({state: 'detached'});
@@ -324,9 +399,9 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
     await purpose.fill('Mine again');
     await page.locator('#pe-dialog [data-pe-save]').click();
     await page.locator('#pe-dialog [data-pe-theirs]').click();
-    await page.locator('#pe-dialog .pe-stage[open]').waitFor();
+    await page.locator('#pe-dialog .pe-stage-one').waitFor();
     assert.equal(await page.locator('#pe-title').innerText(), 'Product › Building');
-    assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Building']);
+    assert.equal(await page.locator('#pe-dialog [data-pe-sf="name"]').inputValue(), 'Building');
     pipeline.stages = pipeline.stages.slice(0, 1);
     pipeline.settings_version += 1;
     await purpose.fill('Gone?');

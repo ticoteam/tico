@@ -326,12 +326,10 @@ function renderSettingsBots() {
       });
       return;
     }
-    const bot = target.closest<HTMLElement>('[data-edit-bot]');
     const credential = target.closest<HTMLElement>('[data-agent-credential]');
     const revoke = target.closest<HTMLElement>('[data-agent-revoke]');
     const pairing = target.closest<HTMLElement>('[data-agent-pair]');
     if (pairing) void settingsAgentPair(pairing.dataset.agentPair!);
-    if (bot) settingsEditBot(bot.dataset.editBot);
     if (credential) void settingsAgentCredential(credential.dataset.agentCredential!);
     if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke!);
   };

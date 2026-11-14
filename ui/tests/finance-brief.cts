@@ -84,6 +84,11 @@ async function shot(page: Page, name: string) {
       assert.match(await block.locator('.fin-brief-at').innerText(), /^as of \d{1,2}:\d{2}/, 'the time they were worked out');
       assert.deepEqual(errors, [], 'no page errors');
       await shot(page, 'finance-brief');
+      // What changed is the P&L's: another tab draws its own table first, with no brief over it.
+      await page.evaluate(() => { location.hash = '#/finance/balance'; });
+      await page.locator('#fin-head [data-fin-tab="balance"].cur').waitFor();
+      await page.waitForLoadState('networkidle');
+      assert.equal(await page.locator('#fin-brief .fin-brief').count(), 0, 'no brief off the P&L');
       await page.close();
     }
     {

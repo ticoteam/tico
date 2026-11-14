@@ -193,6 +193,9 @@ async function until(fn: () => unknown, what: string) {
       assert.deepEqual((await heads.allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()), ['› Company rules 1', '› Engineering rules 1', '› Rules for all bots 1']);
       for (const i of [0, 1, 2]) assert.equal(await heads.nth(i).getAttribute('aria-expanded'), 'true');
       assert.deepEqual(await panel(page).locator('.rr-sub').allInnerTexts(), ['Be kind and brief with customers.', 'Ship behind a flag.', 'Say you are a bot when asked.']);
+      // each leads with its outcome in the mark every rule uses (stage-rules.ts): Stop, Ask first, Warn
+      assert.deepEqual(await panel(page).locator('.rr-sub').first().locator('.ru-outcome [role=img]').evaluate(el => [el.getAttribute('aria-label'), el.getAttribute('data-icon')]),
+        ['Stop', 'block']);
       const own = await panel(page).locator('a.rr-rule:not(.rr-sub)').allInnerTexts();
       assert.deepEqual(own, ['Run the tests before asking for review.']);
       await heads.nth(1).click();
@@ -546,7 +549,11 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await h.locator('.ru-sg-where').innerText(), 'Build, Fixes 2');
       assert.equal((await page.locator('.sr-ru-group').nth(1).locator('h2').innerText()).replace(/\s+/g, ' ').trim(), 'Every pipeline 1');
       assert.equal(await page.locator('.sr-ru-group .pill, .sr-cost').count(), 0, 'no Free or Jev pill');
-      assert.equal(await page.locator('.sr-ru-group .ru-cost').count(), 1, 'a quiet Jev mark');
+      assert.equal(await page.locator('.sr-ru-group [data-sr-cost]').count(), 1, 'a quiet Jev mark');
+      // the stage panel's one-line row (stage-rules.ts): no title, the Then mark, 36 px (44 on a phone)
+      assert.equal(await page.locator('.sr-ru-group .sr-name').count(), 0, 'no title on a row');
+      assert.deepEqual(await page.locator('.sr-ru-group .sr-r .sr-line').evaluateAll(els => [...new Set(els.map(e => Math.round(e.getBoundingClientRect().height)))]),
+        [vp === PHONE ? 44 : 36]);
       await noSideways(page, 'stages');
       assert.deepEqual(errors, []);
       await page.close();

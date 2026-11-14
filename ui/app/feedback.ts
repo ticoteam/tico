@@ -1,6 +1,7 @@
-/* ui/app/feedback.ts — 👍 / 👎 on a bot's work: its messages (Assistant chat, Threads and DMs, task comments), tasks a bot
-   asked for, and the approvals and questions it puts on Decide cards. 👍 is one tap (again removes it); 👎 saves at once
-   and opens a sheet for what was wrong, to tell the bot or make a rule of it (backend/feedback.py).
+/* ui/app/feedback.ts — 👍 / 👎 on a bot's or another person's work: their messages (Assistant chat, Threads and DMs, task
+   comments) and the tasks they asked for, and the approvals and questions a bot puts on Decide cards. Never on your own.
+   👍 is one tap (again removes it); 👎 saves at once and opens a sheet for what was wrong; on a bot's work the sheet can
+   also tell the bot or make a rule of it (backend/feedback.py).
    A message's row under it holds Copy, 👍 and 👎: with a pointer it shows on hover, and the chosen thumb stays there,
    filled; a chosen 👎 opens what happened to it. On touch a long press on the item opens them, with Copy.
    Every control stays hidden until the server answers the batched read with a list: an older server without these
@@ -38,8 +39,13 @@ const fbMine = (key: string): FbRow | null => (FB.items.get(key) || []).find(f =
 // People rate; a bot's own session never does (the server refuses it too).
 const fbAllowed = () => S.me?.role !== 'bot' && !!myActor();
 const fbBot = (actor: string | null | undefined): boolean => String(actor || '').startsWith('bot:');
-// What a task card or row rates: the task, when a bot asked for it.
-const fbTaskKey = (t: {id?: string; requester_id?: string | null} | null | undefined): string => t?.id && fbBot(t.requester_id) ? fbKey('task', t.id) : '';
+// Whose work takes 👍 / 👎: a bot's or a person's, never your own (rating yourself says nothing).
+const fbRates = (actor: string | null | undefined): boolean => {
+  const a = String(actor || '');
+  return (fbBot(a) || a.startsWith('human:')) && a !== myActor();
+};
+// What a task card or row rates: the task, when a bot or another person asked for it.
+const fbTaskKey = (t: {id?: string; requester_id?: string | null} | null | undefined): string => t?.id && fbRates(t.requester_id) ? fbKey('task', t.id) : '';
 const fbNorm = (s: unknown): string => String(s || '').trim().toLowerCase();
 
 // ---- markup each surface puts in its rows
@@ -187,21 +193,25 @@ function fbDialog(cls: string, label: string): HTMLDialogElement {
 // No title: the close button alone, in the corner.
 const FB_X = '<button type="button" class="ghost fb-x" data-fb-close aria-label="Close" title="Close">✕</button>';
 const fbHeadHTML = (title: string): string => title ? `<div class="fb-head"><h2 tabindex="-1">${esc(title)}</h2>${FB_X}</div>` : `<div class="fb-corner">${FB_X}</div>`;
-// `fixed`: a task or a Decide card, whose chips start with the three ways a request goes wrong.
+// `fixed`: a task or a Decide card, whose chips start with the three ways a request goes wrong. A person's work (the
+// row's bot_id is a person) takes the reason only: telling them and a rule are a bot's (backend/feedback.py).
 function fbSheet(key: string, f: FbRow | null, {fixed = fbSplit(key).type !== 'message'}: {fixed?: boolean} = {}) {
   const d = fbDialog('fb-down', 'Not good');
   const st: FbSheetState = {key, f, chip: '', saved: String(f?.reason || '')};
+  const bot = !f || fbBot(f.bot_id);
   d.innerHTML = `${fbHeadHTML('')}<div class="fb-chips" role="group" aria-label="Reasons"></div>
     <textarea class="fb-why" rows="3" maxlength="${FB_REASON_MAX}" aria-label="What was wrong?" placeholder="What was wrong?">${esc(st.saved)}</textarea>
     <p class="fb-nudge" hidden>You've said this before.</p>
-    <div class="fb-acts"><button type="button" class="ghost" data-fb-rule>Make a rule</button><button type="button" class="primary" data-fb-tell>Tell the bot</button></div>`;
+    <div class="fb-acts">${bot ? '<button type="button" class="ghost" data-fb-rule>Make a rule</button><button type="button" class="primary" data-fb-tell>Tell the bot</button>'
+      : '<button type="button" class="primary" data-fb-save>Save</button>'}</div>`;
   d.showModal();
   const box = $('.fb-why', d), chips = $('.fb-chips', d), nudge = $('.fb-nudge', d);
-  const rule = $('[data-fb-rule]', d), tell = $('[data-fb-tell]', d);
+  const rule = d.querySelector<HTMLButtonElement>('[data-fb-rule]'), tell = d.querySelector<HTMLButtonElement>('[data-fb-tell]');
   let reasons: FbReason[] = [];
   const counts = () => new Map<string, number>(reasons.map(r => [fbNorm(r.text), Number(r.count) || 0]));
-  // Said twice before: one line says so and a rule becomes the main way out.
+  // Said twice before: one line says so and a rule becomes the main way out (a bot's work only).
   const renudge = () => {
+    if (!rule || !tell) return;
     const again = (counts().get(fbNorm(st.chip || box.value)) || 0) >= 2;
     nudge.hidden = !again;
     rule.className = again ? 'primary' : 'ghost'; tell.className = again ? 'ghost' : 'primary';
@@ -240,12 +250,18 @@ function fbSheet(key: string, f: FbRow | null, {fixed = fbSplit(key).type !== 'm
     FB.reasons = null;               // the new reason is among the recent ones next time
     return st.f;
   };
-  tell.onclick = async () => {
+  const save = d.querySelector<HTMLButtonElement>('[data-fb-save]');
+  if (save) save.onclick = async () => {
+    busy(true);
+    try { await settle(); st.closing = true; d.close(); }
+    catch (e) { toast(errorMessage(e, ''), true, null, {host: d}); busy(false); }
+  };
+  if (tell) tell.onclick = async () => {
     busy(true);
     try { await settle({tell: true}); st.closing = true; d.close(); toast('Sent to bot'); }
     catch (e) { toast(errorMessage(e, ''), true, null, {host: d}); busy(false); }
   };
-  rule.onclick = async () => {
+  if (rule) rule.onclick = async () => {
     busy(true); rule.textContent = 'Drafting…';
     try {
       const saved = await settle();

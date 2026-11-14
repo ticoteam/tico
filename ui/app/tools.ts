@@ -247,7 +247,7 @@ async function pageTools() {
   // (Automations' .au-plus) for adding, then ⋯ with mail Settings, last.
   $('#main').innerHTML = `<div class="au tt-au" id="tools-root" data-screen="list">
     ${pageHead({title: 'Tools', hook: 'tt-head', pad: true,
-      tools: `<button type="button" class="au-fbtn" data-tl-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="tt-chat"></span>`,
+      tools: `<button type="button" class="au-fbtn" data-tl-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>`,
       primary: add ? `<span class="au-newbox"><button class="ghost ph-go au-plus" type="button" data-tl-add aria-label="Add tool" title="Add tool" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span></button><div class="au-newm" role="menu" aria-label="Add tool" hidden></div></span>` : '',
       more: `<a href="#/tools/settings" data-tl-settings>Settings</a>`})}
     <div class="au-body">
@@ -261,9 +261,9 @@ async function pageTools() {
   search.oninput = () => { if (TL !== state) return; state.q = search.value; toolsChanged(); };
   toolsPlace(root);
   toolsWire(root, state);
-  // The Tools owner's chat (page-chat.ts), which takes keys without a model seeing them (tools-key-drop.ts).
-  void pageChatMount({page: 'tools', label: 'Tools', button: root.querySelector<HTMLElement>('.tt-chat')!,
-    stays: r => r === TOOLS_ROUTE || r.startsWith(TOOLS_ROUTE + '?'), empty: toolsChatEmpty, keyDrop: toolsInProblem});
+  // The Tools owner's chat (page-chat.ts, mounted by the router), which takes keys without a model seeing them
+  // (tools-key-drop.ts).
+  pageChatUse('tools', {empty: toolsChatEmpty, keyDrop: toolsInProblem});
   if (state.items) toolsDraw();
   // The hub's list, the tools bots declare, the teams and (for whoever may open it) the vault, read together so the
   // list draws once, in its final order. Only the hub's list failing is an error: the rest leave their rows out.
@@ -280,7 +280,7 @@ async function pageTools() {
   if (catalog.status === 'fulfilled') state.catalog = catalog.value;
   if (groups.status === 'fulfilled') state.groups = Array.isArray(groups.value) ? groups.value : groups.value?.groups || [];
   state.items = toolsItems(state);
-  if (root.isConnected) toolsDraw();
+  if (root.isConnected) { toolsDraw(); pageChatEmptySync(); }   // the chat's empty line names the tools in Problem
 }
 
 // The tools that need someone, by name: the chat's empty state names them and a dropped key's "For" offers them.

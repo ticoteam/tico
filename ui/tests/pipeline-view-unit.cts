@@ -9,8 +9,8 @@
 // - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
 //   no factory under Other with no count;
 // - the editor names what someone else changed when its save is refused as out of date;
-// - the editor offers every kind, a page's and In a release's settings, and a stage's On enter, and saves them as the
-//   record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
+// - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
+//   action as rows, one add button), and saves them as the record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
 // - a task's row for a stage's answer is its title, and once met its value.
 // Run: node ui/tests/pipeline-view-unit.cts
 'use strict';
@@ -24,7 +24,7 @@ const APP = path.join(__dirname, '..', 'app');
 const ctx = vm.createContext({
   esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
   TASKS: '#/tasks',
-  document: {addEventListener() {}, getElementById: () => null},
+  document: {addEventListener() {}, getElementById: () => null, querySelector: () => null},
   HTMLInputElement: class {},
   HTMLSelectElement: class {},
   S: {people: [{id: 'ana', name: 'Ana'}], emps: []},
@@ -43,6 +43,13 @@ const ctx = vm.createContext({
   TL_ICON: {plus: '+'},
   giveToFieldHTML: () => '',
   stageRulesButtonHTML: () => '',   // stage-rules.cts draws a stage's Rules button
+  // and the rules in each of a stage editor's phases: here only where they go
+  stageRulesPhaseHTML: (_p: string, s: {id?: string | null}, ph: string) => s.id ? `<div class="sr-phase" data-sr-section="${s.id}" data-sr-phase="${ph}"></div>` : '',
+  // On entering's Limit and action rows are rule rows (stage-rules.ts; stage-rules.cts draws the real one): here, what
+  // the row is given
+  stageRuleRowHTML: (o: {attrs: string; icon?: string; text: string; open?: string; below?: string}) =>
+    `<li class="sr-r" ${o.attrs}><button type="button" class="sr-open" ${o.open ?? ''} data-icon="${o.icon ?? ''}">${o.text}</button>${o.below ?? ''}</li>`,
+  SR_ED: null,   // the rules not read: + Rule or action offers no Rule
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
 for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
@@ -224,15 +231,18 @@ const factories = (async () => {
   assert.deepEqual(plain(ctx.peChanged(mine, order)), ['The order of the stages']);
   assert.deepEqual(plain(ctx.peChanged(mine, rec())), []);
 }
-// ---- the editor: the new kinds, their settings and On enter
+// ---- the editor: the new kinds, their settings and On entering › Then
 {
   const state = {id: 'product', pipelines: [{id: 'product', name: 'Product'}, {id: 'engineering', name: 'Engineering'}],
     draft: rec({stages: [stage('spec', 'Spec', {requirements: [{...req('page'), who_oks: 'people_with_exceptions'}]}),
       stage('release', 'Release', {requirements: [{...req('item'), source: 'github', condition: 'in_release'}]})]})};
   const kinds = ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0);
-  assert.doesNotMatch(kinds, /later|disabled>/, 'every kind may be picked');
-  assert.match(kinds, /<option value="in_release">In a release<\/option>/);
-  assert.match(kinds, /<span>Jev checks<\/span>/);
+  // What it needs is a label (the kind is picked when it is added, + Requirement's list), then its name and a quiet ×.
+  assert.doesNotMatch(kinds, /data-pe-rf="kind"|<details|<summary/, 'no Needs list, nothing to expand');
+  assert.match(kinds, /<span class="pe-req-kind">A page<\/span><input data-pe-rf="line"[^>]*aria-label="A page: Jev checks"/);
+  assert.match(kinds, /<button type="button" class="pe-req-x" data-pe-req-x[^>]*aria-label="Remove A page"[^>]*>×<\/button>/);
+  // + Requirement's list has every kind, In a release among the Links
+  assert.ok((vm.runInContext('PE_KINDS', ctx) as string[][]).some(k => k[0] === 'in_release'));
   assert.match(kinds, /<span>Then OK from<\/span><select[^>]*><option value="">Nobody<\/option>/, 'a page needs no person');
   assert.match(kinds, /data-pe-rs="at_head"[^>]*> Newest commit only/);
   assert.match(kinds, /data-pe-rs="with_release"[^>]*> With its release/);
@@ -259,24 +269,58 @@ const factories = (async () => {
   assert.doesNotMatch(ctx.peReqHTML({...state, draft: saved}, saved.stages[1]!.requirements[0]!, 1, 0),
     /data-pe-rs="prereleases"[^>]* checked/, 'the saved opt-out renders off');
 
-  const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
-  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="act:github.queue">Queue PRs<\/option>/,
-    'a stage files into another pipeline, not its own');
+  // On entering is one list: the Limit and the action are rows only when set, then the rules, then one add button whose
+  // pick offers only what is not set (the first stage has no Limit). What is stored is as before: task_limit, and
+  // on_enter {}, {file_into: id} or {act: 'github.queue'}; "Do nothing" is no choice, it is no action row.
+  const onEnter = (si: number) => ctx.peEnterHTML(state, state.draft.stages[si]!, si, `p-${si}`) as string;
+  const picks = (si: number) => plain(ctx.peEnterPicks(state, state.draft.stages[si]!, si)).map((p: string[]) => p[1]);
+  assert.doesNotMatch(onEnter(0), /data-pe-enter-row|Do nothing|data-pe-sf/, 'nothing set: no row, no field');
+  assert.match(onEnter(0), /<button type="button" class="ghost pe-add" data-pe-enter-add data-pe-si="0" aria-haspopup="menu" aria-expanded="false">\+ Rule or action<\/button><\/div>$/);
+  assert.deepEqual(picks(0), ['Open a linked task in…', 'Add its PRs to the merge queue'], 'the first stage: no Limit; the rules unread: no Rule');
+  assert.deepEqual(picks(1), ['Limit', 'Open a linked task in…', 'Add its PRs to the merge queue']);
+  // A Limit's row says it; its editor, opened in place, is the old field's number, with Remove; typing stores it as the
+  // field did.
+  (state.draft.stages[1] as Record<string, unknown>)['task_limit'] = 4;
+  assert.match(onEnter(1), /<li class="sr-r" data-pe-enter-row="limit" data-pe-si="1"><button type="button" class="sr-open" data-pe-row="limit" data-pe-si="1" aria-expanded="false" aria-controls="pe-ed-p-1-limit" data-icon="vertical_align_top">At most 4 tasks at once<\/button><\/li>/);
+  assert.deepEqual(picks(1), ['Open a linked task in…', 'Add its PRs to the merge queue'], 'a Limit set is not offered');
+  (state as Record<string, unknown>)['rowOpen'] = '1:limit';
+  assert.match(onEnter(1), /aria-expanded="true"[^>]*>At most 4 tasks at once<\/button><div class="pe-row-ed" id="pe-ed-p-1-limit"><label class="pe-f pe-f-short"><span>Tasks at once<\/span><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" data-pe-si="1" value="4"><\/label><button type="button" class="ghost pe-row-x" data-pe-row-x="limit" data-pe-si="1">Remove<\/button><\/div>/);
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peSf: 'task_limit'}, '6'));
+  assert.equal(state.draft.stages[1]!.task_limit, 6);
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peSf: 'task_limit'}, ''));
+  assert.equal(state.draft.stages[1]!.task_limit, null, 'emptied: no limit, as the field stored it');
+  assert.equal(vm.runInContext('peLimitText(1)', ctx), 'At most 1 task at once');
+  // An action's row says it, with the pipeline by name; its editor picks the action and, for a linked task, the
+  // pipeline (another one, never its own).
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter_kind'}, 'file_into'));
+  assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'}, 'the first other pipeline, never its own');
+  assert.match(onEnter(0), /data-pe-enter-row="act"[^>]*><button[^>]*data-pe-row="act"[^>]*data-icon="open_in_new">Open a linked task in Engineering<\/button>/);
+  assert.deepEqual(picks(0), [], 'the stage stores one action');
+  assert.doesNotMatch(onEnter(0), /data-pe-enter-add/, 'nothing left to add: no add button');
+  (state as Record<string, unknown>)['rowOpen'] = '0:act';
+  assert.match(onEnter(0), /<span>Then<\/span><select data-pe-sf="on_enter_kind" data-pe-si="0"><option value="file_into" selected>Open a linked task in…<\/option><option value="act:github.queue">Add its PRs to the merge queue<\/option><\/select>/);
+  assert.match(onEnter(0), /<span>Pipeline<\/span><select data-pe-sf="on_enter"[^>]*><option value="file_into:engineering" selected>Engineering<\/option><\/select>/,
+    'a stage opens a linked task in another pipeline, not its own');
+  assert.match(onEnter(0), /data-pe-row-x="act"[^>]*>Remove</);
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter'}, 'file_into:engineering'));
   assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'});
-  assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]!), /value="file_into:engineering" selected/);
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'act:github.queue'));
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter_kind'}, 'act:github.queue'));
   assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {act: 'github.queue'});
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, ''));
-  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {});
+  assert.match(onEnter(1), /data-icon="merge">Add its PRs to the merge queue<\/button>/);
+  // read only: the rows, with nothing to open, and no add button
+  const roEnter = ctx.peEnterHTML({...state, readOnly: true}, state.draft.stages[0]!, 0, 'p-0') as string;
+  assert.match(roEnter, /<button type="button" class="sr-open" disabled data-icon="open_in_new">Open a linked task in Engineering<\/button><\/li>/);
+  assert.doesNotMatch(roEnter, /data-pe-enter-add|data-pe-row|pe-row-ed/);
+  state.draft.stages[1]!.on_enter = {};
+  (state as Record<string, unknown>)['rowOpen'] = '';
 
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'pr_merged'));
-  const merged = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
-  assert.deepEqual([merged['kind'], merged['source'], merged['condition']], ['item', 'github', 'pr_merged'],
-    'a GitHub condition is saved as an item of source github');
-  assert.match(ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0), /<option value="pr_merged" selected>/);
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'owner_done'));
-  const done = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
+  // + Requirement makes a requirement of the kind picked (peReqNew): a GitHub condition is an item of source github.
+  const merged = plain(ctx.peReqNew('pr_merged')) as Record<string, unknown>;
+  assert.deepEqual([merged['kind'], merged['source'], merged['condition'], merged['can_push_past']], ['item', 'github', 'pr_merged', false],
+    'a GitHub condition is saved as an item of source github, never pushed past');
+  state.draft.stages[0]!.requirements[0] = merged as never;
+  assert.match(ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0), /<span class="pe-req-kind">PR merged<\/span>/);
+  const done = plain(ctx.peReqNew('owner_done')) as Record<string, unknown>;
   assert.deepEqual([done['kind'], done['source'], done['condition']], ['owner_done', null, null]);
 
   // A by-hand stage alone offers whether a person's request moves on by itself; leaving by hand off clears it.
@@ -292,16 +336,16 @@ const factories = (async () => {
 }
 // ---- the editor: a stage's answer
 {
-  const state = {id: 'product', pipelines: [], reqOpen: new WeakSet(), draft: rec({stages: [stage('spec', 'Spec', {requirements: [req('owner_done')]})]})};
+  const state = {id: 'product', pipelines: [], draft: rec({stages: [stage('spec', 'Spec', {requirements: [req('owner_done')]})]})};
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '') =>
     Object.assign(Object.create(ctx[kind].prototype), {dataset: {peSi: '0', peRi: '0', ...data}, value, type: 'text', closest: () => null});
   const r = () => plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
   const html = () => ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0) as string;
-  assert.match(html(), /<optgroup label="Responses"><option value="owner_done" selected>Owner says done<\/option><option value="ok">OK from someone<\/option><option value="answer">Answer<\/option><\/optgroup><optgroup label="Links"><option value="linked_done">/);
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'kind'}, 'answer'));
+  assert.match(html(), /<span class="pe-req-kind">Owner says done<\/span>/);
+  // An answer, added from + Requirement: its title names it; the name follows the title.
+  state.draft.stages[0]!.requirements[0] = ctx.peReqNew('answer', 'Confidence');
   assert.deepEqual([r()['kind'], r()['settings'], r()['who_oks'], r()['choices']], ['answer', {type: 'text', name: 'confidence'}, 'none', null]);
-  assert.match(html(), /<span>Title<\/span>/);
+  assert.match(html(), /data-pe-rf="line"[^>]*aria-label="[^"]*: Title"/);
   assert.match(html(), /<span>From<\/span><select data-pe-rf="person_id"[^>]*><option value="">Task owner<\/option>/);
   assert.match(html(), /data-pe-rf="answer_name"[^>]*value="confidence"/);
   ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence (0-100)'));
@@ -331,19 +375,44 @@ const factories = (async () => {
   const build = stage('build', 'Build', {owner: 'pick', pick, pick_next: 'The next task goes to Builder 2, after Builder had the last one.', task_limit: 3});
   const review = stage('review', 'Review', {owner: 'bot:r1'});
   const base = rec({stages: [stage('deck', 'On deck'), build, review]});
-  const state = {id: 'product', pipelines: [], open: new WeakSet(), reqOpen: new WeakSet(), base, draft: JSON.parse(JSON.stringify(base))};
+  const state = {id: 'product', pipelines: [], open: new WeakSet(), base, draft: JSON.parse(JSON.stringify(base))};
   const html = (si: number) => ctx.peStageHTML(state, state.draft.stages[si]!, si, 3) as string;
 
-  // Three groups in the order a task moves, with every field the window had before (AC-11).
+  // Name and Goal, then three phases in the order a task moves, each a heading with a small leading mark, with every
+  // field the window had before (AC-11) and, last in each, the rules that act there.
   const body = html(1);
-  const groups = [...body.matchAll(/<h4 class="pe-h">([^<]+)<\/h4>/g)].map(m => m[1]);
-  assert.deepEqual(groups, ['When a task arrives', 'Who works on it', 'To leave']);
+  const groups = [...body.matchAll(/<h4 class="pe-h pe-phase-h"[^>]*><span class="nav-icon" aria-hidden="true">(\w+)<\/span>([^<]+)<\/h4>/g)].map(m => `${m[1]} ${m[2]}`);
+  assert.deepEqual(groups, ['login On entering', 'schedule While here', 'logout To leave']);
+  assert.doesNotMatch(body, />Rules</, 'no Rules heading');
   const at = (needle: string) => { const i = body.indexOf(needle); assert.ok(i >= 0, needle); return i; };
-  const [arrives, works, leave] = groups.map(g => at(`>${g}<`)) as [number, number, number];
-  for (const f of ['data-pe-sf="on_enter"', 'data-pe-sf="task_limit"']) assert.ok(at(f) > arrives && at(f) < works, `${f} is under When a task arrives`);
-  for (const f of ['data-pe-sf="owner"', 'data-pe-sf="expected_n"']) assert.ok(at(f) > works && at(f) < leave, `${f} is under Who works on it`);
-  for (const f of ['data-pe-seg="by_hand"', 'data-pe-req-add']) assert.ok(at(f) > leave, `${f} is under To leave`);
-  for (const f of ['data-pe-sf="name"', 'data-pe-sf="purpose"', 'data-pe-sf="expected_unit"']) at(f);
+  const [arrives, works, leave] = ['On entering', 'While here', 'To leave'].map(g => at(`>${g}<`)) as [number, number, number];
+  for (const f of ['data-pe-sf="name"', 'data-pe-sf="purpose"']) assert.ok(at(f) < arrives, `${f} is at the top`);
+  for (const f of ['data-pe-enter-row="limit"', 'data-sr-phase="enter"', 'data-pe-enter-add']) assert.ok(at(f) > arrives && at(f) < works, `${f} is under On entering`);
+  assert.doesNotMatch(body, /data-pe-sf="(on_enter_kind|task_limit)"/, 'On entering has rows, not fields (its editors closed)');
+  for (const f of ['data-pe-sf="owner"', 'data-pe-sf="expected_n"', 'data-pe-sf="keep_warm_hours"', 'data-sr-phase="here"']) assert.ok(at(f) > works && at(f) < leave, `${f} is under While here`);
+  for (const f of ['data-pe-seg="by_hand"', 'data-pe-req-add', 'data-sr-phase="leave"']) assert.ok(at(f) > leave, `${f} is under To leave`);
+  at('data-pe-sf="expected_unit"');
+  // On entering, one list: the Limit row, the rules, then its add button; the other phases' rules come after their fields
+  assert.ok(at('data-pe-enter-row="limit"') < at('data-sr-phase="enter"') && at('data-sr-phase="enter"') < at('data-pe-enter-add'), 'Limit, rules, add');
+  assert.ok(at('data-sr-phase="here"') > at('data-pe-sf="keep_warm_hours"') && at('data-sr-phase="leave"') > at('data-pe-req-add'), 'a phase\'s rules follow its fields');
+  // Owner can take a phone's whole row (pipeline.css .pe-f-owner)
+  assert.match(body, /<label class="pe-f pe-f-owner"><span>Owner<\/span><select data-pe-sf="owner"/);
+  // The stage's purpose is labelled Goal (its stored key stays `purpose`).
+  assert.match(body, /<label class="pe-f"><span>Goal<\/span><input data-pe-sf="purpose"/);
+  assert.doesNotMatch(body, />Purpose</);
+  // The built-in rules' one line ends the stage.
+  assert.ok(body.trimEnd().endsWith('<div class="sr-phase" data-sr-section="build" data-sr-phase="always"></div></div></details>'), 'the built-in line is last');
+  // Read only (the viewer may not change the pipeline): the same fields, off, with nothing to add or remove; each
+  // phase's rules stay outside its switched-off fields, so their rows still open.
+  const ro = ctx.peStageHTML({...state, readOnly: true}, state.draft.stages[1]!, 1, 3) as string;
+  assert.equal([...ro.matchAll(/<fieldset class="pe-ro" disabled>/g)].length, 3, 'the top row and the fields of While here and To leave are off');
+  assert.match(ro, /data-pe-enter-row="limit"[^>]*><button type="button" class="sr-open" disabled/, 'On entering\'s rows: nothing to open');
+  assert.doesNotMatch(ro, /data-pe-enter-add/);
+  for (const ph of ['here', 'leave']) {
+    const sec = ro.slice(ro.indexOf(`data-pe-phase="${ph}"`));
+    assert.ok(sec.indexOf(`data-sr-phase="${ph}"`) > sec.indexOf('</fieldset>'), `${ph}: the rules sit after the fieldset`);
+  }
+  assert.doesNotMatch(ro, /data-pe-req-add|data-pe-req-x|data-pe-up|data-pe-stage-x/);
   // Tasks leave is a two-way switch now, not a list.
   assert.match(body, /role="radiogroup" aria-label="Tasks leave"[^>]*><button type="button" role="radio" data-v="0" aria-checked="true"[^>]*>When requirements are met<\/button><button type="button" role="radio" data-v="1" aria-checked="false"[^>]*>By hand<\/button>/);
   assert.doesNotMatch(body, /<select data-pe-sf="by_hand"/);

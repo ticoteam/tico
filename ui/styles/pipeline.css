@@ -118,11 +118,8 @@
   .pipe-review-toast { left: 16px; right: 16px; transform: none; justify-content: space-between; }
 }
 
-/* The manager's rail beside the stages (ui/app/pipeline-rail.ts): a column at the right of the Tasks page while open. */
-.tasks-page.has-rail { --rail-w: 320px; grid-template-columns: minmax(0, 1fr) var(--rail-w); }
-
-/* A phone: one stage at a time under a row of stage chips. It has no rail: the header's face opens the manager's chat
-   as a sheet (ui/app/pipeline-ask.ts). */
+/* A phone: one stage at a time under a row of stage chips. The header's face opens the manager's chat as a sheet
+   (ui/app/pipeline-ask.ts). */
 .pchips { display: flex; gap: 8px; overflow-x: auto; padding: 6px 0; scrollbar-width: none; scroll-snap-type: x proximity; }
 .pchips::-webkit-scrollbar { display: none; }
 .pchip { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 12px; border-radius: 16px;
@@ -155,19 +152,6 @@
   /* ✎ is the same 30 px icon as ⋯ and +, with a 44 px tap area (the extra reach is not drawn). */
   .tl-pipeline-edit { color: var(--ink); }
   .tl-pipeline-edit::before { content: ""; position: absolute; inset: -7px -8px; }
-}
-
-@media (min-width: 601px) and (max-width: 760px) {
-  .tasks-page.has-rail { display: grid; }
-  .tasks-page.has-rail .tasks-pane { overflow-y: auto; }
-  /* The page scrolls as a whole here: the rail stays put between the window's top and the bottom bar, so its box is
-     always in view while the board scrolls under the header. */
-  .tasks-page.has-rail > .pm-rail { position: fixed; z-index: 2; top: 0; right: 0; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); width: var(--rail-w); }
-  /* While a box has the keyboard the bottom bar hides; the rail runs to the window's edge. */
-  body.mobile-composer-focus .tasks-page.has-rail > .pm-rail { bottom: 0; }
-}
-@media (max-width: 600px) {
-  .tasks-page.has-rail { display: block; }
 }
 
 /* The pipeline editor (ui/app/pipeline-editor.ts, docs/pipelines-v3.md S11), its only styles: labels left-aligned above
@@ -204,27 +188,51 @@
 .pe-stage[open]>summary .pe-stage-meta{display:none}
 .pe-tools{display:none;gap:2px}
 .pe-stage[open]>summary .pe-tools{display:inline-flex}
-/* One stage's editor, opened from its header on the board: no moves or Remove, which belong with the whole list. */
-.pe-one .pe-stage[open]>summary .pe-tools{display:none}
+/* One stage's editor: the stage's fields are the dialog's body, with no row around them (pipeline-editor.ts). */
+.pe-stages.pe-one{border:0;background:none}
+.pe-stage-one>.pe-stage-body{padding:0}
 /* the stage's ↑ ↓ Remove are small on a computer; a phone keeps the shared 44 px floor */
 @media (min-width:761px){.pe-tools button{min-height:26px;padding:2px 8px}}
 .pe-stage-body{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s2) var(--s3) var(--s3) calc(var(--s3) + 20px)}
 .pe-h{margin:var(--s2) 0 0;color:var(--muted);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-.pe-req{border-top:1px solid var(--line)}
-.pe-req:last-of-type{border-bottom:1px solid var(--line)}
-.pe-req>summary{display:flex;align-items:center;gap:var(--s2);padding:6px 0;cursor:pointer;list-style:none}
-.pe-req>summary::-webkit-details-marker{display:none}
-.pe-req>summary::before{content:"";flex:none;width:6px;height:6px;margin:0 4px 0 2px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);transition:transform .12s}
-.pe-req[open]>summary::before{transform:rotate(45deg)}
-.pe-req-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pe-req-who{flex:none;font-size:var(--t-sm)}
-.pe-req-body{display:flex;flex-direction:column;gap:var(--s2);padding:0 0 var(--s3) 20px}
-.pe-req-foot{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3)}
-.pe-req-x{margin-left:auto}
+/* A stage's phases (pipeline-editor.ts peStageHTML): On entering, While here, To leave, each a heading with a small
+   leading mark, its fields, then the rules that act in it (stage-rules.css). */
+.pe-phase{display:flex;flex-direction:column;gap:var(--s3);min-width:0}
+.pe-phase-h{display:flex;align-items:center;gap:6px}
+/* the mark's box is its glyph, so the heading starts at the fields' left edge */
+.pe-phase-h .nav-icon{flex:none;width:15px;height:15px;font-size:15px;line-height:1;letter-spacing:0;text-transform:none}
+/* On entering is one list (pipeline-editor.ts peEnterHTML): the Limit and the action as rule rows (stage-rules.css),
+   then the rules, one hairline between rows, then + Rule or action. A row's small editor opens under it, in line with
+   its text. */
+.pe-list{display:flex;flex-direction:column;min-width:0}
+.pe-enter-list{border-top:1px solid var(--line)}
+.pe-list>.pe-add{margin-top:var(--s2)}
+.pe-row-ed{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--s2) var(--s3);padding:2px 6px 10px 30px}
+.pe-row-ed>.pe-f{flex:0 1 auto}
+.pe-row-ed>.pe-f-short{flex:0 0 96px}
+.pe-row-x{margin-left:auto}
+.pe-phase-h:focus{outline:0}
+.pe-phase-h:focus-visible{outline:var(--focus-ring);outline-offset:2px}
+/* A requirement, always open (pipeline-editor.ts peReqHTML): what it needs as a label, its name and a quiet × on one line,
+   then only its kind's settings, then its switches on one wrapping line. Hairlines between them, dense. */
+.pe-reqs{display:flex;flex-direction:column}
+.pe-reqs:empty{display:none}
+.pe-req{display:flex;flex-direction:column;gap:6px;padding:8px 0;border-top:1px solid var(--line)}
+.pe-req:last-child{border-bottom:1px solid var(--line)}
+.pe-req-line{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.pe-req-kind{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:var(--t-sm)}
+.pe-req-line input{flex:1 1 auto;min-width:0}
+.pe-req-x{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;min-height:0;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font-size:16px;line-height:1;cursor:pointer}
+.pe-req-x:hover{background:var(--hover);color:var(--ink)}
+.pe-req-x:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pe-req-sw{display:flex;flex-wrap:wrap;align-items:center;gap:2px var(--s3)}
+.pe-req .pe-row{gap:var(--s2)}
 .pe-choices{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .pe-choice{display:inline-flex;align-items:center;gap:2px}
 .pe-choice input{width:120px}
 .pe-add{align-self:flex-start}
+/* Read only (pipeline-editor.ts, the viewer may not change the pipeline): the same fields, off, laid out as the body. */
+.pe-ro{display:flex;flex-direction:column;gap:var(--s3);min-width:0;margin:0;padding:0;border:0}
 /* An Owner that is "One of several": the bots to pick from (each with its model family), Pick and Prefer as segmented
    switches, Limit each, the owner switch and who gets the next task. A segmented switch wraps on a narrow screen. */
 .pe-pick{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s2) 0 var(--s2) var(--s3);border-left:2px solid var(--line)}
@@ -232,19 +240,28 @@
 .pe-family{font-size:var(--t-2xs)}
 .pe-pick-next{margin:0;font-size:var(--t-sm)}
 .pe-seg{align-self:flex-start;flex-wrap:wrap}
-.pe-foot{display:flex;justify-content:space-between;gap:var(--s2)}
+/* The dialog's footer (pipeline-editor.ts peFootHTML): it stays while the body scrolls; a refusal's words over + Stage
+   (left) and Save (right, last). */
+.pe-foot[hidden]{display:none}
+.pe-foot .err{margin:0 0 8px}
+.pe-foot .err[hidden]{display:none}
+.pe-foot-row{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
 /* Someone saved first (pipeline-editor.ts peClashHTML): what they changed, Load theirs and Save mine. */
 .pe-clash{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center;padding:10px;border-radius:var(--r-ctl);background:var(--wait-bg);color:var(--wait-ink)}
 .pe-clash p{flex:1 1 260px;margin:0}
 .pe-clash-do{display:flex;gap:var(--s2)}
 @media (max-width:720px){
   /* a stage's and a requirement's row open on a tap: 44 px targets */
-  .pe-stage>summary,.pe-req>summary{min-height:44px;box-sizing:border-box}
+  .pe-stage>summary{min-height:44px;box-sizing:border-box}
+  .pe-req-x{width:44px;height:44px}
   /* a switch or a tick is taken by its whole label: 44 px tall */
   .pe-dialog label:has(> input[type=checkbox]){display:inline-flex;align-items:center;min-height:44px}
   .pe-dialog{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:14px 14px 0 0}
   .pe-stage-owner:not(.pe-stage-pool)>span{display:none}
   .pe-stage-body{padding-left:var(--s3)}
   .pe-row>.pe-f-name{flex:1 1 100%}
+  /* the Owner's whole row (a bot's name is long); Expected time and Keep warm share the next */
+  .pe-row>.pe-f-owner{flex:1 1 100%}
+  .pe-row-ed{padding-left:6px}
   .pe-seg{border-radius:12px}
 }

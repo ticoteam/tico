@@ -18,7 +18,8 @@ const LEARN_SECTIONS: [LearnKind, string, string][] = [['bots', 'Bots', 'smart_t
 const LEARN_SRC_ICONS: Record<string, string> = {chat: 'forum', task: 'task_alt', slack: 'tag', mail: 'mail', meeting: 'groups', doc: 'description', commit: 'history'};
 let LEARN_LOAD = 0;
 
-const learnNight = (night: string): string => new Date(night + 'T12:00:00').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+// A night (YYYY-MM-DD) in the guide's words, month first whatever the browser's locale: "Thu, Nov 12" (format.ts).
+const learnNight = (night: string): string => dayWords(night, {weekday: true});
 
 async function pageLearnings(): Promise<void> {
   const load = ++LEARN_LOAD;

@@ -47,13 +47,16 @@ function gsrcDraw(state: GrState) {
   const reach = (s: GrSource) => {
     const kind = esc(GT_REACH.find(r => r[0] === s.reach_kind)?.[1] || s.reach_kind || ''), ref = String(s.reach_ref || '');
     if (!ref) return kind;
+    // A person is named, with their face, as every other list names people (not their id).
+    if (s.reach_kind === 'person') return gsrcWho(ref.includes(':') ? ref : 'human:' + ref);
     let site = ref;
     if (s.reach_kind === 'url') { try { site = new URL(ref).hostname.replace(/^www\./, ''); } catch { site = ref; } }
     return `${kind} <span class="gsrc-ref" title="${esc(ref)}">${esc(site)}</span>`;
   };
   const row = (s: GrSource) => {
-    const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s">${esc(s.system)}</span><span class="muted gsrc-r">${reach(s)}</span>
-      <span class="muted gsrc-m">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o">${esc(grWho(s.owner_ref))}</span>${gsrcSync(s)}`;
+    // data-k names each fact on a phone, where the row stacks and the heads are gone (growth.css).
+    const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s" data-k="Source">${esc(s.system)}</span><span class="muted gsrc-r" data-k="Reached by">${reach(s)}</span>
+      <span class="muted gsrc-m" data-k="Bots may">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o" data-k="Owner">${s.owner_ref ? gsrcWho(String(s.owner_ref)) : ''}</span>${gsrcSync(s)}`;
     return `<li data-src="${esc(s.id)}" data-health="${esc(s.health || 'not_synced')}">${may
       ? `<button type="button" class="gsrc-row" data-src-edit="${esc(s.id)}">${inner}</button>` : `<div class="gsrc-row">${inner}</div>`}</li>`;
   };
@@ -87,6 +90,13 @@ function gsrcDraw(state: GrState) {
       void gsrcRead(state);
     };
   });
+}
+// A teammate as lists show one: the face (16px) and the name; a bot by its slug or bot:<id>, a person by human:<id>.
+function gsrcWho(ref: string) {
+  const pid = ref.startsWith('human:') ? ref.slice(6) : '', bot = pid ? null : botByRef(ref.startsWith('bot:') ? ref.slice(4) : ref);
+  const person = pid ? (S.people || []).find(p => p.id === pid) : null;
+  const face = bot ? avatar(bot.id, 16) : person ? personAvatar(person, 16) : '';
+  return `<span class="gsrc-who">${face}<span>${esc(grWho(ref))}</span></span>`;
 }
 async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null) {
   // What reach_ref can name: connected MCP tools and stored credentials, else free text.

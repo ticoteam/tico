@@ -7,13 +7,22 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-/** The controls a view hides outright (styles/components.css, html.view-only). */
+/** The controls a view hides outright (styles/components.css, html.view-only; the task window's own in task-code.css). */
 const VIEW_HIDDEN = [
-  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add',
+  '#task-mi-new', '#task-mi-edit', '#task-play', '.add-ctl', '[data-need-answer]', '[data-task-follow]', '.p-follow', '.tm-page-add', 'header.ph .ph-add',
   '[data-page-add]', '[data-page-link]', '[data-answer]', '[data-dash-mode]', '[data-dash-add]',
+  // 👍 👎 on a bot's or a person's work (feedback.ts): the task window's head and their messages.
+  '[data-fb-rate]',
   // The task window: its page +, Ask someone, Follow, Answer, Done or Close, and Stop on a run.
   '[data-tp-add]', '[data-req-ask]', '[data-prop-follow]', '[data-prop-unfollow]', '[data-task-answer]',
   '[data-task-finish]', '[data-task-stop]',
+  // ...and (task-code.css) Reopen, Pages' upload line, every + and every × that takes something off, Edit on the
+  // description and the roadmap's "I want this"; a section left with only its heading goes with them.
+  '#task-modal [data-task-reopen]', '#task-modal [data-tp-drop]', '#task-modal .prop-add', '#task-modal .prop-x',
+  '#task-modal [data-drop-link]', '#task-modal [data-drop-rel]', '#task-modal [data-req-withdraw]', '#task-modal [data-tp-unlink]',
+  '#task-modal [data-depends-add]', '#task-modal [data-task-body-edit]', '#task-modal [data-requester-self]',
+  // A bot's ⋯: the private chat's Archive (and its line) is a write.
+  '#bot-dm-arch-host',
 ];
 /** The controls that only read. Anything else that takes a click or input is greyed out and inert in a view.
     ui/tests/app-view-read-only.cts keeps its own list on purpose: the test checks this one rather than reading it, so
@@ -22,13 +31,22 @@ const VIEW_READS = [
   '#side a', '#side button', '#mobile-nav button', '#org-fan a', '#org-fan button', '#account', '#account-menu button', '#task-scope', '#task-q', '#task-filter',
   '#task-menu', '#task-mi-archive', '#task-mi-layout button', '#task-archive-x', '#task-archives button', '.tl-mi',
   '.tl-chip button', '#task-more button', '.tk-row', '[data-task]',
-  '[data-need]', '[data-reload]', '[data-dash-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
+  '[data-need]', '[data-reload]', '[data-dash-retry]', '[data-fin-retry]', '[data-gr-retry]', '.dash-tabs a', '.dash-tabs button', '[role="tab"]',
   '[aria-label="Close"]', '[data-close]', '[data-modal-close]', '[data-task-earlier]', '[data-task-tab]', '[data-show-more]', '[data-more]', 'a[href]', 'input[type="search"]',
   // The shared page header's ⋯ (page-head.ts) opens a menu; its views held there and Copy link only move or read.
   'header.ph > .ph-more', '.ph-menu > .ph-mtabs > .ph-mtab', '.ph-menu .ph-copy',
-  // A bot's page: its ⋯ (the detail views and Incognito, which only move between its chats) and the rail's ⋯ (the task
-  // lists that did not fit). The private chat's Archive in that ⋯ is a write and stays off.
-  '#bot-more-btn', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
+  // A bot's page: its ⋯ (the detail views), the lock and Incognito in ⋯ (they only move between its chats), and the
+  // rail's ⋯ (the task lists that did not fit). The private chat's Archive in that ⋯ is a write: hidden (VIEW_HIDDEN).
+  '#bot-more-btn', '#bot-incognito', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
+  // The task window: opening a subtask or a related task (and unfolding the subtasks), Show more on a long message,
+  // opening a file, copying a session's resume command, and the head's ⋯, which in a view holds only reads (Copy link,
+  // Copy session ID, Watch the session; task-props.ts leaves the rest out).
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-msg-more]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  // Replay, Changelog, Usage, Roadmap and What it has learned (the pages a view opens; Usage and Learnings answer a bot
+  // with an error): Retry after a failed load, the shared filter icon, and in the shared popover a filter's choices and
+  // its search.
+  '[data-use-retry]', '[data-rp-retry]', '[data-learned-retry]', '[data-roadmap-retry]', '[data-retry-changes]',
+  '.use-filter', '#rp-filter', '[data-cl-filter]', '#task-filter-pop .tl-opt input', '#task-filter-pop .tl-menu-q',
 ];
 const VIEW_CONTROLS = 'button, input, textarea, select, [contenteditable="true"], [role="button"], [role="checkbox"], '
   + '[role="switch"], [role="menuitem"], [role="menuitemradio"]';

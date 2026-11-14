@@ -108,7 +108,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   $('#main').innerHTML = `${pageHead({title: p.name || p.id, hook: 'person-ph',
       tabs: tabs.map(t => ({label: t === 'assistant' ? myChatName() : PERSON_TAB_LABELS[t] || t, cur: t === tab, attrs: `data-pt="${t}"`})),
       tabsAttrs: `id="ptabs" aria-label="${esc(p.name || p.id)}"`,
-      tools: dm ? '<button type="button" class="ghost" id="person-dm"><span class="nav-icon" aria-hidden="true">chat_bubble</span>Message</button>' : '',
+      tools: dm ? '<button type="button" class="ghost" id="person-dm"><span class="nav-icon" aria-hidden="true">chat_bubble</span><span class="ph-w">Message</span></button>' : '',
       more: PAGE_HEAD_COPY})}
   <ul class="goal-lines head-goals person-goals" id="head-goals" aria-label="Goals" hidden></ul>
   <div id="pane-profile" ${tab === 'profile' ? '' : 'hidden'}>
@@ -359,9 +359,8 @@ function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
   const first = firstName(p.name) || p.id;
   // On their own page a task waiting on them is the rule, not the exception: its row has no amber "!" (a mark on every
   // row says nothing). A row waiting on someone else, a bot at work or one that can't run keeps its mark.
-  const theirs = (t: TaskBriefV3) => taskMark(t) === 'person' && (!t.turn?.who || t.turn.who === 'human:' + p.id)
-    ? {...t, turn: {...t.turn, state: 'theirs'}} as unknown as TaskBriefV3 : t;
-  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(theirs(t))).join('')}</div>`
+  const theirs = (t: TaskBriefV3) => taskMark(t) === 'person' && (!t.turn?.who || t.turn.who === 'human:' + p.id);
+  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(t, {noMark: theirs(t)})).join('')}</div>`
       : `<div class="empty">No active tasks. <a href="#" data-person-task-add>Give ${esc(first)} a task</a>.</div>`)
     + (finished.length ? `<details class="person-tasks-done"><summary class="muted">Finished <span class="cnt">${finished.length}</span></summary>${
         finished.map(t => taskRowHTML(t, {look: 'archive'})).join('')}</details>` : '');

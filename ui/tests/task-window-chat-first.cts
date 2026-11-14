@@ -189,6 +189,9 @@ const pages = async (page: Page) => {
       // 8. No links, runs or meetings: none of those sections show until ⋯ › Activity and links.
       for (const sel of ['.task-links', '[data-task-runs]', '[data-task-meetings]'])
         assert.equal(await win.locator(sel).isVisible(), false, `${sel} is hidden`);
+      // ...and nor does the Activity and links heading: never a heading with nothing under it.
+      assert.ok(await win.locator('[data-task-props]').isVisible(), 'Details is in view');
+      assert.equal(await win.locator('[data-task-activity] > .rail-h').isVisible(), false, 'no empty Activity and links heading');
       await win.locator('[data-task-more]').click();
       await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Activity and links'}).click();
       await win.locator('[data-task-activity]').waitFor({state: 'visible'});

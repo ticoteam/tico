@@ -76,14 +76,14 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .ru-src.government::before{background:var(--wait)}
 .ru-pill{white-space:nowrap}
 
-/* Pipelines and stages, Wakes, Automations on tasks and Built in: the stage rules' rows (stage-rules.css) as plain rows
-   here, a title and its marks; a rule that asks Jev has a quiet mark, a free one none. */
-.ru .sr-builtin{background:none}
+/* Pipelines and stages, Suggested's stage rules and Built in draw the stage panel's one-line rule row (stage-rules.css
+   .sr-r); here it sits flush with the page's other rows. Wakes and Automations on tasks are rows of links. */
+.ru .sr-r{padding:0 2px}
 .ru .sr-line>.pill{flex:none}
-.ru-cost{flex:none;width:18px;height:18px;font-size:17px;color:var(--muted)}
 .ru .sr-row-ru{gap:2px;padding-top:8px;padding-bottom:8px}
 .ru .sr-row-ru .sr-line{display:flex;align-items:center;gap:8px}
-.ru .sr-row-ru .ru-pacts{margin-left:auto}
+/* Wakes and Automations on tasks: the automation's name, a link, on one line cut with "…" */
+.ru .sr-row-ru a.sr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink)}
 
 /* Suggested */
 .ru-sg{max-width:980px;margin:16px 0 8px}
@@ -292,7 +292,7 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .rr-cx{display:inline-block;width:10px;font-size:12px;line-height:var(--lh-none)}
 .rr-inh-h[aria-expanded="true"] .rr-cx{transform:var(--chev-open,rotate(90deg))}
 .rr-inh-l{display:flex;flex-direction:column;padding:0 0 4px 20px}
-.rr-rule{display:block;padding:7px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-base);line-height:var(--lh-tight);overflow-wrap:anywhere;text-decoration:none}
+.rr-rule{display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-base);line-height:var(--lh-tight);overflow-wrap:anywhere;text-decoration:none}
 .rr-rule:hover{background:var(--surface2);text-decoration:none}
 .rr-rule.rr-sub{padding:3px 0 5px;border:0;color:var(--muted)}
 .rr-rule.rr-sub:hover{background:none;color:var(--ink)}
@@ -372,3 +372,10 @@ button.rr-line:hover{background:var(--surface2)}
   .rr-panel{padding:8px 12px 20px}
   .rr-back{display:inline-flex;margin-left:-8px;font-size:22px}
 }
+
+/* A company rule's outcome (Stop, Ask first, Warn) leads its text, in the mark every rule uses (stage-rules.ts
+   ruleOutcomeIconHTML): muted, 15 px, the word as its name and tip; the column stays when a rule has none. */
+.ru-outcome{flex:none;display:inline-grid;place-items:center;width:16px;height:16px;margin-top:1px;color:var(--muted);vertical-align:-3px}
+.ru-txt .ru-outcome{display:inline-grid;margin-right:8px}
+.ru-outcome .nav-icon{font-size:15px;line-height:1;width:15px;height:15px;overflow:hidden}
+.rr-rule-t{min-width:0}

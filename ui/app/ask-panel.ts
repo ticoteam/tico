@@ -92,12 +92,14 @@ function askSync() {
   // On a computer the list sits under the open panel: out of reach of Tab and the screen reader until it closes.
   const list = $('#side .side-scroll'), under = open && !askPhone();
   if (list && list.inert !== under) list.inert = under;
-  askSet(row, 'title', name + ' (⌘J)');
+  // ⌘J is this page's chat: the page owner's where it has one (page-chat.ts), else Ask, and the row says so only then.
+  askSet(row, 'title', name + (pageChatKeyTaken() ? '' : ' (⌘J)'));
   // While the panel is open a close mark holds the row's (and the phone tab's) dot place (ask.css).
   for (const el of [row, tab].filter(Boolean)) {
     el.setAttribute('aria-expanded', String(open));
     if (open) el.setAttribute('aria-label', 'Close Tico Assistant'); else el.removeAttribute('aria-label');
   }
+  pageChatAskSync(open);   // Calendar's and Meetings' chat is Ask: their tab and mark say whether it is open (page-chat.ts)
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
   if (panel.getAttribute('aria-label') !== name) panel.setAttribute('aria-label', name);

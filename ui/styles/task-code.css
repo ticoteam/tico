@@ -282,5 +282,9 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
    chip keeps a width limit inside the head's actions. */
 #task-modal .task-chat .th-status.task-wait{margin:0;color:inherit;font-size:var(--t-sm)}
 #task-modal .tw-acts>.tchip-snoozed{flex:0 1 auto;min-width:0;max-width:min(220px,30vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* A bot's read-only view (view-only.ts) hides what only writes: the way back for a finished task, and Pages' upload line. */
-html.view-only #task-modal :is([data-task-reopen],[data-tp-drop]){display:none!important}
+/* A bot's read-only view (view-only.ts) hides what only writes, even greyed out, since a screenshot would read it as an
+   action: the way back for a finished task, Pages' upload line, every + (Sessions, Links, Files, Followers, Related…),
+   every × that takes something off (a link, a session, a relation, an ask, a page), Edit on the description and the
+   roadmap's "I want this". A section left with only its heading goes too: Pages with no page, an empty To leave. */
+html.view-only #task-modal :is([data-task-reopen],[data-tp-drop],.prop-add,.prop-x,[data-drop-link],[data-drop-rel],[data-req-withdraw],[data-tp-unlink],[data-depends-add],[data-task-body-edit],[data-requester-self]){display:none!important}
+html.view-only #task-modal .task-side :is(.tsec-empty,.task-pages:not(:has(.tp-page))){display:none!important}

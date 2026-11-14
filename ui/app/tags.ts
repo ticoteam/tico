@@ -12,7 +12,7 @@ function tagSummary(tag: TagSummaryInput | null | undefined) {
   const values = Object.values(tag?.metadata || {}).slice(0, 2).map(value => {
     if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
       const date = new Date(value + 'T12:00:00Z');
-      if (!Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value) return date.toLocaleDateString(undefined, {month: 'short', day: 'numeric', timeZone: 'UTC'});
+      if (!Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value) return dayWords(value);   // format.ts: "Nov 6", Today
     }
     return typeof value === 'object' ? JSON.stringify(value) : String(value);
   });
@@ -128,7 +128,7 @@ async function pageTag(key: string) {
     // A sub-page of Tags: the shared header's "Tags ›" leads back (ui/app/page-head.ts). Its title is set again on a save.
     $('#main').innerHTML = `<div class="page-tags">
       ${pageHead({title: tagSummary(tag), hook: 'tag-head', back: {href: '#/tags', label: 'Tags'}})}
-      ${tag.bot_writers.length ? `<p class="muted" data-tag-bot-writers>Bots that may set this tag on any task they can read: ${esc(tag.bot_writers.map(actor => botDisplayName(actor.replace(/^bot:/, ''))).join(', '))}</p>` : ''}
+      ${tag.bot_writers.length ? tagWritersHTML(tag.bot_writers) : ''}
       <section class="card"><header><h2>${tag.is_template ? 'Template' : 'Checklist'}</h2>${data.editable ? '<button type="button" class="ghost tag-edit" data-tag-edit>Edit</button>' : ''}</header><div class="tag-notes" data-tag-notes></div><div data-tag-editor hidden></div></section>
       ${tag.is_template ? `<section class="card"><header><h2>Make a tag</h2></header>${tagCreateForm(tag)}</section>` : ''}
       <section class="card"><header><h2>Tasks</h2></header><div class="tag-list" data-tag-tasks>${tagTaskRows(data.tasks)}</div>${data.next_offset != null ? '<button type="button" class="ghost tag-more" data-tag-more>More</button>' : ''}</section></div>`;
@@ -275,6 +275,15 @@ function tagEditForm(tag: import('../types/api').Tag, save: TagSave, editable: b
     }
     finally { $('button[type=submit]', form).disabled = false; }
   };
+}
+// The bots that may set this tag on any task they can read: one muted line of their faces, each named on hover and for
+// screen readers (the whole sentence is the line's label).
+function tagWritersHTML(writers: string[]): string {
+  const faces = writers.map(actor => {
+    const slug = actor.replace(/^bot:/, ''), name = botDisplayName(slug);
+    return `<a class="tag-writer tap-mark" href="#/bot/${encodeURIComponent(slug)}" title="${esc(name)}" aria-label="${esc(name)}">${botAvatar(slug, 22)}</a>`;
+  }).join('');
+  return `<p class="muted tag-writers" data-tag-bot-writers title="Bots that may set this tag on any task they can read">Bots may set it<span class="tag-writer-faces">${faces}</span></p>`;
 }
 // The heading a tag page shows: the shared header's title.
 function tagHeading(tag: import('../types/api').Tag): void {

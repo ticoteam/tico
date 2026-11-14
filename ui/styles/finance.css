@@ -8,8 +8,10 @@
 .fin-as{display:flex;align-items:center;gap:6px;width:max-content;max-width:100%;box-sizing:border-box;margin:0 0 12px;padding:2px 4px 2px 10px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm);font-weight:600}
 .fin-as span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fin-as button{position:relative;flex:none;height:22px;min-height:0;min-width:22px;padding:0 4px;border:0;color:inherit}
-/* The header's add menu (finAddMenu): under its quiet +, its right edge on the +'s. */
+/* The header's add menu (finAddMenu): under its quiet +, its right edge on the +'s; on a phone, the width of the screen
+   under the header's line (z-index over the phone's tab bar). */
 .fin-head-pop .fin-menu{top:calc(100% + 4px)}
+@media (max-width:760px){.fin-head-pop .fin-menu{top:auto;margin-top:48px;z-index:70;max-height:min(70vh,520px)}}
 .fin-body{min-width:0}
 
 .fin-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px}
@@ -130,8 +132,11 @@
 .fin-bs tr[data-fin-line]{cursor:pointer}
 .fin-bs tr[data-fin-line]:hover td,.fin-t tbody tr[data-fin-card]:hover td,.fin-t tbody tr[data-fin-tx]:hover td,.fin-t tbody tr[data-fin-src]:hover td,.fin-t tbody tr[data-fin-mate]:hover td,.fin-t tbody tr[data-fin-key]:hover td{background:var(--surface2)}
 .fin-bs tr.fin-on td,.fin-t tr.fin-on td{background:color-mix(in srgb,var(--accent) 10%,transparent)}
-.fin-from{display:flex;flex-wrap:wrap;gap:4px}
-.fin-src{display:inline-block;padding:0 6px;border-radius:999px;background:var(--surface2);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+/* Where a line's entries come from: quiet words in a row, "Bills · Invoices · Journal"; a link is ink and underlined. */
+.fin-from{display:flex;flex-wrap:wrap;gap:0 6px}
+.fin-src{position:relative;display:inline-block;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+a.fin-src{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+.fin-from>.fin-src:not(:last-child)::after{content:'·';display:inline-block;margin-left:6px;color:var(--muted);text-decoration:none}
 .fin-t tbody tr{cursor:pointer}
 .fin-t td{white-space:nowrap}
 .fin-link{padding:0;border:0;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
@@ -205,7 +210,9 @@
    what it is. An empty cell takes no room. */
 @media (max-width:760px){
   .fin-rows,.fin-rows tbody{display:block}
-  .fin-rows thead{display:none}
+  /* the head is clipped, not hidden: a screen reader still names each cell's column (finance.ts finRowsRoles) */
+  .fin-rows thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  .fin-rows thead :is(tr,th){display:block;padding:0;border:0}
   .fin-rows tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:10px 4px;border-bottom:1px solid var(--line)}
   .fin-rows tr:last-child{border-bottom:0}
   .fin-rows tr::before{content:'';order:1;flex-basis:100%;height:0}
@@ -214,6 +221,9 @@
   .fin-rows td.fin-amt{order:0;flex:none;margin-left:auto;color:var(--ink);font-size:var(--t-md);text-align:right}
   .fin-rows td:empty{display:none}
   .fin-rows td[data-k]::before{content:attr(data-k) ' '}
+  /* a fact whose value says what it is (a day, a status) keeps its column's name for a screen reader only */
+  .fin-rows td[data-sk]{position:relative}
+  .fin-rows td[data-sk]::before{content:attr(data-sk) ' ';position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   #fin-body .fin-rows :is(.fin-link,td.fin-cut){max-width:none;overflow:visible;white-space:normal;text-align:left}
   /* a group or section row is a heading line of its own */
   .fin-rows tr:is(.fin-grp,.fin-sec)::before,.fin-rows tr:is(.fin-subt,.fin-tot)::before{display:none}
@@ -223,8 +233,14 @@
   /* the picked row and the row under the finger are marked whole, not cell by cell */
   .fin-rows tr td,.fin-rows tr:hover td,.fin-rows tr.fin-on td{background:none}
   .fin-rows tr.fin-on{background:color-mix(in srgb,var(--accent) 10%,transparent)}
-  .fin-rows .fin-link{min-height:0}
+  /* the row's title is its control: a 44px target (the shared floor), its words centred in it */
+  .fin-rows .fin-link{display:inline-flex;align-items:center;min-height:44px}
+  .fin-rows tr{align-items:center}
+  /* the P&L's line names open their page: each line row stands 44px, so the link is a full target and no two touch */
+  .fin-pl .fin-ln td:first-child a{display:inline-flex;align-items:center;min-height:44px}
 }
+/* "Try again" in a failed read's line keeps its line's height; on a phone .tap-mark gives it a 44px hit area (forms.css) */
+.fin-note .tap-mark,.gr-note .tap-mark{position:relative}
 .fin-chips{display:contents}
 .fin-kv select{width:auto;max-width:200px;min-height:0;padding:2px 6px}
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
@@ -337,3 +353,18 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
 .fin-row-more .nav-icon{font-size:18px}
 .fin-row-more:hover,.fin-row-more[aria-expanded=true]{color:var(--ink);background:var(--surface2)}
 @media (max-width:760px){.fin-row-more{width:44px;height:44px}}
+/* A ⋯ item that names its value under its words (Payables' Bills address). */
+.ph-menu .fin-mi-2{display:flex;flex-direction:column;align-items:flex-start;gap:0}
+.ph-menu .fin-mi-2 .muted{font-size:var(--t-sm);overflow-wrap:anywhere}
+.fin-closed{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-sm)}
+.fin-closed .nav-icon{font-size:14px}
+/* The P&L's bar: a computer shows the period, range, basis and Compare; a phone folds them behind the filter icon. */
+.fin-pl-wide{display:contents}
+.fin-bar .fin-pl-narrow{display:none}
+@media (max-width:760px){
+  .fin-bar .fin-pl-wide{display:none}
+  .fin-bar .fin-pl-narrow{display:inline-grid;width:var(--ctl);height:var(--ctl)}
+  .fin-pl-range{padding:4px 8px;gap:8px}
+}
+/* On a phone the From words follow their label on its line, as every other fact does */
+@media (max-width:760px){.fin-rows td .fin-from{display:inline-flex;column-gap:14px}}   /* 14px apart: two links' 44px hit areas never touch */

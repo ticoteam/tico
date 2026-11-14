@@ -31,9 +31,9 @@ FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task"])
 
 @tool(
     "tico_feedback_give",
-    "Rate a message or task a bot made, 👍 (up) or 👎 (down), with an optional reason (an ask: tico_task_thumbs). "
-    "Rating again replaces your earlier one. tell_bot (a 👎 only) leaves the bot a note for its next run in that "
-    "conversation. People only.",
+    "Rate a message or task a bot or another person made, 👍 (up) or 👎 (down), with an optional reason (an ask: "
+    "tico_task_thumbs). Rating again replaces your earlier one. tell_bot (a 👎 on a bot's work only) leaves the bot a "
+    "note for its next run in that conversation. People only, never on your own work.",
     {
         "subject_type": FEEDBACK_SUBJECT,
         "subject_id": _s("Its id"),

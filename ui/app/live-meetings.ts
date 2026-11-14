@@ -77,7 +77,7 @@ async function pageLiveMeetings(selected: string | {pinned?: string} = ''): Prom
     listVersion: 0, detailVersions: {}, chatSending: new Set<string>()};
   $('#main').innerHTML = `<section class="live-page">
     <header class="live-head"><div><h1>Live now${betaPill('live_meetings')}</h1><p class="muted">Transcript text stays in Tico. Audio is never sent.</p></div>
-      <button type="button" class="ghost" id="live-back">Meetings</button></header>
+      <button type="button" class="ghost" id="live-back">Meetings</button>${pageChatSlot()}</header>
     <form id="live-connect" class="live-connect"><label>Meeting title<input name="title" required maxlength="200" placeholder="Weekly team sync"></label>
       <label>Bot reply cap<input name="reply_cap" type="number" min="1" max="20" value="5" required></label>
       <label>Reply cooldown (seconds)<input name="cooldown_seconds" type="number" min="0" max="3600" value="60" required></label>

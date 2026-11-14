@@ -446,8 +446,9 @@ function taskSessions(t: ModalTask) {
   }).sort((a, b) => (b.d.primary ? 1 : 0) - (a.d.primary ? 1 : 0));
 }
 function taskSessionsHTML(t: ModalTask) {
-  const copy = (value: string, what: string) => `<button type="button" class="tcopy" data-copy-session="${esc(value)}" aria-label="Copy ${esc(what)}" title="Copy ${esc(what)}">${SESSION_COPY}</button>`;
-  const drop = myActor() ? (l: ModalLink) => `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove session">×</button>` : () => '';
+  // Copy and Remove stay small marks in the chip; on a phone each has a 44px tap area round it (.tap-mark, task-modal.css).
+  const copy = (value: string, what: string) => `<button type="button" class="tcopy tap-mark" data-copy-session="${esc(value)}" aria-label="Copy ${esc(what)}" title="Copy ${esc(what)}">${SESSION_COPY}</button>`;
+  const drop = myActor() ? (l: ModalLink) => `<button type="button" class="x tap-mark" data-drop-link="${esc(l.id)}" aria-label="Remove session">×</button>` : () => '';
   const rows = taskSessions(t).map(l => {
     // A bot's session (the primary, or an earlier owner's) copies its full resume command, folder included.
     if (l.d.bot) {
@@ -858,8 +859,8 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
   // The chat's own row (ui/app/thread-view.ts thvMsgHTML, styles/threads.css): the face, then the name and time, then
   // the words. No bubbles, nothing on the right; yours is marked th-mine. A bot's reply opens to its run first.
   const bot = String(m.sender_id || '').startsWith('bot:'), me = !!m.sender_id && m.sender_id === myActor();
-  // A bot's comment takes a row of Copy, 👍 and 👎 under it, as in a chat (ui/app/feedback.ts).
-  const fb = m.id && bot ? fbKey('message', m.id) : '';
+  // A bot's or another person's comment takes a row of Copy, 👍 and 👎 under it, as in a chat (ui/app/feedback.ts).
+  const fb = m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   return `<div class="th-msg tcomment tmsg${me ? ' th-mine from-me' : ''}${bot ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="th-av">${taskMsgFace(m)}</div>
     <div class="th-main"><div class="th-head">${taskMsgWho(m)}${kind}${roadmapCommentMark(m, taskId)}<time datetime="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
       m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}</div>
@@ -994,6 +995,13 @@ function taskLiveHTML(x: ModalExecution | null | undefined, stopping = '', sent 
     <div class="th-main"><div class="th-head"><span class="th-who">${esc(bot ? actorLabel(bot) : 'You')}</span><span class="th-status-word thinking-word">${esc(state)}</span></div>${
       detail ? `<div class="th-status-detail">${detail}</div>` : ''}${pendingHintHTML(run)}</div>${stop}</div>`;
 }
+// Who has a task this one waits on (its turn's `who` is that task's id): from the subtasks or the related tasks the
+// reader was sent, '' when it is neither (a task the reader may not open).
+function taskWaitHolder(data: ModalDetail, t: ModalTask | null, id: string): string {
+  const rows = [...(data.children || []) as {id?: unknown; owner_id?: unknown}[], ...Object.values(t?.relations || {}).flat()];
+  const owner = String(rows.find(k => String(k.id) === id)?.owner_id || '');
+  return owner.includes(':') ? owner : '';
+}
 // The rows at the end of the chat that say what is happening now: a run at work (taskLiveHTML), else what the bot's next
 // run waits for, else whose turn it is; a deferred hand-over; and, whatever else shows, the reader's own ask with Answer.
 function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
@@ -1013,10 +1021,15 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   let now = live;
   if (!now && data.waiting_for) now = row(owner.startsWith('bot:') ? owner : '', 'up next', data.waiting_for, 'th-status-up_next task-wait',
     /^out of credit/i.test(data.waiting_for) ? cloudCreditLinkHTML() : '');
-  // Whose turn it is, in the turn's own words ("Checks running", "Waiting on Ana's OK"), when no run says more.
+  // Whose turn it is, in the turn's own words ("Checks running", "Waiting on Ana's OK"), when no run says more. A person's
+  // or a bot's turn always leads with who it is; a raw id never shows. Someone else's ask says what is owed ("Ben to
+  // answer"), so the question does not read as theirs. A task it waits on (one it filed, one it depends on) is named by
+  // whoever has that task when the reader can see it, else the row leads with "Waiting on a task".
   if (!now && turn?.line && !yours) {
-    const who = String(turn.who || '').includes(':') ? String(turn.who) : '';
-    now = row(who, '', clipLine(turn.line, 400), 'th-status-turn task-wait', taskCauseLinkHTML(turn.href));
+    const other = turn.state === 'tasks' && turn.who ? String(turn.who) : '';
+    const who = String(turn.who || '').includes(':') ? String(turn.who) : other ? taskWaitHolder(data, t, other) : '';
+    const word = who && turn.ask ? 'to answer' : who && turn.state === 'bot' && turn.running ? 'working' : other && !who ? 'waiting on a task' : '';
+    now = row(who, word, clipLine(turn.line, 400), 'th-status-turn task-wait', taskCauseLinkHTML(turn.href));
   }
   const q = t && !taskFinished(t) ? t.deferred || t.quiet : null;
   let deferred = '';
@@ -1439,7 +1452,8 @@ function taskTabShow(d: ModalDialog, tab: TaskTab, picked = true) {
   d.taskTab = tab; taskTabPaint(d);
   if (tab === 'chat' && was !== 'chat' && TASK_CHAT?.dialog === d) {
     const thread = $('.task-comments', TASK_CHAT.host);
-    if (thread) stickScroll(thread).toBottom();
+    // A long message drawn while Chat was out of sight is measured now (chat.ts chatClampSync).
+    if (thread) { chatClampSync(thread); stickScroll(thread).toBottom(); }
   }
 }
 function taskTabsBind(d: ModalDialog) {

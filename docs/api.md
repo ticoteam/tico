@@ -82,7 +82,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |
 | Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
 | Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
-| Feedback | A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
+| Feedback | A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
 | Email | Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids. |

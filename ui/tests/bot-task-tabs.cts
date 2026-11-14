@@ -183,8 +183,8 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       const pill = (name: string) => rail.locator('[data-bot-task-tab]', {hasText: name});
       // A tab past the rail's width waits behind the bar's ⋯ (bot-tasks.ts botTaskTabsFit); picked there it joins the line.
       const pick = async (name: string) => {
-        const more = rail.locator('.bot-task-tabs > .bot-tab-more');
-        await rail.locator('[data-bot-task-tab]:visible', {hasText: name}).or(rail.locator('.bot-task-tabs > .bot-tab-more:visible')).first().waitFor();
+        const more = rail.locator('.bot-task-tabline > .bot-tab-more');
+        await rail.locator('[data-bot-task-tab]:visible', {hasText: name}).or(rail.locator('.bot-task-tabline > .bot-tab-more:visible')).first().waitFor();
         if (await pill(name).isVisible()) return pill(name).click();
         await more.click();
         await page.locator('#task-filter-pop [data-bot-tab-pick]', {hasText: name}).click();
@@ -192,15 +192,23 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       };
       const dialog = page.locator('#bot-filter-dialog');
       const shows = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget));
+      // On a phone Tasks is the top line's mark, or the first item of ⋯ when the bot's long name needs the room.
+      const phoneTasks = async () => {
+        await page.locator('#bot-more-btn').waitFor();
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));   // the line has fitted
+        const mark = page.locator('.bot-switch button[aria-label="Tasks"]');
+        if (await mark.isVisible()) await mark.click();
+        else { await page.locator('#bot-more-btn').click(); await page.locator('#bot-more-menu .bot-mi-tasks').click(); }
+      };
       const goto = async (hash: string) => {
         await page.goto('https://tico-ui.test/' + hash);
-        if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click().catch(() => {});
+        if (phone) await phoneTasks();
       };
 
       // Loading until the layout arrives: no widget is drawn and then moved.
       await goto('#/bot/lead');
       await page.waitForFunction(() => document.querySelector('#pane-tasks')?.hasAttribute('data-loading'));
-      if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click();
+      if (phone) await phoneTasks();
       await rail.locator('.bot-rail-loading').waitFor();
       assert.deepEqual(await shows(), [], at + ': nothing drawn while the layout loads');
       release();

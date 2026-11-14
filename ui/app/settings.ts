@@ -477,30 +477,72 @@ async function renderSettingsBotReports() {
     catch (e) { box.checked = !box.checked; settingsFieldError(box, errorMessage(e, 'Something went wrong.')); }
   };
 }
-// Settings > General > Page owners: the bot each page's Chat opens (backend/page_owners.py, ui/app/page-chat.ts).
-// Owners and admins; the page follows at its next load. No owner: the page has no Chat.
+// Settings > General > Page owners: the bot each page's chat is with (backend/page_owners.py, ui/app/page-chat.ts), one
+// row per page in a compact table: the page, then its owner. Owners and admins; the page follows at its next load.
+// "Default (X)" is the page's default as the company has it (the choice dropped); No owner: the page has no chat. A
+// list longer than a screen gets a search over pages and owners. Drawn again when the roster comes or changes.
+const SETTINGS_PAGE_OWNERS_SEARCH = 12;
+interface SettingsPageOwnerRow { bot?: string | null; name?: string; choice?: string; default?: string | null }
+let SETTINGS_PAGE_OWNERS_ROSTER = '';
+const settingsPageOwnerBots = () => S.emps.filter(e => e.id && !['planned', 'archived'].includes(String(e.state || e.status || '')))
+  .sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
+const settingsPageOwnersRoster = () => settingsPageOwnerBots().map(e => e.id + ':' + (e.display_name || e.slug || '')).join('|');
 async function renderSettingsPageOwners() {
-  const host = $('#set-page-owners');
+  const host = document.getElementById('set-page-owners');
   if (!host || formBusy(host)) return;
-  let pages: Record<string, {bot?: string | null; name?: string}>;
-  try { pages = ((await get('/v2/page-owners', {fresh: true})) as {pages?: Record<string, {bot?: string | null; name?: string}>}).pages || {}; }
+  let pages: Record<string, SettingsPageOwnerRow>;
+  try { pages = ((await get('/v2/page-owners', {fresh: true})) as {pages?: Record<string, SettingsPageOwnerRow>}).pages || {}; }
   catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
   if (!host.isConnected || formBusy(host)) return;
-  const bots = S.emps.filter(e => e.id && !['planned', 'archived'].includes(String(e.state || e.status || '')))
-    .sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
-  host.innerHTML = Object.entries(pages).map(([page, row]) => {
-    const now = String(row.bot || '').replace(/^bot:/, '');
-    const options = ['<option value="">No owner</option>', ...bots.map(e => `<option value="${esc(e.id)}"${e.id === now ? ' selected' : ''}>${esc(e.display_name || e.slug || e.id)}</option>`)];
-    return `<label class="settings-kv"><span>${esc(row.name || page)}</span><select data-page-owner="${esc(page)}" aria-label="${esc((row.name || page) + ' owner')}">${options.join('')}</select></label>`;
-  }).join('');
+  const bots = settingsPageOwnerBots();
+  SETTINGS_PAGE_OWNERS_ROSTER = settingsPageOwnersRoster();
+  const named = (actor: string | null | undefined) => {
+    const id = String(actor || '').replace(/^bot:/, ''), e = bots.find(b => b.id === id);
+    return e ? String(e.display_name || e.slug || e.id) : id ? actorLabel('bot:' + id) : '';
+  };
+  const rows = Object.entries(pages).map(([page, row]) => {
+    const name = row.name || page, choice = row.choice || 'default', picked = choice.replace(/^bot:/, '');
+    // A chosen bot no longer live shows as Default, which is what the page has now.
+    const value = choice === 'none' ? '' : choice !== 'default' && bots.some(e => e.id === picked) ? picked : 'default';
+    const fallback = named(row.default);
+    const option = (v: string, words: string) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(words)}</option>`;
+    const options = [option('default', fallback ? `Default (${fallback})` : 'Default'), option('', 'No owner'),
+      ...bots.map(e => option(String(e.id), String(e.display_name || e.slug || e.id)))];
+    const words = (name + ' ' + (value === '' ? 'No owner' : named(row.bot))).toLowerCase();
+    return `<tr data-words="${esc(words)}"><td class="po-page">${esc(name)}</td><td class="po-owner"><select data-page-owner="${esc(page)}" aria-label="${esc(name + ' owner')}">${options.join('')}</select></td></tr>`;
+  });
+  const search = rows.length > SETTINGS_PAGE_OWNERS_SEARCH
+    ? '<input type="search" class="po-search" data-page-owners-q aria-label="Search pages" placeholder="Search pages" autocomplete="off">' : '';
+  const was = host.querySelector<HTMLInputElement>('[data-page-owners-q]')?.value || '';
+  host.innerHTML = `${search}<table class="po-table"><thead><tr><th scope="col">Page</th><th scope="col">Owner</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
+    + '<p class="empty po-none" hidden>No matches</p>';
+  const q = host.querySelector<HTMLInputElement>('[data-page-owners-q]');
+  if (q) {
+    const filter = () => {
+      const words = q.value.trim().toLowerCase();
+      let shown = 0;
+      for (const tr of Array.from(host.querySelectorAll<HTMLElement>('tbody tr'))) { tr.hidden = !!words && !(tr.dataset.words || '').includes(words); if (!tr.hidden) shown++; }
+      const none = host.querySelector<HTMLElement>('.po-none');
+      if (none) none.hidden = shown > 0;
+    };
+    q.oninput = filter;
+    if (was) { q.value = was; filter(); }
+  }
   for (const select of Array.from(host.querySelectorAll('[data-page-owner]') as NodeListOf<HTMLSelectElement>)) {
     select.onchange = async () => {
       const page = select.dataset.pageOwner || '';
       try { await put('/v2/page-owners/' + encodeURIComponent(page), {bot: select.value || null}); toast('Saved'); }
-      catch (e) { settingsFieldError(select, errorMessage(e, 'Something went wrong.')); void renderSettingsPageOwners(); }
+      catch (e) { settingsFieldError(select, errorMessage(e, 'Something went wrong.')); }
+      void renderSettingsPageOwners();
     };
   }
 }
+/** The roster came or changed (refresh.ts sends tico:roster): the card's choices follow, unless a change is being saved. */
+document.addEventListener('tico:roster', () => {
+  const host = document.getElementById('set-page-owners');
+  if (!host?.isConnected || !host.firstChild || settingsPageOwnersRoster() === SETTINGS_PAGE_OWNERS_ROSTER) return;
+  void renderSettingsPageOwners();
+});
 // Settings > General > Privacy: usage counting and explicit consent for Gateway suggestions (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');

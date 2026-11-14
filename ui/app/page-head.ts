@@ -76,6 +76,9 @@ function pageHead(o: PageHeadOptions): string {
     + '<span class="ph-sp"></span>'
     + `<div class="ph-tools">${o.tools || ''}</div>`
     + (o.primary || o.add || o.actId ? `<div class="ph-act"${o.actId ? ` id="${esc(o.actId)}"` : ''}>${o.primary || (o.add ? pageHeadAdd(o.add.label, o.add.attrs) : '')}</div>` : '')
+    // The page's chat mark (page-chat.ts pageChatMarkHTML): a phone's way into the page owner's chat, just before ⋯.
+    // Hidden on a computer, whose way in is the chat column's tab on the right edge (page-head.css).
+    + `<span class="ph-chat">${typeof pageChatMarkHTML === 'function' ? pageChatMarkHTML() : ''}</span>`
     + (o.more || o.tools ? pageHeadMore(o.more || PAGE_HEAD_COPY, moreId, menuId) : '')
     + '</header>';
 }
@@ -106,7 +109,7 @@ function pageHeadSet(head: HTMLElement, part: PageHeadPart, html: string): void 
     return;
   }
   let act = q('.ph-act');
-  if (!act) { if (!html) return; act = document.createElement('div'); act.className = 'ph-act'; const more = q('.ph-more'); if (more) more.before(act); else head.append(act); }
+  if (!act) { if (!html) return; act = document.createElement('div'); act.className = 'ph-act'; const more = q('.ph-chat') || q('.ph-more'); if (more) more.before(act); else head.append(act); }
   act.innerHTML = html;
   pageHeadFitSoon();
 }

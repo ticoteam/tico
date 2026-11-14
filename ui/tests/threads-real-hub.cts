@@ -240,15 +240,20 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
     const selected = (tab: string) => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
       tab, {timeout: t(15000)});
     await selected('home');
-    // 9d11efec7: a phone has one chat tab; the DM is Incognito, the toggle in the top line (aria-pressed = DM).
+    // 9d11efec7: a phone has one chat tab; the DM is Incognito (aria-pressed = DM), on a phone the first item of ⋯, so
+    // the top line keeps room for the bot's name.
     assert.equal(await phone.locator('#btabs [data-bt="dm"]').count(), 0, 'no DM tab: the DM is Incognito');
-    assert.equal(await phone.locator('#bot-incognito').getAttribute('aria-pressed'), 'false', 'Incognito starts off');
-    await phone.locator('#bot-incognito').tap();
-    await phone.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true',
+    const phoneIncognito = phone.locator('#bot-more-menu [data-bot-incognito]');
+    assert.equal(await phone.locator('#bot-incognito').isVisible(), false, 'no lock in a phone\'s top line');
+    await phone.locator('#bot-more-btn').tap();
+    assert.equal(await phoneIncognito.getAttribute('aria-pressed'), 'false', 'Incognito starts off');
+    await phoneIncognito.tap();
+    await phone.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-more-menu [data-bot-incognito]')?.getAttribute('aria-pressed') === 'true',
       null, {timeout: t(15000)});
     await selected('home');
-    await phone.locator('#bot-incognito').tap();
-    await phone.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false', null, {timeout: t(15000)});
+    await phone.locator('#bot-more-btn').tap();
+    await phoneIncognito.tap();
+    await phone.waitForFunction(() => document.querySelector('#bot-more-menu [data-bot-incognito]')?.getAttribute('aria-pressed') === 'false', null, {timeout: t(15000)});
     await selected('home');
     await phone.context().close();
 

@@ -76,6 +76,9 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 .ph.person-ph>.ph-t>.av{flex:none}
 .person-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .person-goals{margin:0 0 var(--s3)}
+/* The Home card's ⋯ (thread-view's thread menu, drawn into this card's header) is the quiet ⋯ every other card has. */
+#person-home-acts .thv-menu-btn{display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border-color:transparent;background:none;box-shadow:none;color:var(--muted)}
+#person-home-acts .thv-menu-btn:hover{background:var(--surface2);color:var(--ink)}
 .ph.person-ph #person-dm{display:inline-flex;align-items:center;gap:6px}
 .ph.person-ph #person-dm .nav-icon{font-size:18px}
 #person-github{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
@@ -104,10 +107,12 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 #bot-more-menu .bot-mi[aria-pressed=true] .nav-icon{color:var(--ink)}
 #bot-more-menu .bot-mi[aria-current=page]{background:var(--surface2);font-weight:600}
 #bot-more-menu .bot-mi-phone,#bot-more-menu [hidden]{display:none}
+#bot-more-menu .bot-mi-tasks{display:none}
+.bot-top.bot-fold-tasks #bot-more-menu .bot-mi-tasks{display:flex}
 #bot-more-menu>.bot-mgroup+.bot-mgroup:not([hidden]){margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
 @media (max-width:760px){
   #bot-more-menu .bot-mi-phone:not([hidden]){display:flex}
-  #bot-more-menu .bot-mi-phone:not([hidden])~.bot-mgroup:first-of-type{margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
+  :is(#bot-more-menu .bot-mi-phone:not([hidden]),.bot-top.bot-fold-tasks #bot-more-menu .bot-mi-tasks)~.bot-mgroup:first-of-type{margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
   /* the lock is Incognito in ⋯ here, and the chat's Members too: back, the bot, Chat, Tasks and ⋯ fill the line */
   #bot-top>.bot-incognito,#bot-top-acts [data-thv-members]{display:none}
 }
@@ -134,15 +139,18 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-task-tail{padding:6px 0 2px}
 /* The Tasks section's tabs: one row that scrolls sideways when it overflows, never wraps. */
 /* No cap on a bot's tabs: past the rail's width the bar scrolls sideways, and a thin scrollbar says there is more. */
-.bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;margin:2px 0 6px;gap:2px}
+.bot-task-tabline{display:flex;align-items:center;gap:2px;margin:2px 0 6px;min-width:0}
+.bot-task-tabline:has(>.bot-task-tabs[hidden]){display:none}
+.bot-task-tabs.tabs.slim{flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;margin:0;gap:2px}
 .bot-task-tabs::-webkit-scrollbar{height:4px}
 .bot-task-tabs::-webkit-scrollbar-thumb{border-radius:2px;background:var(--line)}
 .bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;min-height:26px;padding:3px 8px;font-size:var(--t-sm)}
 /* Tabs past the rail's width wait behind ⋯ at the bar's end (bot-tasks.ts botTaskTabsFit); editing shows them all. */
 .bot-task-tabs.tabs.slim>.bot-tab-over{display:none}
-.bot-task-tabs.tabs.slim>.bot-tab-more{display:inline-grid;place-items:center;margin-left:auto;padding:0 6px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted)}
-.bot-task-tabs.tabs.slim>.bot-tab-more:hover,.bot-task-tabs.tabs.slim>.bot-tab-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
-.bot-task-tabs>.bot-tab-more .nav-icon{font-size:18px}
+.bot-task-tabline>.bot-tab-more{flex:none;display:inline-grid;place-items:center;min-height:26px;padding:0 6px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.bot-task-tabline>.bot-tab-more[hidden]{display:none}
+.bot-task-tabline>.bot-tab-more:hover,.bot-task-tabline>.bot-tab-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.bot-task-tabline>.bot-tab-more .nav-icon{font-size:18px}
 .trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
@@ -250,7 +258,9 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-switch button{padding:5px 8px}
 }
 @media (max-width:760px){
-  .bot-top{flex-wrap:nowrap}
+  .bot-top{flex-wrap:nowrap;column-gap:4px}   /* the name has the room: its 44px controls sit close */
+  /* A name that would still be cut takes the Tasks mark's room; Tasks is then the first item of ⋯ (botTopFit). */
+  .bot-top.bot-fold-tasks .bot-switch [data-bt=tasks]{display:none}
   #bot-tool-strip{display:none}               /* no room beside the name; the Tools card under More lists them */
   .bot-top>.bot-goal{display:none}            /* the Goals card leads More on a phone */
   /* words, not icons: Home and DM look alike as icons, and these four are the way around a bot on a phone */
@@ -382,16 +392,19 @@ button.bp-ico:hover{background:var(--surface2);color:var(--ink)}
 button.bp-ico:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 button.bp-ico .nav-icon{font-size:18px;color:inherit}
 section.card>header>button.bp-ico{margin-left:auto}
+/* The plain address's first Home, out of sight under its "Loading…" until the page knows which chat to show
+   (bot-page.ts botTalkPick). */
+#pane-chat>.bot-pick-wait{display:none}
+#pane-chat.bot-picking>.bot-pick-wait{display:block}
+#pane-chat.bot-picking>.bot-thread{visibility:hidden}
 /* Working notes: one section a note, each folding behind its heading's chevron; an empty one is its name and "Empty". */
 .bot-note{border-top:1px solid var(--line)}
 .bot-note:first-child{border-top:0}
-.bot-note>summary,.bot-note-empty{display:flex;align-items:center;gap:6px;min-height:36px;font-size:var(--t-base);font-weight:600;color:var(--ink)}
-.bot-note>summary{cursor:pointer;list-style:none}
-.bot-note>summary::-webkit-details-marker{display:none}
-.bot-note>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;color:var(--muted)}
-.bot-note[open]>summary::before{transform:var(--chev-open)}
-.bot-note>.md{padding:0 0 var(--s3) 10px}
-.bot-note-empty{gap:10px;padding-left:10px}
+/* Its fold triangle is the shared one (components.css). */
+.bot-note>summary,.bot-note-empty{display:flex;align-items:center;min-height:36px;font-size:var(--t-base);font-weight:600;color:var(--ink)}
+.bot-note>summary{cursor:pointer}
+.bot-note>.md{padding:0 0 var(--s3) 12px}
+.bot-note-empty{gap:10px;padding-left:12px}
 .bot-note-empty .muted{font-weight:400}
 @media (max-width:760px){.bot-note>summary,.bot-note-empty{min-height:44px}}
 /* The request form's row: its status, then Cancel, then Send changes last at the right (Button order). */
@@ -413,6 +426,7 @@ section.card>header>button.bp-ico{margin-left:auto}
    their size and reach 44px with a ::before (forms.css .tap-mark's way), clear of what sits beside them. */
 @media (max-width:760px){
   .bot-task-tabs.tabs.slim button{min-height:44px}
+  .bot-task-tabline>.bot-tab-more{min-width:44px;min-height:44px}
   .bot-rail .rail-foot{gap:16px}
   .bot-rail .rail-foot a.rail-more{display:inline-flex;align-items:center;min-height:44px}
   #bot-sidebar-edit{width:44px;height:44px;margin:0;top:0;right:-10px}
@@ -420,7 +434,7 @@ section.card>header>button.bp-ico{margin-left:auto}
   #bot-goals-list .goal-ed-text{min-height:44px}
   :is(#pane-more,#pane-history,#person-tasks-card) section.card>header a.linkish,#bot-updates-card>header a.linkish{display:inline-flex;align-items:center;min-height:44px;padding:0 8px}
   #bot-updates-card .upd-switch,.screen-toggle,.person-notify{min-height:44px}
-  #bot-recent-runs tr{min-height:44px;box-sizing:border-box}
+  #bot-recent-runs td{min-height:44px;display:flex;align-items:center}
   #bot-recent-runs td a{position:relative}
   #bot-recent-runs td a::before{content:"";position:absolute;top:calc(50% - 22px);bottom:calc(50% - 22px);left:-12px;right:-12px}
   .person-tasks-done>summary{display:flex;align-items:center;min-height:44px}

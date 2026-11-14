@@ -5600,7 +5600,7 @@ def create_app(settings=None):
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
 
-    feedback.install(app, store, auth, mutate)  # 👍/👎 on bot work (backend/feedback.py)
+    feedback.install(app, store, auth, mutate)  # 👍/👎 on bot and person work (backend/feedback.py)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import screening
 

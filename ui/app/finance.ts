@@ -33,8 +33,8 @@ interface FinActDone { bill_id?: string; invoice_id?: string; contact_id?: strin
 
 // The tabs in the header's order: the shared header (page-head.ts) keeps the first five on the row and lists the rest in
 // its ⋯ (style guide "Views of one thing are tabs: one row, five at most"), so the daily views come first.
-const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['transactions', 'Transactions'], ['balance', 'Balance sheet'], ['tax', 'Tax'],
-  ['attribution', 'Attribution'], ['payables', 'Payables'], ['receivables', 'Receivables'], ['cards', 'Cards'], ['sources', 'Sources'], ['access', 'Access']];
+const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['transactions', 'Transactions'], ['payables', 'Payables'], ['receivables', 'Receivables'],
+  ['balance', 'Balance sheet'], ['tax', 'Tax'], ['attribution', 'Attribution'], ['cards', 'Cards'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN: FinPage | null = null;           // the open page: {load, tab, arg, q, acc, caps}
 let FIN_ACCESS: FinAccData | null = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE: Promise<FinAccData | null> | null = null;     // the sidebar's one read per visit
@@ -218,7 +218,11 @@ const finSeg = (name: string, label: string, options: readonly (readonly string[
 const finSplit = (main: string, rail: string, label: string) => `<div class="fin-split"><div class="fin-main">${main}</div><aside class="fin-rail" id="fin-rail" aria-label="${esc(label)}">${rail}</aside></div>`;
 const finKv = (k: string | undefined, v: string, cls = '') => `<div class="fin-kv"><span>${esc(k)}</span><span class="${cls}">${v}</span></div>`;
 const finNote = (text: string) => `<p class="muted fin-note">${esc(text)}</p>`;
-const finFail = (e: unknown) => finNote(errorStatus(e) === 403 ? 'Not in your view.' : errorMessage(e, 'Did not load.'));
+// A read that failed says what happened and carries the fix (style guide "A great page"): Try again draws the tab again.
+// A refusal (403) is not fixed by trying again, so it has none.
+const finFail = (e: unknown) => errorStatus(e) === 403 ? finNote('Not in your view.')
+  : `<p class="muted fin-note" role="alert">${esc(errorMessage(e, 'Did not load.'))} <button type="button" class="linkish tap-mark" data-fin-retry>Try again</button></p>`;
+document.addEventListener('click', ev => { if (eventElement(ev)?.closest('#main [data-fin-retry]')) route(); });
 function finRail(html: string) { const rail = $('#fin-rail'); if (rail) rail.innerHTML = html; }
 
 // ----------------------------------------------------------------- tables
@@ -250,6 +254,25 @@ function finTrim(table: HTMLTableElement | null | undefined, key: string) {
     }
   }
 }
+// A list table becomes rows on a phone (finance.css .fin-rows): its CSS display changes, which drops a table's semantics
+// in WebKit, so each one carries them as roles (table, row, columnheader, cell) and its head stays for screen readers
+// (clipped, not hidden). Set as the tables reach the page, whichever tab or dialog draws them.
+function finRowsRoles(table: HTMLTableElement) {
+  if (table.getAttribute('role') === 'table') return;
+  table.setAttribute('role', 'table');
+  for (const part of table.querySelectorAll(':scope > thead, :scope > tbody')) part.setAttribute('role', 'rowgroup');
+  for (const tr of table.rows) {
+    tr.setAttribute('role', 'row');
+    for (const c of tr.cells) c.setAttribute('role', c.tagName === 'TH' ? (c.closest('thead') ? 'columnheader' : 'rowheader') : 'cell');
+  }
+}
+new MutationObserver(records => {
+  for (const r of records) for (const n of r.addedNodes) {
+    if (!(n instanceof Element)) continue;
+    if (n.matches('table.fin-rows')) finRowsRoles(n as HTMLTableElement);
+    n.querySelectorAll<HTMLTableElement>('table.fin-rows').forEach(finRowsRoles);
+  }
+}).observe(document.documentElement, {childList: true, subtree: true});
 // On a phone a row's record (the rail) stacks under the list: picking a row brings it into view. Only a pick: a row
 // that folds a group, or a control in a row, leaves the page where it is.
 document.addEventListener('click', ev => {

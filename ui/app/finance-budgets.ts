@@ -47,11 +47,12 @@ const FIN_BUD_HISTORY = 6;   // months of amounts in the rail
 const FIN_BUD_PER_NAME: Record<string, string> = {month: 'month', quarter: 'quarter', year: 'year', once: 'once'};
 const FIN_BUD_SHOWN_FROM: (string | undefined)[] = ['platform', 'mixed'];   // spent_from values that show platform spend
 
-// The month picker's choices: two years back to a year ahead, newest first, and the month shown wherever it is. A month
+// The month picker's choices: ten years back to five ahead (the books' whole life, as the month input it replaced had no
+// limit), newest first, and the month shown wherever it is. A month
 // reads "Nov 2026", the year always said (style guide "Dates and times": a date field always shows it).
 function finMonthOptions(month: string) {
   const now = new Date(), months = new Set<string>([month]);
-  for (let i = -24; i <= 12; i++) { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); months.add(finIso(d).slice(0, 7)); }
+  for (let i = -120; i <= 60; i++) { const d = new Date(now.getFullYear(), now.getMonth() + i, 1); months.add(finIso(d).slice(0, 7)); }
   return [...months].filter(m => /^\d{4}-\d{2}$/.test(m)).sort().reverse().map(m => {
     const [y, n] = finBudYm(m);
     return `<option value="${m}"${m === month ? ' selected' : ''}>${FIN_MON[n - 1]} ${y}</option>`;
@@ -180,15 +181,18 @@ function finBudAsOf(b: FinBudget) {
 function finBudReported(b: FinBudget) {
   const s: Partial<FinBudState> = b.state || {};
   if (s.reported == null || s.actual == null) return '';
-  return `<div class="muted fin-small" data-fin-bud-reported title="${esc(`Reported by ${finBudPlatform(b) || 'the platform'}, not in Spent`)}">Platform ${finUsd(s.reported)}</div>`;
+  return `<div class="muted fin-small" data-fin-bud-reported title="${esc(`Reported by ${finBudPlatform(b) || 'the platform'}, not in Spent`)}">Platform ${finUsd0(s.reported)}</div>`;
 }
 const finBudMay = () => finCaps()?.may('finance.budgets');
 // An amount changes from the month shown, this month or a later one, on a monthly budget (as on a line's page).
 const finBudEditable = (b: FinBudget | undefined) => !!b && !FIN?.bud?.mine && b.period === 'month' && !b.catch_all && FIN_BUD.month >= finToday().slice(0, 7) && finBudMay();
+// The table's one money format: whole dollars ("$4,246"), so a pace never sits in cents beside whole-dollar amounts. The
+// rail keeps the cents.
+const finUsd0 = (c: number | null | undefined) => c == null ? '' : finUsd(Math.round(c / 100) * 100);
 const finBudAmount = (b: FinBudget) => {
   const amount = b.state?.amount;
   if (amount == null) return '<span class="muted">No amount</span>';
-  return finUsd(amount) + (b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '');
+  return finUsd0(amount) + (b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '');
 };
 
 function finBudDraw() {
@@ -212,12 +216,12 @@ function finBudDraw() {
     const b = r.b, s: Partial<FinBudState> = b.state || {}, pct = finBudPct(b), kids = (state.kids.get(b.id) || []).length;
     const platform = finBudPlatform(b) ? esc(finBudPlatform(b)) : finBudTeamRow(b) ? '<span class="muted">team</span>' : '';
     const edit = finBudEditable(b);
-    const pace = s.pace_end == null ? '' : s.amount != null && s.pace_end > s.amount ? `<span class="pill waiting">${finUsd(s.pace_end)}</span>` : finUsd(s.pace_end);
+    const pace = s.pace_end == null ? '' : s.amount != null && s.pace_end > s.amount ? `<span class="pill waiting">${finUsd0(s.pace_end)}</span>` : finUsd0(s.pace_end);
     const asOf = finBudAsOf(b);
-    return `<tr data-fin-bud="${esc(b.id)}" style="--d:${r.depth}"${B.sel === b.id ? ' class="fin-on"' : ''}><td>${esc(b.name)}</td><td>${platform}</td>
+    return `<tr data-fin-bud="${esc(b.id)}" style="--d:${r.depth}"${B.sel === b.id ? ' class="fin-on"' : ''}><td>${esc(b.name)}</td><td data-k="Platform">${platform}</td>
       <td class="fin-n${edit ? ' fin-edit' : ''}" data-k="Budget"${edit ? ` data-fin-bud-amt="${esc(b.id)}" tabindex="0" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[m - 1])}"` : ''}>${finBudAmount(b)}</td>
-      <td class="fin-n" data-k="Spent"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '' : finUsd(s.actual)}${finBudReported(b)}</td>
-      <td>${pct == null ? '' : `<span class="fin-bar-m${finBudMeterCls(b, pct)}" role="img" aria-label="${pct}% used"><i style="width:${Math.min(100, pct)}%"></i></span>`}</td>
+      <td class="fin-n" data-k="Spent"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '' : finUsd0(s.actual)}${finBudReported(b)}</td>
+      <td data-sk="Used">${pct == null ? '' : `<span class="fin-bar-m${finBudMeterCls(b, pct)}" role="img" aria-label="${pct}% used"><i style="width:${Math.min(100, pct)}%"></i></span>`}</td>
       <td class="fin-n" data-k="Pace">${pace}</td><td class="fin-n" data-k="Warn at">${kids || s.amount == null || b.warn_pct === usual ? '' : esc(b.warn_pct + '%')}</td></tr>`;
   };
   const rows = shown.map(rowHtml).join('');

@@ -91,10 +91,11 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     assert.equal(await again.page.locator('#version-message .vm-text').textContent(), MESSAGE.body, 'the ones seen stay away; the fourth comes next');
     await v.ctx.close();
 
-    // HQ not reached: no message, and What's new says it could not check rather than "none".
+    // HQ not reached: no message, and What's new says the list is not here (rather than "none") and leads to GitHub.
     v = await visit({update: {...base, message: null, known_issues: [], known_issues_checked: false}});
     await v.page.locator('#changelog-known-issues').waitFor({state: 'visible'});
-    assert.match((await v.page.locator('#changelog-known-issues').textContent())!, /Could not check/);
+    assert.match((await v.page.locator('#changelog-known-issues').textContent())!, /known issues are not listed here/);
+    assert.match((await v.page.locator('#changelog-known-issues a').getAttribute('href'))!, /^https:\/\/github\.com\/.+\/issues$/, 'its way on');
     assert.equal(await v.page.locator('#version-message').isVisible(), false);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

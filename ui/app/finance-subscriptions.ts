@@ -47,9 +47,9 @@ function finSubTable(read: FinSubRead, may: boolean): string {
          <button type="button" class="ghost" data-fin-sub-id="${esc(r.id)}" data-fin-sub-status="active">Confirm</button></span>`
       : !label ? '' : tone ? `<span class="pill ${tone}">${label}</span>` : `<span class="muted">${label}</span>`;
     return `<tr data-fin-sub="${esc(r.id)}"><td>${esc(r.vendor.name || 'No name')}</td>
-      <td class="fin-n fin-amt">${finUsd(r.monthly)}</td><td>${r.cadence === 'annual' ? 'Annual' : 'Monthly'}</td>
+      <td class="fin-n fin-amt">${finUsd(r.monthly)}</td><td data-sk="Cadence">${r.cadence === 'annual' ? 'Annual' : 'Monthly'}</td>
       <td data-k="Next">${r.next_charge_on ? esc(finDayLabel(r.next_charge_on)) : ''}</td><td class="fin-n" data-k="Seats">${r.seats ?? ''}</td>
-      <td>${status}</td></tr>`;
+      <td data-sk="Status">${status}</td></tr>`;
   }).join('');
   return `<h2 class="fin-h2">Subscriptions <span class="muted">${finUsd(read.monthly_total)} / mo</span></h2>
     <div class="scroll"><table class="fin-t fin-sub-t fin-rows"><thead><tr><th>Vendor</th><th class="fin-n">Monthly</th><th>Cadence</th>

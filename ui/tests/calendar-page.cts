@@ -292,7 +292,9 @@ async function shot(page: Page, name: string, clip?: string) {
       const pricing = page.locator('.cal-ev.event', {hasText: 'Pricing review'});
       assert.equal(await pricing.count(), 1, `${where}: a shared event once`);
       assert.equal(await pricing.locator('.cal-dots i').count(), 1, `${where}: with a dot for Ben`);
-      // Three chips at 1280px: still one header line (AC-7), the search field beside them.
+      // Three chips with a 1280px page: still one header line (AC-7), the search field beside them. The window is the
+      // page's 1280 plus the page chat's tab gutter on the right edge (page-chat.ts, 28 px).
+      await page.setViewportSize({width: 1280 + 28, height: 900});
       await page.locator('[data-cal-range]').click();
       assert.equal(await headerLines(page), 1, `${where}: Today, arrows, range, chips, Add, search, views and ⋯ on one line`);
       assert.equal(await page.locator('[data-cal-chip="human:ben"]').isVisible(), true, `${where}: three chips fit beside the search field`);

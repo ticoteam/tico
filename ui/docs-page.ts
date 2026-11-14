@@ -1,5 +1,6 @@
-/* Internal documents and external sources share Docs search. Ask opens the Ask panel (ui/app/ask-panel.ts), which
-   sees the page. */
+/* Internal documents and external sources share Docs search. Questions about them go to the page's owner chat (the
+   Librarian by default, ui/app/page-chat.ts), which carries the doc that is open; the Assistant in the sidebar sees the
+   page as on every page. */
 'use strict';
 
 // The shapes this file reads: the generated types in ui/types/api.d.ts, and the page's own below.
@@ -220,11 +221,10 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const current = () => load === DOC_LOAD && S.route.startsWith(DOCS);
   $('#main').classList.toggle('docs-reading', !!selected);
 
-  // The one page header (ui/app/page-head.ts): search and Ask as tools, New doc the one filled button, ⋯ last with
+  // The one page header (ui/app/page-head.ts): search as a tool, New doc the one filled button, ⋯ last with
   // Import and Add source (used less than daily, so they live in ⋯ only: style guide "Top bars: one line").
   $('#main').innerHTML = pageHead({title: 'Docs', hook: 'docs-heading', moreId: 'docs-more', menuId: 'docs-menu',
-    tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder=" " value="${esc(DOC_QUERY)}" autocomplete="off"><span class="docs-search-hint docs-search-hint-long" aria-hidden="true">Search docs</span><span class="docs-search-hint docs-search-hint-short" aria-hidden="true">Search</span><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`
-      + `<button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`,
+    tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder=" " value="${esc(DOC_QUERY)}" autocomplete="off"><span class="docs-search-hint docs-search-hint-long" aria-hidden="true">Search docs</span><span class="docs-search-hint docs-search-hint-short" aria-hidden="true">Search</span><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`,
     more: '<button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>'
       + (docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: '1'})}">Set up Docs…</a>` : '')
       + `<a id="docs-archived" href="${docsHref('', archived ? {} : {archived: '1'})}">${archived ? 'Active' : 'Archived'}</a>`,
@@ -244,7 +244,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   }});
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
-  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.ts); what it sends carries this page.
+  // The page's owner's chat (page-chat.ts) carries the doc open here, once it has loaded (below).
+  pageChatUse('docs', {item: undefined});
 
   const cacheKey = archived ? 'archived' : 'active';
   const fresh = docsLoadAll(archived);
@@ -451,6 +452,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
     return;
   }
   if (!current()) return;
+  pageChatUse('docs', {item: () => current() ? {kind: 'doc', id: doc.id, name: doc.title} : null});
   const canChange = admin || !doc.locked;
   const crumb = `<p class="muted docs-crumb" title="${esc(doc.path)}">${esc(docsFolderWords(docsDir(doc.path)))}</p>`;
   const meta = `Version ${doc.version} · Updated ${esc(agoSaid(doc.updated_at))} by ${esc(doc.updated_by_name || doc.updated_by_id)}`;

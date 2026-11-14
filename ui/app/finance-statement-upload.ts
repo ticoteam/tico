@@ -56,9 +56,9 @@ function finStmtRowHtml(x: FinStmtRow): string {
   const attributed = !isNew ? ''
     : x.attribution ? `${esc(x.attribution.account)} <span class="muted">(rule)</span>` : '<span class="muted">Unattributed</span>';
   const pill = isNew ? '<span class="pill ok">New</span>' : '<span class="muted">Already in Tico</span>';
-  return `<tr><td class="fin-nowrap">${esc(finStmtDay(x.date))}</td><td class="fin-tt">${esc(x.description)}</td>
-    <td class="fin-nowrap fin-amt">${esc(finStmtUsd(x.amount))}</td><td>${x.vendor?.name ? esc(x.vendor.name) : ''}</td>
-    <td>${attributed}</td><td>${pill}</td></tr>`;
+  return `<tr><td class="fin-nowrap" data-sk="Date">${esc(finStmtDay(x.date))}</td><td class="fin-tt">${esc(x.description)}</td>
+    <td class="fin-nowrap fin-amt">${esc(finStmtUsd(x.amount))}</td><td data-k="Vendor">${x.vendor?.name ? esc(x.vendor.name) : ''}</td>
+    <td data-k="Line">${attributed}</td><td data-sk="Status">${pill}</td></tr>`;
 }
 
 // The review: a header line (account, month, file), the tie-out with its warning when the rows miss the statement, then

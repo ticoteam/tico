@@ -74,19 +74,10 @@ window.pageChangelog = async function () {
     filterBtn.setAttribute('aria-label', on ? `Filter changes, ${word}` : 'Filter changes');
   };
   const setView = (value: string) => { filter.value = value; paintFilter(); if (data) render(); void load(); };
-  const filterMenu = () => {
-    // Opening the menu closes the header's ⋯; a filter icon folded into it is hidden then, so the menu goes under ⋯.
-    const anchor = filterBtn.closest('.ph-menu') ? headEl.querySelector<HTMLElement>(':scope > .ph-more') || filterBtn : filterBtn;
-    tasksMenu(CL_MENU, anchor, `<div class="tl-menu" role="group" aria-label="Show"><div class="tl-menu-list">${CL_VIEWS.map(([v, label]) =>
+  // The filter icon and its menu (pages-shell.ts phFilterWire): a choice of one view.
+  phFilterWire(CL_MENU, filterBtn, pop, anchor => tasksMenu(CL_MENU, anchor, `<div class="tl-menu" role="group" aria-label="Show"><div class="tl-menu-list">${CL_VIEWS.map(([v, label]) =>
       `<label class="tl-opt"><input type="radio" name="cl-view" value="${v}"${filter.value === v ? ' checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div></div>`,
-    p => { p.onchange = ev => { const t = eventElement(ev); if (t instanceof HTMLInputElement) { tasksMenuClose(); setView(t.value); } }; });
-  };
-  filterBtn.onclick = filterMenu;
-  pop.addEventListener('keydown', tasksMenuKeys);
-  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
-    filterBtn.setAttribute('aria-expanded', String(ev.newState === 'open'));
-    if (ev.newState === 'closed' && (pop.contains(document.activeElement) || document.activeElement === document.body) && filterBtn.isConnected && !filterBtn.closest('.ph-menu')) filterBtn.focus();
-  });
+    p => { p.onchange = ev => { const t = eventElement(ev); if (t instanceof HTMLInputElement) { tasksMenuClose(); setView(t.value); } }; }));
   // Entries this visit has marked read stay listed and labelled New until the person leaves, so nothing
   // vanishes mid-read; a later visit starts from the server's read state.
   const visit = new Map<string, ClEntry>(), saving = new Set<string>();
@@ -114,14 +105,14 @@ window.pageChangelog = async function () {
   };
   // A release with its GitHub publish time shows that day and time in the viewer's own zone. Without one (no time
   // known, or not a release) it shows the day of shipped_at in UTC, as before, and no time.
+  // A release with its GitHub publish time shows that day and time in the viewer's own zone (format.ts: month first,
+  // 12-hour, the year only when it is not this one). Without one (no time known, or not a release) it shows the day of
+  // shipped_at in UTC and no time.
   const releaseWhen = (r: ClEntry) => {
     const published = r.published_at ? new Date(r.published_at) : null;
-    if (published && !Number.isNaN(published.getTime())) return {
-      day: published.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}),
-      time: new Intl.DateTimeFormat(undefined, {hour:'numeric', minute:'2-digit', timeZoneName:'short'}).format(published),
-    };
+    if (published && !Number.isNaN(published.getTime())) return {day: dayWords(published), time: clockWords(published)};
     const date = r.shipped_at ? new Date(r.shipped_at) : null;
-    return {day: date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric', timeZone:'UTC'}) : '', time: ''};
+    return {day: date && !Number.isNaN(date.getTime()) ? dayWords(new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())) : '', time: ''};
   };
   const render = () => {
     if (!page.isConnected) return;

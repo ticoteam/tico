@@ -475,7 +475,7 @@ async function shot(page: Page, name: string) {
         {id: 'n1', kind: 'task', title: 'Fix the invoice export', line: done, act: 'done', task_id: 'n1'},
         {id: 'n2', kind: 'task', title: 'Ship the pricing page', line: done, act: 'done', task_id: 'n2'},
         {id: 'n3', kind: 'ask', title: 'Send an email', line: 'Send this email?', act: 'ok', task_id: 'n3'},
-        {id: 'n4', kind: 'ask', title: 'Pick a launch date', line: 'Which date works?', act: 'answer', task_id: 'n4'},
+        {id: 'n4', kind: 'ask', title: 'Pick a launch date for the holiday storefront once the supplier confirms the December shipment', line: 'Which date works?', act: 'answer', task_id: 'n4'},
         {id: 'n5', kind: 'mention', title: 'Ship the pricing page', line: '@ana can you look?', act: 'reply', task_id: 'n2'},
       ];
       DATA.needs_attention = () => ({count: 13, items: rows});
@@ -506,6 +506,12 @@ async function shot(page: Page, name: string) {
         const onScreen = await marks.evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right <= window.innerWidth; }));
         assert.ok(onScreen.every(Boolean), 'every mark stays on screen, ' + where);
         assert.equal(await sideways(page), false, 'nothing scrolls sideways, ' + where);
+        if (viewport === PHONE) {
+          // A phone's rows are as dense as the guide's: each one line, a 44px target, and a long title ends in "…".
+          assert.deepEqual(await pin.locator('.dash-needs li > a').evaluateAll(els => els.map(a => Math.round(a.getBoundingClientRect().height))), [44, 44, 44, 44, 44], 'every row is one 44px line');
+          assert.deepEqual(await pin.locator('.dash-needs-t').nth(3).evaluate(el => ({over: el.scrollWidth > el.clientWidth, how: getComputedStyle(el).textOverflow, wrap: getComputedStyle(el).whiteSpace})),
+            {over: true, how: 'ellipsis', wrap: 'nowrap'}, 'a long title ends in … on one line');
+        }
         await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-needs-attention');
         assert.deepEqual(errors, []);
         await page.close();

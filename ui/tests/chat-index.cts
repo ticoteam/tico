@@ -186,7 +186,7 @@ async function pageChat(browser: Browser) {
         return out === undefined ? route.fallback() : json(out);
       });
     }});
-  await page.locator('.au-ph [data-pgc-open]').click();
+  // (1440: the page chat is docked open at first, page-chat.ts)
   await page.locator('aside.pgc .th-msg[data-mid="a3"]').waitFor();
   const nav = page.locator('aside.pgc nav.pidx:not([hidden])');
   await nav.waitFor();

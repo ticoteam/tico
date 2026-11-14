@@ -17,6 +17,8 @@ interface BotPageView {
   thread?: { kind: string; view: ThvView } | null;
   /** The newest unread update in the rail (GET /v2/updates, one row). */
   latest?: UpdUpdate | null;
+  /** Watches the rail's task tab bar for its width (botTaskTabsFit); disconnected when the page stops. */
+  railWatch?: ResizeObserver;
   /** Teardown the bot's Settings tab registered (settings-bot-editor.js). */
   settingsCleanup?: () => void;
   /** GET /v2/bots/{bot}/pause-state. */

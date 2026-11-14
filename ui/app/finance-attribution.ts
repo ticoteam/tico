@@ -234,6 +234,8 @@ function finAttrPage(): void {
       // The delete is confirmed in the menu itself (no browser dialog).
       const rule = state.rules[Number(del.dataset.finRuleDel)], pop = del.closest('.fin-pop') as HTMLElement;
       if (rule && pop) {
+        // A question with two buttons, no longer a menu of items: its role says so while it shows.
+        pop.setAttribute('role', 'group'); pop.setAttribute('aria-label', `Delete ${rule.name}?`);
         pop.innerHTML = `<span class="muted fin-small">Delete ${esc(rule.name)}? Its lines go back to their tags.</span>
           <div class="fin-confirm"><button type="button" class="ghost" data-fin-rule-keep>Keep</button><button type="button" class="ghost danger" data-fin-rule-yes="${Number(del.dataset.finRuleDel)}">Delete</button></div>`;
         pop.querySelector<HTMLElement>('[data-fin-rule-keep]')?.focus();
@@ -280,7 +282,7 @@ function finClassesHtml(dims: FinDim[]): string {
     const first = d.splits?.[0];
     const ref = first ? finShareRef(first) : '';
     return `<tr data-fin-class-row="${i}"><td>${esc(d.name)} <span class="muted">${esc(FIN_DIM_KINDS[d.kind] || '')}</span></td><td class="fin-n fin-amt">${finUsd(d.amount)}</td>
-      <td><select data-fin-class-team="${i}" data-fin-class-orig="${esc(ref)}" aria-label="Team for ${esc(d.name)}">${finShareOpts(ref)}</select></td></tr>`;
+      <td data-sk="Team"><select data-fin-class-team="${i}" data-fin-class-orig="${esc(ref)}" aria-label="Team for ${esc(d.name)}">${finShareOpts(ref)}</select></td></tr>`;
   }).join('');
   return `<section class="fin-classes" aria-label="Classes"><h3 class="fin-h">Classes</h3>
     <div class="fin-scroll"><table class="fin-t fin-rows"><thead><tr><th>Name</th><th class="fin-n">Amount (12 mo)</th><th>Team</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -322,8 +324,8 @@ function finAttrDraw(): void {
     const word = FIN_SHARE_KINDS.find(k => k[0] === r.match.kind)?.[1] || '';
     const menu = state.can ? `<span class="fin-pop-at"><button type="button" class="ghost fin-row-more" data-fin-rule-menu aria-label="${esc(r.name)}: actions" title="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
         <div class="fin-pop fin-menu" role="menu" hidden><button type="button" role="menuitem" data-fin-rule-edit="${i}">Edit</button><hr><button type="button" role="menuitem" class="danger" data-fin-rule-del="${i}">Delete</button></div></span>` : '';
-    return `<tr data-fin-rule-row="${i}"><td>${esc(r.name)}</td><td><span class="muted">${esc(word)}</span> ${esc(r.match.label || '')}</td><td>${finShareChips(r.splits)}</td>
-      <td><input type="checkbox" role="switch" class="people-switch" aria-label="${esc(r.name)} on"${r.enabled ? ' checked' : ''}${state.can ? '' : ' disabled'} data-fin-rule-on="${i}"></td><td>${menu}</td></tr>`;
+    return `<tr data-fin-rule-row="${i}"><td>${esc(r.name)}</td><td data-k="Applies to"><span class="muted">${esc(word)}</span> ${esc(r.match.label || '')}</td><td data-k="Split">${finShareChips(r.splits)}</td>
+      <td data-sk="On"><input type="checkbox" role="switch" class="people-switch" aria-label="${esc(r.name)} on"${r.enabled ? ' checked' : ''}${state.can ? '' : ' disabled'} data-fin-rule-on="${i}"></td><td data-sk="Actions">${menu}</td></tr>`;
   }).join('')}</tbody></table>`;
 }
 // The rule's splits and match as its set action takes them.

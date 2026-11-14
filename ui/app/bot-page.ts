@@ -38,7 +38,8 @@ const BOT_TAB_ICON: Record<string, string> = {home: '<span class="nav-icon" aria
 function botMoreItemsHTML(slug: string, lockable: boolean): string {
   const base = `#/bot/${encodeURIComponent(slug)}`;
   const views = BOT_DETAIL_TABS.filter(t => botTabs(slug).includes(t));
-  return (lockable ? '<button type="button" class="bot-mi bot-mi-phone" data-bot-incognito aria-pressed="false"><span class="nav-icon" aria-hidden="true">lock</span>Incognito</button>' : '')
+  const tasks = botTabs(slug).includes('tasks') ? `<a class="bot-mi bot-mi-tasks" href="${base}/tasks" data-bot-mtab="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>` : '';
+  return tasks + (lockable ? '<button type="button" class="bot-mi bot-mi-phone" data-bot-incognito aria-pressed="false"><span class="nav-icon" aria-hidden="true">lock</span>Incognito</button>' : '')
     + '<button type="button" class="bot-mi bot-mi-phone" data-bot-members hidden><span class="nav-icon" aria-hidden="true">groups</span>Members</button>'
     + `<div class="bot-mgroup" role="group" aria-label="Details">${views.map(t => `<a class="bot-mi" href="${base}/${t}" data-bot-mtab="${t}">${BOT_DETAIL_LABELS[t]}</a>`).join('')}</div>`
     + '<div class="bot-mgroup" id="bot-dm-arch-host" role="group" aria-label="Private chat" hidden></div>';
@@ -57,6 +58,7 @@ const botTabs = (slug: string): string[] => {
 const botNow = (): BotPageView => BOT!;
 function botStopped() {
   BOT?.settingsCleanup?.();
+  BOT?.railWatch?.disconnect();
   if (BOT?.thread) threadUnmount(BOT.thread.view);
   BOT = null;
 }
@@ -252,6 +254,7 @@ async function pageBot(slug: string, tab: string | undefined) {
   // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
   // only when it is an alert. Configuration opens on Info.
   BOT?.settingsCleanup?.();
+  BOT?.railWatch?.disconnect();
   pageTitle(botDisplayName(slug));
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
@@ -277,6 +280,7 @@ async function pageBot(slug: string, tab: string | undefined) {
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
+    <div class="th-empty muted bot-pick-wait" role="status">Loading…</div>
     <div class="bot-thread" id="bot-thread"><div class="th-empty muted">Loading…</div></div>
   </div>
 
@@ -287,7 +291,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     <div class="bot-rail-loading rail-empty"${!botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
     ${botWidgetsHTML(slug, {
       tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2></header>
-      <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${botTaskTabsBarHTML(slug)}</div>
+      <div class="bot-task-tabline"><div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${botTaskTabsBarHTML(slug)}</div><button type="button" class="bot-tab-more" aria-label="More lists" title="More lists" aria-expanded="false" hidden><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>
       <div class="bot-task-panes">
       <div class="bot-needs" id="bot-needs" role="tabpanel" aria-labelledby="bot-tab-t-needs" hidden><div id="t-needs" class="tpane"><div class="rail-empty">Loading…</div></div></div>
       <div class="bot-active" id="bot-active" role="tabpanel" aria-labelledby="bot-tab-t-active" hidden><div id="t-open" class="tpane"><div class="rail-empty">Loading…</div></div></div>
@@ -397,8 +401,9 @@ async function pageBot(slug: string, tab: string | undefined) {
   };
   // The lock in the top line (on a phone, Incognito in ⋯) flips the chat between Home and the private DM; it says
   // Incognito only while on. Each names its chat in the address: the bare address is the page's own pick (botTalkPick).
+  // It takes the address's place rather than adding one: Back then leaves the bot instead of landing on the same chat.
   const incognitoFlip = () => {
-    location.hash = `${base}/${$('#bot-incognito')?.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm'}`;
+    location.replace(`${base}/${$('#bot-incognito')?.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm'}`);
   };
   const incognito = $('#bot-incognito');
   if (incognito) incognito.onclick = incognitoFlip;
@@ -406,7 +411,13 @@ async function pageBot(slug: string, tab: string | undefined) {
   moreMenu.addEventListener('click', (ev: MouseEvent) => {
     if (eventElement(ev)?.closest('[data-bot-incognito]')) incognitoFlip();
     // Members in ⋯ is the chat's own Members button, out of the phone's line: the thread's handler opens it.
-    if (eventElement(ev)?.closest('[data-bot-members]')) ($('#bot-top-acts [data-thv-members]') as HTMLElement | null)?.click();
+    // The list closes and ⋯ takes the focus first, so the dialog gives the focus back to ⋯ when it closes.
+    if (eventElement(ev)?.closest('[data-bot-members]')) {
+      ev.stopPropagation();
+      if (moreMenu.matches(':popover-open')) moreMenu.hidePopover();
+      $('#bot-more-btn')?.focus();
+      ($('#bot-top-acts [data-thv-members]') as HTMLElement | null)?.click();
+    }
   });
   // As ⋯ opens it offers Members only while the chat has it.
   moreMenu.addEventListener('beforetoggle', (ev: Event) => {
@@ -462,6 +473,7 @@ async function pageBot(slug: string, tab: string | undefined) {
       const tab = botNow().tab;
       await quarantineResume(slug);
       await refresh(true);
+      BOT?.railWatch?.disconnect();
       BOT = null;
       await pageBot(slug, tab || 'more');
     } catch (error) {
@@ -510,7 +522,13 @@ async function pageBot(slug: string, tab: string | undefined) {
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
   botTaskTabsMoreWire($('#task-filter-pop'));
   // The rail's width changes with the window and the rail's own drag: the tabs fit again (and when it first shows).
-  new ResizeObserver(() => { if (BOT?.slug === slug) botTaskTabsFit(slug); }).observe($('#pane-tasks .bot-task-tabs'));
+  BOT.railWatch = new ResizeObserver(entries => {
+    if (BOT?.slug !== slug) return;
+    if (entries.some(e => e.target.matches('.bot-task-tabs'))) botTaskTabsFit(slug);
+    if (entries.some(e => e.target.id === 'bot-top')) botTopFit();
+  });
+  BOT.railWatch.observe($('#pane-tasks .bot-task-tabs'));
+  BOT.railWatch.observe($('#bot-top'));
 
   moreClampWatch();
   showBotTab(tab);
@@ -522,11 +540,26 @@ async function pageBot(slug: string, tab: string | undefined) {
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
 // The private chat's Archive is the last item of ⋯ (#282, Chris 13 Nov: never in the top line), after a line, with the
 // archive mark: there when the bot has a private chat the viewer may archive; Unarchive when it is archived.
-async function botDmArchiveLoad(slug: string): Promise<void> {
+// The viewer's DM with the bot (null when there is none). A page opening asks it once for both of its readers (which
+// chat to open on, and ⋯'s Archive); an Archive or Unarchive asks again (`again`).
+const BOT_DM_READ: {slug: string; at: number; read: Promise<ThvThread | null> | null} = {slug: '', at: 0, read: null};
+function botDmRead(slug: string, again = false): Promise<ThvThread | null> {
+  if (!again && BOT_DM_READ.read && BOT_DM_READ.slug === slug && Date.now() - BOT_DM_READ.at < 5000) return BOT_DM_READ.read;
+  const read = get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?create=false&with=' + encodeURIComponent('bot:' + slug), {fresh: true})
+    .then(r => (r?.thread !== undefined ? r.thread : r) || null);
+  Object.assign(BOT_DM_READ, {slug, at: Date.now(), read});
+  read.catch(() => { if (BOT_DM_READ.read === read) BOT_DM_READ.read = null; });
+  return read;
+}
+// Each Archive or Unarchive starts a read; only the newest one draws, so a slow older answer never brings back the old label.
+let BOT_DM_ARCH_SEQ = 0;
+async function botDmArchiveLoad(slug: string, again = false): Promise<void> {
   if (!$('#bot-incognito')) return;
+  const seq = ++BOT_DM_ARCH_SEQ;
   let t: ThvThread | null = null;
-  try { const r = await get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?create=false&with=' + encodeURIComponent('bot:' + slug), {fresh: true}); t = r?.thread !== undefined ? r.thread : r; }
+  try { t = await botDmRead(slug, again); }
   catch { return; }
+  if (seq !== BOT_DM_ARCH_SEQ) return;
   const host: HTMLElement | null = $('#bot-dm-arch-host'); if (!host || BOT?.slug !== slug) return;
   const shown = !!t?.id && thvArchivable(t);
   host.hidden = !shown;
@@ -541,9 +574,9 @@ async function botDmArchiveLoad(slug: string): Promise<void> {
   button.querySelector('.nav-icon')!.textContent = archived ? 'unarchive' : 'archive';
   button.querySelector('.bot-mi-w')!.textContent = archived ? 'Unarchive private chat' : 'Archive private chat';
   button.onclick = async () => {
-    try { if (archived) threadsUnarchived(await patch(thvPath(id), {archived: false})); else await threadsArchive(id, () => void botDmArchiveLoad(slug)); }
+    try { if (archived) threadsUnarchived(await patch(thvPath(id), {archived: false})); else await threadsArchive(id, () => void botDmArchiveLoad(slug, true)); }
     catch (e) { toast(errorMessage(e, ''), true); }
-    void botDmArchiveLoad(slug);
+    void botDmArchiveLoad(slug, true);
   };
 }
 function placeBotHead() {
@@ -640,10 +673,7 @@ function showBotTab(tab: string | null | undefined) {
       : BOT.thread && talk.includes(BOT.thread.kind) ? BOT.thread.kind : BOT_TALK_LAST.get(BOT.slug);
     if (talk.length < 2) botThreadShow(talk[0]);
     else if (asked && talk.includes(asked)) botThreadShow(asked);
-    else {
-      const bot = BOT;
-      void botTalkPick(bot.slug).then(kind => { if (BOT === bot && !$('#pane-chat')?.hidden && !bot.thread) { botThreadShow(kind); botIncognitoPaint(); } });
-    }
+    else { botThreadShow('home', true); void botTalkPick(BOT); }
   }
   else botThreadStop();
   botIncognitoPaint();
@@ -668,14 +698,18 @@ function showBotTab(tab: string | null | undefined) {
   }
   $('#main').scrollTop = 0;
   if (wantTools) $('#bot-tools-card')?.scrollIntoView({block: 'start'});
+  botTopFit();   // at once, so the Tasks mark never shows for a frame and then goes
 
 }
-BOT_WIDE.addEventListener('change', () => { if (BOT && $('#btabs')) showBotTab(BOT.tab); });
+// Across 1100px the panes change, never the chat: the address's own tab (none for the plain address, whose chat on show stays).
+BOT_WIDE.addEventListener('change', () => { if (BOT && $('#btabs')) showBotTab(BOT.asked || null); });
 // The thread on the bot page: its Home, or the viewer's DM with it (made on the first message). It stops following
 // when another tab, page or bot takes its place.
-function botThreadShow(kind: string | undefined) {
+// `picking`: the plain address's first Home, out of sight under its "Loading…" line until botTalkPick keeps it or swaps in the DM.
+function botThreadShow(kind: string | undefined, picking = false) {
   if (!BOT || !kind) return;
   const host = $('#bot-thread');
+  $('#pane-chat')?.classList.toggle('bot-picking', picking);
   if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
   botThreadStop();
   const actor = 'bot:' + BOT.slug;
@@ -694,23 +728,39 @@ function botIncognitoPaint() {
   const item = $('#bot-more-menu [data-bot-incognito]');
   if (item) { item.setAttribute('aria-pressed', on); item.hidden = $('#pane-chat')?.hidden !== false; }
 }
+// On a phone the bot's name matters more than a second mark: when the line would cut the name, the Tasks mark leaves it
+// for ⋯ (bot-page.css .bot-fold-tasks), and it comes back once the name fits beside it again.
+function botTopFit() {
+  const top = $('#bot-top') as HTMLElement | null, name = top?.querySelector<HTMLElement>('.bot-ident h1');
+  if (!top || !name) return;
+  if (!BOT_PHONE.matches) { top.classList.remove('bot-fold-tasks'); return; }
+  top.classList.remove('bot-fold-tasks');
+  if (name.scrollWidth > name.clientWidth + 1 && top.querySelector('#btabs [data-bt="tasks"]')) top.classList.add('bot-fold-tasks');
+}
 // Which chat the bare address opens (#/bot/<slug>, the sidebar's link), when the bot has both a Home and a DM with the
 // viewer: the one the viewer last had open on this visit, else the one whose newest message is newer. Home's update
 // cards are not counted (the rail shows them; the thread hides them), so a Home that holds only those is empty, and a
 // bot that talks to the viewer in the DM opens on the DM instead of an empty "No messages yet". With no talk in
-// either, or when a read fails, it is Home. Nothing is stored: the address still names either one (/home, /dm).
+// either, an archived DM, or a read that fails, it is Home. Nothing is stored: the address still names either one.
+// Home is mounted at once, out of sight (botThreadShow `picking`), and judged by what its own read brought, so no
+// thread is read twice; the DM's summary is the read ⋯'s Archive shares (botDmRead).
 const BOT_TALK_LAST = new Map<string, string>();
-async function botTalkPick(slug: string): Promise<string> {
-  const actor = encodeURIComponent('bot:' + slug);
-  const newest = (rows: ThvMessage[]) => rows.filter(m => !m.deleted && !m.hidden && !thvIsUpdateCard(m))
-    .reduce((at, m) => String(m.created_at || '') > at ? String(m.created_at || '') : at, '');
-  const [home, dm] = await Promise.all([
-    get<ThvThread>('/v2/threads/home/' + actor, {fresh: true})
-      .then(t => t?.id ? get<ThvTimeline>(thvTimeline(t.id), {fresh: true}).then(r => newest(r?.messages || [])) : '').catch(() => ''),
-    get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?create=false&with=' + actor, {fresh: true})
-      .then(r => { const t = r?.thread !== undefined ? r.thread : r; return t?.id && !t.archived_at ? String(t.last_message_at || '') : ''; }).catch(() => ''),
-  ]);
-  return dm && dm > home ? 'dm' : 'home';
+const BOT_PICK_WAIT = 20_000;
+async function botTalkPick(bot: BotPageView): Promise<void> {
+  const home = bot.thread?.view;
+  const dmRead = botDmRead(bot.slug).catch(() => null);
+  const started = Date.now();
+  while (home && BOT === bot && bot.thread?.view === home && home.state === 'loading' && Date.now() - started < BOT_PICK_WAIT)
+    await new Promise(done => setTimeout(done, 60));
+  const dm = await dmRead;
+  // Chosen another way meanwhile (the lock, another tab, another bot): that choice stands.
+  if (home && BOT === bot && bot.thread?.view === home) {
+    const at = (iso: unknown) => Date.parse(String(iso || '')) || 0;
+    const homeAt = Math.max(0, ...home.messages.filter(m => !m.deleted && !m.hidden && !thvIsUpdateCard(m)).map(m => at(m.created_at)));
+    const dmAt = dm?.id && !dm.archived_at ? at(dm.last_message_at) : 0;
+    if (dmAt > homeAt) botThreadShow('dm');
+  }
+  if (BOT === bot) { $('#pane-chat')?.classList.remove('bot-picking'); botIncognitoPaint(); }
 }
 function botThreadStop() {
   if (!BOT?.thread) return;

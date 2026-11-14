@@ -24,12 +24,12 @@ function sqlEl<T extends Element>(root: ParentNode, selector: string): T { retur
 function pageSql() {
   if (S.me && !S.me.can_see_sql) { location.hash = TASKS; return; }
   let last = ''; try { last = localStorage.getItem('hub.sql.last') || ''; } catch {}
-  // The one page header (ui/app/page-head.ts). Run stays by the query it runs; its shortcut is in its hover and named
-  // for screen readers, not printed beside it.
+  // The one page header (ui/app/page-head.ts). Run stays by the query it runs, at the right (the forward action, last),
+  // with what the last run answered to its left; its shortcut is in its hover and named for screen readers.
   sqlEl<HTMLElement>(document, '#main').innerHTML = `${pageHead({title: 'Query the database', hook: 'sql-head'})}
     <section class="card">
       <textarea id="sql-text" class="sql-editor" rows="6" spellcheck="false" aria-label="SQL query" placeholder="SELECT bot, state, focus FROM bot_status">${esc(last)}</textarea>
-      <div class="row sql-bar"><button class="primary" type="button" id="sql-run" title="Run (⌘↩ or Ctrl+Enter)" aria-keyshortcuts="Meta+Enter Control+Enter">Run</button><span class="mono muted" id="sql-meta" role="status"></span></div>
+      <div class="row sql-bar"><span class="mono muted" id="sql-meta" role="status"></span><button class="primary" type="button" id="sql-run" title="Run (⌘↩ or Ctrl+Enter)" aria-keyshortcuts="Meta+Enter Control+Enter">Run</button></div>
       <div class="err" id="sql-error" hidden></div>
       <div class="sql-results" id="sql-results"></div>
       <details class="sql-examples"><summary>Examples</summary><p>Read-only, one statement. <a href="${GH}/blob/main/docs/hub-sql.md" target="_blank" rel="noopener">Tables and examples</a></p><ul>${SQL_EXAMPLES.map(([title, sql], i) =>

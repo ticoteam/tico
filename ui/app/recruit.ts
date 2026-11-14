@@ -40,7 +40,6 @@ const RECRUIT_DEPT: Record<string, string> = {marketing: '#a63d65', sales: '#176
   legal: '#4b5563', engineering: '#3f566b', operations: '#0f6e56', hr: '#7a3e9d', leadership: '#3f566b'};
 const RECRUIT_MATCH: Record<string, string> = {strong: 'Strong', good: 'Good'};
 const RECRUIT_HOLD = 1600;                         // how long a dot that landed stays in 'done' before it rests
-const RECRUIT_ARM = 4000;                          // how long Close job? waits for the second click
 const RECRUIT_NEED: Record<string, string> = {connected: 'Connected', on_hire: 'Installs on hire', not_set: 'Not set'};
 
 function settingsRecruitHandoff() {
@@ -362,14 +361,15 @@ function recruitApplicants(main: HTMLElement, found: RecruitFound, arrive: boole
   const tabs: [string, string, number | null][] = [['all', 'All', all.length], ['templates', 'Templates', list.length], ...(cloud ? [['cloud', 'Cloud agents', null] satisfies [string, string, null]] : [])];
   // The one page header (ui/app/page-head.ts): the seat's team as its back link, the seat's title (the dot works there
   // while applicants arrive), the applicant tabs with their counts, then Job post and Close job (the archive icon) for
-  // whoever may change the seat. Where it sits in the org is the team's page and the applicant's Reports to.
+  // whoever may change the seat. Who it reports to is one fact line under the header.
   const back = seat.team ? {href: TEAM_PAGE + encodeURIComponent(seat.team), label: recruitGroupName(seat.team)} : undefined;
   const tools = seat.can_edit ? '<button class="ghost" type="button" data-recruit-post>Job post</button>'
     + '<button class="ghost tl-ib rc-close" type="button" data-recruit-close aria-label="Close job" title="Close job"><span class="nav-icon" aria-hidden="true">archive</span></button>' : '';
   const head = pageHead({title: seat.title, hook: 'rc-head', back, after: `<span class="rc-hdot">${arrive ? ldotHTML({state: 'thinking', size: 20}) : ''}</span>`,
     tabsHook: 'rc-tabs', tabsAttrs: 'aria-label="Applicants"', tools});
+  const reports = seat.reports_to ? recruitPlaceName(seat.reports_to) : '';
   main.innerHTML = `<div class="recruit-page rc-applicants">
-    ${head}
+    ${head}${reports ? `<dl class="rc-facts"><dt>Reports to</dt><dd>${esc(reports)}</dd></dl>` : ''}
     <div id="rc-panel" role="tabpanel" aria-labelledby="rc-tab-all">
       <ul class="rc-list" aria-live="polite"${all.length ? '' : ' hidden'}>${arrive ? '' : all.map(c => recruitItemRow(c, seat)).join('')}</ul>
       <p class="rc-empty muted"${all.length ? ' hidden' : ''}>No applicants yet. Widen the job description.</p>
@@ -613,21 +613,10 @@ function recruitJobPost(found: RecruitFound) {
 }
 // Close job asks twice on the same button: the first click arms it ("Close job?"), a second within a few seconds closes;
 // waiting or moving away puts it back.
+// Closing a job asks once (confirm.ts askConfirm, the same in the browser and the desktop app), so it can be answered
+// even when a phone's header has folded the button into ⋯ and closed ⋯ on the press.
 async function recruitClose(seat: RecruitSeatRow, button: HTMLButtonElement) {
-  if (!button.dataset.armed) {
-    // Asked on the same button: the archive icon gives way to the question until it is answered or the focus leaves.
-    const face = button.innerHTML;
-    button.dataset.armed = '1'; button.textContent = 'Close job?'; button.classList.add('danger', 'armed');
-    const disarm = () => {
-      clearTimeout(timer); button.removeEventListener('blur', disarm);
-      if (!button.dataset.armed) return;
-      delete button.dataset.armed; button.innerHTML = face; button.classList.remove('danger', 'armed');
-    };
-    const timer = setTimeout(disarm, RECRUIT_ARM);
-    button.addEventListener('blur', disarm);
-    return;
-  }
-  delete button.dataset.armed;
+  if (!(await askConfirm(`Close the job "${seat.title}"? Its applicants go and the seat leaves the team chart.`, button))) { phFocusHome(button); return; }
   button.disabled = true;
   try {
     await post(`/v2/seats/${encodeURIComponent(seat.id)}/close`, {});

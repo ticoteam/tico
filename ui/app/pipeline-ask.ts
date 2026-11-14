@@ -9,8 +9,8 @@
    them (`more` counts the rest); the chat shows it as one card under the message (thread-view.ts thvBoardHTML). ✕,
    Escape or a swipe down closes the sheet, and the board is where it was.
    The page (tasks-page.ts) gives the menu's host through the pipeline view's `ask` hook (task-pipelines.ts) and sends the
-   face's taps here (pipelineAskOpen); the view paints the face again when its tab changes (pvDraw). Desktop keeps the
-   manager's rail (pipeline-rail.ts), opened by the same face.
+   face's taps here (pipelineAskOpen); the view paints the face again when its tab changes (pvDraw). On a computer the
+   manager answers the page's chat column instead (pipeline-rail.ts, page-chat.ts), with the same board.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

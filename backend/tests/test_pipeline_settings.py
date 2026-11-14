@@ -513,3 +513,37 @@ def test_a_pipelines_manager_owner_and_stage_owner_are_people_who_can_act(c):
         assert any(words in p for p in PS.check(c, record)), PS.check(c, record)
         with _refused("task_settings"):
             PS.save(c, ANA, record)
+
+
+# ----------------------------------------------------------------------------- the editor's presets
+# The records "+ Requirement" builds for its presets (ui/app/pipeline-editor.ts peReqPreset, peReqNew), as the editor
+# sends them: each must pass the checks a save runs. OK from the pipeline's manager is offered only with a manager.
+def _preset(kind, line, **fields):
+    record = {"kind": kind, "source": None, "condition": None, "settings": {}, "can_push_past": True, "who_oks": "none",
+              "person_id": None, "line": line, "choices": None}
+    record.update(fields)
+    return record
+
+
+EDITOR_PRESETS = {
+    "confidence": _preset("answer", "Confidence (0-100)", settings={"type": "number", "name": "confidence_0_100", "min": 0, "max": 100}),
+    "yes_no": _preset("answer", "Yes or no", settings={"type": "choice", "name": "yes_or_no"}, choices=["Yes", "No"]),
+    "review_page": _preset("page", "Review page", settings={"at_head": True}, who_oks="people_with_exceptions"),
+    "manager_ok": _preset("ok", "OK", who_oks="people_with_exceptions", person_id="bot:manager"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(EDITOR_PRESETS))
+def test_each_editor_preset_passes_the_checks_a_save_runs(c, name):
+    record = _ops()
+    record["stages"][0]["requirements"].append(copy.deepcopy(EDITOR_PRESETS[name]))
+    assert PS.check(c, record) == []
+    saved = PS.save(c, ANA, record)
+    assert _without_ids(saved["stages"][0]["requirements"][-1])["kind"] == EDITOR_PRESETS[name]["kind"]
+
+
+def test_the_manager_ok_preset_needs_a_manager_and_is_refused_without_one(c):
+    # with no manager the editor does not offer it; the same record with nobody named is what the server refuses
+    record = _ops(manager_id=None)
+    record["stages"][0]["requirements"].append(dict(copy.deepcopy(EDITOR_PRESETS["manager_ok"]), person_id=None))
+    assert PS.check(c, record) != []

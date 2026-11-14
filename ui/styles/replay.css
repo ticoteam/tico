@@ -15,14 +15,11 @@
 .rp-actions{display:inline-flex;align-items:center;gap:4px}
 #rp-present[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 /* the Who icon: its count on its corner; folded into ⋯ on a phone it reads "Who" with the count at the row's end */
-.rp-head .ph-fold-word{display:none}
 .rp-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}
-.rp-head>.ph-menu>.ph-tools>.tl-ib{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:auto;padding:6px 10px}
-.rp-head>.ph-menu>.ph-tools>.tl-ib .ph-fold-word{display:inline}
-.rp-head>.ph-menu>.ph-tools>.tl-ib .tl-fbadge{position:static;margin-left:auto}
+.rp-head .rp-seg{flex:none;max-width:none;overflow:visible}   /* never scrolls inside itself: the header folds it into ⋯ */
 .rp-head>.ph-menu>.ph-tools .rp-seg{flex-wrap:wrap}
 /* the Who list is long (every team, bot and person): it scrolls under its search */
-.rp-who .tl-menu-list{max-height:min(420px,60vh);overflow-y:auto}
+.rp-who .tl-menu-list{max-height:min(380px,calc(60vh - 48px));overflow-y:auto}
 .rp-note{margin:0 0 var(--s3);font-size:var(--t-sm);color:var(--muted)}
 .rp-note[hidden]{display:none}
 
@@ -39,7 +36,7 @@
 .rp-face[data-state=needs]::after{display:block;background:var(--wait)}
 .rp-face[data-state=paused]::after{display:block;background:var(--idle)}
 .rp-main{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);grid-template-rows:minmax(0,1fr);gap:var(--s3);min-width:0;flex:1;min-height:0}
-.rp-board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:minmax(0,1fr);gap:8px;min-width:0;min-height:0}
+.rp-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:minmax(0,1fr);gap:8px;min-width:0;min-height:0}
 .rp-board .bcol{max-height:none;min-height:0}
 .rp-board .bcard{cursor:default}
 .rp-board .bcard-open{cursor:default}
@@ -95,6 +92,10 @@ body.rp-presenting .rp-bar{position:fixed;left:24px;right:24px;bottom:16px;z-ind
   /* A phone's bar of controls is tall, so the page scrolls and the stage takes a screen of its own below it. */
   #main.replay-layout{height:auto;overflow:visible;display:block}
   .rp-main{flex:none;height:calc(100dvh - var(--demo-h,0px) - 230px);min-height:420px}
+  /* Nothing in the feed yet: one muted line under the board, not half a screen of empty pane. */
+  .rp-main:has(.rp-feed>.rp-empty:only-child){grid-template-rows:minmax(0,1fr) auto}
+  .rp-feed:has(>.rp-empty:only-child){padding:var(--s1) 0;background:none;border:0}
+  .rp-feed>.rp-empty:only-child{margin:0}
   body.rp-presenting #main{display:flex}
   body.rp-presenting .rp-main{flex:1;height:auto;min-height:0}
   body.rp-presenting .rp-bar{left:12px;right:12px;bottom:12px}

@@ -87,15 +87,16 @@ async function pageNotes(): Promise<void> {
   const state: MeetState = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemAdd: '', confirmDelete: '', open: false};
   // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, the shared filter
-  // icon and Live now as tools, Add notes the one filled button, Ask, Sources and Settings in its ⋯ (the guide: no chat
-  // button in a top bar). Filters in force show as chips under it, the way Tasks shows them. The Recorder links stay in
+  // icon and Live now as tools, Add notes the one filled button, Sources and Settings in its ⋯. No chat button in a top
+  // bar (the guide): Meetings' chat is Ask, opened from the Assistant's tab on the right edge or a phone's chat mark
+  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them. The Recorder links stay in
   // the bar under it.
   $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
     tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
     tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
       + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
       + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
-    more: '<button type="button" id="meet-ask" data-ask-open>Ask</button><div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
+    more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
     primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
     <div class="meet-review-bar">
       <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>

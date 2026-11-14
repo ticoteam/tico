@@ -163,7 +163,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     // A tab past the rail's width waits behind the tab bar's ⋯ (bot-tasks.ts botTaskTabsFit): picked there, it joins the line.
     const show = async (key: string) => {
       if (await tab(key).isVisible()) return tab(key).click();
-      await rail.locator('.bot-task-tabs > .bot-tab-more').click();
+      await rail.locator('.bot-task-tabline > .bot-tab-more').click();
       await page.locator(`#task-filter-pop [data-bot-tab-pick="${key}"]`).click();
       await tab(key).waitFor({state: 'visible'});
     };

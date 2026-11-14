@@ -82,8 +82,9 @@ const tasks = (() => {
 
     // Dana makes the task in the page, for the engineering-manager bot, in the Launch pipeline: it opens once made.
     const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?pipeline=${pipeline}`});
-    await page.click('#task-menu');      // New task is in the header's ⋯
-    await page.click('#task-mi-new');
+    // New task is on the header's row on a computer, in its ⋯ on a phone.
+    if (phone) { await page.click('#task-menu'); await page.click('#task-mi-new'); }
+    else await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
     // For whom: Give to…, searched by the bot's slug.
@@ -350,8 +351,11 @@ const finance = (() => {
     const where = phone ? 'phone' : 'desktop';
     const page = await open(browser, hub, 'dana', {phone, hash: '#/finance'});
     await page.locator('#main', {hasText: 'Revenue'}).first().waitFor({timeout: t(20000)});
-    // The balance sheet lists the accounts Finance was set up with.
-    await page.locator('#main button, #main a', {hasText: /^Balance sheet$/}).first().click();
+    // The balance sheet lists the accounts Finance was set up with. Its tab is past the five on the header's row, so it
+    // is a ⋯ item (page-head.ts): open ⋯, then pick it.
+    const tab = page.locator('#main header.ph a', {hasText: /^Balance sheet$/}).filter({visible: true}).first();
+    if (!(await tab.count())) await page.locator('#main header.ph > .ph-more').click();
+    await page.locator('#main header.ph a', {hasText: /^Balance sheet$/}).filter({visible: true}).first().click();
     const text = await drawn(page, '#main', text => ['Bank', "Owner's equity"].every(account => text.includes(account)),
       `${where}: the balance sheet draws its accounts`);
     for (const account of ['Bank', "Owner's equity"]) {

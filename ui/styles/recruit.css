@@ -28,10 +28,13 @@
 .recruit-page>.empty{display:flex;justify-content:center;padding:64px 0}
 
 /* Applicants: the shared page header (ui/app/page-head.ts) holds the seat's title, the dot that works while applicants
-   arrive, the tabs with their counts, Job post and Close job (its archive icon, or "Close job?" while it asks). */
+   arrive, the tabs with their counts, Job post and Close job (its archive icon). */
 .rc-hdot{display:inline-flex}
 .rc-hdot:empty{display:none}
-.rc-head .rc-close.armed{width:auto;padding:0 10px;color:var(--fail)}
+/* Who the seat reports to: one fact line under the header, the key muted. */
+.rc-facts{display:flex;gap:var(--s2);margin:-4px 0 var(--s3);font-size:var(--t-sm)}
+.rc-facts dt{color:var(--muted)}
+.rc-facts dd{margin:0}
 .rc-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--radius,9px);background:var(--surface);overflow:hidden}
 .rc-list[hidden]{display:none}
 .rc-row{position:relative;display:grid;grid-template-columns:34px minmax(0,1fr) 92px auto;align-items:center;gap:14px;padding:12px 16px;background:var(--surface);transition:transform var(--dur) var(--ease)}

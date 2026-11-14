@@ -223,8 +223,6 @@ button.tw-x:hover{background:var(--surface2)}
   .tw-acct .tw-acct-who:not(:has(*)){display:none}
   .tw-acct-user{max-width:100%}
 }
-.tt-chat{display:inline-flex}
-.tt-chat:empty{display:none}
 /* Keys dropped in that chat (ui/app/tools-key-drop.ts): items show what they are, never a value. */
 .kd-tray{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0;max-height:40vh;max-height:40dvh;overflow-y:auto;overscroll-behavior:contain}
 .kd-tray[hidden]{display:none}
