@@ -257,3 +257,14 @@ def test_a_sources_held_value_stays_on_a_computed_figure(api):
     origin = sept(api)["origins"]["new_customers"]
     assert origin["origin"] == "computed" and origin["conflict"]["value"] == 131
     assert origin["differs"] == {"typed": 120, "chosen": None}
+
+
+# ----------------------------------------------------------------------------- Review 2
+def test_turning_a_typed_estimate_into_an_actual_asks_the_owner(api):
+    owned_channel(api)
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "quality": "estimate"})
+    load(api, september())
+    assert asks(api) == []  # an estimate gives way to the computed figure
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "quality": "actual"})
+    said = asks(api)
+    assert len(said) == 1 and "typed 70%, computed 75%" in said[0]

@@ -1083,8 +1083,12 @@ def cohort_set(c, actor, body):
         c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
     )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
-    if (saved.get("quality") or "actual") == "actual" and any(k in COMPUTED_FIELDS for k in fields):
-        ask_owners(c, saved["month"])  # a typed actual that differs from a computed figure: its owner is asked, once
+    if (saved.get("quality") or "actual") == "actual" and (
+        "quality" in fields or any(k in COMPUTED_FIELDS for k in fields)
+    ):
+        # A typed actual (newly typed, or an estimate now said to be actual) that differs from a computed figure: its
+        # owner is asked, once.
+        ask_owners(c, saved["month"])
     return _cohort_view(saved, _slugs(c), GS.origins_view(c, [cid]))
 
 
