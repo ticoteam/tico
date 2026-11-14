@@ -148,6 +148,19 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       check(writes.length === 0, `an empty Send back sends nothing (${JSON.stringify(writes)})`);
     }
 
+    // The bar's height changes with no redraw (here its padding, as a safe-area inset does): the end of the scroll
+    // follows it.
+    const barH = () => page.evaluate(() => {
+      const row = document.querySelector<HTMLElement>('#need-card [data-dc="approve"]')!.parentElement!;
+      return [row.offsetHeight, parseFloat(getComputedStyle(document.querySelector('#need-card .decide')!).getPropertyValue('--dc-bar-h'))];
+    });
+    await page.locator(`${approve} >> xpath=..`).evaluate(el => { (el as HTMLElement).style.paddingBottom = '60px'; });
+    await page.waitForTimeout(300);
+    const [rowH, room] = await barH();
+    check(rowH === room, `the scroll's room follows the bar's height (bar ${rowH} px, room ${room} px)`);
+    await page.locator(`${approve} >> xpath=..`).evaluate(el => { (el as HTMLElement).style.paddingBottom = ''; });
+    await page.waitForTimeout(300);
+
     // ‹ › on the phone, 8 px clear of ✕; next and back.
     const next = '#need-card [data-dc="next"]', prev = '#need-card [data-dc="prev"]';
     check(await page.locator(next).isVisible() && await page.locator(prev).isVisible(), '‹ › show on a phone');
@@ -160,6 +173,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       await page.locator(`${approve}:not([disabled])`).waitFor();       // its content is read and held
       await page.locator(prev).click();
       await at(1);
+      // Leaving the item clears the hint: back on it, Notes is plain again.
+      check(await page.locator('#dc-notes').getAttribute('placeholder') === null, 'the hint is gone after leaving the item');
     } else {
       // The old way to read items 2 and 4 first, so each is ready the moment it comes back: Skip through them, round
       // the question and on to item 1.

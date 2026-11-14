@@ -650,7 +650,7 @@ function decideBarRoom() {
   const row = decideBarSet();
   // Measured again whenever its height changes without a redraw (the font arriving, a long label wrapping).
   DEC_BAR_WATCH?.disconnect();
-  if (row) DEC_BAR_WATCH?.observe(row);
+  if (row) DEC_BAR_WATCH?.observe(row, {box: 'border-box'});   // padding too: the safe-area inset
 }
 const decideBarRow = () => decidePhone() ? $('.decide .dc-side>div:not(.dc-done)>.dc-acts:last-child') as HTMLElement | null : null;
 function decideBarSet(): HTMLElement | null {
