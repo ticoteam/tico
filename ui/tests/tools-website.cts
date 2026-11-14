@@ -409,7 +409,7 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         assert.deepEqual(last(f, 'PUT', '/api/v2/website-tools/w1/accounts/a1/access/'), {method: 'PUT', path: '/api/v2/website-tools/w1/accounts/a1/access/bots', body: {on: true}});
         await access.locator('.who-pick-q').click();
         await pickList(page).waitFor();
-        assert.ok((await pickOptions(page)).every(o => !o[1].startsWith('Bot')), `${tag}: no bot offered with All bots on`);
+        assert.ok((await pickOptions(page)).every(o => !(o[1] || '').startsWith('Bot')), `${tag}: no bot offered with All bots on`);
         await access.locator('.who-pick-q').press('Escape');
         await access.locator('[data-tw-all-bots]').uncheck();
         await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-tw-revoke="bot:ops"]')?.disabled);

@@ -349,9 +349,10 @@ def _grant(c: Any, account: Any, actor: str) -> Any:
     for gid in _group_grants(c, account):
         if actor in group_members(c, gid):
             return vaults.effective_grant(c, account["id"], GROUP + gid)
-    if actor.startswith("bot:") and c.execute(
-        "SELECT 1 FROM bots WHERE id=? AND state<>'archived'", (H.actor_id(actor),)
-    ).fetchone():
+    if (
+        actor.startswith("bot:")
+        and c.execute("SELECT 1 FROM bots WHERE id=? AND state<>'archived'", (H.actor_id(actor),)).fetchone()
+    ):
         return vaults.effective_grant(c, account["id"], vaults.BOTS)
     return None
 
@@ -930,11 +931,7 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
             for person in account["access"]:
                 people.setdefault(person["subject"], person)
         if any(a["all_bots"] for a in accounts):
-            subjects = (
-                _live_bots(c)
-                if who.role in ("owner", "human")
-                else [who.actor]
-            )
+            subjects = _live_bots(c) if who.role in ("owner", "human") else [who.actor]
             labels = _names(c, subjects)
             for subject in subjects:
                 people.setdefault(subject, _who(subject, labels.get(subject)))
