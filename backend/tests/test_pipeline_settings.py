@@ -522,14 +522,25 @@ def test_a_pipelines_manager_owner_and_stage_owner_are_people_who_can_act(c):
 # The records "+ Requirement" builds for its presets (ui/app/pipeline-editor.ts peReqPreset, peReqNew), as the editor
 # sends them: each must pass the checks a save runs. OK from the pipeline's manager is offered only with a manager.
 def _preset(kind, line, **fields):
-    record = {"kind": kind, "source": None, "condition": None, "settings": {}, "can_push_past": True, "who_oks": "none",
-              "person_id": None, "line": line, "choices": None}
+    record = {
+        "kind": kind,
+        "source": None,
+        "condition": None,
+        "settings": {},
+        "can_push_past": True,
+        "who_oks": "none",
+        "person_id": None,
+        "line": line,
+        "choices": None,
+    }
     record.update(fields)
     return record
 
 
 EDITOR_PRESETS = {
-    "confidence": _preset("answer", "Confidence (0-100)", settings={"type": "number", "name": "confidence_0_100", "min": 0, "max": 100}),
+    "confidence": _preset(
+        "answer", "Confidence (0-100)", settings={"type": "number", "name": "confidence_0_100", "min": 0, "max": 100}
+    ),
     "yes_no": _preset("answer", "Yes or no", settings={"type": "choice", "name": "yes_or_no"}, choices=["Yes", "No"]),
     "review_page": _preset("page", "Review page", settings={"at_head": True}, who_oks="people_with_exceptions"),
     "manager_ok": _preset("ok", "OK", who_oks="people_with_exceptions", person_id="bot:manager"),

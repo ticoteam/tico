@@ -70,7 +70,9 @@ def fit_at(pts):
 
 # 1. zero.plain: default outline.
 default_counter, default_gap = fit_at(coords)
-print("default counter: %d points, largest gap from the original pieces %.1f units" % (len(default_counter), default_gap))
+print(
+    "default counter: %d points, largest gap from the original pieces %.1f units" % (len(default_counter), default_gap)
+)
 new_coords = [coords[i] for i in OUTER] + [(x, y) for x, y, _ in default_counter]
 new_flags = [flags[i] for i in OUTER] + [1 if on else 0 for _, _, on in default_counter]
 new_ends = [len(OUTER) - 1, len(new_coords) - 1]
@@ -94,11 +96,9 @@ for tv in gvar.variations["zero"]:
     at_peak = [(coords[i][0] + deltas[i][0], coords[i][1] + deltas[i][1]) for i in range(len(coords))]
     counter_at_peak, gap = fit_at(at_peak)
     print("  region %s: counter gap %.1f units" % (dict(tv.axes), gap))
-    counter_deltas = [
-        (x - dx, y - dy) for (x, y, _), (dx, dy, _) in zip(counter_at_peak, default_counter, strict=True)
-    ]
+    counter_deltas = [(x - dx, y - dy) for (x, y, _), (dx, dy, _) in zip(counter_at_peak, default_counter, strict=True)]
     outer_deltas = [deltas[i] for i in OUTER]
-    phantom_deltas = deltas[len(coords):]
+    phantom_deltas = deltas[len(coords) :]
     new_tuples.append(TupleVariation(dict(tv.axes), outer_deltas + counter_deltas + phantom_deltas))
 gvar.variations["zero.plain"] = new_tuples
 

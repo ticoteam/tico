@@ -1112,7 +1112,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                     continue
                 added |= mine
                 # tool_id: the API tool that holds it as a key, so Tools lists it on that tool, not as a loose key.
-                item = vault.brief(row) | {'can_reveal': revealable, 'tool_id': row['tool_id']} | last_used(c, row['id'])
+                item = (
+                    vault.brief(row) | {'can_reveal': revealable, 'tool_id': row['tool_id']} | last_used(c, row['id'])
+                )
                 item['grants'] = [
                     dict(g)
                     | {

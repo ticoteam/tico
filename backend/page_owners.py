@@ -43,7 +43,10 @@ PAGES: dict[str, dict[str, str]] = {
     "tasks": {"name": "Tasks", "default": "general-manager"},  # a pipeline's manager answers while one is shown
     "updates": {"name": "Updates", "default": "updates-owner"},
     "company": {"name": "Company", "default": "general-manager"},  # Company's dashboards, its teams', the Company page
-    "strategy": {"name": "Strategy", "default": "strategy-owner"},  # Strategy's other tabs: Market, Org, Budget, Lenses, Brand
+    "strategy": {
+        "name": "Strategy",
+        "default": "strategy-owner",
+    },  # Strategy's other tabs: Market, Org, Budget, Lenses, Brand
     "goals": {"name": "Goals", "default": "strategy-owner"},
     "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
     "growth": {"name": "Growth", "default": "growth-manager"},
@@ -53,7 +56,10 @@ PAGES: dict[str, dict[str, str]] = {
     "docs": {"name": "Docs", "default": "librarian"},  # Docs and Library > Files
     "skills": {"name": "Skills", "default": "botops"},
     "contacts": {"name": "Contacts", "default": "librarian"},
-    "tools": {"name": "Tools", "default": "it-support-specialist"},  # with its keys and inboxes: who sets up tools and access
+    "tools": {
+        "name": "Tools",
+        "default": "it-support-specialist",
+    },  # with its keys and inboxes: who sets up tools and access
     "mail": {"name": "Mail", "default": "general-manager"},
     "messaging": {"name": "Messaging", "default": "general-manager"},
     "settings": {"name": "Settings", "default": "botops"},

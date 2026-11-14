@@ -28,7 +28,10 @@ def test_listening_is_owned_by_the_automations_owner_until_an_admin_changes_it(a
     automations_owner(api)
     pages = get(api, 'page-owners', 'cara-test')['pages']
     assert pages['listening'] == {
-        'bot': 'bot:automations-owner', 'name': 'Listening', 'choice': 'default', 'default': 'bot:automations-owner',
+        'bot': 'bot:automations-owner',
+        'name': 'Listening',
+        'choice': 'default',
+        'default': 'bot:automations-owner',
     }
     # No IT Support Specialist and no General Manager in the base fixture: nothing to fall back to, no chat.
     assert pages['tools'] == {'bot': None, 'name': 'Tools', 'choice': 'default', 'default': None}
@@ -92,8 +95,23 @@ def test_every_page_the_app_reaches_has_an_owner_in_a_new_company(api):
     general_manager(api)
     pages = get(api, 'page-owners', 'cara-test')['pages']
     assert set(pages) >= {
-        'tasks', 'updates', 'company', 'strategy', 'goals', 'finance', 'growth', 'automations', 'listening',
-        'rules', 'docs', 'skills', 'contacts', 'tools', 'mail', 'usage', 'settings',
+        'tasks',
+        'updates',
+        'company',
+        'strategy',
+        'goals',
+        'finance',
+        'growth',
+        'automations',
+        'listening',
+        'rules',
+        'docs',
+        'skills',
+        'contacts',
+        'tools',
+        'mail',
+        'usage',
+        'settings',
     }
     # Calendar and Meetings open Ask (the Assistant's one chat): no page owner of their own.
     assert 'calendar' not in pages and 'meetings' not in pages
@@ -102,7 +120,9 @@ def test_every_page_the_app_reaches_has_an_owner_in_a_new_company(api):
     assert pages['finance']['name'] == 'Finance'
     # The bot that does the page's work wins once the company has it.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('finance-owner','finance-owner','Finance Owner','active')")
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('finance-owner','finance-owner','Finance Owner','active')"
+        )
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('librarian','librarian','Librarian','planned')")
     pages = get(api, 'page-owners')['pages']
     assert pages['finance']['bot'] == 'bot:finance-owner'

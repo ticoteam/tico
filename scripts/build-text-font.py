@@ -33,7 +33,10 @@ FONT_URL = re.compile(r"(?<![\w/])/vendor/fonts/atkinson-hyperlegible-next-plain
 
 
 def font_url():
-    return "/vendor/fonts/atkinson-hyperlegible-next-plain-zero.woff2?v=" + hashlib.sha256(FONT.read_bytes()).hexdigest()[:12]
+    return (
+        "/vendor/fonts/atkinson-hyperlegible-next-plain-zero.woff2?v="
+        + hashlib.sha256(FONT.read_bytes()).hexdigest()[:12]
+    )
 
 
 def stale_font_urls():

@@ -198,7 +198,9 @@ def _an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_
         # A person's Home reaches the person, as a bot's reaches the bot; never its own author.
         mine, theirs = sorted(people(who))[:2]
         wall = threads.home(c, theirs, create=True)
-        assert [(p["actor"], p["reason"], p["mode"]) for p in threads.plan(c, wall, mine)] == [(theirs, "home", "queue")]
+        assert [(p["actor"], p["reason"], p["mode"]) for p in threads.plan(c, wall, mine)] == [
+            (theirs, "home", "queue")
+        ]
         assert threads.plan(c, wall, theirs) == []
     # The run's attempt was granted the Home (attempt_conversations); the other bot reads the Home but may not write.
     monkeypatch.setattr(threads, "_bot_grant", lambda c, v, row: getattr(v.who, "attempt_id", "") == "att-1")
