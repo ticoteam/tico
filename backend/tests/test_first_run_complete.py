@@ -70,9 +70,9 @@ def sample(api):
 # Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
 # Manager for the team, the General Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
-    "onboarding": {"product": "product-manager", "engineering": "engineering-manager"},
-    "company_file": {"product": "general-manager", "engineering": "general-manager"},
-    "sample": {"product": "general-manager", "engineering": "general-manager"},
+    "onboarding": {"product": "product-manager"},
+    "company_file": {"product": "general-manager"},
+    "sample": {"product": "general-manager"},
 }
 
 

@@ -1,5 +1,6 @@
 # pyright: strict
-"""Who fills each role the Product and Engineering presets name (docs/pipelines-v3.md "Default pipelines").
+"""Who fills each role the software presets name: Product, and Product and Engineering before 0.6 (docs/pipelines-v3.md
+"Default pipelines").
 
 The presets name roles, not bots: `pipeline_settings.preset` fills a pipeline's manager, its stage owners and the
 person on its people OKs from `resolve`, and `ensure_presets` fills a still-empty one once the role's bot appears.
@@ -33,6 +34,7 @@ BUILDER = "builder"
 REVIEWER_1 = "reviewer_1"
 REVIEWER_2 = "reviewer_2"
 RELEASE_MANAGER = "release_manager"
+QA_OWNER = "qa_owner"
 ROLES = (
     PRODUCT_MANAGER,
     PRODUCT_OWNER,
@@ -41,6 +43,7 @@ ROLES = (
     REVIEWER_1,
     REVIEWER_2,
     RELEASE_MANAGER,
+    QA_OWNER,
 )
 # The template each role's seat is placed with (templates/catalog/<template>).
 TEMPLATES = {
@@ -51,6 +54,7 @@ TEMPLATES = {
     REVIEWER_1: "reviewer",
     REVIEWER_2: "reviewer",
     RELEASE_MANAGER: "release-owner",
+    QA_OWNER: "qa-owner",
 }
 # The default chart's row id for each role's seat (backend/company_file/chart_formula.json). A live seat's bot gets
 # this slug at go-live (company_import._go_live). The Product Owner's is the first segment's, `<segment>-product-owner`,
@@ -63,6 +67,7 @@ CHART_IDS = {
     REVIEWER_1: "reviewer-1",
     REVIEWER_2: "reviewer-2",
     RELEASE_MANAGER: "release-owner",
+    QA_OWNER: "qa-owner",
 }
 
 

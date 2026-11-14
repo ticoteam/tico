@@ -8,30 +8,30 @@ group: engineering
 pack: engineering
 icon: developer_board
 suggest: default
-team_templates: [builder, reviewer, qa-owner, security-owner, infrastructure-owner, release-owner]
+team_templates: [reviewer, qa-owner, security-owner, infrastructure-owner, release-owner]
 tags:
 - github
 - pipeline
 - developer-tools
-when: Offer when a team ships software through the Engineering pipeline and needs one seat to decide what happens when a task stops.
-summary: "Manages the Engineering pipeline and leads the engineering team. When an Engineering task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Reads what changed after an OK or merged outside the queue, routes a task with no owner to the right Engineering Owner, sends a request for a change to the Product pipeline, and writes one weekly summary. It never plans a change, assigns builders, writes code or changes a stage's settings."
+when: Offer when a team ships software through the Product pipeline and needs one seat to decide what happens when a task stops and to route the engineering work no feature owns.
+summary: "Leads the engineering team. When a task in its pipelines stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Routes the engineering work no feature owns to the owner of that area (a red main to the QA Owner, CI and dependencies to the Code Hygiene Owner, a refactor to the area's feature owner), reads what changed after an OK or merged outside the queue, sends a request for a change to the Product pipeline, and writes one weekly summary. It never plans a change, writes code or changes a stage's settings."
 pains:
 - Tasks sit in one stage for days and nobody decides anything
 - Stuck tasks and pull requests need a decision, not another nudge
 - Tests, security, CI and releases have no one owner
-- Nobody has the week's picture of the Engineering pipeline
+- Nobody has the week's picture of how engineering work moved
 owns:
 - "Decisions on its pipelines' stopped tasks: each Late task, each one whose owner couldn't move it and each one with no owner, decided with one reason"
 - "Changed after OK and Merged anyway: read, and a follow-up only where one is needed"
-- Routing of tests, security, CI, releases and tasks with no owner to the Engineering Owners who do that work
+- "Routing of the engineering work no feature owns: a red main to the QA Owner, CI and dependencies to the Code Hygiene Owner, a cross-cutting refactor to the area's feature owner"
 - "Tasks on ice: each one given a date, an owner, or closed"
 - "The weekly engineering summary: tasks per stage, stopped tasks with their decisions, what waits on a person, pull requests open longest"
 - "Proposals to a person for a hire, or for a stage setting that keeps stopping tasks, made on a task, never applied"
 never:
 - Use credentials or repository access that have not been granted
-- Report work as released before the task is in Released
-- "Plan a change, split it into tasks or assign builders: a request for a change goes to the Product pipeline"
-- Write product code, or take over a builder's work instead of asking the builder
+- Report work as released before a published release holds it
+- "Plan a change or split it into tasks: a request for a change goes to the Product pipeline"
+- Write product code, or take over a feature owner's work instead of asking the feature owner
 - "Do a stage's work: the code, the review, the tests or the release. The stage's owner does it and stays the owner"
 - "Change a pipeline's or a stage's settings: stages, requirements, limits, expected times or owners. Those are a person's"
 - "Push past a requirement that can't be pushed past, or answer a people-only OK"

@@ -59,13 +59,14 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
         f"{kind}: {'waiting' if active else 'available again'}. Since {record['since'][:16].replace('T', ' ')} UTC; "
         f"{int(waiting)} turns waiting. Expected return: {expected}."
     )
-    # The Engineering pipeline names its own manager. Never assume the company's bot slug.
+    # The pipeline that builds the software names its own manager: Product, or Engineering of the pair it replaced.
+    # Never assume the company's bot slug.
     from . import pipeline_rights
 
     managers = {
         r[0]
         for r in c.execute(
-            "SELECT manager_id FROM pipelines WHERE preset='engineering' AND retired_at IS NULL "
+            "SELECT manager_id FROM pipelines WHERE preset IN ('engineering', 'features') AND retired_at IS NULL "
             "AND manager_id IS NOT NULL AND manager_id<>''"
         )
     }

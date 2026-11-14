@@ -343,6 +343,142 @@ PRESETS["product"] = {
     "done": {"id": "product-done"},
     "closed": {"id": "product-closed"},
 }
+# Product (Nov 14, docs/pipelines-v3.md "Product"): one pipeline from pitch to production, the default for a company that
+# builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for the
+# companies that have them. One feature owner, the task's assignee, holds it from Pitch to Validate in one task and one
+# session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. Any person clears
+# the pitch, spec and release gates (people only, nobody named), and a bot never does.
+IDEAS_STAGE = "product-ideas"  # Pitch keeps the id of the pair's Ideas, as Tico Team's Product does (idea_checks)
+PITCH_MAX = 280  # the task's body is the pitch: a person is asked to OK it only once it is this short or shorter
+# Related input (backend/related_input.py): Jev picks 1 to 2 bots over the bar, each adds one round of comments to the
+# spec page; it never blocks and moves on after 4 hours.
+RELATED_INPUT = "related_input"
+PRODUCT = "features"  # the preset's key and `preset` column: "product" is the Product of the pair it replaces
+PRESETS[PRODUCT] = {
+    "id": "product",
+    "name": "Product",
+    "goal": "From a pitch to something checked in production",
+    "prefix": "P",
+    "manager_id": None,
+    "owner_id": None,
+    "private": False,
+    "factory_id": "product",
+    "preset": PRODUCT,
+    "keep_warm_hours": KEEP_WARM_DEFAULT,
+    "stages": [
+        _stage(
+            IDEAS_STAGE,
+            "Pitch",
+            f"The task's body is the pitch: the problem, who has it and the fix, in up to {PITCH_MAX} characters "
+            "(skill write-a-pitch). Any person OKs it; a longer one is the owner's to shorten first.",
+            1440,
+            [_people_only({"kind": "ok", "line": "OK the pitch", "settings": {"body_max": PITCH_MAX}})],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-spec",
+            "Spec",
+            "Write the spec page with the person who OK'd the pitch (skill write-a-spec).",
+            2880,
+            [_page("Spec page", SPEC_RUBRIC)],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-related",
+            "Related input",
+            "The bots this touches add one round of comments to the spec page. Never blocks; moves on after 4 hours.",
+            240,
+            [{"kind": RELATED_INPUT}],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-ok-spec",
+            "OK spec",
+            "Attach the spec page with what the comments changed (skill write-a-spec). Any person OKs it.",
+            2880,
+            [_people_only(_page("Spec page", SPEC_RUBRIC))],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-build",
+            "Build",
+            "Build it, open a PR, link it and get the checks green (skill build-and-open-a-pr), then hand it to review "
+            "(skill hand-off-to-review).",
+            1440,
+            [github("pr_open"), github("checks_pass")],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-review-1",
+            "Review 1",
+            "Review the newest commit and attach a Review page.",
+            120,
+            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
+        ),
+        _stage(
+            "product-fixes-1",
+            "Fixes 1",
+            "Fix what the review found, push, and say done once the checks are green (skill fix-review-findings).",
+            240,
+            [{"kind": "owner_done"}, github("checks_pass")],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-review-2",
+            "Review 2",
+            "Review the newest commit again and attach a Review page.",
+            120,
+            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
+        ),
+        _stage(
+            "product-fixes-2",
+            "Fixes 2",
+            "Fix what the second review found, push, and say done once the checks are green (skill "
+            "fix-review-findings). When it found nothing, say done at once.",
+            240,
+            [{"kind": "owner_done"}, github("checks_pass")],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-qa",
+            "QA",
+            "Build the QA page (skill make-the-qa-page): what changed, before and after screenshots of the running app (or the output that "
+            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. A "
+            "person approves it. To change it, attach the new version; Tico asks the person again when there are new "
+            "commits or it is another page. Never ask your own OK of it.",
+            240,
+            [github("checks_pass"), _people_only(_page("QA page", QA_RUBRIC))],
+        ),
+        _stage(
+            "product-ok-release",
+            "OK release",
+            "Any person OKs the release. Then it merges.",
+            1440,
+            [_people_only({"kind": "ok", "line": "OK the release"})],
+            owner=ASSIGNEE,
+        ),
+        _stage(
+            "product-merge",
+            "Merge",
+            "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send "
+            "the task back to QA.",
+            120,
+            [github("pr_merged")],
+            on_enter={"act": "github.queue"},
+        ),
+        _stage(
+            "product-validate",
+            "Validate",
+            "Check it in production and attach a Checked in production page that names the version production runs "
+            "(skill validate-in-production).",
+            1440,
+            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True)],
+            owner=ASSIGNEE,
+        ),
+    ],
+    "done": {"id": "product-done"},
+    "closed": {"id": "product-closed"},
+}
 # Every text a preset line shipped with before its current one, by where it sits (`preset_texts`). A company's line
 # that still reads one of these was never edited, so `ensure_presets` moves it to the current text (`_follow`). When you
 # change a preset line, add the text it had to its list here: backend/tests/test_preset_texts.py fails until you do.
@@ -393,6 +529,11 @@ EARLIER: dict[str, tuple[str, ...]] = {
     ),
     # The page a person OKs was Fixes 2's until QA had a stage of its own: `_add_qa` moves it there as it was, and
     # `_follow` then moves an unedited line and check to QA's.
+    "engineering-qa/purpose": (
+        "Build the QA page: what changed, before and after screenshots of the running app (or the output that proves a "
+        "change with nothing to see), the checks at the newest commit and what both reviewers found. A person approves "
+        "it to ship. To change it, attach the new version; Tico asks the person. Never ask your own OK of it.",
+    ),
     "engineering-qa/page/line": ("Review page",),
     "engineering-qa/page/rubric": _FIXES_2_RUBRICS,
     "engineering-merge/purpose": (
@@ -409,7 +550,11 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "release that holds this work, it is not yet.",
     ),
 }
-SOFTWARE = ("engineering", "product")  # the presets only a company that builds software gets
+# The Product and Engineering pair Product (PRODUCT) replaced in 0.6. Kept for the companies that have them, so their
+# open tasks finish where they are and their upkeep (`_fill`, `_follow`, `_add_qa`) goes on; never made again. A person
+# adds Product beside them (`add_preset`) and retires each once it holds no open task.
+LEGACY = ("engineering", "product")
+SOFTWARE = (*LEGACY, PRODUCT)  # the presets only a company that builds software gets
 FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to something checked in production."}
 # Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
@@ -438,6 +583,17 @@ ROLES: dict[str, Row] = {
         },
         "ok": ("product-spec",),
     },
+}
+ROLES[PRODUCT] = {
+    "manager": S.PRODUCT_MANAGER,
+    # Every other stage is the task's assignee's: its feature owner.
+    "stages": {
+        "product-review-1": S.REVIEWER_1,
+        "product-review-2": S.REVIEWER_2,
+        "product-qa": S.QA_OWNER,
+        "product-merge": S.RELEASE_MANAGER,
+    },
+    "ok": ("product-qa",),  # the QA page's person, as on Engineering; the pitch, spec and release gates name nobody
 }
 # Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
 PRESETS.update(more.PRESETS)
@@ -734,6 +890,8 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
             problems.append(f"{name} has no setting {key} (on {label}).")
         elif key in ("at_head", "with_release", "prereleases") and not isinstance(value, bool):
             problems.append(f"{key} on {label} is on or off.")
+        elif key == "body_max" and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+            problems.append(f"The most characters of the task's body on {label} is a whole number above zero.")
         elif key == "rubric" and not isinstance(value, str):
             problems.append(f"What Jev checks on {label} must be text.")
         elif key == "release_repo" and (
@@ -821,8 +979,9 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
         )
     elif person and not _actor_exists(conn, person):
         problems.append(f"{person} is not a person or a bot here (on {label}).")  # removed, or left
-    elif kind == "ok" and not person:
-        problems.append(f"An OK from someone on {label} names the person or bot who OKs it.")
+    elif kind == "ok" and not person and req["who_oks"] != "people_only":
+        # People only with nobody named is any person's OK, never a bot's (Product's pitch, spec and release gates).
+        problems.append(f"An OK from someone on {label} names the person or bot who OKs it, or is people only.")
     if req["id"]:
         found = _h()._one(
             conn, "SELECT stage_id, visit_id, kind, source, condition FROM requirements WHERE id=?", (req["id"],)
@@ -1728,14 +1887,26 @@ def _held(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
     )
 
 
+def _made_from(conn: "sqlite3.Connection", key: str) -> str | None:
+    """The id of the pipeline a preset made here, retired or not: the one whose `preset` it is, else one with the
+    preset's id and no preset recorded. A pipeline that only has the preset's id is another preset's (Product of the
+    pair Product replaced has the id `product`): never this one's."""
+    found = conn.execute(
+        "SELECT id FROM pipelines WHERE preset=? OR (preset IS NULL AND id=?) "
+        "ORDER BY preset IS NULL, created_at, id LIMIT 1",
+        (key, PRESETS[key]["id"]),
+    ).fetchone()
+    return str(found[0]) if found else None
+
+
 def _retire_software(conn: "sqlite3.Connection") -> list[str]:
-    """A company that says it builds no software: its untouched Product and Engineering, holding no open task, are
-    retired. The settings version stays 1, so they come back if the answer turns to yes. Product first: Engineering
-    stays while a pipeline still in use files into it. Returns the ids retired."""
+    """A company that says it builds no software: its untouched Product (and the Product and Engineering pair before
+    it), holding no open task, are retired. The settings version stays 1, so they come back if the answer turns to yes.
+    Product first: Engineering stays while a pipeline still in use files into it. Returns the ids retired."""
     retired: list[str] = []
     for key in reversed(SOFTWARE):
-        pid = PRESETS[key]["id"]
-        if not _untouched(conn, pid) or _held(conn, pid):
+        pid = _made_from(conn, key)
+        if not pid or not _untouched(conn, pid) or _held(conn, pid):
             continue
         if any(pid in targets for targets in _handoffs(conn, pid).values()):
             continue
@@ -1768,9 +1939,11 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     have yet. Returns the ids it made.
 
     - General is made for every company, at the first start.
-    - Product and Engineering are made for a company that builds software (`makes_software`: a blank answer is yes),
-      once its setup finished, so their roles find the bots setup made. With them comes the Product factory. A company
-      that says no gets its untouched pair retired; saying yes again brings that pair back.
+    - Product (PRODUCT) is made for a company that builds software (`makes_software`: a blank answer is yes), once its
+      setup finished, so its roles find the bots setup made. With it comes the Product factory. A company that says no
+      gets its untouched Product retired; saying yes again brings it back. A company that has the Product and
+      Engineering pair it replaced (LEGACY) keeps them and their upkeep, and does not get Product made beside them: its
+      `product` id is the old Product's. A person adds it there (`add_preset`).
     - Growth Experiments, Lead, Opportunity, Customer and Success Experiments (pipeline_presets_more) are made for every
       company once its setup finished, each with its Growth or Success factory. A company set up before they existed
       gets them at its next start. Growth and Success Monitoring are made with them, only where their factory's
@@ -1778,12 +1951,12 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
       Owner, the Finance Owner): never with the General Manager standing in. `ensure_private` makes them when that bot is
       made.
-    - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with two exceptions:
+    - A preset the org has (`_made_from`) is never changed, nor one it retired, with two exceptions:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
       filled in once the bot or person for it exists (`_fill`); and a line of its wording nobody edited, one that still
       reads a text the preset shipped with before, moves to the preset's current text (`_follow`). An Engineering
       pipeline made before QA had a stage of its own gets it once, edited or not (`_add_qa`).
-    - A preset whose name or prefix another pipeline already uses is left out, so a start never fails on it."""
+    - A preset whose id, name or prefix another pipeline already uses is left out, so a start never fails on it."""
     made: list[str] = []
     software = makes_software(conn)
     if not software:
@@ -1791,16 +1964,18 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     for key in PRESETS:
         if key in SOFTWARE and not software:
             continue
-        have = conn.execute("SELECT id FROM pipelines WHERE id=? OR preset=?", (PRESETS[key]["id"], key)).fetchone()
+        have = _made_from(conn, key)
         if have:
             if key in SOFTWARE:
-                _bring_back(conn, str(have[0]))
+                _bring_back(conn, have)
             if key == "engineering":
-                _add_qa(conn, str(have[0]))
-            if _untouched(conn, str(have[0])):
-                _fill(conn, key, str(have[0]))
-            _follow(conn, key, str(have[0]))
+                _add_qa(conn, have)
+            if _untouched(conn, have):
+                _fill(conn, key, have)
+            _follow(conn, key, have)
             continue
+        if key in LEGACY or conn.execute("SELECT 1 FROM pipelines WHERE id=?", (PRESETS[key]["id"],)).fetchone():
+            continue  # never made again; or its id is another pipeline's (the old Product's `product`)
         if key in SOFTWARE:
             if not _set_up(conn):
                 continue
@@ -1829,6 +2004,52 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
 
     stage_rules.ensure_defaults(conn)  # each default stage rule once, on the pipelines the company has
     return made
+
+
+def add_preset(
+    conn: "sqlite3.Connection",
+    by: str,
+    key: str,
+    pipeline_id: str | None = None,
+    name: str | None = None,
+    prefix: str | None = None,
+) -> Row:
+    """Make a preset in a company that does not have it, by hand: Product beside the Product and Engineering pair it
+    replaced, whose open tasks finish where they are. The record is the one `ensure_presets` would make (`preset`: its
+    roles' bots, its people OK's person), under `pipeline_id`, `name` and `prefix` when given (the old Product holds
+    `product`, its name and P while it is in use). A stage id another pipeline has gets the first free one after it
+    (`product-spec-2`). Its factory is made when missing. Only the company's owner and Admins (a new pipeline's save).
+    Refused (`task_settings`) for General, a pair preset (LEGACY), a preset the company has, an id in use, and anything a
+    new pipeline's save refuses. Returns the record as `read` gives it."""
+    if key not in PRESETS or key in LEGACY or key == "general":
+        _refuse(
+            conn,
+            by,
+            "task_settings",
+            f"{key} is not a preset to add. Add {PRODUCT} or one of {', '.join(more.PRESETS)}.",
+        )
+    have = _made_from(conn, key)
+    if have:
+        _refuse(conn, by, "task_settings", f"The company has {PRESETS[key]['name']} already: {have}.")
+    _may_change(conn, by, None, None)
+    record = preset(conn, key)
+    record["id"] = pipeline_id or record["id"]
+    if task_engine.pipeline(conn, record["id"]):
+        _refuse(conn, by, "task_settings", f"A pipeline {record['id']} is there already. Give another id.")
+    if name:
+        record["name"] = name
+    if prefix is not None:
+        record["prefix"] = prefix or None
+    taken: set[str] = set()
+    for stage in record["stages"]:
+        stage["id"] = _free_stage_id(conn, stage["id"], taken)
+    for kind in BUILT_IN:
+        record[kind]["id"] = _free_stage_id(conn, record[kind]["id"], taken)
+    if key in SOFTWARE:
+        _ensure_factory(conn)
+    elif record.get("factory_id"):
+        more.ensure_factory(conn, record["factory_id"], _h().now())
+    return save(conn, by, record)
 
 
 def ensure_private(conn: "sqlite3.Connection") -> list[str]:

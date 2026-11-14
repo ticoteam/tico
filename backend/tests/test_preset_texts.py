@@ -23,7 +23,7 @@ from backend import task_requirements as R
 from backend.hubdb_core import KEEPER
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import _answers, _team
+from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
 
 SHIPPED = Path(__file__).parent / "fixtures" / "shipped_preset_texts.json"
 ANA = X.ANA
@@ -38,7 +38,13 @@ def _hash(text):
 
 
 def _now():
-    return {path: text for key in PS.PRESETS for path, text in PS.preset_texts(key).items()}
+    """Every preset line by where it sits. Product's lines are under `features:`: it has the ids of the pair's Product
+    it replaced (`product/goal`, `product-spec/purpose`), whose own lines keep their paths."""
+    return {
+        f"{key}:{path}" if key == PS.PRODUCT else path: text
+        for key in PS.PRESETS
+        for path, text in PS.preset_texts(key).items()
+    }
 
 
 def _lost(shipped, now):
@@ -48,7 +54,7 @@ def _lost(shipped, now):
         for path, digest in shipped.items()
         if path in now
         and _hash(now[path]) != digest
-        and not any(_hash(old) == digest for old in PS.EARLIER.get(path, ()))
+        and not any(_hash(old) == digest for old in PS.EARLIER.get(path.rpartition(":")[2], ()))
     )
 
 
@@ -58,6 +64,7 @@ def c(company):
     with company.transaction() as conn:
         _team(conn)
         _answers(conn, software="yes")
+        legacy_pair(conn)  # an upgrade: a company set up before 0.6 keeps the pair, and its wording follows the presets
         PS.ensure_presets(conn)
         yield conn
 

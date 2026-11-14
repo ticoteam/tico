@@ -934,6 +934,14 @@ STABLE = [
         None,
     ),
     (
+        "/api/v2/pipelines/{pipeline_id}/from-preset",
+        "post",
+        "Pipelines",
+        "addPipelineFromPreset",
+        "Make a pipeline from a preset the company does not have (Product beside the pair it replaced)",
+        None,
+    ),
+    (
         "/api/v2/pipelines/{pipeline_id}/retire",
         "post",
         "Pipelines",

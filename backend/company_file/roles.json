@@ -940,8 +940,8 @@
    "department": "engineering",
    "lead": true,
    "core": false,
-   "summary": "Manages the Engineering pipeline and leads the engineering team. When an Engineering task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Reads what changed after an OK or merged outside the queue, routes a task with no owner to the right Engineering Owner, sends a request for a change to the Product pipeline, and writes one weekly summary. It never plans a change, assigns builders, writes code or changes a stage's settings.",
-   "when": "Offer when a team ships software through the Engineering pipeline and needs one seat to decide what happens when a task stops.",
+   "summary": "Leads the engineering team. When a task in its pipelines stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Routes the engineering work no feature owns to the owner of that area (a red main to the QA Owner, CI and dependencies to the Code Hygiene Owner, a refactor to the area's feature owner), reads what changed after an OK or merged outside the queue, sends a request for a change to the Product pipeline, and writes one weekly summary. It never plans a change, writes code or changes a stage's settings.",
+   "when": "Offer when a team ships software through the Product pipeline and needs one seat to decide what happens when a task stops and to route the engineering work no feature owns.",
    "tags": [
     "github",
     "pipeline",
@@ -951,7 +951,7 @@
     "Tasks sit in one stage for days and nobody decides anything",
     "Stuck tasks and pull requests need a decision, not another nudge",
     "Tests, security, CI and releases have no one owner",
-    "Nobody has the week's picture of the Engineering pipeline"
+    "Nobody has the week's picture of how engineering work moved"
    ],
    "recommend_when": [
     "sells_software",

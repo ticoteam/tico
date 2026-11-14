@@ -47,7 +47,8 @@ architecture) and C (the screens).
 
 - Anyone, bots included, may push past unmet requirements with a reason.
 - Validate loops have no limit.
-- One Builder bot, working each task in its own thread.
+- One feature owner takes a Product task from pitch to production, in one task and one session; there are no
+  Builders (Nov 14). Engineering work no feature owns goes, through the Engineering Manager, to the owner of its area.
 - No migration and no rollback.
 - A stage with no requirements moves tasks on by itself when the next stage has room.
 - Engineering ends at release. Product's Validate checks production.
@@ -69,10 +70,10 @@ architecture) and C (the screens).
   then its manager bot, then a person.
 - **One ask:** everything you are asked is the task. You see the page itself, then Approve, or Send back with notes. The
   notes go to the bot.
-- **Person OKs** on the new Tico Team: the spec before it is built, and the review page before merge. The rest is bots
-  and Jev.
-- **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. The two person OKs in
-  the Product and Engineering presets are people only.
+- **Person OKs** on Product: the pitch, the spec, the QA page and the release. The rest is bots and Jev.
+- **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. Product's person OKs are
+  people only. An OK from someone that is people only and names nobody is any person's: Product's pitch, spec and
+  release gates.
 - **Push past** is a switch on each requirement.
 - Tasks leave Product's **Ideas** by hand, except a request a person files: it goes into Spec when Spec has room. Later
   is dropped. Growth's and Success's Ideas hold every idea, a person's too, until someone starts it.
@@ -777,18 +778,17 @@ are chat, not asks. The setup checklist is onboarding and is not touched.
 
 ## Default pipelines
 
-Twelve presets built from the same parts, in four factories. Customers and manager bots can change any of it.
+Eleven presets built from the same parts, in four factories. Customers and manager bots can change any of it.
 
 | Factory | Pipelines |
 |---|---|
-| Product | Product → Engineering |
+| Product | Product |
 | Growth | Growth Experiments, Growth Monitoring; Lead → Opportunity |
 | Success | Customer; Success Experiments, Success Monitoring |
 | Corporate | Legal; Finance (both private) |
 | none | General |
 
-A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
-builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
+A new org gets General at its first start, and the rest once its setup finishes (Product only if it builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
 renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
 Finance Owner), the moment it is made; never with the General Manager standing in. Growth and Success
 Monitoring are made only where their factory's Experiments pipeline is.
@@ -800,6 +800,18 @@ the preset's requirements and every stage of the preset is there. The move is lo
 (the pipeline's Log shows it), and raises its settings version unless nobody has changed it yet. **When you change a preset line, add the text it had
 to `EARLIER`** (`backend/pipeline_settings.py`, or `backend/pipeline_presets_more.py` for the presets there), then run
 `python -m backend.tests.test_preset_texts --write`; `backend/tests/test_preset_texts.py` fails until both are done.
+
+Product replaced the Product and Engineering pair on Nov 14 (0.6). A company set up before keeps the pair, so its open
+tasks finish where they are, and the pair's upkeep goes on (`pipeline_settings.LEGACY`); a start never makes Product
+beside it, since the old Product holds the id `product`. A person (the company's owner or an Admin) adds Product by
+hand, under another id, name and prefix while the old ones are in use:
+
+    POST /api/v2/pipelines/features/from-preset   {"preset": "features", "name": "Features", "prefix": "F"}
+
+It is made as a new company's would be (its roles' bots, its people OK's person, the Product factory); a stage id the
+old Product holds gets a number (`product-spec-2`, `product-validate-2`). Then retire each of the pair once it holds no
+open task (`POST /api/v2/pipelines/{id}/retire`, refused while one is open), and rename Features to Product. No code
+moves a task between them.
 
 One stage is added on an upgrade, once (`pipeline_settings._add_qa`): an Engineering pipeline made before QA had a stage
 of its own gets QA after Fixes 2, owned by Fixes 2's owner, with Checks pass and the page a person OKs moved there from
@@ -837,13 +849,65 @@ Stages: To do → Done · Closed
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
 Roles are found by the seat's template, never by a name: the Product Manager (`product-manager`), the Engineering
-Manager (`engineering-manager`), the Product Owner, Builder, Reviewer 1, Reviewer 2 and Release Owner. A
-software company has all of them live, with the QA Owner; a role nobody fills goes up to the pipeline's manager, and a
-manager nobody fills to the General Manager, until the role's bot appears. The person on a people OK is the first person
-above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
-that answers yes to "Do you build software?" (a blank answer is yes); an untouched pair is retired when it answers no.
+Manager (`engineering-manager`), Reviewer 1, Reviewer 2, the QA Owner and the Release Owner (and on the pair, the
+Product Owner and the Builder). A software company has all of them live; a role nobody fills goes up to the pipeline's
+manager, and a manager nobody fills to the General Manager, until the role's bot appears. The stages a feature owner
+holds are the task's assignee's. The person on a people OK that names one is the first person above the pipeline's
+manager bot on the org chart, else the org owner. Product is made for a company that answers yes to "Do you build
+software?" (a blank answer is yes); an untouched one is retired when it answers no.
 
 ### Product
+
+From a pitch to something checked in production, in one task. Manager: the Product Manager bot. Keep warm: 8 hours.
+Preset `features`, id `product` (`pipeline_settings.PRODUCT`).
+
+Stages: Pitch → Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release →
+Merge → Validate → Done · Closed
+
+The stage ids are those Tico Team's live Product has where it has the stage: `product-ideas` (Pitch), `product-spec`,
+`product-build`, `product-review-1`, `product-fixes-1`, `product-review-2`, `product-fixes-2`, `product-qa`,
+`product-merge`, `product-validate`; and `product-related`, `product-ok-spec`, `product-ok-release`. Each stage's
+purpose names the company skill it runs on: write-a-pitch, write-a-spec, build-and-open-a-pr and hand-off-to-review,
+fix-review-findings, make-the-qa-page, validate-in-production.
+
+One feature owner, the task's assignee, holds every stage but the reviews, QA and Merge, in one task and one session
+(`session: task`, kept warm while it holds a stage ahead). A task filed with no assignee waits in Pitch for the manager
+to pick one.
+
+- **Pitch.** Owner: the assignee. The task's body is the pitch: the problem, who has it and the fix. To leave: **a
+  person OKs it**: any person, never a bot (people only, nobody named). Over 280 characters (the OK's `body_max`) it
+  is not asked: it is the owner's turn to shorten the body, and an OK is refused. Not now is a snooze, no is a close. A bot's own pitch is not snoozed as a bot's idea in
+  Ideas is (idea_checks: never where the stage asks a person's OK): it reaches a person's Needs you. Jev's duplicate
+  check runs as in Ideas. Expected time: 1 day.
+- **Spec.** Owner: the assignee. To leave: a Spec page (the visual-spec format) with the goal, the scope and acceptance
+  criteria. Jev checks it. Expected time: 2 days.
+- **Related input.** Owner: the assignee. Jev picks the 1 to 2 bots the feature touches over a bar (0.8 to start), and
+  each adds one round of comments to the spec page (`related_input`). It never blocks: with nobody over the bar, or
+  after 4 hours, the task moves on. Expected time: 4 hours.
+- **OK spec.** Owner: the assignee, who attaches the spec page as the comments left it. To leave: **a person OKs it**:
+  any person, never a bot. Jev shows the person what is missing; it never sends the page back. Expected time: 2 days.
+- **Build, Review 1, Fixes 1, Review 2, Fixes 2, QA, Merge:** as on Engineering below, with the assignee in the
+  Builder's place and the QA Owner holding QA. QA's page is OK'd by its named person, as on Engineering.
+- **OK release.** Owner: the assignee. To leave: **a person OKs the release**: any person, never a bot. Then it merges.
+  A task Merge sends back to QA keeps the person's QA OK as on Engineering (C22), and the release is asked again.
+- **Validate.** Owner: the assignee. To leave: a "Checked in production" page that names the version production runs,
+  checked against the release that holds the task's own PRs. No person. Not validated sends the task back to Build,
+  in the same task. A bot's snooze here ends when this server runs a new release. Expected time: 1 day.
+
+### Work no feature owns
+
+There are no Builders. Engineering work no Product task holds (main is red, CI, dependencies, a refactor across areas)
+goes to the Engineering Manager, who gives it to the owner of that area as a task: a red main to the QA Owner; CI and
+dependencies to the Code Hygiene Owner when the company has one, else CI to the Infrastructure Owner and a vulnerable
+dependency to the Security Owner; a refactor or a bug in one area to that area's feature owner, as a Product task.
+A product bug a test or a deploy exposes goes the same way (templates/catalog/engineering-manager, qa-owner,
+release-owner).
+
+### Product and Engineering (before 0.6)
+
+The pair a company set up before 0.6 keeps until its tasks finish. Nothing new is made with it.
+
+#### Product (the pair's)
 
 From an idea to something checked in production. Manager: the Product Manager bot.
 
@@ -863,7 +927,9 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
   The Product Owner takes the page's screenshots itself, in a read-only view of the app
   ([computers.md](computers.md#let-a-bot-view-the-app-read-only)).
 
-### Engineering
+#### Engineering
+
+Build through Merge here is what Product's Build through Merge does, with the Builder's part the feature owner's.
 
 From a task to a published release. Manager: the Engineering Manager bot. Builder is one bot, working each task in its
 own thread.

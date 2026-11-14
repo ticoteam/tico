@@ -17,7 +17,7 @@ from backend import validate_gate as G
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import _answers, _team
+from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
 
 ANA, BEN, PM = X.ANA, "human:ben", "bot:pm"
 CHECKED = "Checked on rc.13, phone and desktop width: the account row is 40 px and not clipped."
@@ -28,6 +28,7 @@ def c(company):
     with company.transaction() as conn:
         _team(conn)
         _answers(conn, software="yes")
+        legacy_pair(conn)  # the pair's Validate, which sends back to In development
         PS.ensure_presets(conn)
         yield conn
 

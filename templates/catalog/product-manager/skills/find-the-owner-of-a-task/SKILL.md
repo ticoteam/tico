@@ -12,7 +12,7 @@ Steps:
    computer is a Paused task, not a wrong owner: leave it, the task carries on when the bot can run.
 3. If the stage's owner is active and the task has another owner who cannot do the work, reassign it to the stage's
    owner: `tico task reassign <id> <owner> -m "<why>" --version N`.
-4. If the work needs someone else (a numbered copy such as `builder-2`, a person, a bot with the right access), reassign
+4. If the work needs someone else (the feature owner of the area it touches, a person, a bot with the right access), reassign
    it to them and say why in one line.
 5. If nobody on the team can do it, do not pick a stand-in. Ask your manager on a task to hire or assign, and snooze the
    task to the date they give, or ask the person above you on the task.

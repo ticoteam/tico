@@ -1977,15 +1977,16 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
 # The release production runs, as end_release_snoozes last saw it.
 RELEASE_SEEN = "release-snoozes-seen"
 # Open tasks a bot snoozed in a stage whose page names the release production runs (`with_release`: Product's
-# Validate), whose filed work has a PR in the repository this server runs (?1, `owner/name`): its production is this
-# server. Such a snooze waits for this server to run a release, so a new one ends it.
+# Validate), whose work (its own PRs, or those of the tasks it filed) has a PR in the repository this server runs (?1,
+# `owner/name`): its production is this server. Such a snooze waits for this server to run a release, so a new one ends
+# it.
 _RELEASE_WAITS = (
     "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id "
     "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status = 'open' AND t.pipeline_id IS NOT NULL "
     "AND EXISTS (SELECT 1 FROM requirements r WHERE r.stage_id = t.stage_id AND r.withdrawn_at IS NULL "
     "AND json_extract(r.settings, '$.with_release')) "
-    "AND EXISTS (SELECT 1 FROM links l JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.source = 'github' "
-    "AND tl.item_type = 'pr' WHERE l.from_task_id = t.id "
+    "AND EXISTS (SELECT 1 FROM task_links tl WHERE tl.source = 'github' AND tl.item_type = 'pr' "
+    "AND (tl.task_id = t.id OR tl.task_id IN (SELECT l.to_task_id FROM links l WHERE l.from_task_id = t.id)) "
     "AND lower(substr(tl.item_key, 1, length(?1) + 1)) = lower(?1) || '#') "
     "ORDER BY z.created_at, z.id"
 )
@@ -1993,7 +1994,7 @@ _RELEASE_WAITS = (
 
 def end_release_snoozes(conn: "sqlite3.Connection", running: str, repo: str) -> list[str]:
     """This server runs another release (`running`, of `repo`, read at start-up): a bot's snooze ends in a stage that
-    checks the release production runs, on a task whose filed work is in `repo`, and whoever has the turn is woken once
+    checks the release production runs, on a task whose work is in `repo`, and whoever has the turn is woken once
     with the release, instead of sleeping to the clock time it guessed. A person's snooze stays. The first start that
     sees no earlier release only records it. Returns the tasks whose snooze ended."""
     found = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (RELEASE_SEEN,)).fetchone()

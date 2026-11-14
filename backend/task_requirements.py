@@ -287,6 +287,17 @@ def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     )
 
 
+def too_long(task: Row, requirement: Row) -> str | None:
+    """Why an OK is not asked yet when the task's body is longer than the requirement's `body_max` (Product's pitch):
+    the owner shortens it first. None when it fits or there is no such setting."""
+    settings: Row = requirement.get("settings") or {}
+    most = settings.get("body_max")
+    size = len(str(task.get("body") or "").strip())
+    if not isinstance(most, int) or isinstance(most, bool) or size <= most:
+        return None
+    return f"The pitch is {size} characters, over {most}: shorten the task's body"
+
+
 def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     if answer and answer["answer"] == "done":
         return Standing(requirement, MET, line="Done")
@@ -296,14 +307,17 @@ def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer:
 def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     person = person_of(conn, requirement, task["visit"]["id"])
     what = requirement.get("line") or "OK"
+    over = too_long(task, requirement)
+    if over:  # the pitch is the owner's to shorten before anyone is asked; a body made longer after the OK counts too
+        return Standing(requirement, NOT_MET, task.get("owner_id"), over)
     if answer and answer["answer"] == "ok":
         return Standing(requirement, MET, line="OK'd")
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"Sent back: {notes}" if notes else "Sent back")
-    if task.get("stage_id") == "product-validate":
-        from . import validate_gate
+    from . import validate_gate
 
+    if validate_gate.is_stage(task.get("stage_id")):
         held = validate_gate.held(conn, task, requirement)  # a bot's OK reaches the person with a passed page only
         if held:
             return held
@@ -773,12 +787,13 @@ def page_for(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[R
 
 
 def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row | None:
-    """The person's OK of this page on the task's visit to this stage before the visits to Merge just before this one."""
+    """The person's OK of this page on the task's visit to this stage before the visits to Merge just before this one,
+    passing over the stages after this one it went through on its way to Merge (Product's OK release)."""
     from .item_sources import github as F
 
     visits = conn.execute(
-        "SELECT v.id, v.stage_id, s.on_enter FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
-        "ORDER BY v.entered_at DESC, v.rowid DESC",
+        "SELECT v.id, v.stage_id, s.on_enter, s.position FROM visits v JOIN stages s ON s.id = v.stage_id "
+        "WHERE v.task_id=? ORDER BY v.entered_at DESC, v.rowid DESC",
         (task["id"],),
     ).fetchall()
     if len(visits) < 3 or str(visits[0][0]) != str(task["visit"]["id"]):
@@ -786,7 +801,11 @@ def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row 
     at = 1
     while at < len(visits) and F.queues_prs({"on_enter": visits[at][2]}):
         at += 1
-    if at == 1 or at == len(visits) or visits[at][1] != visits[0][1]:
+    if at == 1:
+        return None
+    while at < len(visits) and visits[at][1] != visits[0][1] and int(visits[at][3]) > int(visits[0][3]):
+        at += 1
+    if at == len(visits) or visits[at][1] != visits[0][1]:
         return None
     ok = _newest_signoff(conn, str(visits[at][0]), requirement)
     if not ok or ok["answer"] != "ok" or not ok.get("heads") or not str(ok["by_id"]).startswith("human:"):
@@ -966,9 +985,11 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
     "related_input": _related_input,
 }
 # The keys a requirement's `settings` may hold, by kind. Anything else is refused at save (pipeline_settings).
+# - ok: `body_max` (the most characters the task's body may have before it is asked: Product's 280-character pitch).
 # - page: `rubric` (Jev's "what to check"; empty means the requirement's line), `at_head` (the page is for the newest
 #   commit of every linked PR: a new commit puts it back to the owner), `with_release` (Jev is also shown the release
-#   of the tasks this task filed, so "production is older than the release" is judged against what GitHub says).
+#   of the task's PRs and of the tasks it filed, so "production is older than the release" is judged against what
+#   GitHub says).
 # - answer (a stage's): `name` (how the answer is read back, `values`), `type` (ANSWER_TYPES), `min` and `max` (a
 #   number's bounds), `question` (what is asked, in full). A choice's choices are the requirement's `choices`.
 # - item: its condition's (item_sources.Condition.settings, `settings_of`).
@@ -976,7 +997,7 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
 #   long the stage waits for their comments before it is met anyway). Defaults in backend/related_input.py.
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),
-    "ok": (),
+    "ok": ("body_max",),
     "answer": ("name", "type", "min", "max", "question"),
     "linked_done": (),
     "page": ("rubric", "at_head", "with_release"),

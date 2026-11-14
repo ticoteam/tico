@@ -116,15 +116,16 @@ def requirement_of(conn: "sqlite3.Connection", row: Row, requirement: str) -> Ro
 
 
 def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
-    """The release each task this task filed went out in: for every merged PR of a filed task, the oldest saved release
-    whose history holds its merge commit (item_sources.github.included). Sorted, each once. What a Validate page is checked
-    against (`with_release`)."""
+    """The release the task's work went out in: for every merged PR of the task itself (Product, where one task holds
+    its PRs) or of a task it filed (the pair's Product, whose Engineering task holds them), the oldest saved release
+    whose history holds its merge commit (item_sources.github.included). Sorted, each once. What a Validate page is
+    checked against (`with_release`)."""
     cursor = conn.execute(
-        "SELECT r.tag, MIN(r.published_at) FROM links l "
-        "JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.source = 'github' AND tl.item_type = 'pr' "
+        "SELECT r.tag, MIN(r.published_at) FROM task_links tl "
         "JOIN item_metadata f ON f.source = tl.source AND f.item_type = tl.item_type AND f.item_key = tl.item_key "
         "JOIN github_release_commits rc ON rc.commit_sha = json_extract(f.fields, '$.merged_sha') AND rc.included = 1 "
-        "JOIN github_releases r ON r.id = rc.release_id WHERE l.from_task_id = ? "
+        "JOIN github_releases r ON r.id = rc.release_id WHERE tl.source = 'github' AND tl.item_type = 'pr' "
+        "AND (tl.task_id = ?1 OR tl.task_id IN (SELECT l.to_task_id FROM links l WHERE l.from_task_id = ?1)) "
         "GROUP BY json_extract(f.fields, '$.merged_sha')",
         (task_id,),
     )
