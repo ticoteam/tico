@@ -164,3 +164,23 @@ def test_a_job_refused_for_its_task_says_so_not_that_its_computer_could_not_star
     claim(api, machine)
     [failure] = get(api, "health")["failures"]
     assert failure["why"] == execution.REFUSED_RUN, failure
+
+
+def test_the_try_count_is_of_the_computer_the_line_names(api, monkeypatch):
+    monkeypatch.setattr(execution, "PRE_START_TRIES", 4)
+    studio = runner(api, "ana", label="Studio Mac")
+    assign(api, studio, "ops")
+    ready(api, studio, ["ops"])
+    post(api, "chat/ops", {"text": "Please summarize the current work."})
+    for _ in range(2):
+        lapse(api, studio, claim(api, studio))
+    # The bot moves to another computer, where the job lapses twice more and fails.
+    office = runner(api, "ana", label="Office Mac")
+    with api.app.state.store.read() as c:
+        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
+    assign(api, office, "ops", generation=generation)
+    ready(api, office, ["ops"])
+    for _ in range(2):
+        lapse(api, office, claim(api, office))
+    [failure] = get(api, "health")["failures"]
+    assert failure["why"] == "couldn't start on Office Mac after 2 tries", failure
