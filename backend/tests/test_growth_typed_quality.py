@@ -189,3 +189,15 @@ def test_c4_a_number_saved_before_origins_were_kept_keeps_its_actual_mark(api):
     assert marks(later) == ("estimate", {"spend": "typed·actual", "new_customers": "typed·estimate"})
     cleared = put(api, "growth/cohorts", {"channel": "google-search", "month": M, "new_customers": None})
     assert marks(cleared) == ("actual", {"spend": "typed·actual"})
+
+
+def test_c4_an_old_estimate_keeps_its_estimate_mark(api):
+    """C4's other side for a month saved before origins were kept: an old estimate stays an estimate, so clearing the
+    new unmarked number does not turn the month actual."""
+    channel(api)
+    put(api, "growth/cohorts", {"channel": "google-search", "month": M, "spend": 1800, "quality": "estimate"})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM growth_origins")
+    put(api, "growth/cohorts", {"channel": "google-search", "month": M, "new_customers": 7})
+    cleared = put(api, "growth/cohorts", {"channel": "google-search", "month": M, "new_customers": None})
+    assert marks(cleared) == ("estimate", {"spend": "typed·estimate"})
