@@ -391,13 +391,13 @@ pub fn claude_config(servers: &[Value]) -> Map<String, Value> {
     out
 }
 
-/// `mcpServers` for pi's `mcp.json` (streamable HTTP only). `direct` exposure declares each tool to the model, as
-/// Claude Code declares its own, so a bot calls them in one step. Headers keep their `${VAR}` placeholders, which pi
-/// reads from the turn's environment.
+/// `mcpServers` for pi's `mcp.json` (streamable HTTP only). `deferred` exposure keeps each tool out of the request
+/// until `tool_search` loads it, as Claude Code and Codex find theirs by search, so a large server costs no prompt
+/// tokens before it is used. Headers keep their `${VAR}` placeholders, which pi reads from the turn's environment.
 pub fn pi_config(servers: &[Value]) -> Map<String, Value> {
     let mut out = Map::new();
     for s in servers {
-        let mut row = json!({"url": s["url"], "exposure": "direct"});
+        let mut row = json!({"url": s["url"], "exposure": "deferred"});
         let headers = headers_of(s);
         if !headers.is_empty() {
             row["headers"] = Value::Object(headers);
