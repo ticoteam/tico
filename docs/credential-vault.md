@@ -63,10 +63,13 @@ passkey): a bot's fill or copy of the missing value is refused with `no_password
 person to sign in through the live view; **Replace login** adds a password later.
 
 - **Shared** account: used by the people, bots and groups it is shared with (**Who can use it**, the same grants as any
-  Credential). Credential administrators add one. A group gives it to every person and bot in it and in the groups
-  nested under it, now and later, as a group in **Who can see it** does; leaving the group, removing the group from
-  the account or deleting the group ends it at the next use. Only a credential administrator shares with a group, and
-  only a website login: never an API key.
+  Credential). Credential administrators add one. A new shared account defaults to **All bots**, including bots added
+  later; turn that off in **Who can use it** to keep selected grants. People always need their own grant (or a group).
+  Existing accounts keep their saved access. All bots is a website-account grant, not permission to reveal a password
+  or to give an API key to every bot. A group gives it to every person and bot in it and in the groups nested under it,
+  now and later, as a group in **Who can see it** does; leaving the group, removing the group from the account or
+  deleting the group ends it at the next use. Only a credential administrator changes All bots or shares with a group,
+  and only on a website login: never an API key.
 - **Own** account: one person's or one bot's, used by them alone (and by that person's Assistant). It is never shared.
   A person adds one for themselves or for a bot they manage.
 - Which account a caller gets on a site: their own there, else the shared one shared with them (the oldest when there

@@ -416,7 +416,7 @@ def test_a_content_change_turns_on_the_slow_sweep_that_reads_it_on_a_pull_reques
         (["skills/tico-tickets/SKILL.md"], [CLI_SWEEP]),
         (["clients/cli_spec.py"], [CLI_SWEEP]),
         (["clients/commands/tasks.py"], [CLI_SWEEP]),
-        (["e2e/cli/expected-refusals.json"], [CLI_SWEEP]),
+        (["e2e/cli/expected-refusals/task/ask.json"], [CLI_SWEEP]),
         (["clients/catalog.py"], [TEMPLATES_SWEEP]),
         (["backend/health.py"], []),
         (["ui/app/tools.ts"], []),

@@ -13,7 +13,10 @@ A cohort is the customer spells whose "became customer" date falls in the same p
   computed retention. Revenue per customer is the customer's own, else the typed figure for their channel's month, else
   the settings value; margin is the channel's month, else the settings. A cohort under the minimum shows `too_few`.
 - `cac`, `payback_months`: by channel (and all together) only, from the month's typed spend and bot cost. Spend has no
-  segment or plan (`not_split`); typed spend is monthly, so a weekly cohort says `spend_monthly`; Unknown has no spend.
+  segment or plan (`not_split`); Unknown has no spend. A weekly cohort's spend is its Monday-to-Sunday days of Finance's
+  daily ad spend (backend/growth_finance.py weeks) while a live Finance ad spend source fills spend, with no bot cost,
+  which is monthly. Otherwise, or where a channel's month spend is typed or another source's (who wins,
+  backend/growth_sync.py: a sync never overwrites a typed actual), spend is monthly and the week says `spend_monthly`.
 
 Each figure is {value, status, origin: computed}, with `count` and `denominator` where it is a share. A cohort's
 `sources` are the customers sources its customers were loaded from ("upload", or "source:<id>"). The trace lists
@@ -36,6 +39,8 @@ from fastapi import Request
 from . import brand as _brand_untyped
 from . import growth as _growth_untyped
 from . import growth_customers as GC
+from . import growth_finance as GF
+from . import growth_sync as GS
 from . import hubdb as _hubdb_untyped
 from .store import Problem
 
@@ -65,6 +70,15 @@ class Fact:
     plan: str | None = None
     revenue_month: float | None = None
     source: str = ""  # the growth_customers.source it was loaded under: "upload" or "source:<id>"
+
+
+@dataclass(slots=True)
+class Daily:
+    """Finance's daily ad spend by week, for weekly CAC, while a live Finance ad spend source fills spend."""
+
+    spend: dict[tuple[str | None, str], float]  # (channel slug or None for Unknown, the week's Monday) -> spend
+    monthly: set[tuple[str, str]]  # (channel slug, YYYY-MM) whose spend is typed or another source's: the month wins
+    bot_cost: bool = False  # a channel-month read has bot cost, which weekly CAC leaves out
 
 
 @dataclass(slots=True)
@@ -120,11 +134,13 @@ def compute(
     min_cohort: int = MIN_COHORT,
     trace: bool = False,
     keys: bool = False,
+    daily: Daily | None = None,
 ) -> list[Row]:
     """Every cohort of `facts` cut by `cut` at `grain`, as of the date `on`.
 
     channels: the Growth channel slugs; any other channel is Unknown. typed: the typed cohorts, for the month's spend,
-    revenue and margin. trace: add each window's rule; keys: and the customer keys behind it."""
+    revenue and margin. trace: add each window's rule; keys: and the customer keys behind it. daily: Finance's daily
+    spend by week, for weekly CAC (daily_spend); without it a week's CAC says spend is monthly."""
     conf, typed, channels = conf or {}, typed or {}, channels or set()
     groups: dict[tuple[str | None, str], _Group] = {}
     for f in facts:
@@ -135,7 +151,7 @@ def compute(
         if group is None:
             group = groups[(value, key)] = _Group(value, key, start, end, [])
         group.rows.append((f, slug))
-    out = [_cohort(g, on, cut, grain, typed, conf, min_cohort, trace, keys) for g in groups.values()]
+    out = [_cohort(g, on, cut, grain, typed, conf, min_cohort, trace, keys, daily) for g in groups.values()]
     out.sort(key=lambda r: (r["value"] == UNKNOWN, r["value"] is None, str(r["value"])))
     out.sort(key=lambda r: r["period"], reverse=True)
     return out
@@ -167,14 +183,19 @@ def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
 
-def _spend(cut: str, value: str | None, grain: str, key: str, typed: Typed) -> tuple[float | None, str]:
-    """(cost, status) for CAC: the month's typed spend plus bot cost for a channel, or every channel's for all."""
+def _spend(
+    cut: str, value: str | None, grain: str, key: str, typed: Typed, daily: Daily | None = None
+) -> tuple[float | None, str]:
+    """(cost, status) for CAC: the month's typed spend plus bot cost for a channel, or every channel's for all; for a
+    week, its days of Finance's daily spend (`daily`), unless a month it touches has spend that wins."""
     if cut in ("segment", "plan"):
         return None, "not_split"
-    if grain == "week":
+    if grain == "week" and daily is None:
         return None, "spend_monthly"
     if cut == "channel" and value == UNKNOWN:
         return None, "no_spend"
+    if grain == "week" and daily is not None:
+        return _week_spend(value if cut == "channel" else None, key, daily)
     if cut == "channel":
         rows = [typed[(value, key)]] if (value, key) in typed else []
     else:
@@ -184,6 +205,47 @@ def _spend(cut: str, value: str | None, grain: str, key: str, typed: Typed) -> t
     if not costs:
         return None, "no_spend"
     return float(sum((s or 0) + (b or 0) for s, b in costs)), "ok"
+
+
+def _week_spend(slug: str | None, monday: str, daily: Daily) -> tuple[float | None, str]:
+    """A week's spend for one channel, or (slug None) every channel's but Unknown's, as a month's all has it."""
+    start = date.fromisoformat(monday)
+    months = {start.isoformat()[:7], (start + timedelta(days=6)).isoformat()[:7]}
+    if any(m in months and (slug is None or s == slug) for s, m in daily.monthly):
+        return None, "spend_monthly"
+    found = [v for (s, w), v in daily.spend.items() if w == monday and s and (slug is None or s == slug)]
+    return (float(round(sum(found), 2)), "ok") if found else (None, "no_spend")
+
+
+def daily_spend(c: sqlite3.Connection, typed: Typed, since: date, until: date) -> Daily | None:
+    """Finance's daily spend by week over the weeks [since, until] touch, while a live Finance ad spend source fills
+    spend; None without one, or while it cannot read Finance (its source shows Failing with the reason)."""
+    source = H._one(
+        c,
+        "SELECT id, sync_map FROM gtm_sources WHERE sync_kind=? AND retired_at IS NULL ORDER BY created_at LIMIT 1",
+        (GF.KIND,),
+    )
+    if not source:
+        return None
+    start, end = period(since, "week")[1], period(until, "week")[2]
+    try:
+        spend = GF.weeks(c, GS.sync_map(source), start.isoformat(), end.isoformat())
+    except GF.Failing:
+        return None
+    ours = {
+        str(r[0])
+        for r in c.execute(
+            "SELECT cohort_id FROM growth_origins WHERE field='spend' AND origin='synced' AND source_id=?",
+            (source["id"],),
+        )
+    }
+    first, last = start.isoformat()[:7], end.isoformat()[:7]
+    shown = [(slug, m, row) for (slug, m), row in typed.items() if slug and first <= m <= last]
+    return Daily(
+        spend,
+        {(slug, m) for slug, m, row in shown if row.get("spend") is not None and str(row["id"]) not in ours},
+        any(row.get("bot_cost") for _, _, row in shown),
+    )
 
 
 def _trace(rows: list[tuple[Fact, str | None]], kept: list[Fact]) -> Row:
@@ -212,6 +274,7 @@ def _cohort(
     min_cohort: int,
     trace: bool,
     keys: bool,
+    daily: Daily | None = None,
 ) -> Row:
     rows, start, end = group.rows, group.start, group.end
     n = len(rows)
@@ -257,7 +320,7 @@ def _cohort(
         why = "not_yet" if 30 not in rates else "missing"
         view["expected_months"] = _figure(months, "ok" if months is not None else why)
         view["ltv"] = _figure(ltv, "ok" if ltv is not None else why if months is None else "missing")
-    cost, status = _spend(cut, group.value, grain, group.period, typed)
+    cost, status = _spend(cut, group.value, grain, group.period, typed, daily)
     cac = round(cost / n, 2) if cost is not None and n else None
     view["cac"] = _figure(cac, status)
     if cac is None:
@@ -393,22 +456,37 @@ def computed(
     if plan:
         rows = [f for f in rows if f.plan == plan]
     keys = customers and may_see_keys(c, auth, who, conf)
+    typed = typed_cohorts(c)
+    daily = None
+    if grain == "week" and cut in ("channel", "all") and rows:
+        daily = daily_spend(c, typed, min(f.became for f in rows), max(f.became for f in rows))
     cohorts = compute(
         rows,
         today(conf),
         cut=cut,
         grain=grain,
         channels=slugs,
-        typed=typed_cohorts(c),
+        typed=typed,
         conf=conf,
         min_cohort=min_cohort(conf),
         trace=customers,
         keys=keys,
+        daily=daily,
     )
     if cut == "channel" and grain == "month":
         # A typed actual that differs, beside its computed figure, and whether this reader may choose (growth.beside).
         G.typed_beside(c, cohorts, who.actor, bool(admin(auth, who)))
     note = {"segment": "spend is not split by segment", "plan": "spend is not split by plan"}.get(cut)
+    if grain == "week" and not note:
+        statuses = {r["cac"]["status"] for r in cohorts}
+        if daily is None or ("spend_monthly" in statuses and "ok" not in statuses):
+            note = "spend is monthly"
+        elif "spend_monthly" in statuses:
+            note = "weeks touching a month with typed spend say monthly"
+            if daily.bot_cost:  # the weeks that show a CAC still leave bot cost out
+                note += "; bot cost is monthly"
+        elif daily.bot_cost:
+            note = "weekly CAC is daily ad spend: bot cost is monthly"
     return {
         "by": cut,
         "grain": grain,
@@ -418,7 +496,7 @@ def computed(
         "min_cohort": min_cohort(conf),
         "computed_from": len(rows),
         "cohorts": cohorts,
-        "cac_note": note or ("spend is monthly" if grain == "week" else None),
+        "cac_note": note,
         "keys_visible": keys,
         "loads": GC.loads(c, 5),
     }

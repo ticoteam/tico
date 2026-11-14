@@ -160,6 +160,7 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     github_app = ctx.app.state.github_app
     from .github import (
         flush_wakes,
+        recompute_stored_checks,
         reconcile_worktree_prs,
         refresh_deployed_tasks,
         refresh_conflicts,
@@ -169,6 +170,9 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
 
     with ctx.store.transaction() as c:
         flush_wakes(c)
+    # Once: links that read "failing" only for Tico's own gate, from before it was left out, are read again (#426).
+    with ctx.store.transaction() as c:
+        recompute_stored_checks(c)
     refresh_deployed_tasks(github_app)
     # Checks pending with no word from GitHub are read afresh: a suite that never starts sends none (Dev 646).
     refresh_pending_checks(github_app)
@@ -295,6 +299,18 @@ def idea_checks(ctx: Context) -> tuple[str | None, bool]:
     return f"Jev checked {checked} ideas", False
 
 
+def related_input(ctx: Context) -> tuple[str | None, bool]:
+    # Related input (backend/related_input.py): Jev scores the bots a task at a Related input stage touches, with no
+    # transaction held, the picks are asked once each, and a stage whose comments are in or whose time ran out is met.
+    from . import related_input as RI
+
+    at = ctx.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    done = RI.run(ctx.store, at)
+    if not done:
+        return None, True
+    return f"Related input moved {done} tasks on", False
+
+
 # ----------------------------------------------------------------------------- the steps, in the order they run
 MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
     timedelta(minutes=1),
@@ -409,6 +425,7 @@ STEPS = [
     ),
     Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
     Step("idea_checks", "Jev's idea check", "due", None, idea_checks, failure="idea_checks", capture="scheduler"),
+    Step("related_input", "Related input", "due", None, related_input, failure="related_input", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}

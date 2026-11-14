@@ -77,6 +77,9 @@ const GRX_NOTE: Record<string, string> = {
   'spend is not split by segment': 'CAC is per channel: spend is not split by segment.',
   'spend is not split by plan': 'CAC is per channel: spend is not split by plan.',
   'spend is monthly': 'Weekly CAC needs daily spend: spend is monthly.',
+  'weeks touching a month with typed spend say monthly': 'Weekly CAC counts daily ad spend from Finance; a week touching a month with typed spend says monthly.',
+  'weeks touching a month with typed spend say monthly; bot cost is monthly': 'Weekly CAC counts daily ad spend from Finance, without bot cost, which is monthly; a week touching a month with typed spend says monthly.',
+  'weekly CAC is daily ad spend: bot cost is monthly': 'Weekly CAC counts daily ad spend from Finance: bot cost is monthly, so it is left out.',
 };
 
 // The card's body for a computed view; a view of another cut or grain than the one picked reads the picked one.

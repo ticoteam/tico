@@ -253,6 +253,8 @@ That gives three kinds of stage, and no others:
    carries each name's newest answer (`values`). The owner, the manager or any person answers the owner's; it takes no
    thumb and can't be given away. A bot answers with `tico task answer <id> confidence 80`. "Only when" and "Met when"
    (routing on answers) are not built yet and are refused at save.
+7. **Related input.** Jev picks the one or two bots the work touches, and each comments once. It never blocks. See
+   [Related input](#related-input).
 
 Two switches sit on a requirement:
 
@@ -263,6 +265,32 @@ Two switches sit on a requirement:
 
 Requirements are guard rails that keep work visible. They are not security. No refusal about a task counts toward
 quarantining a bot: not a requirement, room, a cap or a rule.
+
+### Related input
+
+Kind `related_input` (backend/related_input.py), on the Product pipeline's Related input stage. Before a person OKs a
+spec, the bots whose areas the work touches get one say.
+
+- **Jev scores.** A Heartbeat step (`related_input`) sends Jev the task's pitch (title and description) and the
+  newest page attached in an earlier stage (the Spec page), with the company's bots: each one's name, job line and
+  team. Jev scores each bot from 0 to 1 (`questions/related-bots.json`, one question per bot). No transaction is held
+  during the call. Jev writes no prose, so each score's "why" is the bot's own job line.
+- **Never asked.** The task's owner and assignee, the pipeline's manager, and every bot that holds one of the
+  pipeline's stages (a fixed owner, or a bot on a pick list, such as the reviewers and QA). Also never asked: the
+  General Manager and the helper bots, a bot that cannot run, and, on a private task, a bot that cannot already read
+  it. The engine never adds a reader.
+- **Picks.** The top `most` bots (default 2) that score at or over `bar` (default 0.8). Each pick gets one wake on the
+  task: read the spec page and comment once, from its area, with `tico task comment`. Its run needs no turn (the
+  wake key's kind is `related`), and nobody chases it.
+- **Met** when every pick has commented, when no bot clears the bar or there is no bot to ask, when Jev failed three
+  times, or when `wait_hours` (default 4) have passed since the task entered the stage. Until then it waits on Jev
+  ("Jev is picking related bots", then "Waiting on comments from Billing Owner"), so no ladder runs and nobody is
+  Late. A timeout is met, never stuck: "4 hours passed: no comment from Mail Owner".
+- **On the task.** One history line for the picks and their scores ("Related input: Jev picked Billing Owner (0.91)"),
+  or why nobody was asked, and one for how it ended. Every score, why and pick is kept in `related_inputs`, one row
+  per visit and requirement.
+- **Settings** on the requirement: `bar` (over 0, up to 1), `most` (1 to 5) and `wait_hours` (over 0, up to 72). A
+  value out of range is refused at save.
 
 ### A requirement on one task
 
@@ -350,7 +378,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: A page is attached.
    - Asked: a check Tico ships (Spec, Review, QA, Checked in production) is asked as its named parts, each a yes/no
      in the same one call (backend/pipeline_judges.py `CHECKS`); a company's own rubric is asked whole. Each check has
-     its bar in `BARS` (today 0.75 yes, 0.2 no for all four). Met when every part is yes, not met when any part is no,
+     its bar in `BARS` (0.5 yes, 0.2 no; QA 0.75 yes, raised by the eval; set from 826 real verdicts and what happened next:
+     evals/pipeline_judge/results/bars-2026-11-13.md). Met when every part is yes, not met when any part is no,
      unsure when none is no and one can't be told. The reason names the missing parts in one line each, at most
      three ("No out-of-scope list found."), never a probability or the check's wording. (Changed Nov 13, task #351.)
    - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with the missing parts; on a page a person OKs

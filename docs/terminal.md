@@ -111,8 +111,8 @@ task arrives; `--pick turns|random`, `--limit-each N` (`--no-limit-each`), `--pr
 `--owns-task` (the pick becomes the task's owner) set how, and alone change a stage that picks already. `tico task
 create`, `tico task request` and `tico task file` may leave the owner out when the pipeline's first stage picks: the
 stage picks one (`tico task file` is otherwise yours by default). Requirement kinds: `page` (a page someone OKs), `ok` (a named person's OK), `owner_done` (the
-holder says done), `linked_done` (the tasks it filed are done) and `item` (a source's condition: `--source github
---condition pr_merged`). A requirement's kind never changes: remove it and add another.
+holder says done), `linked_done` (the tasks it filed are done), `related_input` (Jev picks 1 to 2 related bots to
+comment once) and `item` (a source's condition: `--source github --condition pr_merged`). A requirement's kind never changes: remove it and add another.
 
 Removing takes the exact name of what goes, typed again; nothing is removed without it, and the server refuses while
 open tasks are in the way:

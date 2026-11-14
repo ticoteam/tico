@@ -126,6 +126,7 @@ async function pageTag(key: string) {
     const tag = data.tag;
     $('#main').innerHTML = `<div class="page-tags">
       <div class="board-tools"><h1 data-tag-heading>${esc(tagSummary(tag))}</h1><a href="#/tags">Tags</a></div>
+      ${tag.bot_writers.length ? `<p class="muted" data-tag-bot-writers>Bots that may set this tag on any task they can read: ${esc(tag.bot_writers.map(actor => botDisplayName(actor.replace(/^bot:/, ''))).join(', '))}</p>` : ''}
       <section class="card"><header><h2>${tag.is_template ? 'Template' : 'Checklist'}</h2>${data.editable ? '<button type="button" data-tag-edit>Edit</button>' : ''}</header><div class="tag-notes" data-tag-notes></div><div data-tag-editor hidden></div></section>
       ${tag.is_template ? `<section class="card"><header><h2>Make a tag</h2></header>${tagCreateForm(tag)}</section>` : ''}
       <section class="card"><header><h2>Tasks</h2></header><div data-tag-tasks>${tagTaskRows(data.tasks)}</div>${data.next_offset != null ? '<button type="button" data-tag-more>More</button>' : ''}</section></div>`;
