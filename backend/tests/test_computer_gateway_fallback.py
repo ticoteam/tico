@@ -10,8 +10,8 @@ from backend import login_holds, models_preset
 from backend import model_subscriptions as MS
 from backend.store import H
 from backend.tests.helpers.api import assign, get, post, runner
-from backend.tests.helpers.model_subscriptions import add, give
-from backend.tests.test_models_preset import CLAUDE, choose, connected, on_claude
+from backend.tests.helpers.model_subscriptions import add, give, on
+from backend.tests.helpers.models_preset import CLAUDE, choose, connected
 
 
 def computer(api, bot="ops", signed_in=False, label="Studio Mac", bot_ready=None):
@@ -85,7 +85,7 @@ def turn(api, m, bot="ops"):
 def gateway_company(api, monkeypatch):
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
-    on_claude(api, "ops")
+    on(api, "ops", "claude", CLAUDE["model"])
 
 
 def test_a_computer_whose_plans_ran_out_waits_unless_its_own_switch_is_on(api, gateway_company):
@@ -107,16 +107,16 @@ def test_a_computer_whose_plans_ran_out_waits_unless_its_own_switch_is_on(api, g
 
 
 def test_only_the_computer_that_falls_back_runs_on_the_gateway(api, gateway_company):
-    on_claude(api, "cpo")
-    off, on = computer(api, "ops", label="Off Mac"), computer(api, "cpo", label="On Mac")
-    for m in (off, on):
+    on(api, "cpo", "claude", CLAUDE["model"])
+    waits, falls = computer(api, "ops", label="Off Mac"), computer(api, "cpo", label="On Mac")
+    for m in (waits, falls):
         sid = add(api, name="Plan for " + m["runner_id"])["id"]
         give(api, m, "claude", sid)
         used_up(api, sid)
-    switch(api, on, True)
+    switch(api, falls, True)
     # AC-4: both plans are used up; only the bot on the computer that falls back runs, on the Gateway.
-    assert turn(api, off, "ops") is None
-    got = turn(api, on, "cpo")
+    assert turn(api, waits, "ops") is None
+    got = turn(api, falls, "cpo")
     assert got and got["config"]["runtime"] == "pi"
 
 
@@ -124,13 +124,13 @@ def test_a_plan_with_usage_left_runs_whatever_the_switch_says(api, gateway_compa
     m = computer(api, bot_ready=True)
     sid = add(api)["id"]
     give(api, m, "claude", sid)
-    for on in (False, True):
-        switch(api, m, on)
+    for allowed in (False, True):
+        switch(api, m, allowed)
         got = turn(api, m)
         # AC-5: on the plan, never the Gateway as its main model.
         assert got["config"]["model"] == CLAUDE["model"]
         # The Gateway is the last hop when the plan runs out mid-turn only where the computer falls back to it.
-        assert ("gateway_fallback" in got["config"]) is on
+        assert ("gateway_fallback" in got["config"]) is allowed
         post(api, f"attempts/{got['id']}/started", {"thread_id": "t-" + got["id"]}, m["token"])
         post(
             api, f"attempts/{got['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"]
