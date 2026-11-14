@@ -4071,6 +4071,7 @@ def _tag_view(row):
     value = dict(row)
     value["metadata"] = _json(value.pop("metadata"), {}) or {}
     value["is_template"] = bool(value["is_template"])
+    value["bot_writers"] = _json(value.get("bot_writers"), []) or []
     return value
 
 
@@ -4138,13 +4139,17 @@ def tag_create(
     return tag(conn, ident)
 
 
-def tag_update(conn, actor, ident, version, *, label=None, metadata=None, markdown=None, owner=None, mover=None):
+def tag_update(
+    conn, actor, ident, version, *, label=None, metadata=None, markdown=None, owner=None, bot_writers=None, mover=None
+):
     _writer(conn, actor)
     row = tag(conn, ident)
     if not row:
         refuse(conn, actor, "not-found", "no such tag")
     if not tag_can_edit(conn, actor, row, mover):
         refuse(conn, actor, "identity", "this tag is edited by its owner or a task mover")
+    if bot_writers is not None:
+        bot_writers = _tag_bot_writers(conn, actor, row, bot_writers, mover)
     if row["version"] != version:
         refuse(conn, actor, "version_conflict", "Tag changed; fetch it and retry your update")
     fields = {
@@ -4154,6 +4159,7 @@ def tag_update(conn, actor, ident, version, *, label=None, metadata=None, markdo
             ("metadata", _dump(metadata) if metadata is not None else None),
             ("markdown", markdown),
             ("owner", owner),
+            ("bot_writers", _dump(bot_writers) if bot_writers is not None else None),
         )
         if v is not None
     }
@@ -4172,6 +4178,43 @@ def tag_update(conn, actor, ident, version, *, label=None, metadata=None, markdo
         refuse(conn, actor, "version_conflict", "Tag changed; fetch it and retry your update")
     event(conn, actor, "tag.update", row["id"], {"fields": list(fields), "version": version + 1})
     return tag(conn, row["id"])
+
+
+def _tag_bot_writers(conn, actor, row, writers, mover=None):
+    """The bots that may attach and remove `row` on any task they can read (_label_writer). A grant reaches past the
+    tasks a bot manages, so only a task mover sets it: the tag's owner, a bot among them, cannot grant itself. A label
+    Tico acts on (WORKFLOW_LABELS) is never granted. An empty list revokes every grant."""
+    if mover is None:
+        mover = actor == KEEPER or can_move(conn, actor)
+    if not mover:
+        teams = ", ".join(MOVER_TEAMS)
+        refuse(conn, actor, "identity", f"the bots that may set a tag are chosen by a person on the {teams} teams")
+    if row["key"] in WORKFLOW_LABELS and any(str(w).strip() for w in writers):
+        refuse(conn, actor, "kind", f"{row['key']} changes how Tico runs a task, so only a person sets it")
+    wanted = []
+    for name in [w for w in writers if str(w).strip()]:  # `--bot-writers ''` on a command line revokes
+        ident = resolve_actor(conn, str(name))
+        if not is_bot(ident):
+            refuse(conn, actor, "kind", f"{name} is not a bot on this team")
+        if ident not in wanted:
+            wanted.append(ident)
+    return sorted(wanted)
+
+
+def _granted_labels(conn, actor, row, keys):
+    """The labels in `keys` that a mover let `actor` set on any task it can read (tags.bot_writers). A public roadmap
+    label keeps its own gate even when granted."""
+    from .roadmaps import settings as roadmap_settings
+
+    if not is_bot(actor) or not keys or not task_private_readable(conn, actor, row):
+        return set()
+    public = set(roadmap_settings(conn)["labels"])
+    granted = set()
+    for key in keys:
+        found = tag_by_key(conn, key)
+        if found and actor in found["bot_writers"] and key not in WORKFLOW_LABELS and key not in public:
+            granted.add(key)
+    return granted
 
 
 TASK_TAGS_SQL = (
@@ -4241,6 +4284,8 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
 
     keys = _labels(labels)
     changed = sorted(set(keys) ^ set(task_labels(row)))
+    granted = _granted_labels(conn, actor, row, changed)
+    changed = [k for k in changed if k not in granted]
     if not changed:
         return False
     teams = ", ".join(MOVER_TEAMS)
@@ -6205,6 +6250,10 @@ def task_update(
         "manager_id"
     )
     mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and manager == actor
+    # A bot a mover granted particular tags (tags.bot_writers) may set those, and only those, on a task it reads.
+    if not mine and labels_only and is_bot(actor):
+        changed = set(_labels(labels)) ^ set(task_labels(row))
+        mine = bool(changed) and changed <= _granted_labels(conn, actor, row, changed)
     if not mine and not mover and actor != KEEPER:
         refuse(
             conn,

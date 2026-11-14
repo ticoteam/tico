@@ -372,7 +372,8 @@ tag; later template edits leave existing instances alone. Put the instance on ta
 cannot be attached directly.
 
 The team owner and humans on the leadership, product and engineering teams can attach and
-remove tags, just as they could change labels. A tag's owner (human or bot) can edit its notes,
+remove tags, just as they could change labels, and can let a named bot attach and remove one tag on
+any task it can read ([Permissions](permissions.md#tags)). A tag's owner (human or bot) can edit its notes,
 metadata and label, as can those task movers. Anyone signed in can create a tag they own; a mover
 can create one for another teammate. A tag page lists only tasks the viewer may read. Tick a
 checklist item to save it. If another teammate saved first, load the current notes and combine your changes. Your open notes draft stays in place.
