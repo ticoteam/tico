@@ -21,7 +21,7 @@ certifi==2026.10.23
     #   httpcore
     #   httpx
     #   sentry-sdk
-cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+cffi==2.1.1
     # via cryptography
 charset-normalizer==3.5.2
     # via reportlab
@@ -33,7 +33,7 @@ cryptography==50.0.2
     # via
     #   -r requirements.in
     #   pyjwt
-dnspython==2.9.0
+dnspython==2.9.2
     # via
     #   -r requirements.in
     #   pymongo
@@ -71,16 +71,18 @@ protobuf==7.36.2
     # via livekit
 psycopg[binary]==3.3.6
     # via -r requirements.in
-psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+psycopg-binary==3.3.6
     # via psycopg
-pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+pycparser==3.0
     # via cffi
 pydantic==2.14.1
     # via fastapi
 pydantic-core==2.50.1
     # via pydantic
 pyjwt[crypto]==2.15.1
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   pyjwt
 pymongo==4.19.0
     # via -r requirements.in
 pymysql==1.2.3
@@ -126,7 +128,7 @@ urllib3==2.8.0
     #   sentry-sdk
 uvicorn==0.54.0
     # via -r requirements.in
-uvloop==0.23.0 ; sys_platform != 'win32'
+uvloop==0.23.0 ; sys_platform != "win32"
     # via -r requirements.in
 websockets==16.1.1
     # via -r requirements.in
