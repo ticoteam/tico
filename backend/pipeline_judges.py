@@ -195,14 +195,14 @@ CHECKS: dict[str, tuple[Part, ...]] = {
 # evals/pipeline_judge/rebuild.py from the 826 real verdicts of Nov 11 to 13 and what happened next (the result is
 # evals/pipeline_judge/results/bars-2026-11-13.md): the lowest bar that keeps met-then-sent-back no higher than before
 # and unsure under 10%. A send-back no bar could hold with unsure under 10% (the person sent back the work, every part
-# plainly there) is out of Jev's reach and does not count. QA is raised to 0.7 because at 0.5 the eval's page with the
-# checks of an older commit was met (the result's "raised_by_eval"). Rerun both when what Jev is shown, or a check's
+# plainly there) is out of Jev's reach and does not count. QA stays at 0.75 because the eval's page with the checks of
+# an older commit scored 0.57 to 0.71 over nine real runs: met at 0.5, and once at 0.7 (the result's "raised_by_eval"). Rerun both when what Jev is shown, or a check's
 # parts, change: `rebuild.py --out` rewrites the result without "raised_by_eval", so carry each raise over by hand
 # (test_the_committed_rebuild_result_is_the_bar_the_server_uses fails until it agrees with BARS).
 BARS: dict[str, tuple[float, float]] = {
     "spec": (0.5, NOT_MET_AT),
     "review": (0.5, NOT_MET_AT),
-    "qa": (0.7, NOT_MET_AT),
+    "qa": (0.75, NOT_MET_AT),
     "validate": (0.5, NOT_MET_AT),
 }
 

@@ -344,7 +344,7 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: A page is attached.
    - Asked: a check Tico ships (Spec, Review, QA, Checked in production) is asked as its named parts, each a yes/no
      in the same one call (backend/pipeline_judges.py `CHECKS`); a company's own rubric is asked whole. Each check has
-     its bar in `BARS` (0.5 yes, 0.2 no; QA 0.7 yes, raised by the eval; set from 826 real verdicts and what happened next:
+     its bar in `BARS` (0.5 yes, 0.2 no; QA 0.75 yes, raised by the eval; set from 826 real verdicts and what happened next:
      evals/pipeline_judge/results/bars-2026-11-13.md). Met when every part is yes, not met when any part is no,
      unsure when none is no and one can't be told. The reason names the missing parts in one line each, at most
      three ("No out-of-scope list found."), never a probability or the check's wording. (Changed Nov 13, task #351.)

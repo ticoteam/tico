@@ -682,10 +682,10 @@
  "raised_by_eval": {
   "qa": {
    "bar": [
-    0.7,
+    0.75,
     0.2
    ],
-   "why": "At 0.5 the 92-case eval's QA trap trap-fixes-2-checks-old-head (a page reporting the checks of an older commit) was met in a real run (weakest part 0.66; 0.57 to 0.66 over five runs), a false met. At 0.7 it is unsure and the 46 check cases pass the eval's bar (accuracy 91%, 0 false met, unsure 8.7%). QA unsure on the 826 verdicts at 0.7 is 3.7%, met-then-sent-back 0."
+   "why": "At 0.5 the 92-case eval's QA trap trap-fixes-2-checks-old-head (a page reporting the checks of an older commit) was met in a real run, a false met; at 0.7 it was met again in one run (weakest part 0.71). Over nine real runs its weakest part was 0.57 to 0.71. At 0.75 it was unsure in every run, and the 46 check cases pass the eval's bar (0 false met). 0.75 is the highest bar that keeps QA unsure under 10% on the 826 verdicts (5.3%, met-then-sent-back 0); it is QA's bar before this change."
   }
  }
 }
