@@ -121,6 +121,28 @@ def test_when_on_hq_gets_the_five_fields_and_a_dead_hq_falls_back_silently(envir
     assert checker.view("0.2.13")["latest"] == "0.2.0"
 
 
+@pytest.mark.parametrize("hosted", ["own", "invited"])
+def test_a_hosted_server_counts_by_default_and_never_shows_the_notice(environment, monkeypatch, hosted):
+    api = environment(hosted=hosted)
+    assert api.get("/api/v2/config", headers=signed_in()).json()["usage_count_notice"] is False
+    checker, seen = wire(monkeypatch, api)  # the owner was never shown a notice: hosted counts anyway
+    checker.refresh()
+    assert [r.url.host for r in seen] == ["updates.tico.team"] and set(seen[0].url.params) == ALLOWED
+    # The owner's switch still turns it off.
+    assert api.put("/api/v2/system/usage-count", json={"enabled": False}, headers=signed_in()).status_code == 200
+    checker, seen = wire(monkeypatch, api)
+    checker.refresh()
+    assert [r.url.host for r in seen] == ["api.github.com"] and not seen[0].url.query
+
+
+def test_a_self_hosted_server_counts_nothing_before_the_notice(environment, monkeypatch):
+    api = environment()
+    assert api.get("/api/v2/config", headers=signed_in()).json()["usage_count_notice"] is True
+    checker, seen = wire(monkeypatch, api)
+    checker.refresh()
+    assert [r.url.host for r in seen] == ["api.github.com"] and not seen[0].url.query
+
+
 def test_hq_messages_and_known_issues_for_this_version_ride_the_check(environment, monkeypatch):
     api = environment()
     counting(api)

@@ -88,6 +88,7 @@ def requirement_line(req):
     said = req.get("line") or {
         "owner_done": "its owner says the work is done",
         "linked_done": "the tasks it filed are done",
+        "related_input": "the bots Jev picks have commented, or its wait ran out",
         "item": " ".join(str(x) for x in (req.get("source"), req.get("condition")) if x).replace("_", " ")
         or "a linked item is ready",
     }.get(kind, kind or "")
@@ -811,14 +812,15 @@ def requirement_list(api, args):
 @tool(
     "tico_requirement_add",
     "Add a requirement to a stage. Kinds: page (a page someone OKs), ok (an OK from a named person), owner_done (its "
-    "holder says done), linked_done (the tasks it filed are done), item (a linked item's condition, with source and "
-    "condition, e.g. github pr_merged). `who_oks people_only` keeps the OK for people. Who may change the pipeline. "
+    "holder says done), linked_done (the tasks it filed are done), related_input (Jev picks 1-2 related bots to comment "
+    "once; settings bar, most, wait_hours), item (a linked item's condition, with source and condition, e.g. github "
+    "pr_merged). `who_oks people_only` keeps the OK for people. Who may change the pipeline. "
     'Example: tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me',
     {
         "stage": STAGE,
         "kind": {
             "type": "string",
-            "enum": ["page", "ok", "owner_done", "linked_done", "item"],
+            "enum": ["page", "ok", "owner_done", "linked_done", "related_input", "item"],
             "description": "What it asks for: a page, an OK, the owner done, the linked tasks done, or a source's item",
         },
         "source": _s("An item: its source (github)"),
@@ -1237,7 +1239,8 @@ CLI = (
     ),
     Command(
         "requirement add",
-        "add a requirement to a stage: page, ok, owner_done, linked_done, or item (a source's condition)" + CHANGERS,
+        "add a requirement to a stage: page, ok, owner_done, linked_done, related_input, or item (a source's condition)"
+        + CHANGERS,
         args=(Arg("kind", "--kind"), _either("can_push_past")),
         example='tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me',
     ),

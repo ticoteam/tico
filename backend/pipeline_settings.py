@@ -723,6 +723,10 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
     for key in NOT_YET:
         if key in req["settings"] or req.get(key):
             problems.append(f"Only when and Met when are not ready yet. Remove {key} from {name} on {label}.")
+    if req["kind"] == "related_input":
+        from . import related_input
+
+        problems.extend(related_input.check(req["settings"], label))
     for key, value in req["settings"].items():
         if key in NOT_YET:
             continue

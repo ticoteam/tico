@@ -4966,6 +4966,7 @@ SCHEMAS.update(
                 "is_template": "b",
                 "template_id": "n",
                 "owner": "n",
+                "bot_writers": items("s"),
                 "version": "i",
                 "created_at": "s",
                 "updated_at": "s",

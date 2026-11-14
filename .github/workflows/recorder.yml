@@ -50,9 +50,20 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Without an Apple certificate the Recorder signs with its own self-signed one, so every release has the
+          # same designated requirement (identifier + certificate root) and macOS keeps the person's Accessibility,
+          # microphone and screen grants across updates. Ad hoc signing changed it on every build.
+          RECORDER_CERTIFICATE: ${{ secrets.RECORDER_SIGNING_CERTIFICATE }}
+          RECORDER_CERTIFICATE_PASSWORD: ${{ secrets.RECORDER_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
           # Keychain output can contain private certificate subject names.
           exec >/dev/null 2>&1
+          own=""
+          if [ -z "$APPLE_CERTIFICATE" ] && [ -n "$RECORDER_CERTIFICATE" ]; then
+            APPLE_CERTIFICATE="$RECORDER_CERTIFICATE"
+            APPLE_CERTIFICATE_PASSWORD="$RECORDER_CERTIFICATE_PASSWORD"
+            own=1
+          fi
           [ -n "$APPLE_CERTIFICATE" ] || exit 0
           echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
           security create-keychain -p ci build.keychain
@@ -61,6 +72,18 @@ jobs:
           security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
           rm certificate.p12
+          if [ -n "$own" ]; then
+            # codesign only finds identities in keychains on the search list. A self-signed identity is untrusted,
+            # so it is named by its SHA-1 rather than looked up among valid identities.
+            keychains=()
+            while IFS= read -r line; do
+              line="${line//\"/}"
+              keychains+=("${line//[[:space:]]/}")
+            done < <(security list-keychains -d user)
+            security list-keychains -d user -s build.keychain "${keychains[@]}"
+            hash=$(security find-identity build.keychain | awk 'NR>1 && $2 ~ /^[0-9A-F]{40}$/ {print $2; exit}')
+            [ -n "$hash" ] && echo "RECORDER_SIGNING_IDENTITY=$hash" >> "$GITHUB_ENV"
+          fi
       - name: Apple signing and notarization, only when the secrets exist
         env:
           IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -71,6 +94,7 @@ jobs:
           # An empty APPLE_SIGNING_IDENTITY makes the bundler try to sign with nothing; only a
           # real identity goes into the environment. Without one, tauri.conf.json signs ad hoc.
           [ -n "$IDENTITY" ] && echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          [ -z "$IDENTITY" ] && [ -n "$RECORDER_SIGNING_IDENTITY" ] && echo "APPLE_SIGNING_IDENTITY=$RECORDER_SIGNING_IDENTITY" >> "$GITHUB_ENV"
           [ -n "$ID" ] && echo "APPLE_ID=$ID" >> "$GITHUB_ENV"
           [ -n "$PASSWORD" ] && echo "APPLE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
           [ -n "$TEAM" ] && echo "APPLE_TEAM_ID=$TEAM" >> "$GITHUB_ENV"
@@ -97,6 +121,14 @@ jobs:
           # The stable name the download link uses; the versioned disk image stays next to it.
           cp out/Tico-Recorder_*.dmg out/Tico-Recorder.dmg
           ls out/*.app.tar.gz.sig >/dev/null || { echo "::error::No recorder updater signature"; exit 1; }
+          # A release signed with a certificate must keep a certificate-based designated requirement, or every update
+          # loses the person's privacy grants again.
+          app=$(find recorder/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          requirement=$(codesign -d -r- "$app" 2>&1 | grep '^designated' || true)
+          echo "Recorder $requirement"
+          if [ -n "$APPLE_SIGNING_IDENTITY" ] && ! grep -q 'certificate' <<<"$requirement"; then
+            echo "::error::Recorder is not signed with its certificate"; exit 1
+          fi
           ls -la out
       - uses: actions/upload-artifact@v4
         with:

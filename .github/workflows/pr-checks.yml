@@ -344,6 +344,8 @@ jobs:
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      - name: Coverage pragmas carry a reason
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/diff_coverage.py pragmas --base "$BASE_SHA" --head HEAD'
       - name: Test imports (no file imports a test module; shared names live in helpers/)
         run: python3 scripts/check_test_imports.py --base "$BASE_SHA"
       # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
@@ -632,3 +634,24 @@ jobs:
             fi
           fi
           exit "$status"
+      # The diff coverage gate (scripts/diff_coverage.py): every statement this change adds to backend/ and clients/ must
+      # run under the tests above, on a queue group and on a ready pull request from this repository (the runs that have
+      # the tests job; this job skips drafts). It runs after the last job, so it costs a checkout and two artifact
+      # downloads. Its own step fails the check and lists each statement no test ran.
+      - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pr-check-plan
+      - if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: results-*
+          path: ci-results
+          merge-multiple: true
+      - name: Diff coverage gate (added statements must run under the tests)
+        if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+        run: python3 scripts/diff_coverage.py gate --plan ci-plan.json --results ci-results

@@ -511,7 +511,7 @@ async function renderSettingsPrivacy() {
   if (!host.isConnected) return; // Settings redrew while this was loading; the new card draws itself
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
-    <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}<a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
+    <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}Anonymous: no names, no content. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
     <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet.'}</p>
     <label class="privacy-row"><input type="checkbox" id="privacy-suggestions"${suggestions.share_stats_for_suggestions ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Share stats for suggestions</label>
     <label class="privacy-row"><input type="checkbox" id="privacy-outcomes"${suggestions.report_suggestion_outcomes ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Report suggestion outcomes</label>`;

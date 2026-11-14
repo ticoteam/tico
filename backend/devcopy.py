@@ -591,6 +591,8 @@ KEEP = (
             "page_verdicts",
             # Jev's duplicate check on each idea filed into Product's Ideas (backend/idea_checks.py): kept with its tasks.
             "idea_checks",
+            # Jev's related bots for a task at a Related input stage (backend/related_input.py): kept with its tasks.
+            "related_inputs",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
             "turns",

@@ -902,7 +902,14 @@ refused and nothing is created. A publication OK is for a task that exists, so t
 task without the roadmap tag and then adds it with the OK, or asks a mover. A refusal says which
 tags need a person or an OK and why; an OK that is not given yet, already used or for other tags is
 the same refusal. It counts toward the bot's quarantine once per task an hour, so retrying it
-cannot quarantine the bot. Nothing here makes a bot a mover. Creating and editing a tag is for
+cannot quarantine the bot. A mover may also grant a bot one tag (the tag's bot writers,
+`tico tag update <tag> --version <n> --bot-writers <bot>`): that bot then attaches and removes that tag,
+and only that tag, on any task it can read, such as a test bot marking tickets passed or failed. The
+rest of the task stays out of its reach, and a change that touches any other tag is refused whole.
+Only a mover sets the list, so a bot that owns a tag cannot grant it to itself; `goal:on` and
+`goal:off` are never granted, a public roadmap tag keeps its gate, and an empty list
+(`--bot-writers ''`) revokes. The tag's page names the bots it is granted to. Nothing here makes a
+bot a mover. Creating and editing a tag is for
 those movers or that tag's owner, including a bot owner. A teammate may create a tag they own.
 Owner rights on a tag do not grant mover rights on its tasks. Tags and templates are readable by
 signed-in teammates; their task lists show only tasks each caller may read. Every edit requires the

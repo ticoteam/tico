@@ -41,7 +41,9 @@ and UI files outside the UI map run the tests that name or read them and the smo
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
-ready. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
+ready. The PR checks and the queue fail a change when fewer than 80% of the Python statements it adds to backend/ and
+clients/ run under its selected tests (`scripts/diff_coverage.py`); a line opts out only with `# pragma: no cover - <reason>`
+on that line. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
 queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt

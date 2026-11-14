@@ -196,7 +196,8 @@ def tag_create(api, args):
 
 @tool(
     "tico_tag_update",
-    "Edit a tag's metadata, checklist, label or owner. Send its current version; stale edits are refused.",
+    "Edit a tag's metadata, checklist, label, owner or the bots that may set it. Send its current version; stale "
+    "edits are refused.",
     {
         "id": _s("Tag id or key"),
         "version": {"type": "integer", "description": "Its current version, from `tag show`"},
@@ -204,12 +205,20 @@ def tag_create(api, args):
         "metadata": {"type": "object", "description": "Replace metadata: a JSON object"},
         "markdown": _s("Replace Markdown; on a command line, --markdown-file names a file that holds it"),
         "owner": _s("New owner; empty to clear"),
+        "bot_writers": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 50,
+            "description": "Bots that may attach and remove this tag on any task they can read; a task mover sets "
+            "it, and an empty list revokes every grant",
+        },
     },
     required=("id", "version"),
     writes=True,
 )
 def tag_update(api, args):
-    body = {k: args[k] for k in ("version", "label", "metadata", "markdown", "owner") if args.get(k) is not None}
+    fields = ("version", "label", "metadata", "markdown", "owner", "bot_writers")
+    body = {k: args[k] for k in fields if args.get(k) is not None}
     return _as_person(api).post("tags/" + quote(args["id"], safe=""), body, key=_key(args))
 
 

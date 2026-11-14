@@ -27,10 +27,7 @@ DEFAULT_HQ = "https://updates.tico.team"
 WINDOW_DAYS = 7
 NOTE_EVERY = 3600  # a person's activity is written at most this often
 DOC_URL = "https://github.com/ticoteam/tico/blob/main/PRIVACY.md"
-NOTICE = (
-    "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). "
-    "Turn off: Settings > General or TICO_TELEMETRY=off."
-)
+NOTICE = "Tico counts installs anonymously (no names, no content). Turn off in Settings > General > Privacy."
 FIELDS = ("install_id", "version", "active_people", "active_bots", "first_result")
 _OFF = ("off", "0", "false", "no", "disabled")
 
@@ -123,6 +120,9 @@ class Census:
 
     def ready(self, c):
         """Counting is on and the owner has been shown the notice (as Homebrew does: nothing goes out before it)."""
+        # Hosted by our team: counted by default, with no notice (the company signed up for hosting).
+        if self.settings.hosted:
+            return not self.off_reason(c)
         return not self.off_reason(c) and bool(_load(c).get("notice"))
 
     # ------------------------------------------------------------------ the payload
@@ -252,7 +252,7 @@ class Census:
 
 def notice_due(c, settings, who):
     """Whether the owner's page prints the one-time notice: counting is on, and it was not dismissed."""
-    if who is None or who.role != "owner" or settings.demo or env_off():
+    if who is None or who.role != "owner" or settings.demo or settings.hosted or env_off():
         return False
     record = _load(c)
     return record.get("enabled", True) and record.get("notice") != "dismissed"

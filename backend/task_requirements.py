@@ -47,6 +47,7 @@ KIND_NAMES = {
     "item": "An item",
     "linked_done": "Linked work done",
     "answer": "Answer from someone",
+    "related_input": "Related input",
 }
 # Kinds whose "Who OKs" switch means something. Elsewhere it reads as `none`.
 OK_KINDS = ("ok", "page", "answer")
@@ -947,6 +948,14 @@ def _item(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     return standing
 
 
+def _related_input(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    """Jev picks the bots the work touches and each comments once; met on their comments, on no pick, or on time
+    (backend/related_input.py)."""
+    from . import related_input
+
+    return related_input.standing(conn, task, requirement, answer)
+
+
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
     "owner_done": _owner_done,
     "ok": _ok,
@@ -954,6 +963,7 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
     "linked_done": _linked_done,
     "page": _page,
     "item": _item,
+    "related_input": _related_input,
 }
 # The keys a requirement's `settings` may hold, by kind. Anything else is refused at save (pipeline_settings).
 # - page: `rubric` (Jev's "what to check"; empty means the requirement's line), `at_head` (the page is for the newest
@@ -962,6 +972,8 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
 # - answer (a stage's): `name` (how the answer is read back, `values`), `type` (ANSWER_TYPES), `min` and `max` (a
 #   number's bounds), `question` (what is asked, in full). A choice's choices are the requirement's `choices`.
 # - item: its condition's (item_sources.Condition.settings, `settings_of`).
+# - related_input: `bar` (Jev's score a bot needs to be asked, 0 to 1), `most` (bots asked at most), `wait_hours` (how
+#   long the stage waits for their comments before it is met anyway). Defaults in backend/related_input.py.
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),
     "ok": (),
@@ -969,6 +981,7 @@ SETTINGS: dict[str, tuple[str, ...]] = {
     "linked_done": (),
     "page": ("rubric", "at_head", "with_release"),
     "item": (),
+    "related_input": ("bar", "most", "wait_hours"),
 }
 
 

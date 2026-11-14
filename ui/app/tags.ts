@@ -128,6 +128,7 @@ async function pageTag(key: string) {
     // A sub-page of Tags: the shared header's "Tags ›" leads back (ui/app/page-head.ts). Its title is set again on a save.
     $('#main').innerHTML = `<div class="page-tags">
       ${pageHead({title: tagSummary(tag), hook: 'tag-head', back: {href: '#/tags', label: 'Tags'}})}
+      ${tag.bot_writers.length ? `<p class="muted" data-tag-bot-writers>Bots that may set this tag on any task they can read: ${esc(tag.bot_writers.map(actor => botDisplayName(actor.replace(/^bot:/, ''))).join(', '))}</p>` : ''}
       <section class="card"><header><h2>${tag.is_template ? 'Template' : 'Checklist'}</h2>${data.editable ? '<button type="button" class="ghost tag-edit" data-tag-edit>Edit</button>' : ''}</header><div class="tag-notes" data-tag-notes></div><div data-tag-editor hidden></div></section>
       ${tag.is_template ? `<section class="card"><header><h2>Make a tag</h2></header>${tagCreateForm(tag)}</section>` : ''}
       <section class="card"><header><h2>Tasks</h2></header><div class="tag-list" data-tag-tasks>${tagTaskRows(data.tasks)}</div>${data.next_offset != null ? '<button type="button" class="ghost tag-more" data-tag-more>More</button>' : ''}</section></div>`;

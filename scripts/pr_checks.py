@@ -1961,9 +1961,23 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
         jobs.append({"suite": "selection", "files": []})
+    coverage = {"lines": {}}
+    if event in ("pull_request", "merge_group") and base:
+        # The statements this change adds to backend/ and clients/ (diff_coverage.py): the gate counts which of them run.
+        if __package__:
+            from .diff_coverage import plan_coverage
+        else:
+            from diff_coverage import plan_coverage
+        try:
+            # An empty list may be a git failure (changed_files gives [] then): plan_coverage asks git itself and raises.
+            coverage = plan_coverage(base, head, changed=changed or None)
+        except (OSError, subprocess.CalledProcessError) as error:
+            # The gate fails on a plan that could not read the diff rather than passing with nothing to count.
+            coverage = {"lines": {}, "error": f"diff coverage could not read the change's diff: {error}"}
     plan = {
         **picked,
         "changed": changed,
+        "coverage": coverage,
         "queue_jobs": queue_jobs(changed),
         "matrix": {"include": jobs},
         "estimated_seconds": loads,
@@ -1999,6 +2013,16 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
+def coverage_config(suite, root=ROOT):
+    """The coverage config for a measured job: tests and migrations are left out of the data, the sources come from --cov.
+    `patch = subprocess` measures the Python children tests start (the CLI tests run clients/ that way); pytest-cov 7
+    no longer does it itself, and it combines their data into the job's file."""
+    path = root / "ci-results" / f"coverage-{suite}.ini"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("[run]\npatch = subprocess\nomit =\n    */tests/*\n    */migrations/*\n")
+    return path
+
+
 def run(plan_path, suite, root=None, quarantine=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
     `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
@@ -2010,6 +2034,13 @@ def run(plan_path, suite, root=None, quarantine=False):
     entries = plan["matrix"]["include"] if "matrix" in plan else plan["jobs"]
     job = next(j for j in entries if j.get("suite", j.get("name")) == suite)
     files = job["files"]
+    if __package__:
+        from .diff_coverage import extract
+    else:
+        from diff_coverage import extract
+    lines = plan.get("coverage", {}).get("lines", {})
+    measured = bool(lines) and suite != "selection" and not suite.startswith("browser-")
+    data = root / "ci-results" / f"coverage-{suite}.data"
     if suite == "selection":
         if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
@@ -2036,7 +2067,7 @@ def run(plan_path, suite, root=None, quarantine=False):
             "pytest",
             "-q",
             "-n",
-            str(WORKERS),
+            os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)),
             *PYTEST_FLAGS,
             "-o",
             "junit_family=xunit1",
@@ -2052,11 +2083,24 @@ def run(plan_path, suite, root=None, quarantine=False):
                 print("Environment: " + " ".join(f"{k}={v}" for k, v in sorted(extra.items())), flush=True)
         if quarantine:
             command.append("--quarantine")
+        if measured:
+            # One data file per job, recording only the plan's statement files; extract() keeps the lines that ran.
+            command += [
+                "--cov=backend",
+                "--cov=clients",
+                f"--cov-config={coverage_config(suite, root)}",
+                "--cov-report=",
+            ]
+            # On top of any environment the job already set (a content sweep's, above).
+            env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
         command += files
         print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
     (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     result = subprocess.run(command, cwd=root, env=env)
+    if measured:
+        extract(plan, data, root / "ci-results" / f"coverage-{suite}.json")
+        data.unlink(missing_ok=True)
     if result.returncode == 0 and not suite.startswith("browser-"):
         cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
         # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
