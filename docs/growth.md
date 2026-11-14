@@ -59,7 +59,9 @@ Each month has one row per channel and one **Unknown** row. A row holds:
 - the share still customers at 30, 90 and 180 days, blank until the cohort is that old (or computed from customers:
   see "Computed from customers" below);
 - revenue per customer per month and margin (`--revenue`, `--margin`, with the margin as a percent);
-- a quality mark: `actual` when every input came from a source, `estimate` when one did not.
+- a quality mark: `actual` when every input came from a source, `estimate` when one did not. A month typed without a
+  mark (`tico growth cohort set` with no `--quality`, or the agent tool with no `quality`) is saved as an `estimate`;
+  pass `--quality actual` when the numbers come from your books. The web form's Data field defaults to Estimate too.
 
 Tico computes the channel numbers from these inputs, so nobody types a computed number:
 

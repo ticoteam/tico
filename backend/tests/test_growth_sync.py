@@ -107,7 +107,7 @@ def test_a_typed_actual_is_held_beside_the_source_value_and_its_owner_chooses(ap
     131 is not raised again; a later different value is; using the source's value makes it synced."""
     channels(api)
     m = month(1)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "new_customers": 120})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "new_customers": 120, "quality": "actual"})
     ops = bot(api, "ops")
     src = connect(api, fields={"new_customers": "signups"}, owner_ref="ops")
     text = f"month,channel,signups\n{m},search-ads,131\n"
@@ -138,7 +138,7 @@ def test_an_old_typed_actual_with_no_origin_is_held_too(api):
     """A number typed before origins were kept counts as typed with its row's quality (spec: old typed data stays)."""
     channels(api)
     m = month(1)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "new_customers": 120})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": m, "new_customers": 120, "quality": "actual"})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM growth_origins")
     src = connect(api, fields={"new_customers": "signups"})

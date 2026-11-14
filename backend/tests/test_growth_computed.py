@@ -255,7 +255,11 @@ def test_computed_replaces_a_typed_estimate(api):  # AC-13
 
 def test_a_typed_actual_that_differs_is_kept_beside_the_computed_figure(api):  # AC-14 (the owner's ask is part 3)
     channel(api)
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "kept_d30": 70, "spend": 900})
+    put(
+        api,
+        "growth/cohorts",
+        {"channel": "search-ads", "month": "2026-09", "kept_d30": 70, "spend": 900, "quality": "actual"},
+    )
     load(api, september())
     row = get(api, "growth/cohorts?month=2026-09")["cohorts"][0]
     assert row["kept_d30"] == 75.0 and row["typed"]["kept_d30"] == 70 and row["computed_or_typed"]["spend"] == "typed"

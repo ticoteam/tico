@@ -2609,3 +2609,51 @@ def test_a_growth_read_prints_the_next_setup_step_or_who_may_and_nothing_once_se
     assert out.splitlines()[-1] == "  Only the owner, an admin or a bot can: Ana, Ben."
     done = remotecli.growth_text("growth channel list", {"channels": [], "setup": {"done": True}, "you_may": {}})
     assert done == "No channels yet."
+
+
+def test_an_unmarked_growth_month_sends_no_quality_and_the_help_says_it_is_an_estimate(monkeypatch):
+    """#292 C1, C2 and C9: the command and the MCP tool send no quality unless one is given (the server then saves an
+    estimate: backend/tests/test_growth_typed_quality.py), and both say so."""
+    from clients import hubtools, remotecli
+
+    sent = []
+
+    class Api:
+        def get(self, path, **kw):
+            return {"actor": "bot:growth", "kind": "bot"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {}
+
+    api = Api()
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
+    argv = [
+        "growth",
+        "cohort",
+        "set",
+        "--channel",
+        "google-search",
+        "--month",
+        "2026-10",
+        "--spend",
+        "1800",
+        "--new",
+        "6",
+    ]
+    remotecli.run(hubcli.parser().parse_args(argv))
+    tool = hubtools.BY_NAME["tico_growth_cohort_set"]
+    tool["fn"](api, {"channel": "google-search", "month": "2026-10", "spend": 1800, "new_customers": 6})
+    tool["fn"](
+        api, {"channel": "google-search", "month": "2026-10", "spend": 1800, "new_customers": 6, "quality": None}
+    )
+    body = {"channel": "google-search", "month": "2026-10", "spend": 1800, "new_customers": 6}
+    assert sent == [("PUT", "growth/cohorts", body)] * 3
+    remotecli.run(hubcli.parser().parse_args([*argv, "--quality", "actual"]))
+    assert sent[-1][2] == {**body, "quality": "actual"}
+    assert tool["inputSchema"]["properties"]["quality"]["description"].startswith("Default estimate")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["growth", "cohort", "set", "--help"])
+    assert "saved as estimates unless --quality actual" in " ".join(out.getvalue().split())

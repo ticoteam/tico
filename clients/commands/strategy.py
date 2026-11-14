@@ -748,7 +748,11 @@ def growth_cohort_list(api, args):
         "kept_d180": {"type": "number", "description": "% kept after 180 days"},
         "revenue_month": {"type": "number", "description": "Revenue per customer per month"},
         "margin_pct": {"type": "number", "description": "Gross margin %"},
-        "quality": {"type": "string", "enum": ["actual", "estimate"]},
+        "quality": {
+            "type": "string",
+            "enum": ["actual", "estimate"],
+            "description": "Default estimate; actual only when every number came from a source",
+        },
         "sources": {"type": "object", "description": "{field: where the number came from}"},
         "source": {"type": "array", "items": {"type": "string"}, "description": "FIELD=TEXT, instead of sources"},
     },
@@ -1042,7 +1046,8 @@ CLI = (
     ),
     Command(
         "growth cohort set",
-        "one channel's month, only the fields given (any bot or an admin)",
+        "one channel's month, only the fields given (any bot or an admin); numbers are saved as estimates unless "
+        "--quality actual is given",
         args=(
             Arg("channel", "--channel", metavar="SLUG"),
             Arg("month", "--month", metavar="YYYY-MM"),
