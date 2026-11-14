@@ -38,6 +38,8 @@ PAGES = {
     "inbox": page("threads", "threads"),
     "strategy": page("strategy", "bets"),
     "growth": page("growth/numbers", "months", months=24),
+    # Not a nav row: the Growth page's Retention card, computed from the demo's customers (backend/demo_sections/growth.py).
+    "growth-retention": page("growth/computed", "cohorts", by="plan"),
     "finance": page("finance/transactions", "rows"),
     "rules": page("rules", "rules"),
     # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).

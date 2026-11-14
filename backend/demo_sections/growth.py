@@ -9,6 +9,11 @@ per unit than a unit earns, so they pause, and Cara closes their test.
 The growth model counts revenue per customer per month. A unit's sale is spread over the months it counts (a $299 unit
 is about $25 a month over a year, and a Scene Library plan adds about $6), so each channel's monthly revenue stands for
 one sale. The report says so.
+
+After the last Monday run Ana loads the store's customer export (one row per customer, from the same daily model) in
+Growth, so the Retention card computes each cohort from customers and cuts it by channel, segment or plan. The routine's
+typed day-30 share is the same customers' share, so a typed actual never differs from the computed figure and no owner is
+asked to choose.
 """
 
 import json
@@ -290,6 +295,17 @@ CONTENT = {
             ],
         },
     ],
+    # The store's customer export Ana loads after the last run: keys, a segment and a plan per customer. Every tenth
+    # buyer is a business, and three in ten (the subscribers' share of units) take the Scene Library plan. Of the
+    # customers a cohort loses by day 30, one in five is a subscriber.
+    "customers": {
+        "key": "ACME-{:05d}",
+        "segments": ("home", "business"),
+        "plans": ("lights-only", "scene-library"),
+        "churn_days": (6, 28),  # the first and last day after buying that a lost customer stops
+        "subscriber_digits": (3, 6, 9),  # a buyer's last digit in the export's order: Scene Library
+        "subscriber_churn": 5,
+    },
     "routine": {
         "bot": "growth-manager",
         "key": "weekly-numbers",
@@ -344,6 +360,66 @@ def model(start, runs):
     return days
 
 
+def customers(days):
+    """One row per unit sold, from the daily model: each day's units of a channel are that day's new customers. A month's
+    lost customers (its share not kept to day 30) are spread evenly through the month: `lost` says whether one stops
+    paying before day 30, and `stops` on which day."""
+    conf = CONTENT["customers"]
+    home, business = conf["segments"]
+    lights, scenes = conf["plans"]
+    kept = {ch["slug"]: ch["kept"][0] for ch in CONTENT["channels"]}
+    rows, months = [], {}
+    for row in days:
+        for slug, n in row["units"].items():
+            for _ in range(n):
+                i = len(rows)
+                made = {
+                    "key": conf["key"].format(10001 + i),
+                    "day": row["day"],
+                    "channel": slug,
+                    "segment": business if i % 10 == 0 else home,
+                    "plan": scenes if i % 10 in conf["subscriber_digits"] else lights,
+                    "lost": False,
+                    "stops": None,
+                }
+                rows.append(made)
+                months.setdefault((row["day"].strftime("%Y-%m"), slug), []).append(made)
+    low, high = conf["churn_days"]
+    for (_, slug), group in months.items():
+        if slug not in kept:
+            continue  # Unknown: no source tag, and no retention typed for it
+        lost = round(len(group) * (100 - kept[slug]) / 100)
+        from_scenes = lost // conf["subscriber_churn"]
+        for plan, n in ((conf["plans"][1], from_scenes), (conf["plans"][0], lost - from_scenes)):
+            members = [r for r in group if r["plan"] == plan]
+            for j in range(min(n, len(members))):
+                r = members[(j * len(members)) // n]
+                r["lost"] = True
+                r["stops"] = r["day"] + timedelta(days=low + (j * 7) % (high - low + 1))
+    return rows
+
+
+def kept_share(rows):
+    """The share of `rows` still customers on day 30, as Growth computes it (growth_computed._pct)."""
+    return round(sum(1 for r in rows if not r["lost"]) * 100 / len(rows), 1) if rows else None
+
+
+def load_customers(b, people, last):
+    """Ana loads the store's customer export in Growth. A customer whose stop day is still ahead is still paying."""
+    rows = [
+        {
+            "customer key": r["key"],
+            "became customer": r["day"].isoformat(),
+            "channel": r["channel"],
+            "segment": r["segment"],
+            "plan": r["plan"],
+            "churned": r["stops"].isoformat() if r["stops"] and r["stops"] < last else None,
+        }
+        for r in people
+    ]
+    b.call("POST", "growth/customers", {"rows": rows})
+
+
 def month_rows(days, cutoff):
     """Each month's sums by channel over the days before `cutoff`: what the routine sets on that Monday."""
     sums = {}
@@ -360,8 +436,9 @@ def month_rows(days, cutoff):
     return sums
 
 
-def cohort(ch, month, total, monday):
-    """One month row as the routine sets it. Retention lands once the month's first customers have reached it."""
+def cohort(ch, month, total, monday, people=()):
+    """One month row as the routine sets it. Retention lands once the month's first customers have reached it; day 30
+    is the share of this month's customers so far (`people`) kept to day 30, as Growth computes it from them."""
     if ch is None:
         return {
             "channel": UNKNOWN,
@@ -384,7 +461,7 @@ def cohort(ch, month, total, monday):
     }
     for after, key, value in zip((30, 90, 180), ("kept_d30", "kept_d90", "kept_d180"), ch["kept"], strict=True):
         if total["first"] + timedelta(days=after) <= monday:
-            body[key] = value
+            body[key] = kept_share(people) if after == 30 and people else value
     return body
 
 
@@ -492,7 +569,7 @@ def move_idea(b, s, idea, move):
     b.write(work)
 
 
-def weekly(b, s, days, runs, k, monday):
+def weekly(b, s, days, runs, k, monday, people):
     """One Monday run of the routine: the month rows through the Sunday before, the week's readings, and the run's record."""
     routine = CONTENT["routine"]
     if k == 0:
@@ -559,9 +636,9 @@ def weekly(b, s, days, runs, k, monday):
             (run_id,),
         ).fetchone()
         for (month, slug), total in sums.items():
-            growth.cohort_set(
-                c, "bot:" + routine["bot"], models.GrowthCohortSet(**cohort(by_slug.get(slug), month, total, monday))
-            )
+            mine = [p for p in people if p["channel"] == slug and p["day"] < monday and f"{p['day']:%Y-%m}" == month]
+            row = cohort(by_slug.get(slug), month, total, monday, mine)
+            growth.cohort_set(c, "bot:" + routine["bot"], models.GrowthCohortSet(**row))
         for kpi in CONTENT["kpis"]:
             goals.kpi_log(
                 c,
@@ -624,6 +701,7 @@ def schedule(b, s):
 def seed(b):
     start, runs = window(b.now)
     days, last = model(start, runs), runs[-1]
+    people = customers(days)
     s = {"sources": {}, "kpis": {}, "ideas": {}, "routine": None, "automation": None}
     steps = [(moment(start, 9), lambda: setup(b, s))]
     for ch in CONTENT["channels"]:
@@ -643,7 +721,8 @@ def seed(b):
                 )
             )
     for k, monday in enumerate(runs):
-        steps.append((moment(monday, 7), lambda k=k, monday=monday: weekly(b, s, days, runs, k, monday)))
+        steps.append((moment(monday, 7), lambda k=k, monday=monday: weekly(b, s, days, runs, k, monday, people)))
+    steps.append((moment(last, 11), lambda: load_customers(b, people, last)))
     steps.append((b.now, lambda: schedule(b, s)))
     for when, work in sorted(steps, key=lambda step: step[0]):
         b.clock.at = when
