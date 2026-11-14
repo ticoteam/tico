@@ -133,6 +133,14 @@ run('page-chat-pages', ['org', 'toured'], async ({hub, browser, phone, tag}) => 
   // Kept open from above; below 1600 px the open column floats over the header's right, Chat included: › closes it.
   if (await chatShown(page)) await page.locator('aside.pgc [data-pgc-close]').click();
   await page.locator('body > aside.pgc').waitFor({state: 'hidden', timeout: t(5000)});
+  // A header too crowded for one row folds its tools into ⋯ (page-head.ts); Chat is not one of them, it stays in the row.
+  // Rules' tabs, counts and search filled the row at 1440 px on CI's fonts and folded Chat away.
+  const size = page.viewportSize() ?? {width: 1440, height: 900};
+  await page.setViewportSize({width: 1000, height: size.height});
+  await page.waitForFunction(() => document.querySelector('#main .ru-ph')?.classList.contains('ph-fold'), null, {timeout: t(5000)});
+  assert.equal(await page.locator('#main .ru-chat [data-pgc-open]').isVisible(), true, 'Chat stays in a folded header');
+  assert.ok((await box(page, '#main .ru-chat [data-pgc-open]')).y < 140, 'Chat in the header\'s first row');
+  await page.setViewportSize(size);
   await at(page, '#/rules?rule=' + rule.id);
   const side = page.locator('#ru-side');
   await side.locator('.ru-side-h').waitFor({timeout: t(10000)});

@@ -354,11 +354,12 @@ async function pageRules() {
           seq: 0, loaded: new Set(), error: ''};
     ruWire();
     void ruleChecksMount(RU.root.querySelector('.ru-ph'));
-    // Chat with the Rules Owner (page-chat.ts), last of the header's tools (ruDrawHead keeps it there on every tab). It
-    // takes the rule's detail's place: opening it closes the detail, and opening a rule closes it (ruDrawPanel).
-    const chat = document.createElement('span');
+    // Chat with the Rules Owner (page-chat.ts), a part of the header's row of its own, before the filled button: not in
+    // the tools, which a crowded header folds into ⋯ (page-head.ts pageHeadFold), and ruDrawHead redraws on each tab.
+    // It takes the rule's detail's place: opening it closes the detail, and opening a rule closes it (ruDrawPanel).
+    const chat = document.createElement('span'), head = root.querySelector('.ru-ph');
     chat.className = 'pgc-slot ru-chat';
-    root.querySelector('.ru-ph > .ph-tools')?.append(chat);
+    head?.insertBefore(chat, head.querySelector(':scope > .ph-act'));
     void pageChatMount({page: 'rules', label: 'Rules', button: chat, stays: r => rdUnder(r, RULES_ROUTE),
       panel: {open: () => !!RU?.root.classList.contains('ru-open'), close: () => { if (RU) location.hash = ruBack(); }}});
   }
@@ -386,7 +387,6 @@ function ruDrawHead() {
   const human = S.me?.role !== 'bot';
   // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
   if (ru.tab === 'internal' && head.querySelector('.ph-tools .rr-q')) return;
-  const chat = head.querySelector('.ru-chat');   // the owner's Chat (pageRules), last of the tools on every tab
   const toolsBy: Partial<Record<RuleTab, string>> = {
     internal: `<div class="rr-find"><input class="rr-q" type="search" placeholder="Search people, bots and teams" aria-label="Search people, bots and teams" autocomplete="off">
       <div class="rr-results" role="listbox" aria-label="Matches" hidden></div></div>`,
@@ -397,7 +397,6 @@ function ruDrawHead() {
     due: human ? '<button class="primary ph-go" type="button" data-ru-add-due>Add due date</button>' : '',
   };
   pageHeadSet(head, 'tools', toolsBy[ruTab()] || '');
-  if (chat) pageHeadTools(head)?.append(chat);
   pageHeadSet(head, 'primary', primaryBy[ruTab()] || '');
 }
 function ruDraw() {
