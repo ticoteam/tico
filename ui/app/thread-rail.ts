@@ -325,3 +325,29 @@ function threadBrowseOpen(): void {
   q.focus();
   void load();
 }
+
+// ---- Thread dialogs and the teammates a picker offers: shared by the rail, New message and a thread's Members and
+// settings (the threads-page part, ui/app/threads-page.ts).
+// Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
+// helpers and the viewer are never listed.
+function threadAddable({groups = true}: {groups?: boolean} = {}): ThdPick[] {
+  const bots = shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
+    .map(e => ({actor: 'bot:' + e.name, label: (e.display_name || e.name)!}));
+  const people = (S.people || []).filter((p: ThdAccessible & (typeof S.people)[number]) => p.id && !p.hidden && p.id !== S.me?.id && p.my_access?.write !== false)
+    .map(p => ({actor: 'human:' + p.id, label: p.name || p.id}));
+  const teams = groups ? (S.orgGroups || []).filter((g: ThdAccessible & OrgGroup) => g.id && g.my_access?.write).map(g => ({actor: 'group:' + g.id, label: g.name || g.id})) : [];
+  return [...people, ...teams, ...bots].sort((a, b) => a.label.localeCompare(b.label));
+}
+function threadDialog(id: string, label: string): HTMLDialogElement {
+  let dlg = document.getElementById(id) as HTMLDialogElement | null;
+  if (!dlg) {
+    dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg);
+    // A route change (a link, the phone's Back) leaves the page the dialog was for.
+    addEventListener('hashchange', () => { if (dlg?.open) dlg.close(); });
+  }
+  dlg.setAttribute('aria-label', label);
+  return dlg;
+}
+const threadDialogHead = (title: string) => `<header class="tmodal-head"><h2>${esc(title)}</h2><span class="spacer"></span>
+  <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>`;
+function threadDialogWire(dlg: HTMLDialogElement): void { dlg.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dlg.close(); }); }

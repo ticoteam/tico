@@ -5,19 +5,6 @@ type ClEntry = import('./types/api').ChangelogEntry;
 type ClList = import('./types/api').ChangelogList;
 type ClRead = import('./types/api').ChangelogReadResult;
 
-window.renderChangelogNotice = function () {
-  const count = Number(S.config.changelog?.unread_count) || 0;
-  const notice = document.querySelector<HTMLElement>('#changelog-notice');
-  const badge = document.querySelector<HTMLElement>('#changelog-badge');
-  if (notice) {
-    // The sidebar's one version row (ui/app/notices.ts): while a newer release is offered, that row stands in for this one.
-    notice.hidden = !count || nvUpdateShown();
-    const label = notice.querySelector<HTMLElement>('.changelog-notice-label');
-    if (label) label.textContent = S.config.version ? `Updated to ${nvVersion(S.config.version)}` : "What's new";
-  }
-  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = String(count); }   // ticks (ui/app/motion.ts)
-};
-
 // The top of What's new: the Beta features, from the server's one list (backend/beta.py), each with its pages in the
 // manual, and the known issues in the running version, as Tico HQ lists them with the update check (backend/releases.py).
 function changelogBetaHTML() {
@@ -39,7 +26,8 @@ function changelogKnownIssuesHTML() {
   return `<section class="changelog-top changelog-known-issues" id="changelog-known-issues" aria-labelledby="changelog-ki-h"><h2 id="changelog-ki-h">Known issues in your version</h2>${body}</section>`;
 }
 
-window.pageChangelog = async function () {
+// The What's new page. This file is a page part (ui/parts.json "changelog"); the sidebar's notice is in ui/app/notices.ts.
+async function pageChangelog() {
   const root = document.querySelector<HTMLElement>('#main');
   if (!root) return;
   root.innerHTML = `<div class="release-page"><header class="release-header"><div><h1>Changelog</h1><p class="muted release-summary" role="status"></p></div></header>${changelogBetaHTML()}${changelogKnownIssuesHTML()}<div class="release-filters"><input type="search" aria-label="Search changes" autocomplete="off" placeholder="Search changes…"><select aria-label="Filter changes"><option value="unread">Since last look</option><option value="product">All product updates</option><option value="">All activity</option></select><button class="primary add-ctl" type="button" aria-label="Add product update" title="Add product update" hidden data-add-update>${TL_ICON.plus}</button></div><div class="release-list" aria-live="polite">Loading changes…</div><button class="ghost" type="button" data-more-changes hidden>Load older changes</button></div>`;
@@ -63,7 +51,7 @@ window.pageChangelog = async function () {
   };
   const notice = (count: number) => {
     S.config.changelog = {unread_count: count};
-    window.renderChangelogNotice();
+    renderChangelogNotice();
   };
   const bullet = (b: string) => esc(typeof plainMd === 'function' ? plainMd(b) : b);
   const renderSummary = () => {
@@ -196,4 +184,4 @@ window.pageChangelog = async function () {
     };
   };
   await load(true);
-};
+}

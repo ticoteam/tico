@@ -432,7 +432,7 @@ function tasksReviewCount(state: TasksPageState): number {
 // items, never another pipeline's. Nothing to walk says so.
 async function tasksReview(state: TasksPageState): Promise<void> {
   const p = tasksPipeline(state);
-  if (!p) { if (!decideGoThrough()) toast('Nothing waits on you'); return; }
+  if (!p) { if (!await decideGoThrough()) toast('Nothing waits on you'); return; }
   const counts = needsStageCounts(), open = matchMedia(PHONE).matches ? pvStateFor(p).stage : '';
   const stage = open && counts.get(open) ? open : p.stages.find(s => counts.get(s.id || ''))?.id || '';
   if (!stage || !await decideStageOpen(stage)) toast(`Nothing waits on you in ${p.name}`);

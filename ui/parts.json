@@ -1,5 +1,56 @@
 {
  "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "thread-settings": {
+  "files": [
+   "app/threads-page.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "threadMembersOpen",
+   "threadSettingsOpen",
+   "threadEarlierOpen"
+  ],
+  "idle": []
+ },
+ "browser-view": {
+  "files": [
+   "app/browser-view.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "key-drop": {
+  "files": [
+   "app/secret-drop.ts",
+   "app/tools-key-drop.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "kdWire",
+   "kdBeforeSend"
+  ],
+  "idle": [
+   "kdForget"
+  ]
+ },
+ "tags": {
+  "files": [
+   "app/tags.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageTags",
+   "pageTag"
+  ],
+  "calls": [
+   "settingsTags"
+  ],
+  "idle": []
+ },
  "tool-icons": {
   "files": [
    "tool-icons.ts"
@@ -83,7 +134,9 @@
    "model-login.ts",
    "app/catalog.ts"
   ],
-  "deps": [],
+  "deps": [
+   "tags"
+  ],
   "pages": [
    "pageSettings",
    "pageSkillsConnect"
@@ -186,7 +239,8 @@
    "settings",
    "task",
    "bot-files",
-   "tool-icons"
+   "tool-icons",
+   "decide"
   ],
   "pages": [
    "pageBot",
@@ -352,7 +406,8 @@
   "deps": [
    "finance",
    "webhooks",
-   "docs-editor"
+   "docs-editor",
+   "browser-view"
   ],
   "pages": [
    "pageCompanyDocs",
@@ -531,7 +586,11 @@
    "app/task-runs.ts",
    "app/task-props.ts"
   ],
-  "deps": [],
+  "deps": [
+   "task-files",
+   "decide",
+   "tags"
+  ],
   "pages": [
    "pageRoadmap"
   ],
@@ -552,6 +611,61 @@
    "taskAskSettled",
    "taskChatStop",
    "taskModalRouteClose"
+  ]
+ },
+ "assistant": {
+  "files": [
+   "assistant.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "assistantCards",
+   "assistantOff",
+   "assistantSettingsStrip"
+  ],
+  "idle": []
+ },
+ "changelog": {
+  "files": [
+   "changelog.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageChangelog"
+  ],
+  "calls": [],
+  "idle": []
+ },
+ "task-files": {
+  "files": [
+   "app/task-files.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "decide": {
+  "files": [
+   "app/decide.ts",
+   "app/decide-about.ts"
+  ],
+  "deps": [
+   "browser-view"
+  ],
+  "pages": [],
+  "calls": [
+   "decideStageOpen",
+   "decideWanted",
+   "decideStageWanted",
+   "decideGoThrough",
+   "decideOpen"
+  ],
+  "idle": [
+   "decideStop",
+   "decideRefresh",
+   "decidePaintBody"
   ]
  }
 }

@@ -69,7 +69,7 @@ async function pageAssistant() {
   // Earlier chats are stored history: readable while the Assistant is off too.
   assistantEarlier(d.earlier, load);
   if (!d.available) {
-    window.assistantChat?.off($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
+    assistantOff($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
   }
   const P = assistantPill(), thread = $('#conv-thread');

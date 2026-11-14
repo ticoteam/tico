@@ -932,7 +932,7 @@ function v2ChatRender(state: ChatState) {
       // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
       patchHTML(thread, html, visualSwap);
       if (thread.querySelector('[data-hold]')) ruleChatWire(state, thread);
-      if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
+      if (thread.querySelector('[data-action-host]')) void assistantCards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
       if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
       if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,

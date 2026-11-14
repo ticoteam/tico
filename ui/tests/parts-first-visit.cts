@@ -19,13 +19,17 @@ declare const S: {v2: {status: Record<string, unknown>}};
 declare function refresh(quiet: boolean): void;
 declare function liveEmit(topic: string, data: unknown): void;
 declare function decideTabPages(): {page: string}[];
+declare function uiPartLoad(name: string): Promise<void>;
 
 interface PartsTable { build: string; parts: Record<string, {url: string; load: string[]}> }
 const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
 // Pages a cold open draws from the shell alone.
 const SHELL = ['#/home', '#/tasks', '#/threads'];
 // What a link straight to a task, a thread or Settings downloads besides the shell.
-const ONLY: Record<string, string[]> = {'#/task/': ['task'], '#/thread/': [], '#/settings/general': ['settings'], '#/settings': ['settings']};
+// A task's page brings the parts it draws from (its files, the ask screen and the browser view it opens, its tags), and
+// Settings its Tags tab and the assistant's strip: each is its own part so that Home, which uses none of them, does not download them (P05b).
+const TASK = ['browser-view', 'decide', 'tags', 'task', 'task-files'];
+const ONLY: Record<string, string[]> = {'#/task/': TASK, '#/thread/': [], '#/settings/general': ['assistant', 'settings', 'tags'], '#/settings': ['assistant', 'settings', 'tags']};
 // Every page in the sidebar, the account menu, Company, Library and Settings. A bot's, a person's, a task's and a
 // thread's page are added from the seeded hub.
 const ROUTES = [
@@ -111,9 +115,6 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await open.page.addInitScript(() => { Object.defineProperty(Notification, 'permission', {get: () => 'granted'}); });
       await open.page.goto(hub.url + '/#/home');
       await drawn(open.page, '#/home');
-      // A "Page → Tab" phrase in Needs you links Rules' and Settings' tabs before either page has been opened.
-      assert.deepEqual(await open.page.evaluate(() => decideTabPages().map(p => p.page).filter(p => p !== 'Finance')), ['Rules', 'Settings'],
-        "a cold Home knows Rules' and Settings' tabs");
       await open.page.evaluate(() => {
         refresh(false);
         const bot = Object.keys(S.v2.status)[0] || 'ops';
@@ -123,6 +124,11 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await open.page.waitForLoadState('networkidle', {timeout: t(15000)}).catch(() => {});
       assert.deepEqual(open.errors, [], 'Home after a refresh: errors on the page');
       assert.deepEqual(open.parts, [], "Home's refresh, a bot's status change and notifications download no page part");
+      // A "Page → Tab" phrase in Needs you (the ask screen, its own part since P05b) links Rules' and Settings' tabs
+      // with neither page's code: opening the ask screen's code downloads that part alone.
+      assert.deepEqual(await open.page.evaluate(async () => { await uiPartLoad('decide'); return decideTabPages().map(p => p.page).filter(p => p !== 'Finance'); }),
+        ['Rules', 'Settings'], "the ask screen knows Rules' and Settings' tabs");
+      assert.deepEqual([...new Set(open.parts)].sort(), ['browser-view', 'decide'], "the ask screen's code downloads its own part and the browser view only");
       await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: false});
       await open.close();
     }
