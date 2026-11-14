@@ -61,6 +61,33 @@ def test_the_product_owner_reads_ci_by_repository_and_never_writes_it():
     assert "gh pr checks <pull request link>" in playbook and "-R <owner/name>" in playbook
 
 
+# Token plan items 2 and 6 (Nov 13): a resumed turn already has the bot's files in context, so they are read when a session
+# starts or after a compaction, never "every run"; and every bot that writes or reviews code is told to hand simple work to
+# Haiku subagents, in its instructions rather than a hidden setting.
+CODE_BOTS = ["builder", "reviewer", "qa-owner", "release-owner", "devops-engineer", "infrastructure-owner"]
+SUBAGENTS = (
+    "Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: searching, reading logs, running "
+    "tests, mechanical edits. Use Opus for complex work and for anything with substantial UI work."
+)
+
+
+def test_no_template_reads_its_files_on_every_run():
+    for path in sorted(CATALOG.glob("*/AGENTS.md")):
+        text = " ".join(path.read_text().split())
+        assert "first, every run" not in text and "`knowledge/company.md` every run" not in text, path
+
+
+@pytest.mark.parametrize("template", CODE_BOTS)
+def test_code_bots_hand_simple_work_to_haiku_subagents(template):
+    assert SUBAGENTS in agent(template)
+
+
+def test_reviews_start_from_the_diff():
+    assert "Start from the diff, the Spec page and the failing checks" in agent("reviewer")
+    playbook = " ".join((CATALOG / "reviewer" / "playbooks" / "review-a-pull-request.md").read_text().split())
+    assert "Start from the diff, the Spec page and the failing checks." in playbook
+
+
 @pytest.mark.parametrize("template", ["builder", "release-owner"])
 def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_tag(template):
     # A conflict wake tells the Builder to rebase and push with a lease; the Release Owner rebases in Merge. A tag is a

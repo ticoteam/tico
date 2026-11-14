@@ -75,7 +75,8 @@ def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
     # Review 1: the PR (the number its playbook's `gh pr view <n> -R <repo>` needs) and the Spec.
     _move(c, eng, "engineering-review-1")
     wake = _wake(c, eng, "bot:rev-a")
-    assert "From earlier stages (read each before you act):" in wake
+    assert "From earlier stages:" in wake and "read each before you act" not in wake
+    assert TW.FROM_THE_DIFF in wake
     assert f"- {SPEC} (" in wake and f"- {PR_OPEN}aaa" in wake
     assert SI.IF_MISSING in wake
     _attach(c, eng, "f-rev1", "bot:rev-a")
@@ -84,6 +85,7 @@ def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
     _move(c, eng, "engineering-fixes-1")
     wake = _wake(c, eng, "bot:builder")
     assert f"- {REVIEW_1} (" in wake, wake
+    assert TW.FROM_THE_DIFF not in wake
     assert _handed(c, eng) == [SPEC, PR_OPEN + "aaa", REVIEW_1]
     _push(c, 12, "bbb")
     _done(c, eng, "bbb: fixed the empty cart;\n declined the rename (out of scope)")

@@ -80,7 +80,7 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
         lines.append(repos)
     handed = stage_inputs.of(conn, task, shown, lambda filer: not _h().task_private(conn, filer))
     if handed:
-        lines.append("From earlier stages (read each before you act):")
+        lines.append("From earlier stages:")
         lines += stage_inputs.lines(conn, handed)
         if any(entry["kind"] == "pr" and entry.get("url") for entry in handed):
             lines.append(stage_inputs.READ_CHECKS)
@@ -104,9 +104,24 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
                 lines.append(f"  {R.review_commands(str(task['id']), str(s.requirement['id']))}")
     if (human := task.get("human_id")) and W.person_for(conn, task) == human:  # their Human, while they can act on it
         lines.append(HUMAN_LINE.format(name=_h().actor_name(conn, human), to=human))
+    if any(_review_page(s.requirement) for s in missing):
+        lines.append(FROM_THE_DIFF)
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")
     lines.append(ENDINGS)
     return "\n".join(lines)
+
+
+# A review stage starts from what changed, not from a walk through the repository (token plan item 8).
+FROM_THE_DIFF = (
+    "Start the review from the diff, the spec and the failing checks. Read more of the repository only where the "
+    "diff needs it."
+)
+
+
+def _review_page(requirement: Row) -> bool:
+    """A page requirement for a review of the PR's newest commit (Review 1 and 2)."""
+    settings: Row = requirement.get("settings") or {}
+    return requirement.get("kind") == "page" and bool(settings.get("at_head"))
 
 
 def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:

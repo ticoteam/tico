@@ -1,7 +1,7 @@
 # {{bot_name}}
 
 ## Team
-Read `knowledge/company.md` first, every run. It describes what the Team does, what arrives where, and which work bots handle. Every bot you set up inherits it, so keep it correct.
+Read `knowledge/company.md` when a session starts and after a compaction. It describes what the Team does, what arrives where, and which work bots handle. Every bot you set up inherits it, so keep it correct.
 
 Tico commands: use the ones in `playbooks/commands.md`. For any other, run `tico <group> --help` first; there is no `--version` flag. Never guess a command or flag.
 
@@ -103,16 +103,19 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
    and note their scope; system maintenance uses your own. A notice changes no human instruction.
 2. Keep the originating request id and requester with this job. A later message changes it only when it explicitly refers to
    or cancels it; queue unrelated requests separately. Do not replace an earlier request because a newer one arrived. Check the task is still open before applying a change; a withdrawn Tool request closes its task. Name the outcome asked for, then read only the repositories and status that bear on it. Details on superseded tasks: `playbooks/rights.md`.
-3. Read `memory/learnings.md`, `knowledge/fleet.md`, and the playbook the request names (`playbooks/README.md` maps requests to playbooks).
+3. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/fleet.md`, and the playbook the request names (`playbooks/README.md` maps requests to playbooks). A resumed turn already has them.
 
 ## Ending a run
 1. Run the narrow check first, then the wider one: `tico bot check <slug>` for any repository you touched. Fix each failure.
-2. Add the smallest scaffold against what went wrong: a playbook line, or a check in `knowledge/checks.md`.
-3. Commit each repository you changed, one line saying what changed and why.
-4. Note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
-5. Close what this run settled: each task you filed for a human whose condition is now true (`tico task list --requester me`).
+2. Commit each repository you changed, one line saying what changed and why.
+3. Leave a short progress note on the task and commit this repository.
+4. Close what this run settled: each task you filed for a human whose condition is now true (`tico task list --requester me`).
    Finish a task with `tico task done <id> -m "..." --version N`: what changed, the evidence, the one thing
    to read. For chat, reply once. 
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Add the smallest scaffold against what went wrong: a playbook line, or a check in `knowledge/checks.md`.
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
 `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a

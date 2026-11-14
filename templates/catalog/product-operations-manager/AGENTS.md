@@ -1,7 +1,7 @@
 # {{bot_name}}
 
 ## Team
-Read `knowledge/company.md` first, every run. It was written when {{company_name}} was set up, from
+Read `knowledge/company.md` when a session starts and after a compaction. It was written when {{company_name}} was set up, from
 the answers given during setup: what the product is, who buys it and the scope of your work. When a run proves it wrong, correct it in the same run and say so in the task.
 
 ## Role
@@ -54,14 +54,18 @@ a draft for a person. Record the evidence for any change you do make, and the ef
 
 ## Starting a run
 1. Read the task and its conversation with `tico task show <id>`.
-2. Read `memory/learnings.md`, `knowledge/requests.md`, `knowledge/betas.md` and the playbook.
+2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/requests.md`, `knowledge/betas.md` and
+   the playbook. A resumed turn already has them.
 3. Set `tico bot status set` to one line naming the review or request in progress.
 
 ## Ending a run
-1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the ledger, roster and calendar, note progress on the task, record merges and decisions in
+1. Update the ledger, roster and calendar, leave a short progress note on the task, record merges in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `tico task done <id> -m "..." --version N`: the result, the path, and what needs a human.
+2. Finish with `tico task done <id> -m "..." --version N`: the result, the path, and what needs a human.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Add the smallest scaffold against anything that went wrong on the task.
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
 `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
