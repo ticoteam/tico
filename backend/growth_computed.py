@@ -471,8 +471,11 @@ def computed(
     )
     note = {"segment": "spend is not split by segment", "plan": "spend is not split by plan"}.get(cut)
     if grain == "week" and not note:
-        if daily is None or any(r["cac"]["status"] == "spend_monthly" for r in cohorts):
+        statuses = {r["cac"]["status"] for r in cohorts}
+        if daily is None or ("spend_monthly" in statuses and "ok" not in statuses):
             note = "spend is monthly"
+        elif "spend_monthly" in statuses:
+            note = "weeks touching a month with typed spend say monthly"
         elif daily.bot_cost:
             note = "weekly CAC is daily ad spend: bot cost is monthly"
     return {

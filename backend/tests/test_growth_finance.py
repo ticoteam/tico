@@ -443,10 +443,12 @@ SEPT_DAYS = [
 ]
 
 
-def _weekly_setup(api: Any, monkeypatch: Any, typed: float | None = None) -> dict[str, Any]:
+def _weekly_setup(
+    api: Any, monkeypatch: Any, typed: float | None = None, campaigns: dict[str, str] | None = None
+) -> dict[str, Any]:
     """search-ads and referrals, September's 40 search-ads customers, Finance's daily September spend, and a Finance ad
     spend source mapping brand and retarget to search-ads, synced once as on 13 November. `typed`: search-ads'
-    September spend typed as actual before the source connects."""
+    September spend typed as actual before the source connects. `campaigns`: another campaign map."""
     from datetime import datetime, timezone
 
     from backend import growth_computed as GX
@@ -469,7 +471,9 @@ def _weekly_setup(api: Any, monkeypatch: Any, typed: float | None = None) -> dic
             "truth_for": "spend",
             "system": "Finance ad spend",
             "sync_kind": GF.KIND,
-            "sync_map": {"campaigns": {"meta_ads:111:brand": "search-ads", "meta_ads:111:retarget": "search-ads"}},
+            "sync_map": {
+                "campaigns": campaigns or {"meta_ads:111:brand": "search-ads", "meta_ads:111:retarget": "search-ads"}
+            },
         },
     )
     with store.transaction() as c:
@@ -545,3 +549,50 @@ def test_weekly_cac_from_daily_spend_says_it_leaves_out_the_monthly_bot_cost(api
     first = weeks["2026-08-31"]
     assert first["cac"]["value"] == round(1800.0 / first["new_customers"]["value"], 2)
     assert result["cac_note"] == "weekly CAC is daily ad spend: bot cost is monthly"
+
+
+def test_a_campaign_mapped_by_channel_name_counts_in_its_weeks_and_one_with_no_channel_counts_nowhere(
+    api: Any, monkeypatch: Any
+):
+    """Review 1: the sync engine reads a mapped channel as its slug or its name, in any case, and leaves out a name
+    Growth has no channel for. Weekly spend reads the map the same way, so a week's all is the sum of its channels."""
+    from backend.tests.helpers.api import get
+
+    campaigns = {"meta_ads:111:brand": "Search Ads", "meta_ads:111:retarget": "no-such-channel"}
+    _weekly_setup(api, monkeypatch, campaigns=campaigns)
+    month = next(r for r in get(api, "growth/computed?month=2026-09")["cohorts"] if r["value"] == "search-ads")
+    assert month["cac"]["value"] == round(3600.0 / 40, 2)  # brand's 1,200 + 2,400; retarget's 600 is not written
+    _, weeks = _weeks(api)
+    first = weeks["2026-08-31"]
+    assert first["cac"] == {
+        "value": round(1200.0 / first["new_customers"]["value"], 2),
+        "status": "ok",
+        "origin": "computed",
+    }
+    _, every = _weeks(api, "all", "all")
+    assert every["2026-08-31"]["cac"]["value"] == round(1200.0 / every["2026-08-31"]["new_customers"]["value"], 2)
+
+
+def test_a_day_spent_in_another_currency_leaves_weekly_cac_monthly(api: Any, monkeypatch: Any):
+    """Finance's books are in USD: a day recorded in EUR cannot be added up, so weekly CAC falls back to monthly (the
+    source's next run fails with the same reason) rather than counting it as dollars."""
+    _weekly_setup(api, monkeypatch)
+    store: Store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE fin_ad_spends SET currency='EUR' WHERE day='2026-09-08'")
+    result, weeks = _weeks(api)
+    assert {w["cac"]["status"] for w in weeks.values()} == {"spend_monthly"} and result[
+        "cac_note"
+    ] == "spend is monthly"
+
+
+def test_when_only_some_weeks_say_monthly_the_note_says_which(api: Any, monkeypatch: Any):
+    """August's spend is typed: the week of 31 August touches it and says monthly, while September's later weeks show
+    daily CAC, so the note names the weeks that say monthly instead of saying all spend is monthly."""
+    from backend.tests.helpers.api import put
+
+    _weekly_setup(api, monkeypatch)
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-08", "spend": 900})
+    result, weeks = _weeks(api)
+    assert weeks["2026-08-31"]["cac"]["status"] == "spend_monthly" and weeks["2026-09-07"]["cac"]["status"] == "ok"
+    assert result["cac_note"] == "weeks touching a month with typed spend say monthly"

@@ -167,14 +167,23 @@ def weeks(
 ) -> dict[tuple[str | None, str], float]:
     """Each Monday-to-Sunday week's spend per channel over the days [start, end], in the book's currency:
     {(channel slug, or None for Unknown, the week's Monday YYYY-MM-DD): spend}. For Growth's weekly CAC, read when a
-    weekly cohort is, from Finance's daily spend; the cohort rows hold only months. Raises Failing as `rows` does."""
+    weekly cohort is, from Finance's daily spend; the cohort rows hold only months. A mapped channel is read as the sync
+    engine reads it, a live channel's slug or name in any case; a campaign mapped to anything else counts nowhere, as a
+    run leaves it unwritten. Raises Failing as `rows` does."""
+    from . import growth_sync as GS
+
     currency = _currency(c)
+    known = GS._channels(c)  # pyright: ignore[reportPrivateUsage]
+    slugs = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, slug FROM growth_channels WHERE retired_at IS NULL")}
     totals: dict[tuple[str | None, str], int] = {}
     for r in SA.campaign_days(c, start, end):
         _same_currency(r.platform, r.account_external_id, r.currency, currency)
+        named = _channel(mapping, campaign_key(r.platform, r.account_external_id, r.campaign_external_id))
+        if named is not None and named.lower() not in known:
+            continue
         day = date.fromisoformat(r.day)
         monday = (day - timedelta(days=day.weekday())).isoformat()
-        key = (_channel(mapping, campaign_key(r.platform, r.account_external_id, r.campaign_external_id)), monday)
+        key = (slugs[known[named.lower()]] if named is not None else None, monday)
         totals[key] = totals.get(key, 0) + r.amount
     return {key: round(cents / 100, 2) for key, cents in totals.items()}
 

@@ -116,7 +116,7 @@ function computedView(by: string, grain: string, keys: boolean, customers: boole
     : [cohortOf(by, grain, 'search', 64, 52), cohortOf(by, grain, 'unknown', 19, 12)];
   if (customers) for (const c of cohorts) Object.assign(c.kept_d30, {rule: `became customer ${c.start} to ${c.end}, ${by} ${c.value}, still paying on day 30`}, keys ? {customers: KEYS} : {});
   return {by, grain, month: '2026-09', as_of: '2026-11-13', min_cohort: 30, computed_from: 124, cohorts, keys_visible: keys && customers,
-    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'spend is monthly' : null,
+    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'weeks touching a month with typed spend say monthly' : null,
     loads: [{source: 'upload', customers: 124, removed: 0, loaded_by: 'human:ana', loaded_at: '2026-11-13T06:00:00'}]};
 }
 const NAMES: Record<string, string> = {growth_number: 'Number', growth_funnel: 'Funnel', growth_channels: 'Channels', growth_retention: 'Retention', growth_board: 'Growth board', kpi: 'KPI'};
@@ -529,7 +529,7 @@ async function shot(page: Page, name: string) {
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] tr.grx-wk'));
       assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of 28 Sep', 'Week of 21 Sep']);
       assert.deepEqual((await rowsOf()).map(r => r[6]), ['monthly', '$42'], 'a week of daily spend shows its CAC; one touching a typed month says monthly');
-      assert.match(await card.locator('.grx-foot').innerText(), /Weekly CAC needs daily spend: spend is monthly\./);
+      assert.match(await card.locator('.grx-foot').innerText(), /a week touching a month with typed spend says monthly\./);
       assert.ok(fake.reads.includes('by=channel&grain=week&month=2026-09'), 'the weekly read asks for the month');
       await shot(page, 'desktop-growth-computed');
       // A figure opens its customers: the rule, still customers and churned with the date, counts matching the figure.
