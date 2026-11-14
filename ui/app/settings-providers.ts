@@ -221,8 +221,8 @@ function providersGatewayCardHTML(view: SettingsProvidersView, gateway: Settings
   return `<div class="models-gw models-gw-head">
       ${gateway ? `<p class="models-gw-line" data-gateway-state="${esc(gateway.state || (gateway.connected ? 'connected' : 'none'))}"><span class="dot ${tone === 'ok' ? 'ok' : 'failed'}" aria-hidden="true"></span><span data-gateway-line>${esc(line)}</span>${gatewaySpendBar(gateway)}</p>` : ''}
       <label class="models-gw-toggle"><input type="checkbox" class="people-switch" data-gateway-toggle${providersGatewayOn(view) ? ' checked' : ''}${owner ? '' : ' disabled'}
-        aria-label="Use Tico Gateway as fallback"><span>Use as fallback</span></label>
-      ${helpBubble('Used when a computer has no subscription, or a plan runs out.')}</div>
+        aria-label="Use Tico Gateway until a computer is signed in"><span>Use until a computer is signed in</span></label>
+      ${helpBubble("Used while a computer has no subscription and no login of its own. When a computer's plans run out, its own Fall back to Tico Gateway decides.")}</div>
     ${gatewayOverviewHTML(overview)}
     ${gateway ? `<details class="models-adv" data-gateway-advanced><summary>Advanced</summary>${gatewayHTML(gateway, owner)}</details>` : ''}
     <details class="models-adv" data-gateway-webhooks><summary>Webhooks</summary><div id="wh-gateway"></div></details>`;

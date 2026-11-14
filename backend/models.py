@@ -1645,6 +1645,10 @@ class RunnerMemberBots(Contract):
     accepts: bool
 
 
+class RunnerGatewayFallback(Contract):
+    on: bool
+
+
 class RunnerLabel(Contract):
     # Trimmed first (Contract strips), then 1 to 100 characters on one line.
     label: StrictStr = Field(

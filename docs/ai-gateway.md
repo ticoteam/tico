@@ -36,8 +36,10 @@ still runs as that level.
 ## Choose how bots get their models
 
 In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
-switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out): on is the first choice (or Tico Gateway only,
-when that was picked), off is the second (or your company's plans or API keys).
+switch, **Use until a computer is signed in** (used while a computer has no subscription and no login of its own): on is
+the first choice (or Tico Gateway only, when that was picked), off is the second (or your company's plans or API keys).
+Whether a computer's bots run on Tico Gateway when its plans run out is that computer's own **Fall back to Tico Gateway**
+switch, off until an owner or admin turns it on ([Computers](computers.md#subscriptions)).
 
 The four choices:
 
@@ -253,7 +255,7 @@ saying the Tico AI Gateway cut the reply off.
 ## Settings → Models → Tico Gateway
 
 One card. Its first line says whether the Gateway is connected (and, for the owner only, this month's spend against its
-cap, with a bar) beside the **Use as fallback** switch. Owners and admins also see **prices** per 1M tokens in and out by
+cap, with a bar) beside the **Use until a computer is signed in** switch. Owners and admins also see **prices** per 1M tokens in and out by
 level (X-Low to X-High) and mode (Regular, Fast), without the models underneath; **Picks in use** (name, version or
 Auto, number of bots) when a bot uses one; **API keys**, a link for the owner while the Gateway is connected
 ([API keys](#api-keys)); and **Services**, folded, with each service's status (Live, On request, Coming soon), price and
