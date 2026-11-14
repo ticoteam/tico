@@ -2,6 +2,8 @@
    under .ph, so an old page rule left on a hook class (.au-ph h1, .rd-strat-head h1…) loses to it. */
 .ph{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;box-sizing:border-box;min-height:calc(var(--ctl) + 9px);margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
 .ph.ph-pad{padding:8px 28px;margin:0}
+/* While page-head.ts fits the header it measures it at once: no transition may hand back the old geometry (task #457). */
+.ph.ph-fit,.ph.ph-fit *,.ph.ph-fit::after,.ph.ph-fit *::before,.ph.ph-fit *::after{transition:none!important}
 .ph>.ph-t{flex:none;margin:0;font-size:var(--t-lg);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-tight);white-space:nowrap}
 .ph>.ph-back{flex:none;margin-right:-6px;color:var(--muted);font-size:var(--t-lg);line-height:var(--lh-tight);text-decoration:none;white-space:nowrap}
 .ph>.ph-back:hover{color:var(--ink);text-decoration:none}
