@@ -285,6 +285,9 @@ function kdDraw(view: ThvView): void {
 
 /** Before Send: scan once more, save every item, and give back the words to send (names only), or null to wait. */
 async function kdBeforeSend(view: ThvView): Promise<{text: string; unmarked: string[]} | null> {
+  // This code failed to load when the composer was drawn (parts.ts), so kdWire never ran: wire it now. Whatever was
+  // typed or pasted meanwhile is scanned below like any other words, so nothing goes out unchecked.
+  if (!KD.has(view) && view.opts.keyDrop) kdWire(view, view.opts.keyDrop.tools);
   const state = KD.get(view), box = kdBox(view);
   if (!state || !box) return null;
   state.rules ||= await sdRules();
