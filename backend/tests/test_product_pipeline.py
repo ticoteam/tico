@@ -18,6 +18,7 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.product_engineering_presets import PPM, _answers, _role_bot, _seat, _team, legacy_pair
 from backend.tests.helpers.sample_company import booted, environment, rows, signed_in  # noqa: F401
+from backend.tests.helpers.stage_inputs import _link_pr, _push
 
 ANA, BEN = X.ANA, "human:ben"
 OWNER = "bot:pm"  # the Product Owner of _team, as the feature owner the tasks are given to
@@ -184,6 +185,43 @@ def test_the_feature_owner_holds_build_and_both_fixes(c):
     task = _task(c)
     for stage in ("product-build", "product-fixes-1", "product-fixes-2", "product-validate"):
         assert E.move(c, task["id"], stage, ANA, "On")["owner_id"] == OWNER
+
+
+def test_the_owner_the_manager_picks_in_pitch_holds_build_the_fixes_and_validate_whoever_holds_a_stage_between(c):
+    """Tico Team, Nov 14: a task with no assignee fell to the Engineering Manager in Build. The owner it has when it
+    leaves Pitch is its feature owner: a stand-in the manager names later holds that stage only."""
+    _product(c)
+    _past_merge(c)
+    _role_bot(c, "fo-2", "segment-product-owner")
+    row = H.task_create(c, ANA, "Saved carts", PITCH, OWNER, pipeline="product", lint=False)
+    c.execute("UPDATE task_move_guards SET open=1, task_id=? WHERE id=1", (row["id"],))
+    c.execute("UPDATE tasks SET owner_id=NULL, assignee_id=NULL WHERE id=?", (row["id"],))  # filed with no owner
+    c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+    E.reassign(c, row["id"], OWNER, ANA, "Carts are yours")
+    assert E.task(c, row["id"])["assignee_id"] == OWNER
+    assert E.move(c, row["id"], "product-build", ANA, "On")["owner_id"] == OWNER
+    E.reassign(c, row["id"], "bot:fo-2", ANA, "Stand in while pm is out")
+    moved = E.move(c, row["id"], "product-fixes-1", ANA, "On")
+    assert (moved["owner_id"], moved["assignee_id"]) == (OWNER, OWNER)
+    assert E.move(c, row["id"], "product-validate", ANA, "On")["owner_id"] == OWNER
+
+
+def test_an_old_merged_pr_does_not_meet_pr_open_in_build(c):
+    """Tico Team, Nov 14: a task linked to an old, merged PR before its spec skipped Build. PR open counts an open PR,
+    or one linked since the task entered Build."""
+    from backend.item_sources import github as GS
+
+    _product(c)
+    X.github_installed(c)
+    task = _task(c)
+    _link_pr(c, task["id"], 7, "a" * 40)
+    _push(c, 7, "a" * 40, state="merged", merged_sha="b" * 40)
+    row = E.move(c, task["id"], "product-build", ANA, "On")
+    standing = next(s for s in R.unmet(c, row) if s.requirement.get("condition") == "pr_open")
+    assert (standing.on, standing.line) == (OWNER, GS.NO_NEW_PR)
+    _link_pr(c, task["id"], 8, "c" * 40)
+    _push(c, 8, "c" * 40)
+    assert all(s.requirement.get("condition") != "pr_open" for s in R.unmet(c, E.task(c, task["id"])))
 
 
 def test_not_validated_sends_the_task_back_to_build_in_the_same_task(c):

@@ -872,7 +872,11 @@ fix-review-findings, make-the-qa-page, validate-in-production.
 
 One feature owner, the task's assignee, holds every stage but the reviews, QA and Merge, in one task and one session
 (`session: task`, kept warm while it holds a stage ahead). A task filed with no assignee waits in Pitch for the manager
-to pick one.
+to pick one; the owner a task leaves an assignee-held stage with becomes its assignee if it has none. After the
+pipeline's first stage, a reassign names who holds that visit only: the assignee holds the stages after it, and a stage
+rule that refuses the assignee leaves only that stage with nobody (Tico Team, Nov 14: Build fell to the Engineering
+Manager). Build's PR open counts a PR that is open, or one linked since the task entered Build: an old PR that merged
+before it does not (a task skipped Build on one).
 
 - **Pitch.** Owner: the assignee. The task's body is the pitch: the problem, who has it and the fix. To leave: **a
   person OKs it**: any person, never a bot (people only, nobody named). Over 280 characters (the OK's `body_max`) it

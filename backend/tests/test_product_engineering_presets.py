@@ -484,7 +484,8 @@ def test_owner_on_the_team_a_task_that_comes_back_to_fixes_owned_outside_enginee
     eng = _owned_by_the_product_owner(c)
     fixes = next(s for s in E.stages(c, "engineering") if s["name"] == "Fixes 1")
     moved = E.move(c, eng["id"], fixes["id"], ANA, "Review found the cart is lost on sign-out")
-    assert (moved["assignee_id"], moved["owner_id"]) == (None, None)
+    # Fixes has nobody, so the manager picks; the assignee stays the task's for the stages after it.
+    assert (moved["assignee_id"], moved["owner_id"]) == ("bot:pm", None)
     assert _move_notes(c, eng["id"])[-1] == (
         "Review found the cart is lost on sign-out. Rule Owner on the team: pm is not on the Engineering team"
     )
