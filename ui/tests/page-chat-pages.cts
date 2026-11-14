@@ -25,9 +25,9 @@ declare const THV_FROM_PAGES: Record<string, () => string>;
 // addresses that show it, each with the place its header holds Chat (a page's code may still be loading after the address
 // changes, so the test waits for that page's own Chat).
 const PAGES: [string, string, string[]][] = [  // hash|slot
-  ['strategy', 'engineering-manager', ['#/strategy|strat-chat', '#/strategy/org|strat-chat', '#/strategy/budget|strat-chat', '#/strategy/market|strat-chat']],
+  ['strategy', 'engineering-manager', ['#/strategy|strat-chat', '#/strategy/org|strat-chat', '#/strategy/budget|strat-chat', '#/strategy/market|strat-chat', '#/strategy/lenses|strat-chat', '#/strategy/brand|strat-chat']],
   ['finance', 'release-manager', ['#/finance|fin-chat']],
-  ['growth', 'builder-claude', ['#/growth|gr-chat']],
+  ['growth', 'builder-claude', ['#/growth|gr-chat', '#/growth/sources|gr-chat']],
   ['automations', 'builder-openai', ['#/automations|au-chat']],
   ['docs', 'engineering-manager', ['#/docs|docs-chat', '#/library/files|lf-chat']],
   ['updates', 'release-manager', ['#/updates|upd-chat']],
