@@ -15,7 +15,7 @@ REPO = "acme/app"
 ANA = X.ANA
 # The role bots, each found by its seat as setup seats them (test_product_engineering_presets.py has the full set).
 SEATS = [
-    ("pm", "segment-product-owner", "Product Owner"),
+    ("pm", "feature-owner", "Product Owner"),
     ("builder", "builder", "Builder"),
     ("rev-a", "reviewer", "Reviewer 1"),
     ("rev-b", "reviewer", "Reviewer 2"),

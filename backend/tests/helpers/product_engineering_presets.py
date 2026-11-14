@@ -12,7 +12,7 @@ ANA = X.ANA
 PPM, EPM = "product-manager", "engineering-manager"
 ROLE_BOTS = {
     PPM: "product-manager",
-    "pm": "segment-product-owner",  # the Product Owner
+    "pm": "feature-owner",  # the Product Owner
     EPM: "engineering-manager",
     "builder": "builder",
     "rev-b": "reviewer",
@@ -50,7 +50,7 @@ def _team(c):
     for slug, template in ROLE_BOTS.items():
         _role_bot(c, slug, template)
     _seat(c, "Product Manager", "product-manager", PPM)
-    _seat(c, "Product Owner", "segment-product-owner", "pm")
+    _seat(c, "Product Owner", "feature-owner", "pm")
     _seat(c, "Engineering Manager", "engineering-manager", EPM)
     _seat(c, "Builder", "builder", "builder")
     _seat(c, "Reviewer 2", "reviewer", "rev-b")

@@ -9,7 +9,7 @@ person on its people OKs from `resolve`, and `ensure_presets` fills a still-empt
   that is not archived. A filled seat is closed (`lifecycle.fill_seat` sets `closed_at` with `filled_by`), so this is
   any seat, open or closed, that a bot fills. Reviewer 1 and Reviewer 2 share `reviewer`: among its filled seats,
   ordered by title then `created_at`, the first is Reviewer 1 and the second Reviewer 2. The Product Owner is the
-  first `segment-product-owner` the same way (the first segment's, live at setup).
+  first `feature-owner` the same way (the first segment's, live at setup).
 - With no such seat, the first active bot whose `bot_settings.template` is the role's, by slug.
   Reviewer 2 is then the second `reviewer` bot.
 - A pipeline's manager is its team's Manager: the Product Manager (`product-manager`) and the Engineering Manager
@@ -48,7 +48,7 @@ ROLES = (
 # The template each role's seat is placed with (templates/catalog/<template>).
 TEMPLATES = {
     PRODUCT_MANAGER: "product-manager",
-    PRODUCT_OWNER: "segment-product-owner",
+    PRODUCT_OWNER: "feature-owner",
     ENGINEERING_MANAGER: "engineering-manager",
     BUILDER: "builder",
     REVIEWER_1: "reviewer",
@@ -57,11 +57,11 @@ TEMPLATES = {
     QA_OWNER: "qa-owner",
 }
 # The default chart's row id for each role's seat (backend/company_file/chart_formula.json). A live seat's bot gets
-# this slug at go-live (company_import._go_live). The Product Owner's is the first segment's, `<segment>-product-owner`,
-# or `product-owner` with no segment.
+# this slug at go-live (company_import._go_live). The Product Owner's is the first segment's, `<segment>-feature-owner`,
+# or `feature-owner` with no segment.
 CHART_IDS = {
     PRODUCT_MANAGER: "product-manager",
-    PRODUCT_OWNER: "product-owner",
+    PRODUCT_OWNER: "feature-owner",
     ENGINEERING_MANAGER: "engineering-manager",
     BUILDER: "builder",
     REVIEWER_1: "reviewer-1",

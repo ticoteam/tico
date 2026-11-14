@@ -8,7 +8,7 @@ version: 0.2
 created: 2026-10-18T00:00:00.000Z
 company:
   name: "Sample Co"
-  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Product Lead, a Builder, a Support Agent and a Content Owner. Nothing here is real: there are no customers to email, no website to publish to and no payments."
+  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Product Lead, a Feature Owner, a Support Agent and a Content Owner. Nothing here is real: there are no customers to email, no website to publish to and no payments."
   signals: [sells_software, sells_to_businesses, publishes_content, has_support_inbox, small_team]
 people:
   - id: you
@@ -40,7 +40,7 @@ employees:
     department: product
     reports_to: you
     start: now
-    reason: "Decides what Brightbook builds next and writes it down for the Builder."
+    reason: "Decides what Brightbook builds next and writes it down for the Feature Owner."
     runs_on: claude
     starter_tasks:
       - title: "Write a one-page brief for Brightbook's text-message reminders"
@@ -52,13 +52,13 @@ employees:
           1. Write the brief, under 400 words: the problem in the salon owner's words, what the first version does and
              does not do, three acceptance tests (Given/When/Then), and one open question.
           2. Put the brief on this task as one comment, so the owner reads it where they answer.
-  - id: builder
-    template: builder
-    title: "Builder"
+  - id: feature-owner
+    template: feature-owner
+    title: "Feature Owner"
     department: engineering
     reports_to: head-of-product
     start: now
-    reason: "Builds Brightbook. The sample has no code yet, so it plans the work instead."
+    reason: "Takes Brightbook's features from pitch to production. The sample has no code yet, so it plans the work instead."
     runs_on: codex
     starter_tasks:
       - title: "Plan how to build Brightbook's text-message reminders"
@@ -131,7 +131,7 @@ goals:
     deadline: null
   - id: reminders-planned
     title: "Text-message reminders have a build plan"
-    owner: builder
+    owner: feature-owner
     measure: null  # not set yet: which number, and by when?
     unit: ""
     direction: up

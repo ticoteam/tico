@@ -1,6 +1,6 @@
 # Propose a hire
 
-Use this when recurring product work has no owner: a segment with no Product Owner, or work that no seat covers.
+Use this when recurring product work has no owner: a segment with no Feature Owner, or work that no seat covers.
 
 ## Steps
 1. Check that the work is recurring, not a one-off. One-off work is routed to the right seat, not hired for.

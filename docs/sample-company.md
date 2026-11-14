@@ -7,7 +7,7 @@ instead of building a team first. Sample Co sells Brightbook, a small booking ap
 |---|---|---|---|
 | Assistant | Claude | The owner knows the team and what each bot does | Write a one-page welcome to Sample Co |
 | Product Lead | Claude | Text-message reminders are specified and agreed | Write a one-page brief for the reminders |
-| Builder | ChatGPT | Text-message reminders have a build plan | Plan how to build the reminders (there is no code) |
+| Feature Owner | ChatGPT | Text-message reminders have a build plan | Plan how to build the reminders (there is no code) |
 | Support Agent | ChatGPT | Every customer question has a reply ready within a day | Draft replies to three made-up customer questions |
 | Content Owner | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
 

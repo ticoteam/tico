@@ -104,7 +104,7 @@ ALIASES = {
     "tester": "qa-owner",
     "reviewer": "reviewer",
     "code reviewer": "reviewer",
-    "engineer": "builder",
+    "engineer": "feature-owner",
     "support": "support",
     "customer support": "support",
     "invoices": "billing",
