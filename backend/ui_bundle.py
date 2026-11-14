@@ -445,6 +445,21 @@ def cold_js(bundle):
     return out
 
 
+def shell_size_report(ui_dir, ceiling=None):
+    """`--shell-size`: prints the JavaScript a cold open of Home downloads (what bench/first-open.cts measures in a
+    browser), each script and the total against the ceiling; 1 when over it, else 0."""
+    try:
+        current, _ = build(Path(ui_dir))
+    except ui_build.StaleBuild as exc:
+        raise SystemExit(f"ui bundle: {exc}") from None
+    ceiling = SHELL_JS_CEILING if ceiling is None else ceiling
+    sizes = cold_js(current)
+    for path, size in sizes.items():
+        print(f"{size / 1024:8.1f} KB  {path}")
+    print(f"{sum(sizes.values()) / 1024:8.1f} KB  cold open of Home, gzip (ceiling {ceiling / 1024:.1f} KB)")
+    return 1 if shell_over(current, ceiling) else 0
+
+
 def shell_over(bundle, ceiling=None):
     """None when a cold open's JavaScript (`cold_js`) is within `ceiling` bytes; otherwise what to tell the change's
     author: the size, the ceiling and the five largest shell files (each gzip on its own, so they add up to more)."""
@@ -590,16 +605,7 @@ if __name__ == "__main__" and sys.argv[1:2] == ["--where"]:
     for arg in sys.argv[2:]:
         print(f"{arg} -> {where(current, arg) or 'not in a minified file'}")
 elif __name__ == "__main__" and sys.argv[1:2] == ["--shell-size"]:
-    # The JavaScript a cold open of Home downloads (what bench/first-open.cts measures in a browser), against the ceiling.
-    try:
-        current, _ = build(Path(__file__).resolve().parents[1] / "ui")
-    except ui_build.StaleBuild as exc:
-        raise SystemExit(f"ui bundle: {exc}") from None
-    sizes = cold_js(current)
-    for path, size in sizes.items():
-        print(f"{size / 1024:8.1f} KB  {path}")
-    print(f"{sum(sizes.values()) / 1024:8.1f} KB  cold open of Home, gzip (ceiling {SHELL_JS_CEILING / 1024:.1f} KB)")
-    raise SystemExit(1 if shell_over(current) else 0)
+    raise SystemExit(shell_size_report(Path(__file__).resolve().parents[1] / "ui"))
 elif __name__ == "__main__":
     ui, out = Path(sys.argv[1]), Path(sys.argv[2])
     try:

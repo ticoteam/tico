@@ -99,3 +99,16 @@ def test_a_shell_over_its_ceiling_is_still_served(tmp_path, monkeypatch):
     bundle = ui_bundle.UiBundle(_ui(tmp_path, shell_pad=3000)).get()
     assert bundle is not None and b"function aGo" in bundle.js
     assert ui_bundle.shell_over(bundle)
+
+
+def test_the_size_report_prints_each_script_and_fails_over_the_ceiling(tmp_path, capsys):
+    ui = _ui(tmp_path, shell_pad=3000)
+    total = sum(ui_bundle.cold_js(ui_bundle.build(ui)[0]).values())
+    assert ui_bundle.shell_size_report(ui, total) == 0
+    out = capsys.readouterr().out
+    assert (
+        "/tico/ui/app.bundle.js" in out
+        and "/vendor/marked.min.js" in out
+        and f"{total / 1024:.1f} KB  cold open" in out
+    )
+    assert ui_bundle.shell_size_report(ui, total - 1) == 1
