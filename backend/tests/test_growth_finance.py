@@ -602,3 +602,34 @@ def test_when_only_some_weeks_say_monthly_the_note_says_which(api: Any, monkeypa
     assert result["cac_note"] == "weeks touching a month with typed spend say monthly"
     put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "bot_cost": 300})
     assert _weeks(api)[0]["cac_note"] == "weeks touching a month with typed spend say monthly; bot cost is monthly"
+
+
+def test_one_channel_mapped_by_its_slug_and_its_name_sums_into_one_month(api: Any):
+    """#469: brand mapped by the channel's name and retarget by its slug reach the engine as one row, so the run
+    succeeds and the month holds both campaigns' spend. A value that names no live channel is still listed as not
+    written, and its spend counts nowhere."""
+    from backend import growth_sync as GS
+    from backend.tests.helpers.api import get, post
+
+    store: Store = api.app.state.store
+    month = GS.this_month()
+    day = f"{month}-01"
+    _finance_with_spend(store, [(day, "brand", 421000), (day, "retarget", 188000), (day, "podcast", 31000)])
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
+    mapping = {
+        "meta_ads:111:brand": "Search Ads",
+        "meta_ads:111:retarget": "search-ads",
+        "meta_ads:111:podcast": "radio",
+    }
+    body = {
+        "truth_for": "spend",
+        "system": "Finance ad spend",
+        "sync_kind": GF.KIND,
+        "sync_map": {"campaigns": mapping},
+    }
+    src = post(api, "growth/sources", body)
+    result = post(api, f"growth/sources/{src['id']}/sync", {})
+    assert result["ok"], result
+    assert [(x["channel"], x["reason"]) for x in result["not_written"]] == [("radio", "no such channel")]
+    cohorts = get(api, f"growth/cohorts?month={month}")["cohorts"]
+    assert {str(r["channel"] or "unknown"): r["spend"] for r in cohorts} == {"search-ads": 6090.0}
