@@ -1694,7 +1694,7 @@ def _jev_lines(r, row):
 
 
 @pytest.mark.parametrize("rubric", ["SPEC_RUBRIC", "QA_RUBRIC"])
-@pytest.mark.parametrize("ps", [{}, {"goal": 0.6, "built": 0.6}], ids=["every part yes", "a part unsure"])
+@pytest.mark.parametrize("ps", [{}, {"goal": 0.4, "built": 0.4}], ids=["every part yes", "a part unsure"])
 def test_a_page_a_person_oks_shows_nothing_from_jev_unless_a_part_is_missing(store, seeded, monkeypatch, rubric, ps):
     def build(c):
         _pipeline(c, page_settings={"rubric": _shipped(rubric)}, who_oks="people_only")
@@ -1772,7 +1772,7 @@ def _jev_wakes(r, row, who):
 
 def test_unsure_on_a_bots_stage_wakes_the_manager_once_per_version_and_not_the_pages_bot(store, seeded, monkeypatch):
     row, fid = seeded(lambda c: _validate(c, store))
-    monkeypatch.setattr(PJ, "ENGINE", _parts({"version": 0.5}))
+    monkeypatch.setattr(PJ, "ENGINE", _parts({"version": 0.35}))
     assert V.run(store, H.shift(H.now(), seconds=1)) == 1
     with store.read() as r:
         standing = _standing(r, row)
