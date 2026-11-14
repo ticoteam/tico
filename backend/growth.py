@@ -1068,6 +1068,16 @@ def cohort_set(c, actor, body):
             else:
                 sources.pop(key, None)
     fields.update(sources=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
+    if row and not marked and any(k in GS.FIELDS for k in fields):
+        # A number saved before origins were kept takes its row's mark. Pin that mark on it before the row's mark can
+        # follow a new unmarked number, so the old number keeps the mark it was saved with.
+        for field in GS.FIELDS:
+            if row.get(field) is not None and field not in fields:
+                c.execute(
+                    "INSERT OR IGNORE INTO growth_origins (cohort_id, field, origin, quality, by, at) "
+                    "VALUES (?,?,'typed',?,?,?)",
+                    (row["id"], field, row["quality"], row.get("updated_by"), row["updated_at"]),
+                )
     if row:
         c.execute(
             f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in fields)} WHERE id=?",

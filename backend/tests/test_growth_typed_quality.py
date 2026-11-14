@@ -103,7 +103,9 @@ def test_c6_a_synced_number_replaces_an_unmarked_typed_guess(api):
 
 def test_c7_months_saved_before_this_release_keep_their_marks_through_the_migrations(tmp_path):
     """C7: months saved the old way (an unmarked row took the column default 'actual') keep every mark when the
-    database is opened again and its migrations run, and no migration writes a growth quality."""
+    database is opened again and its migrations run, and no migration writes a growth quality. The reopen guards the
+    schema code that runs on every start; the scan of every migration statement and file is what catches a future
+    migration that rewrites a quality (this release adds none)."""
     path = tmp_path / "hub.db"
     conn = H.connect(path)
     now = "2026-10-01T00:00:00Z"
@@ -165,3 +167,25 @@ def test_c10_no_route_saves_an_unmarked_month_as_actual(api):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM growth_cohorts WHERE quality='actual'").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM growth_origins WHERE quality='actual'").fetchone()[0] == 0
+
+
+def test_c5_a_null_mark_on_an_existing_actual_month_keeps_it_actual(api):
+    """C5 with quality null (the MCP tool may send it): only sources change, the month stays actual."""
+    channel(api)
+    put(api, "growth/cohorts", {"channel": "google-search", "month": M, "spend": 1800, "quality": "actual"})
+    body = {"channel": "google-search", "month": M, "sources": {"spend": "Google Ads"}, "quality": None}
+    assert marks(put(api, "growth/cohorts", body)) == ("actual", {"spend": "typed·actual"})
+    assert stored(api, "google-search") == ("actual", {"spend": "actual"})
+
+
+def test_c4_a_number_saved_before_origins_were_kept_keeps_its_actual_mark(api):
+    """C4 for a month saved before per-number origins were kept (no origin rows): an unmarked new number makes the
+    month an estimate, but the old spend stays actual, and clearing the new number makes the month actual again."""
+    channel(api)
+    put(api, "growth/cohorts", {"channel": "google-search", "month": M, "spend": 1800, "quality": "actual"})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM growth_origins")
+    later = put(api, "growth/cohorts", {"channel": "google-search", "month": M, "new_customers": 7})
+    assert marks(later) == ("estimate", {"spend": "typed·actual", "new_customers": "typed·estimate"})
+    cleared = put(api, "growth/cohorts", {"channel": "google-search", "month": M, "new_customers": None})
+    assert marks(cleared) == ("actual", {"spend": "typed·actual"})
