@@ -808,6 +808,8 @@ def last_stop(c, bot, status):
                 "reason": (
                     f"Its computer took this run {start_holds.SAME} times and never started it."
                     if start_holds.LAPSED_WHY in str(attempt["final_text"])
+                    else f"Its computer took this run {PRE_START_TRIES} times and never started it."
+                    if start_holds.MISSED_WHY in str(attempt["final_text"])
                     else f"Its computer handed this run back {start_holds.SAME} times for the same reason."
                 ),
                 "text": attempt["final_text"],
@@ -4270,16 +4272,16 @@ class Execution:
                             else "check that Computer"
                         )
                         reason = f"Your {name} couldn't start on {label}; {remedy}"
-                        if lapses >= start_holds.SAME:
-                            reason = f"Your {name} couldn't start on {label}: {start_holds.LAPSED_WHY}; {remedy}"
-                        # Its last tries lapsed in silence: no wait clears that, and the next wake would loop again.
+                        # SAME silent lapses in a row are named as silence; a spent day's budget only as missed starts.
+                        silence = lapses >= start_holds.SAME
+                        why = start_holds.LAPSED_WHY if silence else start_holds.MISSED_WHY
+                        if silence:
+                            reason = f"Your {name} couldn't start on {label}: {why}; {remedy}"
+                        # Its last tries never started: no wait clears that, and the next wake would loop again.
                         # BotOps gets it and the task waits on it, as for hand-backs (start_holds.file).
-                        botops = bool(start_holds.file(c, row, start_holds.LAPSED_WHY, label, lapses=lapses or tries))
+                        botops = bool(start_holds.file(c, row, why, label, lapses=lapses if silence else tries))
                         if botops:
-                            reason = (
-                                f"Your {name} couldn't start on {label}: {start_holds.LAPSED_WHY}. "
-                                f"{start_holds.BOTOPS_HAS_IT}"
-                            )
+                            reason = f"Your {name} couldn't start on {label}: {why}. {start_holds.BOTOPS_HAS_IT}"
                         state = "failed"
                         c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
                         job = c.execute(

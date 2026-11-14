@@ -210,3 +210,21 @@ def test_a_pause_that_cuts_a_claimed_run_is_not_called_the_computers_silence(api
     # So the job goes out again at once on resume, with no wait.
     again = claim(api, machine)
     assert again and again["job_id"] == attempt["job_id"]
+
+
+def test_a_job_failed_by_the_day_budget_is_not_called_silent_in_a_row(api, monkeypatch):
+    # Fewer than SAME silent lapses in a row, but the day's budget of missed starts is spent: the job fails and BotOps
+    # has it, worded as missed starts, never as "took this run SAME times" in silence.
+    monkeypatch.setattr(execution, "PRE_START_TRIES", start_holds.SAME - 1)
+    machine, _, attempt = start(api)
+    job_id = attempt["job_id"]
+    for n in range(start_holds.SAME - 1):
+        lapse(api, machine, attempt)
+        if n < start_holds.SAME - 2:
+            attempt = claim(api, machine)
+    assert job_state(api, job_id) == "failed"
+    [review] = botops_tasks(api)
+    assert start_holds.LAPSED_WHY not in review["body"] and start_holds.MISSED_WHY in review["body"]
+    stop = get(api, "status?bot=ops")["status"]["last_stop"]
+    assert stop["needs_person"] is False and stop["text"].endswith(start_holds.BOTOPS_HAS_IT)
+    assert stop["reason"] == f"Its computer took this run {start_holds.SAME - 1} times and never started it."

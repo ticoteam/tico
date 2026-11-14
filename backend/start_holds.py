@@ -19,7 +19,8 @@ A computer that claims the run and then says nothing (never starts it, never ren
 no reason to compare, so the lapses themselves are counted (`lapsed_in_a_row`). On Tico Team (Nov 12) the shared
 machine did that to Performance Owner's runs ~344 times in a day: each job failed after ten lapses and the next wake
 started over, with nobody told. So the expiry that makes SAME lapses in a row on one job files here too (`file` with
-`lapses`), with LAPSED_WHY as the reason, and the task waits on BotOps the same way.
+`lapses`), with LAPSED_WHY as the reason (MISSED_WHY when the day's budget of missed starts ran out first), and the
+task waits on BotOps the same way.
 """
 
 import json
@@ -40,6 +41,9 @@ REASON_CHARS = 500
 BOTOPS_HAS_IT = "BotOps is checking why."  # ends the failed run's text: no person is asked (execution.last_stop)
 # The reason a job's runs that only lapsed are filed with: the computer said nothing, so this is all that is known.
 LAPSED_WHY = "it took each run and never started it, renewed its lease or handed it back"
+# The reason when the day's budget of missed starts (execution.PRE_START_TRIES) runs out with fewer than SAME silent
+# lapses in a row: some of those runs may have been handed back or cut, so silence is not claimed.
+MISSED_WHY = "it never started any of them before its lease ran out"
 
 
 def reason(c: Any, aid: str) -> str:
