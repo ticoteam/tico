@@ -72,7 +72,6 @@
 #meet-live-now{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 #meet-live-now .pill{line-height:16px}   /* the Beta pill sits inside without growing the button */
 .ph #notes-search{width:240px;flex:0 1 240px}
-.ph #meet-ask{flex:none}
 /* Sources in the ⋯ menu carries a dot when a source needs a look; the closed ⋯ carries it too. */
 .ph-more.meet-src-trouble{position:relative}
 .ph-more.meet-src-trouble::after{content:"";position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--fail)}

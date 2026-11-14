@@ -40,7 +40,7 @@ def test_only_an_owner_or_admin_changes_a_page_owner_and_only_to_a_live_bot(api)
     automations_owner(api)
     put(api, 'page-owners/listening', {'bot': 'automations-owner'}, 'cara-test', expected=403)
     put(api, 'page-owners/listening', {'bot': 'no-such-bot'}, expected=404)
-    put(api, 'page-owners/finance', {'bot': 'automations-owner'}, expected=404)
+    put(api, 'page-owners/calendar', {'bot': 'automations-owner'}, expected=404)  # Calendar opens Ask: no owner
     assert get(api, 'page-owners')['pages']['listening']['bot'] == 'bot:automations-owner'
 
 
@@ -66,6 +66,39 @@ def test_goals_is_owned_by_the_strategy_owner_until_an_admin_changes_it(api):
     e = settings_catalog.entry('pages.goals.owner')
     assert (e.method, e.route, e.field, e.who) == ('PUT', 'page-owners/goals', 'bot', 'admin')
     assert e.read == 'page-owners#pages.goals.bot'
+
+
+# Spec chat-on-every-page, Release 3: each page's chat is the bot that does its work, changeable like Listening's.
+RELEASE_3 = {
+    'strategy': ('Strategy', 'strategy-owner'),
+    'finance': ('Finance', 'finance-owner'),
+    'growth': ('Growth', 'growth-manager'),
+    'automations': ('Automations', 'automations-owner'),
+    'docs': ('Docs', 'librarian'),
+    'updates': ('Updates', 'updates-owner'),
+    'rules': ('Rules', 'rules-owner'),
+}
+
+
+def test_release_3_pages_are_owned_by_the_bot_that_does_their_work_until_an_admin_changes_it(api):
+    with api.app.state.store.transaction() as c:
+        for _name, slug in RELEASE_3.values():
+            c.execute(
+                "INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')",
+                (slug, slug, slug.replace('-', ' ').title()),
+            )
+    pages = get(api, 'page-owners', 'cara-test')['pages']
+    for page, (name, slug) in RELEASE_3.items():
+        assert pages[page] == {'bot': 'bot:' + slug, 'name': name}, page
+        e = settings_catalog.entry('pages.' + page + '.owner')
+        assert (e.method, e.route, e.field, e.who) == ('PUT', 'page-owners/' + page, 'bot', 'admin'), page
+        assert e.read == 'page-owners#pages.' + page + '.bot', page
+    # Calendar and Meetings open Ask (the Assistant's one chat): no page owner of their own.
+    assert 'calendar' not in pages and 'meetings' not in pages
+    setup(api)
+    assert put(api, 'page-owners/rules', {'bot': 'ops'}, 'ben-test')['bot'] == 'bot:ops'
+    assert get(api, 'page-owners')['pages']['rules']['bot'] == 'bot:ops'
+    assert get(api, 'page-owners')['pages']['finance']['bot'] == 'bot:finance-owner'
 
 
 def test_the_settings_catalogue_sets_listenings_owner(api):

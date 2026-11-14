@@ -759,6 +759,13 @@ const THV_FROM_PAGES: Record<string, (item?: PageChatItem) => string> = {
   // the review view (file-review.ts), at the version that was on screen
   file: item => item?.kind === 'file' && item.id ? fileReviewHref(item.id, {version: Number(String(item.name || '').replace(/^v/, '')) || null}) : '',
   goals: item => goalsBase() + (item?.kind === 'goal' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  strategy: () => STRATEGY,
+  finance: () => FIN_ROUTE,
+  growth: () => GR_ROUTE,
+  automations: item => AUTOMATIONS + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  docs: () => DOCS,
+  updates: () => UPDATES,
+  rules: () => RULES_ROUTE,
 };
 function thvFromHTML(m: ThvMessage) {
   const f = m.refs?.from_page;

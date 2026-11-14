@@ -93,6 +93,8 @@ function askSync() {
     el.setAttribute('aria-expanded', String(open));
     if (open) el.setAttribute('aria-label', 'Close Tico Assistant'); else el.removeAttribute('aria-label');
   }
+  // Calendar's and Meetings' Chat opens Ask (page-chat.ts pageChatAsk): pressed while it is open.
+  document.querySelectorAll('[data-pgc-ask]').forEach(b => { if (b.getAttribute('aria-pressed') !== String(open)) b.setAttribute('aria-pressed', String(open)); });
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
   if (panel.getAttribute('aria-label') !== name) panel.setAttribute('aria-label', name);

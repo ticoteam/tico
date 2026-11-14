@@ -309,6 +309,7 @@ async function pageRdOrg(): Promise<void> {
         <button type="button" class="ghost rdo-fit" data-rdo-zoom="fit" title="Fit the chart to the frame">Fit</button></div>
       <div class="rdo-pane" id="rdo-pane"><div class="rdo-sz" id="rdo-sz"><div class="rdo-cv rd-org" id="rdo-cv"></div></div></div></div>
       <div class="org-fac-host" id="org-fac-host"></div>`;
+  strategyChatMount();
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
   rdoDraw();

@@ -245,6 +245,7 @@ function pageBudget() {
       <button type="button" class="ghost bt-all" data-bt-all>Expand all</button>
       ${helpBubble('Spend over the period. The bar is the limit nearest its cap.')}</div>
     <div id="bt-body" class="bt-body">${skelRows(6, {dot: false})}</div>`;
+  strategyChatMount();
   let typing: number | null = null;
   const q = $('#bt-q') as HTMLInputElement | null;
   if (!q) throw new Error('#bt-q is missing');

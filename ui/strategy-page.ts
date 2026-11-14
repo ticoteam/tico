@@ -213,6 +213,7 @@ window.pageStrategy = async function pageStrategy(): Promise<void> {
   const kept = S.lastRead.strategy as StratKept | undefined;
   STRAT_MKT = {...(kept?.market || {})};
   main.innerHTML = strategyHeadHtml('strategy') + `<div id="strat-body" class="strat-body">${kept ? '' : skelRows(6, {dot: false})}</div>`;
+  strategyChatMount();
   const open = (data: StratData) => {
     STRAT = {data, kpis: [], load, adding: false, editSection: '', addSection: false, publishing: false};
     strategyRender();
@@ -669,7 +670,11 @@ function strategyRender() {
   const data = STRAT.data, view = strategyView(data);
   patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
   const tools = $('.rd-strat-head > .ph-tools');
+  // The owner's Chat (strategyChatMount) stays last of the tools: taken out while they are drawn, then put back.
+  const chat = tools?.querySelector(':scope > .strat-chat');
+  chat?.remove();
   if (tools) patchHTML(tools, strategyToolsHtml(data));
+  if (tools && chat) tools.append(chat);
   if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
   if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};

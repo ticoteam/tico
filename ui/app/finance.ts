@@ -288,6 +288,7 @@ function pageFinance() {
   const main = $('#main');
   main.classList.add('strategy-layout', 'finance-layout');
   main.innerHTML = finHeadHtml() + '<div id="fin-brief"></div>' + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
+  finChatMount();
   const state = FIN;
   void (async () => {
     let acc: FinAccData | null = null, error: unknown = null;
@@ -332,11 +333,17 @@ function finHeadHtml() {
   return `<div class="strat-head rd-strat-head fin-head" id="fin-head"><h1>Finance</h1>
     <nav class="tabs slim strat-tabs" aria-label="Finance">${tabs.map(([id, label]) =>
       `<a href="${finHref('/' + id, id === 'pnl' && pnlView === 'expenses' ? {view: 'expenses'} : {})}" data-fin-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>
-    <span class="spacer"></span>${viewing}</div>`;
+    <span class="spacer"></span>${viewing}<span class="pgc-slot fin-chat"></span></div>`;
+}
+// Chat with the Finance Owner (page-chat.ts), at the head's right; the same chat on every Finance tab, Payables' bills too.
+function finChatMount() {
+  const slot = document.querySelector<HTMLElement>('#fin-head .fin-chat');
+  if (slot) void pageChatMount({page: 'finance', label: 'Finance', button: slot, stays: r => rdUnder(r, FIN_ROUTE)});
 }
 function finHeadDraw() {
   const head = $('#fin-head'); if (!head) return;
   head.outerHTML = finHeadHtml();
+  finChatMount();
   const end = $('#fin-head [data-fin-as-end]');
   if (end) end.onclick = () => { FIN_VIEW_AS = ''; location.hash = finHref('/' + (FIN?.tab === 'line' ? 'pnl' : FIN?.tab || 'pnl')); };
 }

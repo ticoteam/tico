@@ -685,11 +685,13 @@ async function pageLibraryFiles() {
       <header class="lf-head"><h1>Files</h1>
         <div class="lf-search">${TL_ICON.search}<input class="lf-q" type="search" placeholder="Search" aria-label="Search files" autocomplete="off" spellcheck="false"></div>
         <button type="button" class="lf-fbtn" popovertarget="lf-filter-pop" aria-haspopup="true" aria-expanded="false" aria-label="Filters" title="Filters">${filterIcon(16)}<span class="lf-fbn tnum" hidden></span></button>
-        <div class="tl-pop lf-pop" id="lf-filter-pop" popover></div></header>
+        <div class="tl-pop lf-pop" id="lf-filter-pop" popover></div><span class="pgc-slot lf-chat"></span></header>
       <div class="lf-bar" hidden></div>
       <div class="lf-table"><div class="lf-cols" aria-hidden="true"><span class="lf-h"></span><span class="lf-h">Name</span><span class="lf-h lf-kind">Kind</span><span class="lf-h lf-by">Made by</span><span class="lf-h lf-team">Team</span><span class="lf-h lf-when">Updated</span></div>
         <div class="lf-list" aria-live="polite">${skelRows(6)}</div></div></div>`;
     LF = {root: $('#lf-root'), pop: $('#lf-filter-pop'), filter, rows: [], cursor: null, seq: 0, groups: []};
+    // Chat with the Librarian (page-chat.ts): Docs' chat, kept going between Docs and Files.
+    void pageChatMount({page: 'docs', label: 'Files', button: $('#lf-root .lf-chat'), stays: docsChatStays});
     lfWire();
     get('/v2/groups').then(g => { if (!LF) return; LF.groups = Array.isArray(g) ? g : g?.groups || []; lfControls(); }).catch(() => {});
   } else if (LF) LF.filter = filter;
@@ -898,6 +900,8 @@ function lfDraw() {
 
 // ----------------------------------------------------------------- routes and global search
 // Called by redesignRoute (ui/app/redesign.ts) before the router's own list.
+// Docs and Library › Files share the Librarian's chat (page-chat.ts): moving between them keeps it open.
+const docsChatStays = (r: string): boolean => r === DOCS || r.startsWith(DOCS + '/') || r.startsWith(DOCS + '?') || rdUnder(r, RD_FILES);
 function pagesRoute(r: string) {
   if (rdUnder(r, RD_FILES)) { pageLibraryFiles(); return true; }
   if (r.startsWith(PAGE_ROUTE)) {

@@ -8,7 +8,11 @@
    left, the owner's face and name, then the chat. Its left edge drags it 260–560 px wide; the width and whether it is
    open are kept in this browser (open per page). Esc inside it closes it. ⌘J (Ctrl+J) opens it with the cursor in its
    composer and closes it again (ask-panel.ts asks pageChatKey first); Ask and a page chat are never open together.
-   A page may hold the column (pageChatHold): Listening's editor takes its place while open.
+   A page may hold the column (pageChatHold): Listening's and Automations' editor takes its place while open. A page's
+   own panel may instead swap with it (`panel`, Rules' detail): opening Chat closes the panel, and the page closes the
+   chat when the panel opens (pageChatYield).
+   Calendar and Meetings, whose owner is the Assistant, get the same Chat with the Assistant's face, which opens Ask
+   (pageChatAsk): no second Assistant chat.
    Phone (≤760 px, the pages' own phone layout): the owner's face opens the chat full screen over the page and the tab
    bar: ‹ at left, the name in the middle, the composer at the bottom. ‹ or the phone's back returns to the page as it
    was (a history entry of its own, as the task window's).
@@ -30,6 +34,7 @@ interface PageChatOpts {
   item?: () => PageChatItem | null; // what is selected on the page now
   empty?: () => string;            // the chat's empty state, written from the page when it opens
   keyDrop?: () => string[];        // Tools: the composer catches keys (tools-key-drop.ts); the tools in Problem, by name
+  panel?: {open: () => boolean; close: () => void}; // Rules: the page's detail panel, which the chat takes the place of
 }
 interface PageChatState extends PageChatOpts { owner: string; chat: ThvView | null; full: boolean; open: boolean; held: boolean }
 
@@ -107,7 +112,7 @@ async function pageChatMount(opts: PageChatOpts): Promise<void> {
   if (PGC && (PGC.page !== opts.page || PGC.owner !== owner)) pageChatLeave();
   if (!owner) return;
   const state: PageChatState = PGC || {...opts, owner, chat: null, full: false, open: false, held: false};
-  Object.assign(state, {button: opts.button, stays: opts.stays, item: opts.item, label: opts.label});
+  Object.assign(state, {button: opts.button, stays: opts.stays, item: opts.item, label: opts.label, panel: opts.panel});
   const name = actorLabel(owner);
   opts.button.innerHTML = `<button type="button" class="ghost pgc-btn" data-pgc-open aria-pressed="false" aria-label="Chat with ${esc(name)}" title="Chat with ${esc(name)} (⌘J)">`
     + `<span class="pgc-face">${actorFace(owner, 22)}</span><span class="pgc-word">Chat</span></button>`;
@@ -117,7 +122,17 @@ async function pageChatMount(opts: PageChatOpts): Promise<void> {
   const aside = pgcAside();
   aside.setAttribute('aria-label', 'Chat with ' + name);
   document.body.style.setProperty('--pgc-w', pageChatWidth() + 'px');
-  pgcDraw(state, !pgcPhone() && pgcOpenKept(opts.page));
+  // A panel the address opened (a rule's detail) keeps its place: the chat kept open waits until it is asked for.
+  pgcDraw(state, !pgcPhone() && pgcOpenKept(opts.page) && !opts.panel?.open());
+}
+
+/** Calendar and Meetings: Chat with the Assistant's face, which opens Ask (the Assistant's one chat, which already
+    carries the page). Ask's own state says whether it is pressed (ask-panel.ts askSync). */
+function pageChatAsk(button: HTMLElement): void {
+  const owner = 'bot:' + assistantBot(), name = askName();
+  button.innerHTML = `<button type="button" class="ghost pgc-btn" data-pgc-ask aria-pressed="${!!ASK?.open}" aria-label="Chat with ${esc(name)}" title="Chat with ${esc(name)} (⌘J)">`
+    + `<span class="pgc-face">${actorFace(owner, 22)}</span><span class="pgc-word">Chat</span></button>`;
+  button.querySelector('button')?.addEventListener('click', () => { if (!askAway()) askToggle(); });
 }
 
 /** Whether the page's chat column shows now (a desktop's; a phone's full screen is not a column). */
@@ -130,6 +145,7 @@ function pageChatToggle(open?: boolean, focus = false): void {
   if (pgcPhone()) { if (open !== false) pgcFullOpen(state); else pgcFullClose(state); return; }
   const next = open ?? !(state.open && !state.held);
   if (next) state.held = false;   // Chat asked for while a page's panel holds the column: the chat comes back over it
+  if (next && state.panel?.open()) state.panel.close();   // Rules: the chat takes the detail's place
   pgcKeep(pgcOpenKey(state.page), next ? '1' : '0');
   const inside = pgcAside().contains(document.activeElement);
   pgcDraw(state, next);
@@ -144,6 +160,11 @@ function pageChatKey(): boolean {
   if (document.querySelector('dialog[open]')) return true;
   pageChatToggle(!pageChatShown(), true);
   return true;
+}
+
+/** The page's own panel (`panel`, Rules' detail) has just opened: it takes the open chat's place, which closes. */
+function pageChatYield(): void {
+  if (pageChatShown()) pageChatToggle(false);
 }
 
 /** A page's own panel takes the column's place while it is open (Listening's editor); the column comes back after. */

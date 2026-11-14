@@ -5,6 +5,9 @@
 .pgc-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px 0 5px;border-radius:16px}
 .pgc-btn[aria-pressed="true"]{background:var(--surface2)}
 .pgc-face{display:inline-flex;flex:none}
+/* Where a page's header holds Chat: nothing until the page has an owner. */
+.pgc-slot{display:inline-flex;flex:none;align-items:center}
+.pgc-slot:empty{display:none}
 .pgc{position:fixed;z-index:35;top:var(--pgc-top,0px);right:0;bottom:0;width:var(--pgc-w,340px);box-sizing:border-box;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:var(--t-sm);box-shadow:-10px 0 28px rgba(0,0,0,.14)}
 .pgc[hidden]{display:none}
 /* From 1600 px the page makes room: it sits beside the column, narrower by its width, and the column needs no shadow. */

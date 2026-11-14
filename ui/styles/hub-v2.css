@@ -65,7 +65,7 @@
 #main.docs-layout>.ph{flex:none}
 .ph .docs-search-field{flex:0 1 280px;min-width:160px}
 .ph a#docs-new{display:inline-flex;align-items:center;text-decoration:none}
-.ph :is(#docs-ask,#docs-add-source){flex:none;white-space:nowrap}
+.ph #docs-add-source{flex:none;white-space:nowrap}
 .docs-search-field .nav-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;font-size:16px}
 .docs-search-field input.docs-search{width:100%;min-width:0;height:32px;padding:0 30px 0 32px;font-size:var(--t-base);background-image:none}   /* the field has its own icon */
 .docs-kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);min-width:18px;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:var(--t-xs)/16px var(--mono);text-align:center;pointer-events:none}

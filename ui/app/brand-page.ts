@@ -264,6 +264,7 @@ function pageBrand() {
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = redesignStrategyHead('brand') + `<div id="gr-body" class="gr-body">${BR.data ? '' : skelRows(6, {dot: false})}</div>`;
+  strategyChatMount();
   if (BR.data) { brandDraw(); BR.drawn = true; }
   void brandRead(BR);
 }

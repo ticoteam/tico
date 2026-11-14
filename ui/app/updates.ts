@@ -191,7 +191,8 @@ function pageUpdates(): void {
     + `<button type="button" class="upd-chip" id="upd-scope" aria-pressed="${state.scope === 'all'}" aria-label="Whole org" title="Whole org: off shows only the cards below you"${updIsTree(state) ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">groups</span><span class="upd-lbl">Whole org</span></button>`
     + `<button type="button" class="upd-chip" id="upd-mine" aria-pressed="${state.mine}" aria-label="My bots" title="My bots"${updIsTree(state) ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">person</span><span class="upd-lbl">My bots</span></button>`
     + `<button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>`
-    + `<button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>`;
+    + `<button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>`
+    + '<span class="pgc-slot upd-chat"></span>';
   col.innerHTML = `<div class="upd-page">
     ${pageHead({
       title: view === 'archive' ? 'Archive' : 'Updates',
@@ -204,6 +205,8 @@ function pageUpdates(): void {
     })}
     <div id="upd-feed" class="upd-feed" aria-live="polite"></div>
   </div>`;
+  // Chat with the Updates Owner (page-chat.ts), last of the tools.
+  void pageChatMount({page: 'updates', label: 'Updates', button: col.querySelector('.upd-chat'), stays: r => r === UPDATES || r.startsWith(UPDATES + '?')});
   if ($('#upd-day')) $('#upd-day').onclick = () => { location.hash = UPDATES + (state.kind === 'weekly' ? '?kind=weekly' : ''); };
   col.querySelector('.upd-seg').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-upd-kind]'); if (!b || b.dataset.updKind === state.kind) return;

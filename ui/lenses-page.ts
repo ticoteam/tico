@@ -113,6 +113,7 @@ window.pageLenses = async function pageLenses(): Promise<void> {
   const main = $('#main');
   main.classList.add('strategy-layout');
   main.innerHTML = strategyHeadHtml('lenses') + `<div id="lens-body" class="lens-body">${skelRows(5, {dot: false})}</div>`;
+  strategyChatMount();
   LENS = {load, timer: 0, bets: [], label: 'Bet', watch: null};
   const id = lensRunId();
   if (id) await lensRunPage(id, load); else await lensListPage(load);

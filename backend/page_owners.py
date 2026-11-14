@@ -25,11 +25,19 @@ if TYPE_CHECKING:
     import sqlite3
 
 KEY = "page_owners"
-# The bot that does each page's work (spec chat-on-every-page): Listening and Goals so far; the other pages follow.
+# The bot that does each page's work (spec chat-on-every-page), not the one that improves the page. Calendar and
+# Meetings have none: their Chat opens Ask, the Assistant's one chat (ui/app/page-chat.ts pageChatAsk).
 PAGES: dict[str, dict[str, str]] = {
     "listening": {"name": "Listening", "default": "automations-owner"},
     "tools": {"name": "Tools", "default": "tools-product-owner"},
     "goals": {"name": "Goals", "default": "strategy-owner"},
+    "strategy": {"name": "Strategy", "default": "strategy-owner"},  # Strategy's other tabs: Market, Org, Budget...
+    "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
+    "growth": {"name": "Growth", "default": "growth-manager"},
+    "automations": {"name": "Automations", "default": "automations-owner"},
+    "docs": {"name": "Docs", "default": "librarian"},  # Docs and Library > Files
+    "updates": {"name": "Updates", "default": "updates-owner"},
+    "rules": {"name": "Rules", "default": "rules-owner"},
 }
 FROM_LIMITS = {"page": 40, "label": 80, "kind": 40, "id": 200, "name": 200}
 

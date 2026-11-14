@@ -75,6 +75,5 @@
   .au.au-lst[data-screen="detail"]>.ph>:not(.ph-tools),.au.au-lst[data-screen="detail"]>.ph>.ph-tools>:not(.au-chat){display:none}
   .au-lst[data-screen="detail"] .au-crumb{min-height:44px;padding-right:60px}
 }
-/* The owner's Chat button (page-chat.ts); the chat itself is the shared column (page-chat.css). */
-.au-lst .au-chat{display:inline-flex;margin-left:6px}
-.au-lst .au-chat:empty{display:none}
+/* The owner's Chat button (page-chat.ts) on Listening and Automations; the chat itself is the shared column (page-chat.css). */
+.au .au-chat{margin-left:6px}

@@ -222,7 +222,7 @@ function auShell() {
   const lst = !!AU.lst;
   $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
     ${pageHead({title: lst ? 'Listening' : 'Automations', hook: 'au-ph', pad: true,
-      tools: `<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>${lst ? '<span class="au-chat"></span>' : ''}`,
+      tools: `<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="pgc-slot au-chat"></span>`,
       primary: `<span class="au-newbox"><button class="primary ph-go au-new" type="button"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}>${lst ? 'New listening' : 'New automation'}</button>`
         + `<div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>`})}
     <div class="au-body">
@@ -257,11 +257,13 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
-  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (auEdDraw).
-  if (lst) void pageChatMount({page: 'listening', label: 'Listening', button: root.querySelector('.au-chat'), stays: r => auUnder(r, LISTENING),
+  // The owner's chat (page-chat.ts), the Automations Owner's on both pages by default, one chat each; the one open rides
+  // along. An editor takes the chat's place while open (auEdDraw).
+  void pageChatMount({page: lst ? 'listening' : 'automations', label: lst ? 'Listening' : 'Automations', button: root.querySelector('.au-chat'),
+    stays: r => auUnder(r, lst ? LISTENING : AUTOMATIONS),
     item: () => {
       const a = AU;
-      if (!a || a.root !== root || !a.lst || !a.cur || !a.id) return null;
+      if (!a || a.root !== root || !!a.lst !== lst || !a.cur || !a.id) return null;
       return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
     }});
 }
@@ -433,7 +435,7 @@ function auDrawSide() {
   const again = b && html ? ed.querySelector<HTMLInputElement>(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
-  if (AU.lst) pageChatHold(!!html);
+  pageChatHold(!!html);
   // The board's pop-ups float over it on a computer; a phone keeps the sheet.
   AU.root.classList.toggle('ed-pop', !!html && AU.ed?.kind === 'board');
   auEl(AU.root, '.au-scrim').hidden = !html;

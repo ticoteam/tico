@@ -1,5 +1,5 @@
-// Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
-// (ui/app/ask-panel.ts), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
+// Library on a real hub: Tools › Keys has an Ask button that opens the Ask panel (ui/app/ask-panel.ts), which sees the
+// page (Docs' and Meetings' Ask buttons are Chat now: page-chat-pages.cts); no Librarian rail, sidebar row or settings link. The Library and Company sidebar
 // groups fold behind a chevron (kept per browser, open again on their own pages).
 // Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cts).
 import type {Page} from 'playwright';
@@ -12,7 +12,7 @@ const at = (page: Page, hash: string) => go(page, hash).then(() => page.waitForF
 
 run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/docs'});
-  for (const [hash, button] of [['#/docs', '#docs-ask'], ['#/meetings', '#meet-ask'], ['#/tools/keys', '#lc-ask']] as const) {
+  for (const [hash, button] of [['#/tools/keys', '#lc-ask']] as const) {
     await at(page, hash);
     const ask = page.locator(button), panel = page.locator('#ask-panel');
     await ask.waitFor({timeout: t(10000)});

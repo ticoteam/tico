@@ -220,11 +220,10 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const current = () => load === DOC_LOAD && S.route.startsWith(DOCS);
   $('#main').classList.toggle('docs-reading', !!selected);
 
-  // The one page header (ui/app/page-head.ts): search, Ask and Add source as tools, today's menu in its ⋯, New doc last.
+  // The one page header (ui/app/page-head.ts): search, Add source and Chat as tools, today's menu in its ⋯, New doc last.
   $('#main').innerHTML = pageHead({title: 'Docs', hook: 'docs-heading', moreId: 'docs-more', menuId: 'docs-menu',
     tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder="Search docs" value="${esc(DOC_QUERY)}" autocomplete="off"><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`
-      + `<button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`
-      + '<button class="ghost" id="docs-add-source" type="button">Add source</button>',
+      + '<button class="ghost" id="docs-add-source" type="button">Add source</button><span class="pgc-slot docs-chat"></span>',
     more: '<button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>'
       + (docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: '1'})}">Set up Docs…</a>` : '')
       + `<a id="docs-archived" href="${docsHref('', archived ? {} : {archived: '1'})}">${archived ? 'Active' : 'Archived'}</a>`,
@@ -245,7 +244,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   $('#docs-add-source').onclick = () => openLink(null);
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
-  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.ts); what it sends carries this page.
+  // Chat with the Librarian (page-chat.ts), in place of the Ask button Docs had; the same chat on Library › Files.
+  void pageChatMount({page: 'docs', label: 'Docs', button: $('#main .docs-chat'), stays: docsChatStays});
 
   const cacheKey = archived ? 'archived' : 'active';
   const fresh = docsLoadAll(archived);

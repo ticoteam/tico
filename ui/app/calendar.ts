@@ -132,12 +132,16 @@ function pageCalendar(r: string): void {
         <input type="search" id="cal-q" placeholder="Name, event, with:" autocomplete="off" spellcheck="false" aria-label="Search calendars and events" aria-controls="cal-dd" aria-autocomplete="list">
         <div class="cal-dd" id="cal-dd" role="listbox" hidden></div></div>
       <div class="theme-seg cal-views" role="radiogroup" aria-label="View" data-cal-views></div>
+      <span class="pgc-slot cal-chat"></span>
       <div class="cal-more"><button type="button" class="ghost small cal-ib" data-cal-more aria-label="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
         <div class="cal-menu" role="menu" data-cal-menu hidden><button type="button" role="menuitemcheckbox" data-cal-record aria-checked="true">Record calls I join</button></div></div>
     </header>
     <div class="cal-strip" data-cal-strip></div>
     <div class="cal-body" data-cal-body>${skelRows(6)}</div>
   </div>`;
+  // Chat with the Assistant's face, which opens Ask (page-chat.ts pageChatAsk): the Assistant's one chat.
+  const chat = document.querySelector<HTMLElement>('#cal-root .cal-chat');
+  if (chat) pageChatAsk(chat);
   const q = document.querySelector<HTMLInputElement>('#cal-q');
   if (q) q.value = CALP.q;
   if (CALP.q) calFindOpen(false);

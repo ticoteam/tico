@@ -207,5 +207,14 @@ function redesignStrategyHead(tab: string): string {
     tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`})),
     tools: sub, actId: 'strat-actions'});
 }
+// Chat with the Strategy Owner (page-chat.ts), last of the header's tools, on every Strategy tab but Goals (which has its
+// own, goals.ts). Called by each tab once it has drawn redesignStrategyHead; moving between these tabs keeps the chat.
+function strategyChatMount(): void {
+  const tools = document.querySelector('#main header.rd-strat-head > .ph-tools');
+  if (!tools) return;
+  tools.insertAdjacentHTML('beforeend', '<span class="pgc-slot strat-chat"></span>');
+  void pageChatMount({page: 'strategy', label: 'Strategy', button: tools.lastElementChild as HTMLElement,
+    stays: r => rdUnder(r, STRATEGY) && !rdUnder(r, RD_GOALS)});
+}
 
 // Org (ui/app/redesign-org.ts) and the Market page (ui/app/redesign-market.ts) are their own files.

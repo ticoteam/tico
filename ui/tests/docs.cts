@@ -260,9 +260,8 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
     await shot(page, 'list');
-    // Ask opens the Ask panel with this page; nothing of the Librarian: no rail, settings link or sidebar gear.
-    assert.equal(await page.locator('#docs-ask').getAttribute('aria-label'), 'Ask');
-    assert.equal(await page.locator('#docs-ask').getAttribute('data-ask-open'), '');
+    // No Ask button (Chat with the Librarian takes its place, page-chat-pages.cts); no rail, settings link or sidebar gear.
+    assert.equal(await page.locator('#docs-ask, #main [data-ask-open]').count(), 0);
     assert.equal(await page.locator('[data-docs-ask], #docs-librarian-settings, #side .nav-librarian, #nav-strategy-librarian').count(), 0);
 
     // ---- read an internal doc, and its relative link to another doc stays in the app
@@ -437,7 +436,7 @@ const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOStr
     addLinked('https://drive.google.com/drive/folders/brand', 'Brand assets', 'google_drive', 'Logos and the tone guide');
     page = await open('#/docs', {width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    assert.equal(await page.locator('#docs-ask .docs-ask-word').isVisible(), false);
+    assert.equal(await page.locator('#docs-ask').count(), 0);
     await shot(page, 'phone-list');
     await page.locator('.docs-item').first().click();
     await page.locator('.docs-reader-head h2').waitFor();

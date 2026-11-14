@@ -207,8 +207,14 @@ function pageGrowth() {
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = `<div class="strat-head rd-strat-head gr-head"><a class="gr-back" href="${GR_ROUTE}" data-gr-back>Growth</a><span class="muted" aria-hidden="true">/</span><h1>Sources</h1><span class="spacer"></span>
-    <div class="strat-actions" id="strat-actions"></div></div><div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+    <span class="pgc-slot gr-chat"></span><div class="strat-actions" id="strat-actions"></div></div><div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  grChatMount(main);
   pageGrowthSources(GR);
+}
+// Chat with the Growth Manager (page-chat.ts) in the head, on Growth and its Sources alike.
+function grChatMount(root: Element) {
+  const slot = root.querySelector<HTMLElement>('.gr-chat');
+  if (slot) void pageChatMount({page: 'growth', label: 'Growth', button: slot, stays: r => rdUnder(r, GR_ROUTE)});
 }
 // After Settings or a channel saves: the cards and the Get started panel read again.
 function grReload(state: unknown) {
@@ -227,10 +233,12 @@ DASH_PLACES.growth = {
   head: () => `<h1>Growth</h1><a class="grh-ns" data-gr-ns hidden></a><span class="spacer"></span>
     <label class="grh-month" hidden><span class="sr-only">Month</span><select data-gr-month></select></label>
     ${grBoardLink('gr-btn grh-btn', 'Growth board', '', ' data-gr-board')}
-    ${grAdmin() ? '<button type="button" class="ghost grh-btn" data-gr-settings>Settings</button>' : `<a class="gr-btn grh-btn" href="${GR_SOURCES}" data-gr-sources>Sources</a>`}`,
+    ${grAdmin() ? '<button type="button" class="ghost grh-btn" data-gr-settings>Settings</button>' : `<a class="gr-btn grh-btn" href="${GR_SOURCES}" data-gr-sources>Sources</a>`}
+    <span class="pgc-slot gr-chat"></span>`,
   wire(state) {
     const root = state.root;
     if (!root) return;   // G: the grid is there before a place is wired
+    grChatMount(root);
     root.querySelector('[data-gr-settings]')?.addEventListener('click', () => { if (GR) void gcSettings(GR); });
     if (GR) grStartMount(GR, root);   // the Get started panel under the head while setup is not done
     // A stale or failing source is said once, right under the head and over every other panel (grHealthRead).
