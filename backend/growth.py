@@ -524,17 +524,22 @@ def typed_beside(c, computed_rows, actor, is_admin):
             figures["typed"] = said
 
 
-def ask_owners(c):
-    """After a customers load: tell each channel's owner, once per month and figure, of the numbers typed as actual that
-    differ from the ones now computed. Every such number is on the Growth page to choose; a channel with no owner
-    (Unknown, or none set) is an admin's there, with no notice. Returns how many numbers were asked about."""
+def ask_owners(c, month=None):
+    """Tell each channel's owner, once per month and figure, of the numbers typed as actual that differ from the ones
+    computed from customers: after a customers load (every month) and after a number is typed as actual (its month).
+    Every such number is on the Growth page to choose. A channel with no owner (Unknown, or none set) is an admin's
+    there and is not marked asked, so an owner set later is told at the next load. Returns how many numbers were asked
+    about."""
     from . import growth_computed as GX
 
-    computed = GX.by_channel_month(c)
+    computed = GX.by_channel_month(c, month)
     if not computed:
         return 0
     slugs = _slugs(c)
-    rows = H._rows(c.execute("SELECT * FROM growth_cohorts"))
+    sql, args = "SELECT * FROM growth_cohorts", ()
+    if month:
+        sql, args = sql + " WHERE month=?", (month,)
+    rows = H._rows(c.execute(sql, args))
     origins = GS.origins_view(c, [r["id"] for r in rows])
     chosen = choices(c, [r["id"] for r in rows])
     found = {r["slug"]: r for r in H._rows(c.execute("SELECT slug, name, owner_ref FROM growth_channels"))}
@@ -542,7 +547,8 @@ def ask_owners(c):
     for raw in rows:
         row = _cohort_view(raw, slugs, origins)
         key = (row["channel"], row["month"])
-        if key not in computed:
+        ch = found.get(row["channel"]) if row["channel"] else None
+        if key not in computed or not ch or not ch.get("owner_ref"):
             continue
         mine = chosen.get(row["id"], {})
         view = beside(row, computed[key], *key, None, mine)
@@ -565,9 +571,7 @@ def ask_owners(c):
             )
             asked.setdefault(row["channel"], []).append(line)
     for slug, lines in asked.items():
-        ch = found.get(slug) if slug else None
-        if not ch or not ch.get("owner_ref"):
-            continue
+        ch = found[slug]
         shown = "; ".join(lines[:5]) + (f"; and {len(lines) - 5} more" if len(lines) > 5 else "")
         H.notice(
             c,
@@ -1079,6 +1083,8 @@ def cohort_set(c, actor, body):
         c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
     )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
+    if (saved.get("quality") or "actual") == "actual" and any(k in COMPUTED_FIELDS for k in fields):
+        ask_owners(c, saved["month"])  # a typed actual that differs from a computed figure: its owner is asked, once
     return _cohort_view(saved, _slugs(c), GS.origins_view(c, [cid]))
 
 

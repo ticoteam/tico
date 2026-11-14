@@ -716,6 +716,7 @@ async function shot(page: Page, name: string) {
       const kept = card.locator('tr[data-grx-row="search"] td[data-grx-typed="kept"]');
       assert.match(await kept.innerText(), /^70% typed\s*computed\s*81%$/, 'the kept typed number is the figure, the computed one under it');
       assert.equal(await kept.locator('button[data-keep]').count(), 0, 'chosen: nothing more to choose');
+      assert.match(await card.locator('.grx-foot').innerText(), /A kept typed number shows as typed; LTV here uses the computed shares\./);
       assert.deepEqual(errors, []);
       await page.close();
       Object.assign(DIFFERS, {chosen: null, may: false});

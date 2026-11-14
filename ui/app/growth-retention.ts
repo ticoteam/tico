@@ -98,6 +98,7 @@ function grxCard(v: GrxView) {
   if (typed.length) notes.push(byChannelMonth ? 'Rows marked typed were typed by the team: those channels have no customers loaded.'
     : `Typed retention for ${typedNames} shows under Cut by Channel, Monthly.`);
   if (v.cohorts.some(c => Object.values(c.typed || {}).some(t => t && !t.chosen))) notes.push('A number typed as actual that differs shows under the computed one until the channel’s owner keeps one.');
+  if (v.cohorts.some(c => Object.values(c.typed || {}).some(t => t?.chosen === 'typed'))) notes.push('A kept typed number shows as typed; LTV here uses the computed shares.');
   if (v.cohorts.some(c => c.too_few)) notes.push(`Under ${v.min_cohort} customers a cohort shows counts only: too few for a rate.`);
   if (v.cohorts.some(c => c.kept_d30.status === 'not_yet' || c.kept_d90.status === 'not_yet')) notes.push('A day fills once every customer in the cohort has reached it.');
   if (v.cac_note) notes.push(GRX_NOTE[v.cac_note] || v.cac_note);

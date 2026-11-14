@@ -151,7 +151,9 @@ with the number of customers it comes from and the customers source(s) they were
 `tico growth cohort list --json`: `computed`, `computed_from`, `sources`). A typed estimate for the same month is
 replaced. A typed actual that differs is kept beside it, on the Number cards and the Retention card, and the channel's
 owner or an admin keeps one (`tico growth cohort resolve ... --keep typed|computed --against computed`). After a load,
-the channel's owner gets one notice naming the numbers that differ; each channel, month and figure is asked about once.
+and after a number is typed as actual, the channel's owner gets one notice naming the numbers that differ; each
+channel, month and figure is asked about once. A channel with no owner is asked once an owner is set, at the next load.
+On the Retention card, LTV uses the computed shares even where a typed number was kept.
 The choice holds across later loads; typing a new number for that month and figure asks again. Channels and months
 with no customer facts read exactly as before. Every figure says which it is.
 

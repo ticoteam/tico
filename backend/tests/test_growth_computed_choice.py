@@ -8,7 +8,7 @@ Synthetic customers only: a search-ads September 2026 cohort of 40, 30 still pay
 import pytest
 
 from backend import growth_computed as GX
-from backend.tests.helpers.api import get, post, put
+from backend.tests.helpers.api import get, headers, post, put
 from backend.tests.helpers.company import bot
 from backend.tests.helpers.growth_computed import TODAY, as_csv, september
 
@@ -187,3 +187,73 @@ def test_a_synced_customers_source_is_named_with_its_id(api):
     post(api, f"growth/sources/{src['id']}/rows", {"csv": as_csv(september())})
     sources = sept(api)["origins"]["kept_d30"]["sources"]
     assert [(s["source_id"], s["source"]) for s in sources] == [(src["id"], "Customers sheet")]
+
+
+# ----------------------------------------------------------------------------- Review 1
+def test_typing_an_actual_after_a_load_asks_the_owner_at_once(api):
+    owned_channel(api)
+    load(api, september())
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    said = asks(api)
+    assert len(said) == 1 and "typed 70%, computed 75%" in said[0]
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70, "spend": 900})
+    assert len(asks(api)) == 1  # the same typed number: asked already
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 75, "quality": "estimate"})
+    assert len(asks(api)) == 1  # an estimate is replaced by the computed figure, nothing to ask
+
+
+def test_a_channel_with_no_owner_is_asked_once_an_owner_is_set(api):
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search ads"})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    load(api, september())
+    bot(api, "ops")
+    r = api.patch("/api/v2/growth/channels/search-ads", json={"owner_ref": "ops"}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    load(api, september())
+    said = asks(api)
+    assert len(said) == 1 and "typed 70%" in said[0]
+
+
+def test_a_member_sees_both_values_but_no_keep_or_use(api):
+    owned_channel(api)
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "kept_d30": 70})
+    load(api, september())
+    view = get(api, f"places/growth?month={SEPT}", token="cara-test")
+    number = next(
+        p["card"]["data"]
+        for p in view["pins"]
+        if p["card"]["template"] == "growth_number" and p["card"]["settings"].get("metric") == "kept_d30"
+    )
+    assert [(c["typed"], c["may"]) for c in number["origin"]["conflicts"]] == [(70, False)]
+    retention = next(p["card"]["data"] for p in view["pins"] if p["card"]["template"] == "growth_retention")
+    search = next(r for r in retention["computed"]["cohorts"] if r["value"] == "search-ads")
+    assert search["typed"] == {"kept_d30": {"typed": 70, "chosen": None, "may": False}}
+    # The channel's owner may, though not an admin.
+    ops = bot(api, "ops")
+    mine = get(api, f"growth/computed?month={SEPT}", token=ops)
+    assert next(r for r in mine["cohorts"] if r["value"] == "search-ads")["typed"]["kept_d30"]["may"] is True
+
+
+def test_a_sources_held_value_stays_on_a_computed_figure(api):
+    owned_channel(api)
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": SEPT, "new_customers": 120})
+    src = post(
+        api,
+        "growth/sources",
+        {
+            "truth_for": "new customers",
+            "system": "Signups sheet",
+            "sync_kind": "file",
+            "sync_map": {"fields": {"new_customers": "signups"}},
+        },
+    )
+    assert (
+        post(api, f"growth/sources/{src['id']}/rows", {"csv": f"month,channel,signups\n{SEPT},search-ads,131\n"})[
+            "held"
+        ]
+        == 1
+    )
+    load(api, september())
+    origin = sept(api)["origins"]["new_customers"]
+    assert origin["origin"] == "computed" and origin["conflict"]["value"] == 131
+    assert origin["differs"] == {"typed": 120, "chosen": None}
