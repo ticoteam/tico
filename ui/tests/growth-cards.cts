@@ -98,7 +98,8 @@ const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
     {stage: 'idea', label: 'Idea', count: 0, cards: []}]}),
 };
 // Computed retention (backend/growth_computed.py): September 2026 cut by channel, segment or plan, monthly or weekly.
-// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status].
+// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status]. Weekly CAC comes from Finance's daily spend,
+// except where a month the week touches has typed spend (October here): that week says monthly.
 const fig = (value: number | null, status = 'ok', more: Record<string, unknown> = {}) => ({value: status === 'ok' ? value : null, status, origin: 'computed', ...more});
 const KEYS = {still: ['cus_1042', 'cus_1047'], churned: [{key: 'cus_1044', churned: '2026-09-19'}]};
 function cohortOf(by: string, grain: string, value: string | null, n: number, kept: number, period = '2026-09', start = '2026-09-01', end = '2026-09-30') {
@@ -106,7 +107,7 @@ function cohortOf(by: string, grain: string, value: string | null, n: number, ke
   return {cut: by, value, grain, period, start, end, computed_from: n, too_few: few, new_customers: fig(n),
     kept_d30: fig(Math.round(kept * 1000 / n) / 10, few ? 'too_few' : 'ok', {count: kept, denominator: n, fills_on: '2026-10-30'}),
     kept_d90: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2026-12-29'}), kept_d180: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2027-03-29'}),
-    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? fig(null, 'spend_monthly') : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
+    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? (period === '2026-09-21' ? fig(42) : fig(null, 'spend_monthly')) : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
 }
 function computedView(by: string, grain: string, keys: boolean, customers: boolean) {
   const cohorts = grain === 'week' ? [cohortOf(by, grain, 'search', 31, 25, '2026-09-28', '2026-09-28', '2026-10-04'), cohortOf(by, grain, 'search', 33, 27, '2026-09-21', '2026-09-21', '2026-09-27')]
@@ -527,6 +528,7 @@ async function shot(page: Page, name: string) {
       await card.locator('[data-gr-seg="grx-grain"] button[data-v="week"]').click();
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] tr.grx-wk'));
       assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of 28 Sep', 'Week of 21 Sep']);
+      assert.deepEqual((await rowsOf()).map(r => r[6]), ['monthly', '$42'], 'a week of daily spend shows its CAC; one touching a typed month says monthly');
       assert.match(await card.locator('.grx-foot').innerText(), /Weekly CAC needs daily spend: spend is monthly\./);
       assert.ok(fake.reads.includes('by=channel&grain=week&month=2026-09'), 'the weekly read asks for the month');
       await shot(page, 'desktop-growth-computed');
