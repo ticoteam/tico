@@ -191,7 +191,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert not results[0]["ok"]
     # "cap table" names the Equity Manager role for bot_add.
     assert A.find_role("cap table")["slug"] == "equity-manager"
-    assert A.find_role("engineer")["slug"] == "builder" and A.find_role("reviewer")["slug"] == "reviewer"
+    assert A.find_role("engineer")["slug"] == "feature-owner" and A.find_role("reviewer")["slug"] == "reviewer"
     # The built-in's old name and its new one both name it; a bare "CEO" is a person's title, not the bot.
     assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Owner")["slug"] == "strategy-owner"
     assert A.find_role("CEO") is None
