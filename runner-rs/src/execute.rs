@@ -3139,13 +3139,26 @@ impl Runner {
                     let bound = crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime).and_then(|d| d.binding());
                     format!("{}{}", crate::continuity::side_session(&conv, &hop.model), bound.unwrap_or_default())
                 });
+                // One the server asks to compact first (it failed for its size) is not resumed: resumed again it would
+                // fail the same way, and that second failure clears the task's conversation, the primary's session
+                // with it. The hop begins a new one, which is the task's side session from then on.
                 let saved_side = match &side_conv {
-                    Some(side) => self.state.session(&bot, side, &kept_runtime).map_err(Fail::runtime)?,
-                    None => None,
+                    Some(side) if !truthy(config.get("compact_first")) => {
+                        self.state.session(&bot, side, &kept_runtime).map_err(Fail::runtime)?
+                    }
+                    _ => None,
                 };
                 // One that cannot be resumed (gone, or refused twice) is begun again, from the checkpoint and the replay.
                 let resumed_side = match &saved_side {
-                    Some(prev) => self.resume_saved(h, prev, &settings, &attempt, &flags).await.ok(),
+                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                        Ok(t) => Some(t),
+                        Err((missing, error)) => {
+                            let why = if missing { "is not on this computer" } else { "was refused" };
+                            self.diagnose(&aid, &format!("The task's fallback side session {why} ({}); a new one begins.",
+                                crate::continuity::trim(&error)));
+                            None
+                        }
+                    },
                     None => None,
                 };
                 let side_resumed = resumed_side.is_some();
@@ -6460,7 +6473,7 @@ for line in sys.stdin:
             true,
             &[
                 ("m1", json!({}), json!({})),
-                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m2", json!({}), limit_hop("kimi-k3-fallback")),
                 ("m4", json!({}), limit_hop("kimi-k3-fallback")),
                 ("m4", json!({}), limit_hop("kimi-k3-other")),
                 ("m4", json!({}), limit_hop("kimi-k3-fallback")),
@@ -6489,6 +6502,12 @@ for line in sys.stdin:
                 && again.contains("Where this task stood after its last turn")
                 && again.contains("hit its usage limit")
                 && !again.contains("fresh fallback thread"),
+            "{again}"
+        );
+        // The room since its last turn (m2): m3 is given, m1 from before it is not.
+        assert!(
+            again.contains("Release build 41 failed its smoke test.")
+                && !again.contains("Watch the Acme release."),
             "{again}"
         );
         assert!(
@@ -6571,6 +6590,46 @@ for line in sys.stdin:
             "{:?}",
             ran.saved
         );
+    }
+
+    #[tokio::test]
+    async fn a_limit_fallback_told_to_compact_first_begins_a_new_side_session() {
+        // A side session that failed for its size marks the task compact_first; the next hop, its login still held,
+        // must not resume that session again (it would fail the same way, and the second failure clears the
+        // conversation, the primary's session with it): it begins a new one from the checkpoint and the replay.
+        let mut compact = limit_hop("kimi-k3-fallback");
+        compact["compact_first"] = json!(true);
+        let ran = session_turns(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), compact),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), json!({})),
+            ],
+        )
+        .await;
+        let (primary, side) = (&ran.sessions[0], &ran.sessions[1]);
+        assert!(
+            ran.sessions[2] != *side && ran.sessions[2] != *primary,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert!(
+            ran.prompts[2].contains("fresh fallback thread"),
+            "{}",
+            ran.prompts[2]
+        );
+        // The new one is the task's side session from then on.
+        assert_eq!(ran.sessions[3], ran.sessions[2], "{:?}", ran.sessions);
+        assert_eq!(ran.saved, vec![Some(primary.clone()); 5], "{:?}", ran.saved);
+        assert_eq!(ran.sessions[4], *primary, "{:?}", ran.sessions);
     }
 
     /// Turns through a fake Claude process that answers every prompt, one per entry of `turns` (each is the config
