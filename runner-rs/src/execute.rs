@@ -3130,10 +3130,51 @@ impl Runner {
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                let th = h.start_thread(&bot, &settings).await?;
+                let kept_runtime = thread_runtime(&hop.runtime, &hop.harness);
+                // A task's hop keeps a side session per model, the one a task-model fallback on that model keeps
+                // (continuity::side_session under `conv`, which names the bot's login and a Clear empties): the task's
+                // next hop on the model resumes it, reading its prompt cache instead of writing it again. Its own
+                // subscription's binding goes after the model, so a thread is never resumed on another login.
+                let side_conv = (key.starts_with("task:") && source_resume.is_none() && !fresh_chat).then(|| {
+                    let bound = crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime).and_then(|d| d.binding());
+                    format!("{}{}", crate::continuity::side_session(&conv, &hop.model), bound.unwrap_or_default())
+                });
+                // One the server asks to compact first (it failed for its size) is not resumed: resumed again it would
+                // fail the same way, and that second failure clears the task's conversation, the primary's session
+                // with it. The hop begins a new one, which is the task's side session from then on. The mark is the
+                // conversation's and does not say which session was too large, so a healthy side session is dropped too
+                // when the primary took it: one cache write, against the risk of that clear.
+                let saved_side = match &side_conv {
+                    Some(side) if !truthy(config.get("compact_first")) => {
+                        self.state.session(&bot, side, &kept_runtime).map_err(Fail::runtime)?
+                    }
+                    _ => None,
+                };
+                // One that cannot be resumed (gone, or refused twice) is begun again, from the checkpoint and the replay.
+                let resumed_side = match &saved_side {
+                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                        Ok(t) => Some(t),
+                        Err((missing, error)) => {
+                            let why = if missing { "is not on this computer" } else { "was refused" };
+                            self.diagnose(&aid, &format!("The task's fallback side session {why} ({}); a new one begins.",
+                                crate::continuity::trim(&error)));
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                let side_resumed = resumed_side.is_some();
+                let th = match resumed_side {
+                    Some(t) => t,
+                    None => h.start_thread(&bot, &settings).await?,
+                };
                 thread = Some(th.clone());
                 // Said once the fallback's host is up: a hop that cannot start has run nothing.
-                session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
+                session = Some(if side_resumed {
+                    crate::continuity::Session::resumed()
+                } else {
+                    crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None)
+                });
                 self.note_session(&aid, &bot, session.as_ref());
                 if busy.is_some() || held.is_some() {
                     // The primary never started (its login was busy, or held by the server), so this host
@@ -3151,9 +3192,23 @@ impl Runner {
                     None if hit_limit || held.is_some() => format!("{primary} hit its usage limit"),
                     None => format!("{primary} was unavailable"),
                 };
-                let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
+                let note = crate::fallback::prompt_note(&because, &primary, &hop);
+                let fresh_text = format!("{}\n\n{note}", crate::prompt::replayed(&attempt, &names, None, false, &replay));
+                let text = if side_resumed {
+                    // Resumed: the checkpoint and the room since its last turn here, its own replies included, not the
+                    // replay a new thread needs; the repo rules again, since nothing records that this thread holds them.
+                    let mut resuming = attempt.clone();
+                    resuming["_side_ran"] = json!(true);
+                    resuming["_repo_rules_changed"] = json!(true);
+                    let after = self.state.cursor(&th, None).map_err(Fail::runtime)?;
+                    let built = crate::prompt::replayed(&resuming, &names, after.as_deref(), true, "");
+                    format!("{built}\n\n{note}\n\n{}", crate::continuity::SIDE_RESUMED)
+                } else {
+                    fresh_text.clone()
+                };
+                // A resumed session that turns out to be missing restarts under its id with what a new one is given.
+                h.full_prompt(&th, side_resumed.then(|| fresh_text.clone()));
                 let live_source = source_continue() && thread_updates();
-                let kept_runtime = thread_runtime(&hop.runtime, &hop.harness);
                 let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
                     place.as_ref().is_some_and(|p| p.session_path.is_some()));
                 let fallback_fresh = if live_source {
@@ -3173,7 +3228,8 @@ impl Runner {
                         }),
                     })
                 } else { None };
-                if !h.confirms_threads() {
+                // A resumed side session's id is known before the turn: it is confirmed at once.
+                if !h.confirms_threads() || side_resumed {
                     if let Some(fresh) = &fallback_fresh {
                         self.confirm_thread(fresh, &h.session_id(&th)).await?;
                     }
@@ -3198,6 +3254,18 @@ impl Runner {
                     fresh: fallback_fresh.as_ref(),
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                if side_resumed && h.restored(&th) {
+                    // Claude Code finds out only as the turn runs that the saved session is gone: it began a new one.
+                    session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
+                    self.note_session(&aid, &bot, session.as_ref());
+                }
+                // However the hop ended, its thread is the task's side session on this model for the next hop. A
+                // failed local save only costs that hop a new session: it never fails work this one already did.
+                if let Some(side) = &side_conv {
+                    if keep_session(&self.state, &bot, side, &kept_runtime, &h.session_id(&th)).await.is_err() {
+                        self.diagnose(&aid, "Fallback side session not kept on this computer; the task's next fallback turn starts a new one.");
+                    }
+                }
                 if let Some(fresh) = fallback_fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
                     if let Some(confirmed) = h.confirmed(&th) {
                         // A transient handoff failure must not erase a completed result or start a new provider.
@@ -6073,6 +6141,17 @@ for line in sys.stdin:
     /// entry of `turns`, on a task's room or (`task` false) the bot's main chat; `serves` is whether the server says
     /// it takes `session` in a result.
     async fn session_turns(task: bool, serves: bool, turns: &[Turn]) -> Ran {
+        session_turns_limited(task, serves, turns, &[]).await
+    }
+
+    /// `session_turns`, with pi refusing each prompt of `limited` (counted from 0 across all turns) for its usage
+    /// limit; `prompts` then holds every prompt pi was sent, in order.
+    async fn session_turns_limited(
+        task: bool,
+        serves: bool,
+        turns: &[Turn],
+        limited: &[usize],
+    ) -> Ran {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(serves)));
         let dir =
@@ -6083,6 +6162,13 @@ for line in sys.stdin:
         HOST_COMMAND.with(|command| {
             *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture))
         });
+        for n in limited {
+            std::fs::copy(
+                fixture.with_file_name("error.jsonl"),
+                dir.join(format!("fixture-{n}")),
+            )
+            .unwrap();
+        }
         let (url, seen, server) = recording_server().await;
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
@@ -6164,7 +6250,7 @@ for line in sys.stdin:
                     .to_string()
             })
             .collect();
-        let prompts = (0..turns.len())
+        let prompts = (0..turns.len() + limited.len())
             .map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).unwrap_or_default())
             .collect();
         let seen = seen.lock().unwrap().clone();
@@ -6375,6 +6461,177 @@ for line in sys.stdin:
             session_of(&ran.completions[4]),
             ("new".to_string(), json!("fallback_side"), Value::Null)
         );
+    }
+
+    /// A task turn whose own login the server holds after a usage limit, run on its fallback on `model`.
+    fn limit_hop(model: &str) -> Value {
+        json!({"primary_held": "2099-01-01T00:00:00Z", "fallback": {"harness": "pi", "model": model}})
+    }
+
+    #[tokio::test]
+    async fn a_tasks_next_limit_fallback_on_the_same_model_resumes_its_side_session() {
+        let ran = session_turns(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m2", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), limit_hop("kimi-k3-other")),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), json!({})),
+            ],
+        )
+        .await;
+        let primary = &ran.sessions[0];
+        let side = &ran.sessions[1];
+        assert!(side != primary, "{:?}", ran.sessions);
+        // AC-1: the first limit hop starts the side session, the second resumes it.
+        assert_eq!(
+            session_of(&ran.completions[1]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert_eq!(ran.completions[1]["fallback"], "pi");
+        assert_eq!(ran.sessions[2], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        // AC-2: told it is resumed, given the checkpoint, not the fresh thread's replay of the room.
+        let again = &ran.prompts[2];
+        assert!(
+            again.contains(crate::continuity::SIDE_RESUMED)
+                && again.contains("Where this task stood after its last turn")
+                && again.contains("hit its usage limit")
+                && !again.contains("fresh fallback thread"),
+            "{again}"
+        );
+        // The room since its last turn (m2): m3 is given, m1 from before it is not.
+        assert!(
+            again.contains("Release build 41 failed its smoke test.")
+                && !again.contains("Watch the Acme release."),
+            "{again}"
+        );
+        assert!(
+            ran.prompts[1].contains("fresh fallback thread"),
+            "{}",
+            ran.prompts[1]
+        );
+        // AC-4: a hop on another model starts its own; the first model's is kept and resumed after it.
+        assert!(
+            ran.sessions[3] != *primary && ran.sessions[3] != *side,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[3]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert_eq!(ran.sessions[4], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            session_of(&ran.completions[4]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        // AC-6: the primary's saved thread never moved, and its next turn resumes it, told a side session ran.
+        assert_eq!(ran.saved, vec![Some(primary.clone()); 6], "{:?}", ran.saved);
+        assert_eq!(ran.sessions[5], *primary, "{:?}", ran.sessions);
+        assert!(
+            ran.prompts[5].contains(crate::continuity::AFTER_SIDE),
+            "{}",
+            ran.prompts[5]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_primary_out_of_quota_mid_turn_resumes_the_tasks_side_session_on_its_fallback() {
+        // Turn 2's login is held: its fallback starts the side session. Turn 3's primary runs, and pi refuses it for
+        // its usage limit (prompt 2): the hop resumes that side session and says why it hopped (AC-3).
+        let fallback = json!({"fallback": {"harness": "pi", "model": "kimi-k3-fallback"}});
+        let ran = session_turns_limited(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), fallback),
+            ],
+            &[2],
+        )
+        .await;
+        let side = &ran.sessions[1];
+        assert_eq!(ran.sessions.len(), 4, "{:?}", ran.sessions);
+        assert_eq!(
+            ran.sessions[2], ran.sessions[0],
+            "the primary ran on its own session: {:?}",
+            ran.sessions
+        );
+        assert_eq!(ran.sessions[3], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            ran.completions[2]["outcome"], "completed",
+            "{}",
+            ran.completions[2]
+        );
+        assert_eq!(ran.completions[2]["fallback"], "pi");
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        let hop = &ran.prompts[3];
+        assert!(
+            hop.contains("kimi-k3 hit its usage limit") || hop.contains("pi hit its usage limit"),
+            "{hop}"
+        );
+        assert!(
+            hop.contains(crate::continuity::SIDE_RESUMED) && !hop.contains("fresh fallback thread"),
+            "{hop}"
+        );
+        // The primary's saved thread is the same after the hop.
+        assert_eq!(
+            ran.saved[2],
+            Some(ran.sessions[0].clone()),
+            "{:?}",
+            ran.saved
+        );
+    }
+
+    #[tokio::test]
+    async fn a_limit_fallback_told_to_compact_first_begins_a_new_side_session() {
+        // A side session that failed for its size marks the task compact_first; the next hop, its login still held,
+        // must not resume that session again (it would fail the same way, and the second failure clears the
+        // conversation, the primary's session with it): it begins a new one from the checkpoint and the replay.
+        let mut compact = limit_hop("kimi-k3-fallback");
+        compact["compact_first"] = json!(true);
+        let ran = session_turns(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), compact),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), json!({})),
+            ],
+        )
+        .await;
+        let (primary, side) = (&ran.sessions[0], &ran.sessions[1]);
+        assert!(
+            ran.sessions[2] != *side && ran.sessions[2] != *primary,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert!(
+            ran.prompts[2].contains("fresh fallback thread"),
+            "{}",
+            ran.prompts[2]
+        );
+        // The new one is the task's side session from then on.
+        assert_eq!(ran.sessions[3], ran.sessions[2], "{:?}", ran.sessions);
+        assert_eq!(ran.saved, vec![Some(primary.clone()); 5], "{:?}", ran.saved);
+        assert_eq!(ran.sessions[4], *primary, "{:?}", ran.sessions);
     }
 
     /// Turns through a fake Claude process that answers every prompt, one per entry of `turns` (each is the config
@@ -6597,6 +6854,95 @@ for line in sys.stdin:
             "{}",
             prompts[2]
         );
+    }
+
+    #[tokio::test]
+    async fn a_limit_fallback_begins_a_new_side_session_when_its_last_one_cannot_serve() {
+        // Two limit hops in a row on Claude, the second after: the side session went from this computer (AC-5), a
+        // Clear (AC-7), the bot's login changed (AC-9), or the turns are a chat's, not a task's (AC-10).
+        for case in ["gone", "cleared", "login", "chat", "kept"] {
+            let task = case != "chat";
+            let mut hop = json!({"runtime": "pi", "harness": "pi", "fallback": {"harness": "claude", "model": "synthetic-fallback"}, "primary_held": "2099-01-01T00:00:00Z"});
+            if task {
+                hop["session"] = json!("task");
+            }
+            let mut second = hop.clone();
+            if case == "cleared" {
+                second["attempt"] = json!({"session_epoch": 1});
+            }
+            let extra = if task {
+                json!({"conversation": {"id": "c-watch", "kind": "task"}, "session_epoch": 0,
+                       "task": {"id": "t-watch", "title": "Watch the Acme release", "checkpoint": "Build 40 green.", "checkpoint_at": "2026-10-22T08:00:00Z"}})
+            } else {
+                json!({})
+            };
+            // The fake Claude says the second hop's saved session is not found (its process 1).
+            let missing: &[usize] = if case == "gone" { &[1] } else { &[] };
+            let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
+                &[hop, second],
+                &[],
+                missing,
+                &[],
+                extra,
+                |_| (),
+                |n, projects| {
+                    if n == 1 && case == "login" {
+                        let path = projects.parent().unwrap().join("runner.json");
+                        let mut config: Value =
+                            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                        let login = projects.parent().unwrap().join("lab-login");
+                        std::fs::create_dir_all(&login).unwrap();
+                        config["profiles"] = json!({"lab": {"dir": login, "share_operator": true}});
+                        config["default_profile"] = json!("lab");
+                        std::fs::write(&path, config.to_string()).unwrap();
+                    }
+                },
+            )
+            .await;
+            std::fs::remove_dir_all(&dir).ok();
+            assert_eq!(
+                session_of(&completions[0]),
+                ("new".to_string(), json!("fallback_side"), Value::Null),
+                "{case}"
+            );
+            assert_eq!(
+                completions[1]["outcome"], "completed",
+                "{case}: {}",
+                completions[1]
+            );
+            assert_eq!(completions[1]["fallback"], "claude", "{case}");
+            let last = prompts.last().unwrap();
+            if case == "kept" {
+                // The control: nothing changed, so the second hop resumes the first one's session.
+                assert_eq!(threads, vec![threads[0].clone(); 2], "{case}");
+                assert_eq!(
+                    session_of(&completions[1]),
+                    ("resumed".to_string(), Value::Null, Value::Null)
+                );
+                assert!(last.contains(crate::continuity::SIDE_RESUMED), "{last}");
+                continue;
+            }
+            assert_eq!(
+                session_of(&completions[1]),
+                ("new".to_string(), json!("fallback_side"), Value::Null),
+                "{case}"
+            );
+            // Begun again as a new side session (this rig's room has no history to replay), never told it was resumed.
+            assert!(
+                last.contains("hit its usage limit")
+                    && (!task || last.contains("Where this task stood"))
+                    && !last.contains(crate::continuity::SIDE_RESUMED),
+                "{case}: {last}"
+            );
+            if case == "gone" {
+                // Asked to resume it, Claude found none and began one in its place.
+                assert_eq!(threads.len(), 3, "{threads:?}");
+                assert_eq!(threads[1], threads[0], "{threads:?}");
+            } else {
+                assert_eq!(threads.len(), 2, "{case}: {threads:?}");
+                assert!(threads[1] != threads[0], "{case}: {threads:?}");
+            }
+        }
     }
 
     #[tokio::test]

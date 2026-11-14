@@ -1842,10 +1842,13 @@ def handle(c):
     if kind in ("prompt", "compact"):
         log("args.log", " ".join(args) + "\n")
     if kind == "prompt":
-        log("prompt-%d" % len([f for f in os.listdir(logs) if f.startswith("prompt-")]), c["message"], "w")
+        n = len([f for f in os.listdir(logs) if f.startswith("prompt-")])
+        log("prompt-%d" % n, c["message"], "w")
         reply(c, {"disposition": "started"})
         aborted = False
-        for line in open(fixture).read().splitlines():
+        # A `fixture-<n>` in the logs folder is played for prompt n instead (a usage limit on one turn).
+        own = os.path.join(logs, "fixture-%d" % n)
+        for line in open(own if os.path.exists(own) else fixture).read().splitlines():
             word = line.split() or [""]
             if word[0] == "EXIT": os._exit(int(word[1]))
             elif word[0] == "WAIT":
