@@ -265,7 +265,7 @@ def attach(
     if kept:
         # A new version of the page a person OK'd, at the commits they OK'd: their OK stands (task_requirements._page).
         # The task's history and the bot both hear so, or the bot reads the new version as asking them again (#435).
-        name, was_version = TR.name_of_actor(conn, kept["by_id"]), kept["page_version"]
+        name, was_version = str(H.actor_name(conn, kept["by_id"])), kept["page_version"]
         E._event(  # pyright: ignore[reportPrivateUsage]
             conn,
             task_id,
@@ -277,7 +277,7 @@ def attach(
             {"requirement": found["id"], "answer": kept["id"], "from": was_version, "to": version},
         )
         made["said"] = (
-            f"{name}'s OK at {TR.short_heads(TR.heads_of(kept.get('heads')))} stands. "
+            f"{name}'s OK at {TR.short_heads(json.loads(kept.get('heads') or '{}'))} stands. "
             f"This version is kept on the task and doesn't ask {name} again."
         )
     if E.advance(conn, task_id) is None:

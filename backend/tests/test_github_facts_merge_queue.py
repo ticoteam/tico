@@ -1107,6 +1107,12 @@ def test_new_commits_since_count_new_titles_and_changed_files(c):
     rebased = [["c" * 40, "Absolute value"], ["d" * 40, "Handle 0"], ["e" * 40, "Say why"]]
     F.save_diff(c, REPO, "new", "d2", commits=rebased, files={"abs.py": "h2", "keep.py": "k", "new.py": "n"})
     assert F.since(c, {ref: "old"}, {ref: "new"}) == {"commits": 2, "titles": ["Say why", "Handle 0"], "files": 2}
+    # A new commit with an old commit's title is new when the old commit is still there: only a rewritten commit's
+    # title cancels one copy.
+    F.save_diff(c, REPO, "old2", "d3", commits=[["f" * 40, "Fix tests"]], files={"abs.py": "h1"})
+    again = [["f" * 40, "Fix tests"], ["0" * 40, "Fix tests"]]
+    F.save_diff(c, REPO, "new2", "d4", commits=again, files={"abs.py": "h3"})
+    assert F.since(c, {ref: "old2"}, {ref: "new2"}) == {"commits": 1, "titles": ["Fix tests"], "files": 1}
 
 
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):

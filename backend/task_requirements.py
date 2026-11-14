@@ -703,16 +703,6 @@ def unreviewed(conn: "sqlite3.Connection", task: Row) -> str | None:
     return f"New commits since the reviews ({_where(conn, task, new)}): {NOT_REVIEWED}" if new else None
 
 
-def heads_of(text: object) -> dict[str, object] | None:
-    """An answer's or page's kept commits ({pr ref: commit}) from its JSON, or None."""
-    return _heads_of(text)
-
-
-def name_of_actor(conn: "sqlite3.Connection", actor: object) -> str:
-    """What a person reads for an actor (hubdb.actor_name)."""
-    return _name(conn, actor)
-
-
 def _is_bot(actor: object) -> bool:
     from . import hubdb_core
 

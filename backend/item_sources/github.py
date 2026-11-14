@@ -26,6 +26,7 @@ import logging
 import re
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -505,7 +506,7 @@ def _kept(conn: "sqlite3.Connection", repo: str, sha: str) -> tuple[list[list[st
 def since(conn: "sqlite3.Connection", before: dict[str, object], after: dict[str, object]) -> Row | None:
     """What came in the PRs between the commits `before` and `after` ({pr ref: commit}): {commits: how many new ones,
     titles: the newest new ones' titles, newest first, up to 3, files: how many files' changes differ}. A commit counts
-    as new when the PR at `before` had none with its id or its title, so a rebase's copies are not counted again. None
+    as new when the PR at `before` did not have it, and no commit the PR lost since (a rebase) had its title. None
     while what one of them changes is not read yet (`_refresh_diffs`), GitHub did not give it all, or the PRs differ."""
     if set(before) != set(after):
         return None
@@ -518,8 +519,19 @@ def since(conn: "sqlite3.Connection", before: dict[str, object], after: dict[str
         old, new = _kept(conn, repo, str(before[ref])), _kept(conn, repo, str(sha))
         if old is None or new is None:
             return None
-        seen = {each[0] for each in old[0]} | {each[1] for each in old[0]}
-        added = [each for each in new[0] if each[0] not in seen and each[1] not in seen]
+        # A commit the PR still has is not new. One it lost (a rebase rewrote it) cancels one new commit with its
+        # title: the rebase's copy. Counted per title, so a second "Fix tests" pushed after the first is still new.
+        kept_shas = {each[0] for each in new[0]}
+        shas = {each[0] for each in old[0]}
+        rewritten = Counter(each[1] for each in old[0] if each[0] not in kept_shas)
+        added: list[list[str]] = []
+        for each in new[0]:
+            if each[0] in shas:
+                continue
+            if rewritten[each[1]]:
+                rewritten[each[1]] -= 1
+                continue
+            added.append(each)
         count += len(added)
         titles.extend(each[1] for each in reversed(added) if each[1])
         files += sum(1 for name in set(old[1]) | set(new[1]) if old[1].get(name) != new[1].get(name))
