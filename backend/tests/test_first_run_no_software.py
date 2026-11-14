@@ -70,9 +70,8 @@ def test_a_software_company_and_one_that_did_not_say_get_the_product_and_enginee
     titles = {row["title"] for row in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up % template'")}
     assert titles == {
         "Set up Product Manager from the product-manager template",
-        "Set up Product Owner from the segment-product-owner template",
+        "Set up Feature Owner from the feature-owner template",
         "Set up Engineering Manager from the engineering-manager template",
-        "Set up Builder from the builder template",
         "Set up Reviewer 1 from the reviewer template",
         "Set up Reviewer 2 from the reviewer template",
         "Set up QA Owner from the qa-owner template",

@@ -1385,10 +1385,11 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
 def preset_engineering(c):
     """The Engineering preset with the QA OK people-only (chris/rc3-signoffs makes the preset so)."""
     from backend import pipeline_settings as PS
-    from backend.tests.helpers.product_engineering_presets import _answers, _team
+    from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
 
     _answers(c)
     _team(c)
+    legacy_pair(c)
     PS.ensure_presets(c)
     pid = c.execute("SELECT id FROM pipelines WHERE name='Engineering'").fetchone()[0]
     c.execute(

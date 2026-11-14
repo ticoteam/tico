@@ -126,7 +126,7 @@ BOTS = [
     ("compliance-manager", "compliance-manager", "operations-manager"),
     ("returns-and-refunds-specialist", "returns-and-refunds-specialist", "operations-manager"),
     # Engineering: calibration cloud, player, phone app
-    ("product-manager", "segment-product-owner", "human:eli"),
+    ("product-manager", "feature-owner", "human:eli"),
     ("reviewer", "reviewer", "product-manager"),
     ("qa-owner", "qa-owner", "product-manager"),
     ("devops", "devops-engineer", "product-manager"),

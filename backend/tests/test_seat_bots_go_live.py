@@ -67,7 +67,7 @@ def _company(environment):
         "JOIN bot_settings s ON s.bot_id=b.id WHERE json_extract(s.extra,'$.goes_live_on_setup')",
     )
     seats = {row["id"]: (row["slug"], row["task"]) for row in found}
-    assert {"builder", "product-owner", "product-manager", "success-manager"} <= {slug for slug, _ in seats.values()}
+    assert {"feature-owner", "product-manager", "success-manager"} <= {slug for slug, _ in seats.values()}
     assert all(task for _, task in seats.values())  # each one is BotOps' "Set up" task
     _report(api, computer)
     return api, computer, seats
@@ -92,7 +92,7 @@ def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository
     waits (202) and the computer's report finishes it: every seat bot ends active, not onboarding, and the Engineering
     task waiting on the Builder starts by itself, with nobody calling go-live again or marking onboarding complete."""
     api, computer, seats = _company(environment)
-    builder, _ = _seat(seats, "builder")
+    builder, _ = _seat(seats, "feature-owner")
     with api.app.state.store.transaction() as c:
         # The Product pipeline files into Engineering while the Builder is still being set up (Acme's E-2).
         task = H.task_create(
@@ -165,7 +165,7 @@ def test_botops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(enviro
     the step, before go-live and while it waits for the repository, and taken once the bot is active."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
-    builder, task = _seat(seats, "builder")
+    builder, task = _seat(seats, "feature-owner")
     version = api.get(f"/api/v2/tasks/{task}", headers=signed_in()).json()["task"]["version"]
 
     def done(note):
@@ -175,9 +175,9 @@ def test_botops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(enviro
     assert early.status_code == 409, early.text
     assert (
         early.json()["error"]["code"] == "bot_not_live"
-        and "tico bot go-live builder" in early.json()["error"]["detail"]
+        and "tico bot go-live feature-owner" in early.json()["error"]["detail"]
     )
-    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    assert act(api, attempt, "POST", "bots/feature-owner/go-live", {}).status_code == 202
     waiting = done("Built.")
     assert waiting.status_code == 409 and "by itself" in waiting.json()["error"]["detail"], waiting.text
     _report(api, computer, present=[builder])
@@ -200,8 +200,8 @@ def test_going_live_ends_the_wait_botops_set_on_the_setup_task_and_wakes_it_to_s
     goes live the wait ends at once, BotOps is woken on that task, and its done closes it."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
-    builder, task = _seat(seats, "builder")
-    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    builder, task = _seat(seats, "feature-owner")
+    assert act(api, attempt, "POST", "bots/feature-owner/go-live", {}).status_code == 202
     snoozed = act(
         api,
         attempt,
@@ -230,8 +230,8 @@ def test_botops_cannot_snooze_a_setup_task_once_its_bot_is_live(environment):
     so the snooze is refused, and BotOps marks the task done."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
-    builder, task = _seat(seats, "builder")
-    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    builder, task = _seat(seats, "feature-owner")
+    assert act(api, attempt, "POST", "bots/feature-owner/go-live", {}).status_code == 202
     _report(api, computer, present=[builder])
     assert _state(api, builder)["state"] == "active"
     refused = act(
@@ -253,8 +253,8 @@ def test_going_live_leaves_a_snooze_a_person_set_on_the_setup_task(environment):
     """A snooze a person sets on the setup task is theirs to end: the bot going live does not end it."""
     api, computer, seats = _company(environment)
     attempt = _claim(api, computer, "botops")
-    builder, task = _seat(seats, "builder")
-    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    builder, task = _seat(seats, "feature-owner")
+    assert act(api, attempt, "POST", "bots/feature-owner/go-live", {}).status_code == 202
     mine = api.post(
         f"/api/v2/tasks/{task}/snooze",
         json={"why": "I will look first", "version": _version(api, task)},
@@ -290,9 +290,9 @@ def test_a_bot_held_by_onboarding_says_so_and_claims_the_moment_it_is_marked_com
     from backend import task_wakes as W
 
     api, computer, seats = _company(environment)
-    builder, _ = _seat(seats, "builder")
+    builder, _ = _seat(seats, "feature-owner")
     _report(api, computer, present=[builder])
-    assert act(api, _claim(api, computer, "botops"), "POST", "bots/builder/go-live", {}).status_code == 200
+    assert act(api, _claim(api, computer, "botops"), "POST", "bots/feature-owner/go-live", {}).status_code == 200
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:owner", "Add negate", "negate(x) returns -x.", "bot:" + builder)
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot=?", (builder,))
@@ -303,7 +303,7 @@ def test_a_bot_held_by_onboarding_says_so_and_claims_the_moment_it_is_marked_com
     late = [c for c in health["checks"] if c["id"] == "queue"]
     assert not any("Not started" in str(check) for check in late), late
 
-    marked = api.post("/api/v2/bots/builder/onboarded", json={}, headers=signed_in())
+    marked = api.post("/api/v2/bots/feature-owner/onboarded", json={}, headers=signed_in())
     assert marked.status_code == 200, marked.text
     assert rows(
         api, "SELECT 1 FROM changes WHERE topic='runner' AND kind='work' AND bot=? AND seq>?", (builder, before)
@@ -331,14 +331,15 @@ SETUP_FILES = {
         "knowledge/pipeline.md",
     ],
     "success-manager": ["knowledge/team.md", "knowledge/pipeline.md"],
-    "segment-product-owner": [
-        "knowledge/segment.md",
+    "feature-owner": [
+        "knowledge/area.md",
+        "knowledge/standards.md",
         "knowledge/spec-format.md",
         "knowledge/launch-checklist.md",
         "knowledge/problems.md",
-        "knowledge/briefs.md",
+        "knowledge/pitches.md",
+        "knowledge/patterns.md",
     ],
-    "builder": ["knowledge/standards.md", "knowledge/patterns.md"],
     "reviewer": ["knowledge/standards.md", "knowledge/patterns.md"],
     "qa-owner": ["knowledge/thresholds.md", "knowledge/suites.md"],
     "release-owner": [
@@ -481,7 +482,7 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
     now gives each seat bot its own setup task, first in its queue, from BotOps: it names the files the template's setup
     writes, says to take the defaults and ask nothing now, and raises no onboarding prompt or person ask. Once only."""
     api, computer, seats = _company(environment)
-    builder, _ = _seat(seats, "builder")
+    builder, _ = _seat(seats, "feature-owner")
     with api.app.state.store.transaction() as c:
         waiting = H.task_create(
             c, "human:owner", "Add negate", "negate(x) returns -x.", "bot:" + builder, allow_planned=True
@@ -511,8 +512,9 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
             assert f"`{name}`" in task["body"], (row["slug"], name)
         assert "ask nothing" in task["body"] and "Not yet told:" in task["body"]
         assert _turn(api, task["id"])["state"] == "bot", row["slug"]
-    po = next(row for row in found if row["slug"] == "product-owner")
-    assert "Product (" in rows(api, "SELECT body FROM tasks WHERE id=?", (po["task"],))[0]["body"]
+    # Product's stages a feature owner holds are its tasks' assignee's: its manager is told it manages it.
+    pm = next(row for row in found if row["slug"] == "product-manager")
+    assert "Product (you manage it" in rows(api, "SELECT body FROM tasks WHERE id=?", (pm["task"],))[0]["body"]
 
     assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")
     assert not rows(api, "SELECT 1 FROM messages WHERE body LIKE '%set you up%'")
@@ -523,8 +525,8 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
     assert not any(row["task"] in str(asked) for row in found if row["task"]), asked
 
     first = _claim(api, computer, builder)
-    own = next(row["task"] for row in found if row["slug"] == "builder")
+    own = next(row["task"] for row in found if row["slug"] == "feature-owner")
     assert first, "the Builder claims work"
     assert (first["task"]["id"], own) != (waiting["id"], own) and first["task"]["id"] == own, (first["task"], own)
-    again = act(api, attempt, "POST", "bots/builder/go-live", {})
+    again = act(api, attempt, "POST", "bots/feature-owner/go-live", {})
     assert again.status_code == 200 and "own_setup_task_id" not in again.json(), again.text

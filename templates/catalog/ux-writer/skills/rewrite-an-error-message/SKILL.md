@@ -10,7 +10,7 @@ rewrite, and cite the rule it follows from `knowledge/ux-writing-standards.md` o
 Steps:
 1. Write what the person did or what the system could not do, in one plain sentence. Leave out the code.
 2. Write the fix in the next sentence: what to change, or the next thing to do. If the fix is not known, say what the
-   person can do now, such as trying again or quoting a reference. Check with the Product Owner before you promise a
+   person can do now, such as trying again or quoting a reference. Check with the Feature Owner before you promise a
    fix the product does not make.
 3. Remove blame ("you entered"), filler ("oops", "unfortunately"), and the words "invalid", "valid" and "please".
 4. Replace any generic phrase. "This field is required" becomes the name of the field and what it needs: "Enter the

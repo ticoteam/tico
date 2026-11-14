@@ -22,6 +22,7 @@ that note, which files new Engineering work with the note in it (stage_effects._
 `sweep` runs once, at the start of the release that carries this (start_jobs), over tasks already in Validate.
 """
 
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -39,7 +40,10 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 STAGE = "product-validate"
-BACK_TO = "product-in-development"
+# Validate on Product, on the Product of the pair it replaced, and on a Product added beside that pair, whose ids taken
+# by the pair's get a number (pipeline_settings.add_preset: `product-validate-2`).
+STAGES = re.compile(r"product-validate(?:-[0-9]+)?")
+BACK_TO = "product-in-development"  # the pair's Product: entering it files new Engineering work
 PAGE = "Checked in production page"
 FIRST = "Make the Checked in production page first."
 OWN_TASK = "Ask it as its own task, or as an OK for that action."
@@ -57,7 +61,12 @@ def _h() -> Any:
 
 def applies(row: Row | None, by: object, person: object) -> bool:
     """A bot's ask of a person on a task in Product's Validate."""
-    return bool(row) and (row or {}).get("stage_id") == STAGE and is_bot(by) and is_human(person)
+    return bool(row) and is_stage((row or {}).get("stage_id")) and is_bot(by) and is_human(person)
+
+
+def is_stage(stage_id: object) -> bool:
+    """Whether a stage is Product's Validate (STAGES)."""
+    return isinstance(stage_id, str) and STAGES.fullmatch(stage_id) is not None
 
 
 def decision(choices: object) -> bool:
@@ -162,12 +171,32 @@ def sends_back(conn: "sqlite3.Connection", task: Row, requirement: Row, value: s
     return value == "no" and gated(conn, task, requirement)
 
 
+def back_to(conn: "sqlite3.Connection", task_id: str) -> str:
+    """Where Not validated sends a task: In development on the pair's Product (entering it files new Engineering work
+    that carries the note), else the first stage of its pipeline that needs a PR open (Product's Build, where its owner
+    builds the fix in the same task)."""
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    row = E.task(conn, task_id) or {}
+    work = [s for s in E.stages(conn, str(row.get("pipeline_id") or "")) if s["kind"] == "work"]
+    if any(s["id"] == BACK_TO for s in work):
+        return BACK_TO
+    for stage in work:
+        if any(
+            r["kind"] == "item" and r.get("source") == "github" and r.get("condition") == "pr_open"
+            for r in R.on_stage(conn, str(stage["id"]))
+        ):
+            return str(stage["id"])
+    return BACK_TO
+
+
 def not_validated(conn: "sqlite3.Connection", task_id: str, by: str, notes: str | None) -> Row:
-    """Back to In development with the person's note: entering it files new Engineering work that carries the note."""
+    """Back with the person's note (`back_to`)."""
     from . import task_engine as E
 
     said = " ".join(str(notes or "").split())
-    return E.move(conn, task_id, BACK_TO, by, f"{NOT_VALIDATED}: {said}" if said else NOT_VALIDATED)
+    return E.move(conn, task_id, back_to(conn, task_id), by, f"{NOT_VALIDATED}: {said}" if said else NOT_VALIDATED)
 
 
 # ----------------------------------------------------------------------------- the one-time sweep at the release

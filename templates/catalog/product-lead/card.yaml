@@ -9,7 +9,7 @@ lead: true
 icon: lightbulb
 suggest: default
 tags: [saas, software, roadmap, prioritisation, discovery, b2b, b2c]
-team_templates: [segment-product-owner, customer-insights-analyst, ux-researcher, product-analyst, product-operations-manager, ux-writer, pricing-analyst]
+team_templates: [feature-owner, customer-insights-analyst, ux-researcher, product-analyst, product-operations-manager, ux-writer, pricing-analyst]
 summary: "Runs the product team's week: roadmap status, the decisions waiting on a human, what each product bot found, and evidence-scored proposals for what to build next. Roadmap changes happen only when asked and a Tool allows them."
 when: "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place."
 pains:

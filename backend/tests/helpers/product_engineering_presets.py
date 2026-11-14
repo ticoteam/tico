@@ -1,8 +1,10 @@
-"""The Product and Engineering presets' setup for tests: the setup answers and the role bots in their seats."""
+"""The software presets' setup for tests: the setup answers, the role bots in their seats, and the Product and
+Engineering pair a company set up before 0.6 has (`legacy_pair`)."""
 
 import json
 
 from backend import bot_settings as BS
+from backend import pipeline_settings as PS
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -10,7 +12,7 @@ ANA = X.ANA
 PPM, EPM = "product-manager", "engineering-manager"
 ROLE_BOTS = {
     PPM: "product-manager",
-    "pm": "segment-product-owner",  # the Product Owner
+    "pm": "feature-owner",  # the Product Owner
     EPM: "engineering-manager",
     "builder": "builder",
     "rev-b": "reviewer",
@@ -48,8 +50,18 @@ def _team(c):
     for slug, template in ROLE_BOTS.items():
         _role_bot(c, slug, template)
     _seat(c, "Product Manager", "product-manager", PPM)
-    _seat(c, "Product Owner", "segment-product-owner", "pm")
+    _seat(c, "Product Owner", "feature-owner", "pm")
     _seat(c, "Engineering Manager", "engineering-manager", EPM)
     _seat(c, "Builder", "builder", "builder")
     _seat(c, "Reviewer 2", "reviewer", "rev-b")
     _seat(c, "Reviewer 1", "reviewer", "rev-a")
+
+
+def legacy_pair(c):
+    """The Product and Engineering pair (pipeline_settings.LEGACY) as a company set up before 0.6 has it: made the way
+    ensure_presets made them then, with the Product factory. Its next start keeps them and their upkeep, and does not
+    make the one-pipeline Product beside them. Call it before ensure_presets."""
+    PS._ensure_factory(c)
+    for key in ("engineering", "product"):
+        if not PS._made_from(c, key):
+            PS.save(c, PS.SYSTEM, PS.preset(c, key))

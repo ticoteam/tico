@@ -917,11 +917,19 @@ def test_hqs_chart_with_pipeline_managers_starts_one_manager_per_team_running_it
         }
         assert not [slug for slug in first["bots"] if "pipeline-manager" in slug or "team-manager" in slug]
         assert "pipeline-manager" not in first["seats"] and first["seats"].count("corporate-manager") == 1
-        expected = {"product": "product-manager", "engineering": "engineering-manager", **more.MANAGERS}
+        expected = {"product": "product-manager", **more.MANAGERS}
         assert {pid: first["pipelines"][pid] for pid in expected} == expected
+        assert "engineering" not in first["pipelines"]  # Product replaced the pair
         lines = {template: above for template, above in first["bots"].values()}
-        assert lines["segment-product-owner"] == "product-manager"
-        assert first["bots"]["builder"][1] == "engineering-manager"
+        assert lines["feature-owner"] == "product-manager"
+        if name == "theirs":
+            # Nov 14: the older chart's Product Owner reads as the Feature Owner under its old slug, and its Builder
+            # seat is still the Builder it asked for; today's chart has none. Compared without them, the rest is one.
+            assert first["bots"].pop("builder")[1] == "engineering-manager"
+            first["bots"] = {
+                slug.replace("-product-owner", "-feature-owner"): row for slug, row in first["bots"].items()
+            }
+            first["count"] = (first["count"][0] - 1, first["count"][1] - 1)
         trees.append(first)
     assert trees[0] == trees[1]
 
@@ -1750,9 +1758,8 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
 # owners, the QA Owner, and the Legal Owner, who runs Legal.
 LIVE_DEFAULT = (
     "product-manager",
-    "product-owner",
+    "feature-owner",
     "engineering-manager",
-    "builder",
     "reviewer-1",
     "reviewer-2",
     "qa-owner",
@@ -1806,7 +1813,7 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     for title, slug in (
         ("QA Owner", "qa-owner"),
         ("Release Owner", "release-owner"),
-        ("Product Owner", "product-owner"),
+        ("Feature Owner", "feature-owner"),
     ):
         assert seats[title]["filled_by"] == ids[slug], title
     # Each team has one Manager, a bot from the start except Corporate's, which is a seat to fill. Every live seat
@@ -1815,8 +1822,9 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
         assert seats[title]["filled_by"] == ids[slug], title
     assert seats["Corporate Manager"]["closed_at"] is None and not seats["Corporate Manager"]["filled_by"]
     assert not [title for title in seats if title.endswith(("Team Manager", "Pipeline Manager"))]
-    assert stored_line(api, "product-owner") == ids["product-manager"]
-    assert {stored_line(api, slug) for slug in ("builder", "reviewer-1", "qa-owner", "release-owner")} == {
+    assert stored_line(api, "feature-owner") == ids["product-manager"]
+    assert "builder" not in ids  # the Feature Owner builds: no default chart has a Builder
+    assert {stored_line(api, slug) for slug in ("reviewer-1", "qa-owner", "release-owner")} == {
         ids["engineering-manager"]
     }
     assert {stored_line(api, slug) for slug in LIVE_DEFAULT if slug.endswith("-manager")} == {"human:owner"}
@@ -1934,7 +1942,6 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
     with store.read() as c:
         assert [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY id")] == [
             "customer",
-            "engineering",
             "finance",  # the default chart's Bookkeeper is live: Finance (private) with it
             "general",
             "growth-experiments",

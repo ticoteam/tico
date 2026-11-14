@@ -46,8 +46,9 @@ HEAVY, REVIEWER_2, LIGHT, ASSISTANT = "heavy", "reviewer-2", "light", "assistant
 LIGHT_TEMPLATES = frozenset(("librarian", "rules-owner", "updates-owner", "automations-owner", "finance-owner"))
 ASSISTANT_TEMPLATE = "assistant"
 
-# role -> {plans connected: (model, effort)} for the bot's own turns. Heavy is every role not named: the Builder,
-# Reviewer 1, every Owner, Product Owner and manager, and the spec and plan writers. Their own turns (routing, stage
+# role -> {plans connected: (model, effort)} for the bot's own turns. Heavy is every role not named: every Feature Owner
+# (it pitches, specs, builds and validates in one task), Reviewer 1, every other Owner and manager, a Builder a company
+# still has, and the spec and plan writers. Their own turns (routing, stage
 # moves, comments) run on the cheap model and their tasks on the strong one (TASK_SETS). The Assistant chats with
 # people rather than working tasks, and Haiku scores half of Opus on its evals (evals/assistant/BASELINE.md), so it keeps
 # the strong model for its own turns and has no task model. Reviewer 2 always runs another model than Reviewer 1 (D12),

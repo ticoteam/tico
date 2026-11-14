@@ -296,6 +296,18 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
     return stage_row.get("owner") or None
 
 
+def _feature_owner(row: Row) -> str | None:
+    """The task's assignee, who holds every stage "the task's assignee" holds (Product's feature owner). A task that
+    leaves such a stage with an owner and no assignee (the manager picked one, or the owner pitched it) keeps that owner
+    as its assignee, so the later stages are theirs and never fall to the manager (Tico Team, Nov 14: Build fell to the
+    Engineering Manager)."""
+    assignee = row.get("assignee_id")
+    stage: Row = row.get("stage") or {}
+    if not assignee and stage.get("kind") == "work" and stage.get("owner") == "assignee" and row.get("owner_id"):
+        return str(row["owner_id"])
+    return str(assignee) if assignee else None
+
+
 def owner_ruled(
     conn: "sqlite3.Connection", row: Row, stage_row: Row, owner: str | None, event: str = "enters"
 ) -> tuple[str | None, str, Row | None]:
@@ -1129,7 +1141,8 @@ def move(
     _close_visit(conn, visit, how, by, why, ts)
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
-    wanted = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    assignee = _feature_owner(row)
+    wanted = owner_for(target, assignee, row.get("owner_id"))
     owner, unable, ruled = owner_ruled(conn, row, target, wanted)
     task_wakes.drop(conn, task_id)  # what was queued was about the visit that just closed
     status = {"work": "open", "done": "done", "closed": "closed"}[target["kind"]]
@@ -1140,8 +1153,10 @@ def move(
         extra["closed_at"] = ts if status == "closed" else None
     if "closed_by_id" in row:
         extra["closed_by_id"] = str(by) if status == "closed" else None
-    if unable:
-        extra["assignee_id"] = None  # the manager picks who has it (reassign), as for a task with no assignee
+    if assignee != row.get("assignee_id"):
+        extra["assignee_id"] = assignee
+    # A rule that refuses the assignee here leaves this stage with nobody: the manager picks who holds it (reassign).
+    # The assignee stays the task's, for the stages after it.
     picked = _pick(conn, row, target, owner, unable)
     if picked and picked[0].bot:
         owner = picked[0].bot
@@ -1556,6 +1571,16 @@ def _may_name(conn: "sqlite3.Connection", by: str, actor: str | None, task_id: s
     _refuse(conn, by, "task_requirement", "Name a person or a bot", task_id)
 
 
+def _sets_assignee(conn: "sqlite3.Connection", row: Row) -> bool:
+    """Whether a reassign in an assignee-held stage names the task's assignee: in its pipeline's first work stage
+    (Product's Pitch: who the feature owner is), or while it has none."""
+    if not row.get("assignee_id"):
+        return True
+    first = next((s for s in stages(conn, str(row.get("pipeline_id") or "")) if s["kind"] == "work"), None)
+    here: Row = row.get("stage") or {}
+    return first is not None and first["id"] == here.get("id")
+
+
 def reassign(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -1569,7 +1594,8 @@ def reassign(
     """Change who owns the task for this visit. Same writer, so it is logged and raises the version. It resets the
     tries, drops the old owner's queued wakes for the task (a bot that still has a turn, named on an OK, keeps its
     own) and wakes the new owner when the turn is theirs. In a stage owned by "the task's assignee", the assignee
-    changes with it."""
+    changes with it in the pipeline's first stage, or while the task has none; later, the new owner holds this visit
+    only and the assignee (Product's feature owner) holds the stages after it."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1585,7 +1611,7 @@ def reassign(
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     pick = stage_pick.config(row["stage"])
-    if row["stage"].get("owner") == "assignee" or (pick and pick.owns_task):
+    if (pick and pick.owns_task) or (row["stage"].get("owner") == "assignee" and _sets_assignee(conn, row)):
         fields["assignee_id"] = owner
     _write(conn, task_id, **fields)
     if pick:
@@ -1977,15 +2003,16 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
 # The release production runs, as end_release_snoozes last saw it.
 RELEASE_SEEN = "release-snoozes-seen"
 # Open tasks a bot snoozed in a stage whose page names the release production runs (`with_release`: Product's
-# Validate), whose filed work has a PR in the repository this server runs (?1, `owner/name`): its production is this
-# server. Such a snooze waits for this server to run a release, so a new one ends it.
+# Validate), whose work (its own PRs, or those of the tasks it filed) has a PR in the repository this server runs (?1,
+# `owner/name`): its production is this server. Such a snooze waits for this server to run a release, so a new one ends
+# it.
 _RELEASE_WAITS = (
     "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id "
     "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status = 'open' AND t.pipeline_id IS NOT NULL "
     "AND EXISTS (SELECT 1 FROM requirements r WHERE r.stage_id = t.stage_id AND r.withdrawn_at IS NULL "
     "AND json_extract(r.settings, '$.with_release')) "
-    "AND EXISTS (SELECT 1 FROM links l JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.source = 'github' "
-    "AND tl.item_type = 'pr' WHERE l.from_task_id = t.id "
+    "AND EXISTS (SELECT 1 FROM task_links tl WHERE tl.source = 'github' AND tl.item_type = 'pr' "
+    "AND (tl.task_id = t.id OR tl.task_id IN (SELECT l.to_task_id FROM links l WHERE l.from_task_id = t.id)) "
     "AND lower(substr(tl.item_key, 1, length(?1) + 1)) = lower(?1) || '#') "
     "ORDER BY z.created_at, z.id"
 )
@@ -1993,7 +2020,7 @@ _RELEASE_WAITS = (
 
 def end_release_snoozes(conn: "sqlite3.Connection", running: str, repo: str) -> list[str]:
     """This server runs another release (`running`, of `repo`, read at start-up): a bot's snooze ends in a stage that
-    checks the release production runs, on a task whose filed work is in `repo`, and whoever has the turn is woken once
+    checks the release production runs, on a task whose work is in `repo`, and whoever has the turn is woken once
     with the release, instead of sleeping to the clock time it guessed. A person's snooze stays. The first start that
     sees no earlier release only records it. Returns the tasks whose snooze ended."""
     found = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (RELEASE_SEEN,)).fetchone()

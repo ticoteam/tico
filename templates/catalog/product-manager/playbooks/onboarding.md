@@ -29,8 +29,8 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
    Why: every proposal is scored against it.
 2. Where does the roadmap live, and what is committed for this quarter?
    Why: it sets the list you report on as on track or at risk.
-3. Which customer segments does the product serve, and who is the Product Owner for each, or who should be?
-   Why: each segment's Product Owner owns its specs. A segment with no owner is a hire proposal.
+3. Which customer segments does the product serve, and who is the Feature Owner for each, or who should be?
+   Why: each segment's Feature Owner owns its specs. A segment with no owner is a hire proposal.
 4. How do you size effort today: person-weeks, t-shirt sizes, or nothing? Who can give an estimate?
    Why: effort is the one number you cannot find yourself.
 5. When should the weekly summary land, and who reads it? Default: Mondays at 09:00, to you.
@@ -41,13 +41,13 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 ## 4. Record
 
 Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/roadmap.md`, `knowledge/team.md` (each segment and its
-Product Owner) and `knowledge/decision-log.md` (headings only, to fill). Write `knowledge/pipeline.md`: the Product pipeline's
+Feature Owner) and `knowledge/decision-log.md` (headings only, to fill). Write `knowledge/pipeline.md`: the Product pipeline's
 stages in order, each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
 
 ## 5. Produce the first summary now
 
 Follow `playbooks/weekly-product-summary.md` from what you read. Publish it with `tico file publish reports/YYYY-MM-DD-product-summary.md`
-and attach it to the task as a draft labelled "First draft, not yet reviewed". Change nothing, decide nothing and start no work with a Product Owner.
+and attach it to the task as a draft labelled "First draft, not yet reviewed". Change nothing, decide nothing and start no work with a Feature Owner.
 
 ## 6. Check the routine
 

@@ -28,7 +28,7 @@ Nothing in the product repositories changes in this run.
    failed, cancelled by a person or rolled back. Count each rollback once, and the release cadence from the deploy record.
 5. **Hand each finding to its seat.** One task per hand-off, with the evidence in its body:
    - failing gating checks to the Infrastructure Owner, and flaky tests to the QA Owner, with the run ids and the check name;
-   - delivery timings that span repositories to the Product Owner;
+   - delivery timings that span repositories to the Feature Owner;
    - a real product bug a failed deploy exposed to issue triage, with the deploy's run id.
    The release record stays in this report: it is the source for the next release notes. A rollback goes to the person who runs
    deploys (step 6). If a seat does not exist on the team, the hand-off goes to the owner as a task.

@@ -9,13 +9,13 @@ from backend.store import H
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import add, codex_file, company
 
-ROLES = {"ops": "builder", "cpo": "reviewer", "inbox": "librarian"}
+ROLES = {"ops": "feature-owner", "cpo": "reviewer", "inbox": "librarian"}
 CLAUDE_TASKS = {"model": "claude-opus-5-5", "reasoning_effort": "medium", "runtime": "claude"}
 CHATGPT_TASKS = {"model": "gpt-6.1-sol", "reasoning_effort": "high", "runtime": "codex"}
 
 
 def bots(api):
-    """ops the Builder, cpo Reviewer 1, inbox the Librarian (light), and a second reviewer: Reviewer 2."""
+    """ops a Feature Owner, cpo Reviewer 1, inbox the Librarian (light), and a second reviewer: Reviewer 2."""
     setup(api)
     company(api, enabled=["anthropic"])
     with api.app.state.store.transaction() as c:
@@ -59,7 +59,7 @@ def plan_moves(api):
 def test_a_claude_plan_puts_the_bots_on_the_claude_set(api):
     second = bots(api)
     add(api)
-    # The Builder and Reviewer 1 run their own turns on Haiku and their tasks on Opus.
+    # A Feature Owner and Reviewer 1 run their own turns on Haiku and their tasks on Opus.
     assert on(api, "ops") == ("claude-haiku-5-5", "xhigh", "claude")
     assert on(api, "cpo") == ("claude-haiku-5-5", "xhigh", "claude")
     assert tasks_on(api, "ops") == tasks_on(api, "cpo") == CLAUDE_TASKS
@@ -225,9 +225,12 @@ def test_the_assistant_keeps_the_strong_model_and_no_task_model():
     assert PM.pick(PM.ASSISTANT, PM.CLAUDE) == ("claude-opus-5-5", "medium")
     assert PM.pick(PM.ASSISTANT, PM.CHATGPT) == ("gpt-6.1-sol", "high")
     assert PM.task_pick(PM.ASSISTANT, PM.CLAUDE) is None
-    # Every Owner, Product Owner and manager is heavy: Haiku for its own turns, Opus for its tasks.
-    for template in ("qa-owner", "release-owner", "segment-product-owner", "engineering-manager", "general-manager"):
+    # Every Owner, Feature Owner and manager is heavy: Haiku for its own turns, Opus for its tasks.
+    for template in ("qa-owner", "release-owner", "feature-owner", "engineering-manager", "general-manager"):
         assert PM.role_of(template, False) == PM.HEAVY
+    # A Feature Owner pitches, specs, builds and validates in one task: Haiku 5.5 xhigh routes, Opus 5.5 medium works.
+    assert PM.pick(PM.role_of("feature-owner", False), PM.CLAUDE) == ("claude-haiku-5-5", "xhigh")
+    assert PM.task_pick(PM.role_of("feature-owner", False), PM.CLAUDE) == ("claude-opus-5-5", "medium")
     assert PM.pick(PM.HEAVY, PM.BOTH) == ("claude-haiku-5-5", "xhigh")
     assert PM.task_pick(PM.HEAVY, PM.BOTH) == ("claude-opus-5-5", "medium")
     assert PM.task_pick(PM.LIGHT, PM.CLAUDE) is None and PM.task_pick(PM.REVIEWER_2, PM.CLAUDE) is None

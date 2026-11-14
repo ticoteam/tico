@@ -290,7 +290,10 @@ CASES = {
         lambda r: _req(r, 1).update(person_id="bot:nobody"),
         "bot:nobody is not a person or a bot",
     ),
-    "an OK naming nobody": (lambda r: _req(r, 1).update(person_id=None), "names the person or bot who OKs it"),
+    "an OK naming nobody that a bot may give": (
+        lambda r: _req(r, 1).update(person_id=None, who_oks="people_with_exceptions"),
+        "names the person or bot who OKs it, or is people only",
+    ),
     "who OKs on owner done": (
         lambda r: _req(r).update(who_oks="people_only"),
         "Who OKs is only for an OK or a page",

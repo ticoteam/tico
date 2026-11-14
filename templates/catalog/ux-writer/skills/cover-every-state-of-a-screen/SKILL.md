@@ -31,4 +31,4 @@ Example (generic, invented): a class schedule screen.
 - Empty week: "No classes this week. Add a class to fill the schedule." Button: "Add class". Next step: add a class.
 - Offline: "You are offline. Check your connection and try again." Next step: retry.
 - Load failed: "We could not load this week's schedule. Try again." Next step: retry.
-- Permission denied: a question for the Product Owner. The spec does not say who sees the schedule.
+- Permission denied: a question for the Feature Owner. The spec does not say who sees the schedule.

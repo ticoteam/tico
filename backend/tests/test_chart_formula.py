@@ -101,7 +101,6 @@ def test_a_seat_row_has_the_company_file_employee_shape_and_a_live_flag():
 SOFTWARE_LIVE = {
     "product-manager",
     "engineering-manager",
-    "builder",
     "reviewer-1",
     "reviewer-2",
     "release-owner",
@@ -110,25 +109,25 @@ SOFTWARE_LIVE = {
 MANAGERS = {"growth-manager", "success-manager"}  # the Corporate Manager is a seat to recruit
 
 
-def test_segment_product_owners_report_to_the_product_manager_and_the_first_starts_live():
+def test_segment_feature_owners_report_to_the_product_manager_and_the_first_starts_live():
     inputs = {"segments": ["Creators", "Fans", "Teachers"], "channels": [], "initiatives": [], "industry": []}
-    owners = [seat for seat in F.build(inputs)["employees"] if seat["id"].endswith("-product-owner")]
+    owners = [seat for seat in F.build(inputs)["employees"] if seat["id"].endswith("-feature-owner")]
     assert [(seat["id"], seat["reports_to"], seat["live"]) for seat in owners] == [
-        ("creators-product-owner", "product-manager", True),
-        ("fans-product-owner", "product-manager", False),
-        ("teachers-product-owner", "product-manager", False),
+        ("creators-feature-owner", "product-manager", True),
+        ("fans-feature-owner", "product-manager", False),
+        ("teachers-feature-owner", "product-manager", False),
     ]
 
 
-def test_a_chart_with_no_segment_has_one_product_owner_and_no_segment_seats():
+def test_a_chart_with_no_segment_has_one_feature_owner_and_no_segment_seats():
     result = F.build({"segments": [], "channels": [], "initiatives": [], "industry": []})
     product = [seat for seat in result["employees"] if seat["team"] == "Product"]
     assert [(seat["id"], seat["title"], seat["template"], seat["live"]) for seat in product] == [
         ("product-manager", "Product Manager", "product-manager", True),
-        ("product-owner", "Product Owner", "segment-product-owner", True),
+        ("feature-owner", "Feature Owner", "feature-owner", True),
     ]
     assert "segment-marketing-owner" not in {seat["template"] for seat in result["employees"]}
-    assert live_ids(result) == SOFTWARE_LIVE | MANAGERS | {"finance-owner", "legal-owner", "product-owner"}
+    assert live_ids(result) == SOFTWARE_LIVE | MANAGERS | {"finance-owner", "legal-owner", "feature-owner"}
 
 
 def test_the_six_pipeline_seats_use_the_templates_the_pipelines_find_them_by():
@@ -139,13 +138,16 @@ def test_the_six_pipeline_seats_use_the_templates_the_pipelines_find_them_by():
         for seat in F.build({"segments": [], "channels": [], "initiatives": [], "industry": []})["employees"]
     }
     for role, chart_id in pipeline_seats.CHART_IDS.items():
+        if role == pipeline_seats.BUILDER:
+            continue  # no default chart has a Builder: the Feature Owner builds
         assert seats[chart_id]["template"] == pipeline_seats.TEMPLATES[role], role
     assert seats["release-owner"]["title"] == "Release Owner"
     assert seats["qa-owner"]["live"] is True
     managers = {seat["id"]: seat["reports_to"] for seat in seats.values() if seat["team"] == "Engineering"}
     assert managers.pop("engineering-manager") is None
     assert set(managers.values()) == {"engineering-manager"}
-    assert seats["product-owner"]["reports_to"] == "product-manager"
+    assert seats["feature-owner"]["reports_to"] == "product-manager"
+    assert "builder" not in seats  # the Feature Owner builds: no default chart has a Builder
     # One Manager per team: no Team Manager seat beside it and no Pipeline Manager under it.
     assert not [
         seat["title"] for seat in seats.values() if seat["title"].endswith(("Team Manager", "Pipeline Manager"))
@@ -200,24 +202,24 @@ def test_titles_and_ids_are_unique_within_their_limits_and_are_slugs():
 
 def test_a_repeated_title_gets_a_number_and_a_repeated_id_a_suffix():
     inputs = {"segments": ["Creators", "creators", "CREATORS"], "channels": [], "initiatives": [], "industry": []}
-    seats = [seat for seat in F.build(inputs)["employees"] if seat["template"] == "segment-product-owner"]
+    seats = [seat for seat in F.build(inputs)["employees"] if seat["template"] == "feature-owner"]
     assert [seat["title"] for seat in seats] == [
-        "Creators Product Owner",
-        "creators Product Owner 2",
-        "CREATORS Product Owner 3",
+        "Creators Feature Owner",
+        "creators Feature Owner 2",
+        "CREATORS Feature Owner 3",
     ]
     assert [seat["id"] for seat in seats] == [
-        "creators-product-owner",
-        "creators-product-owner-2",
-        "creators-product-owner-3",
+        "creators-feature-owner",
+        "creators-feature-owner-2",
+        "creators-feature-owner-3",
     ]
 
 
 def test_titles_that_slug_alike_get_ids_that_differ():
     inputs = {"segments": ["Pro/Max", "Pro Max"], "channels": [], "initiatives": [], "industry": []}
-    seats = [seat for seat in F.build(inputs)["employees"] if seat["template"] == "segment-product-owner"]
-    assert [seat["title"] for seat in seats] == ["Pro/Max Product Owner", "Pro Max Product Owner"]
-    assert [seat["id"] for seat in seats] == ["pro-max-product-owner", "pro-max-product-owner-2"]
+    seats = [seat for seat in F.build(inputs)["employees"] if seat["template"] == "feature-owner"]
+    assert [seat["title"] for seat in seats] == ["Pro/Max Feature Owner", "Pro Max Feature Owner"]
+    assert [seat["id"] for seat in seats] == ["pro-max-feature-owner", "pro-max-feature-owner-2"]
 
 
 def test_a_long_title_is_cut_so_its_number_still_fits():
@@ -274,7 +276,7 @@ def test_a_bet_is_tagged_to_a_segment_ignoring_case_and_spacing():
     }
     result = F.build(inputs)
     assert "Live rooms Owner" not in titles_of(result)
-    assert "“Live rooms” initiative (b1)" in by_title(result, "Creators Product Owner")["reason"]
+    assert "“Live rooms” initiative (b1)" in by_title(result, "Creators Feature Owner")["reason"]
 
 
 def test_a_long_bet_statement_keeps_its_owner_reason_within_the_reason_limit():
@@ -314,11 +316,11 @@ def test_a_long_product_reason_names_its_initiatives_or_counts_them_when_they_wo
         for n in range(1, 6)
     ]
     four = F.build({"segments": [segment_name], "channels": [], "initiatives": initiatives[:4], "industry": []})
-    reason = by_title(four, "%s Product Owner" % segment_name)["reason"]
+    reason = by_title(four, "%s Feature Owner" % segment_name)["reason"]
     assert "“Initiative 1 " in reason and len(reason) <= D.LIMITS["reason"]
     five = F.build({"segments": [segment_name], "channels": [], "initiatives": initiatives, "industry": []})
-    reason = by_title(five, "%s Product Owner" % segment_name)["reason"]
-    assert reason == "Owns the %s segment's product and 5 initiatives (b1, b2, b3, b4, b5)." % segment_name
+    reason = by_title(five, "%s Feature Owner" % segment_name)["reason"]
+    assert reason == "Owns the %s segment's features and 5 initiatives (b1, b2, b3, b4, b5)." % segment_name
     assert len(reason) <= D.LIMITS["reason"]
 
 
@@ -329,8 +331,8 @@ def test_a_product_reason_quotes_its_labels_curly_and_names_a_repeated_label_onc
         {"id": "b3", "statement": "Start fan clubs", "name": "Fan clubs", "segment": "Creators"},
     ]
     result = F.build({"segments": ["Creators"], "channels": [], "initiatives": bets, "industry": []})
-    assert by_title(result, "Creators Product Owner")["reason"] == (
-        "Owns the Creators segment's product and the “Live rooms” and “Fan clubs” initiatives (b1, b2, b3)."
+    assert by_title(result, "Creators Feature Owner")["reason"] == (
+        "Owns the Creators segment's features and the “Live rooms” and “Fan clubs” initiatives (b1, b2, b3)."
     )
 
 
@@ -363,7 +365,7 @@ def test_a_removed_manager_leaves_its_team_uncovered_and_its_reports_move_up_the
     result = F.build(HOTMIC, ["engineering-manager"])
     assert result["uncovered"] == ["Engineering"]
     assert all(seat["reports_to"] != "engineering-manager" for seat in result["employees"])
-    assert by_title(result, "Builder")["reports_to"] is None
+    assert by_title(result, "Reviewer 1")["reports_to"] is None
 
 
 def test_a_removed_marketing_owner_leaves_only_its_segment_uncovered():
@@ -380,7 +382,7 @@ def test_a_removed_factory_owner_leaves_its_area_uncovered(seat, name):
 
 def test_removed_is_a_list_of_seat_ids_and_a_string_is_refused():
     with pytest.raises(TypeError):
-        F.build(HOTMIC, "creators-product-owner")
+        F.build(HOTMIC, "creators-feature-owner")
 
 
 # ---------------------------------------------------------------------------------------------- industry
@@ -444,7 +446,7 @@ def test_a_blank_draft_is_the_default_channels_and_no_segment_or_bet_seats():
     assert inputs["segments"] == [] and inputs["initiatives"] == []
     assert inputs["channels"] == list(F.DEFAULT_CHANNELS)
     result = F.build(inputs)
-    assert len(result["employees"]) == 25
+    assert len(result["employees"]) == 24
     assert result["uncovered"] == []
 
 

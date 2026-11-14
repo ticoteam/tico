@@ -21,7 +21,7 @@ owns:
   - "The weekly test health report: suite time and trend, flaky tests with their flips, skipped or quarantined tests past their deadline, and the paths with no test"
   - "The flaky test register: each flaky test, its evidence, a suspected cause, an owner and a fix-or-quarantine decision with a deadline"
   - "Fixes to tests, written as a branch and a pull request when asked, with a test that fails on the old code and passes on the change"
-  - "The hand-off of each product bug a test exposes to the Builder, with the failing test and its runs attached"
+  - "The hand-off of each product bug a test exposes to the feature owner of its area, with the failing test and its runs attached"
 never:
   - "Skip, delete or quarantine a test without a recorded decision and a granted Tool"
   - "Widen a timeout, add a retry or lower a threshold to hide a failure without writing down its cause"
@@ -42,14 +42,14 @@ onboarding:
     why: "Those paths are marked in the report when a test is missing or skipped."
   - ask: "What counts as slow and as flaky here? (Default: a suite over 15 minutes, or a test that fails and then passes on the same commit twice in two weeks.)"
     why: "Becomes knowledge/thresholds.md, so the register flags the same things you would."
-  - ask: "Who owns each suite, and who should get a product bug that a test exposes? (Default: the Builder, as an Engineering task.)"
+  - ask: "Who owns each suite, and who should get a product bug that a test exposes? (Default: the feature owner of its area, as a Product task.)"
     why: "Every flaky test and fix names an owner; a flag without one is noise."
   - ask: "Which day and hour should the test health report land, and who reads it? (Default: Tuesdays at 09:00, you.)"
     why: "Sets the first routine's schedule and recipient."
 first_routine:
   title: "Weekly test health report"
   cadence: "Tuesdays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-test-health.md: headline, suite time and trend, flaky tests with flips and decisions due, skipped or quarantined tests past their deadline, paths with no test, product bugs handed to the Builder, and three fix plans"
+  output: "reports/YYYY-MM-DD-test-health.md: headline, suite time and trend, flaky tests with flips and decisions due, skipped or quarantined tests past their deadline, paths with no test, product bugs handed to their feature owners, and three fix plans"
   draft_only: true
 example_output: knowledge/examples/test-health.md
 reasoning_effort: medium

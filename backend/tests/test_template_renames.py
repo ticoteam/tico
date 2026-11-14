@@ -144,7 +144,10 @@ def test_hqs_chart_in_the_older_shape_gives_the_tree_a_chart_in_todays_shape_giv
     case = next(case for case in golden["cases"] if case["name"] == name.split()[1])
     theirs = starter.load(employees_file(CHARTS[name]))
     ours = starter.load(employees_file(case["expected"]["employees"]))
-    assert tree(theirs) == tree(ours)
+    # Nov 14: the Product Owner is the Feature Owner (RENAMED), and today's chart has no Builder: the Feature Owner builds.
+    # An older chart's Builder seat is still read as the Builder it asked for.
+    assert [row for row in tree(theirs) if row[0] != "builder"] == tree(ours)
+    assert "feature-owner" in {b["template"] for b in theirs["bots"]}
     live = {b["template"] for b in theirs["bots"] if b.get("live")}
     assert {"product-manager", "engineering-manager", "growth-manager", "success-manager"} <= live
     assert "corporate-manager" not in live

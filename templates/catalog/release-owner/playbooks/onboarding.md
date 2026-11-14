@@ -50,7 +50,7 @@ Record each answer, dated, in the `knowledge/` file it belongs to. Then write, a
 Merge needs you to push fix commits to pull request branches. Check with `gh repo view <repo> --json viewerPermission`. If
 it is not WRITE or higher, ask the owner once, on the task, to run
 `tico bot repos <your slug> --chosen <owner>/<repo>:write` for each repository that ships. Until then, a queue failure
-you would fix yourself goes back to the Builder in QA.
+you would fix yourself goes back to the task's owner in QA.
 
 ## 5. Produce the first results now
 

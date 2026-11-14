@@ -11,7 +11,7 @@ The outcome is a copy table engineers can paste from, with every state covered.
 
 Read the spec's problem, acceptance criteria and edge cases. List every state the screen can be in:
 empty, loading, filled, error (each kind), success, no permission, offline. A state the spec does not
-describe is a question for the Product Owner, not a guess. Follow `skills/cover-every-state-of-a-screen/SKILL.md` for the list.
+describe is a question for the Feature Owner, not a guess. Follow `skills/cover-every-state-of-a-screen/SKILL.md` for the list.
 
 ## 2. Check the words
 
@@ -32,4 +32,4 @@ ways? Cut every word that does not help.
 
 ## 5. Hand over
 
-`tico file publish copy/<spec-slug>.md --task <id>`, commit, and `tico task done <id> -m "..." --version N`: the path, new terms proposed, and questions for the Product Owner.
+`tico file publish copy/<spec-slug>.md --task <id>`, commit, and `tico task done <id> -m "..." --version N`: the path, new terms proposed, and questions for the Feature Owner.

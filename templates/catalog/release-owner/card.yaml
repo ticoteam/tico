@@ -22,7 +22,7 @@ owns:
   - "The gate list: each check that blocks a merge, by name, and the seat its failures are handed to. The Infrastructure Owner keeps the runner and workflow failure figures"
   - "The release record: each release that reached users, the days between releases, each failed or rolled-back deploy, its cause and the time to recover, read from the workflow runs (gh run list) and releases (gh release list)"
   - "Each release, from readiness to rollout: a go or no-go call, the changelog entry and plain-language release notes from merged pull requests, a suggested version, and the rollout of the exact version the owner approves"
-  - "Each Engineering task in Merge: queued again as it is, fixed on its branch (a rebase, a conflict, a broken test, a small fix) and queued again, or sent back to the Builder"
+  - "Each Engineering task in Merge: queued again as it is, fixed on its branch (a rebase, a conflict, a broken test, a small fix) and queued again, or sent back to the task's owner"
 never:
   - "Run a merge command: the merge queue merges"
   - "Rerun, cancel, trigger, deploy or roll back anything on its own. A rollback is a request it drafts for the person who runs deploys; a rollout starts only after the owner approves that exact version"

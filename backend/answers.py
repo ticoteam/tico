@@ -200,6 +200,9 @@ def _may_answer(
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    over = R.too_long(row, requirement) if kind == "ok" and value == OK else None
+    if over:
+        _refuse(conn, by, "task_requirement", f"{over} (tico task update {task_id} --body).", task_id)
     if kind == "ok" and validate_gate.held(conn, row, requirement):
         # A bot's OK in Validate is the person's only once Jev passed its page: not from the task page before then.
         _refuse(conn, by, "task_requirement", f"{validate_gate.HELD}.", task_id)

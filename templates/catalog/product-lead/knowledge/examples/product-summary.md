@@ -12,7 +12,7 @@ studios. Every item is invented. Nothing was changed in any tool. First draft, n
 1. **Class waitlists: build now or research first?** Score 1,415 (reach 1,150 studios × impact 2 ×
    confidence 80% ÷ effort 1.3 weeks, estimate from Marco 2026-09-24). 41 accounts asked
    (`product-operations-manager` ledger), top feedback theme 3 weeks running. Recommendation: build; spec from
-   `segment-product-owner` by 2026-10-02. If undecided: it misses the November release.
+   `feature-owner` by 2026-10-02. If undecided: it misses the November release.
 2. **Studio payroll export: park?** No goal it serves; 3 accounts asked; confidence 50%. Recommendation:
    park, revisit at Q1 planning.
 

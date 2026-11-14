@@ -442,8 +442,8 @@ ASSISTANT_TOOLS = frozenset(
 )
 
 
-# The developer tool list (backend/mcp.py tool_profile): what a code bot (the Builder, both Reviewers, and the QA, Release
-# and Code Hygiene Owners) is told to run in its template, playbooks and skills (templates/catalog/<template>), and in
+# The developer tool list (backend/mcp.py tool_profile): what a code bot (both Reviewers, the QA, Release and Code
+# Hygiene Owners, and a Builder a company still has) is told to run in its template, playbooks and skills (templates/catalog/<template>), and in
 # the wake and stage text the server sends it. The full list is about 92k tokens of schemas, which a harness without
 # tool search carries on every call; this one is a tenth of that. Only the listing shrinks: a call to any other tool the
 # caller's kind allows still runs, and the `tico` CLI still reaches every route. backend/tests/test_developer_tools.py
@@ -493,6 +493,25 @@ DEVELOPER_TOOLS = frozenset(
     }
 )
 
+# The feature tool list: a Feature Owner (templates/catalog/feature-owner) writes code, so it gets the developer list,
+# plus the product tools its template names for the weekly area review and the pitch: goals and KPIs, the market
+# segments and the strategy, calls and weekly updates. backend/tests/test_developer_tools.py checks it the same way.
+FEATURE = "feature"
+FEATURE_TOOLS = DEVELOPER_TOOLS | frozenset(
+    {
+        "tico_goal_list",
+        "tico_kpi_log",
+        "tico_kpi_show",
+        "tico_market_segment_tree",
+        "tico_strategy_show",
+        "tico_meeting_search",
+        "tico_meeting_read",
+        "tico_update_list",
+    }
+)
+# Each profile's list. A profile not here (none, or one a newer server names) gets the whole list.
+PROFILES = {DEVELOPER: DEVELOPER_TOOLS, FEATURE: FEATURE_TOOLS}
+
 
 def offered_to(tool_):
     """The kinds a tool is offered to. The Assistant's turn is offered the tools it is told to run (ASSISTANT_TOOLS) and
@@ -518,7 +537,7 @@ UNLISTED = frozenset({"tico_finance_card_fill"})
 
 def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
-    when the kind is not known), never an UNLISTED one, and with the `developer` profile only DEVELOPER_TOOLS. Sorted by
+    when the kind is not known), never an UNLISTED one, and with a profile only its list (PROFILES). Sorted by
     name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
     together)."""
     return [
@@ -527,5 +546,5 @@ def listing(local=False, kind=None, profile=None):
         if t["name"] not in UNLISTED
         and (local or not t.get("local"))
         and (kind is None or kind in offered_to(t))
-        and (profile != DEVELOPER or t["name"] in DEVELOPER_TOOLS)
+        and (profile not in PROFILES or t["name"] in PROFILES[profile])
     ]

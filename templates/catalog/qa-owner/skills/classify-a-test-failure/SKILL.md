@@ -4,7 +4,7 @@ description: Classify one failing test as a product bug, a flaky test, a test de
 ---
 # Classify a test failure
 
-When to use: when a test is red and someone asks why, when you add a failure to the flaky test register, or before you hand a product bug to the Builder.
+When to use: when a test is red and someone asks why, when you add a failure to the flaky test register, or before you hand a product bug to its feature owner.
 
 Steps:
 1. Read the failed log only: `gh run view <id> -R <repo> --log-failed`. If the log is gone, the class is "unknown" and you stop.

@@ -401,7 +401,7 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
     assert not changes(migrated(company.before), results[0][1]), "The pending migrations changed the company"
 
 
-REMOVED = ("growth-manager", "legal-owner", "segment-product-owner")  # live seat bots' templates in the fixture
+REMOVED = ("growth-manager", "legal-owner", "feature-owner")  # live seat bots' templates in the fixture
 
 
 def test_a_bot_whose_template_the_new_release_no_longer_ships_keeps_working(company, tmp_path):

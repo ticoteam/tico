@@ -32,7 +32,7 @@ NEW = (
     "success-monitoring",
 )
 FACTORIES = [
-    ("product", ["product", "engineering"]),
+    ("product", ["product"]),
     ("growth", ["growth-experiments", "growth-monitoring", "lead", "opportunity"]),
     ("success", ["customer", "success-experiments", "success-monitoring"]),
     ("corporate", ["finance", "legal"]),
@@ -80,7 +80,7 @@ def test_a_new_company_gets_every_default_pipeline_in_its_factory(environment):
     api = _new_company(environment)
     layout, live = _layout(api)
     assert [(f, sorted(p)) for f, p in FACTORIES] == layout
-    assert live == {"general", "product", "engineering", "finance", "legal", *NEW}
+    assert live == {"general", "product", "finance", "legal", *NEW}
     stages = [r["name"] for r in rows(api, "SELECT name FROM stages WHERE pipeline_id='lead' ORDER BY position")]
     assert stages == ["Targets", "Outreach", "Replies", "Qualified", "Done", "Closed"]
     stages = [

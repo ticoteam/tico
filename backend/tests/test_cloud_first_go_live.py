@@ -5,7 +5,9 @@ rest on the shared one. The shared machine is made for BotOps' setup work, and B
 The Builder's own machine does not exist yet (a machine is made for work, and a bot that is not live has none), so
 its go-live found no computer and answered 409 `no_computer`: the first Engineering seat a ticket needs never went
 live. HQ is a fake (helpers/cloud_machines.py); the routes, BotOps' turn token, the runner's enroll, report and claim
-are the real ones."""
+are the real ones.
+
+Nov 14: the default org has no Builder; the Feature Owner builds, and starts on the shared machine like the rest."""
 
 import uuid
 
@@ -62,8 +64,8 @@ def test_botops_takes_the_builder_live_on_a_cloud_company_before_its_own_machine
     manager.tick()  # HQ lists sizes: the bots go on cloud machines, and BotOps' setup work makes the shared one
     assert [call[1] for call in hq.calls if call[0] == "create"] == ["_shared"]
     seats = {r["id"]: r["slug"] for r in rows(api, "SELECT id,slug FROM bots WHERE state='planned'")}
-    builder = next(bot for bot, slug in seats.items() if slug == "builder")
-    assert rows(api, "SELECT placement FROM cloud_machines WHERE bot=?", (builder,)) == [{"placement": "own"}]
+    builder = next(bot for bot, slug in seats.items() if slug == "feature-owner")
+    assert rows(api, "SELECT placement FROM cloud_machines WHERE bot=?", (builder,)) == [{"placement": "shared"}]
     computer = _post(api, "runners/enroll", {"code": hq.calls[-1][3], "label": "boat-vm", "platform": "linux"}, "")
     computer = computer.json()
     manager.tick()
@@ -77,5 +79,5 @@ def test_botops_takes_the_builder_live_on_a_cloud_company_before_its_own_machine
     for bot, slug in seats.items():
         assert _state(api, bot)["state"] == "active", f"{slug} never went live: {_state(api, bot)}"
     work = _claim(api, computer, builder)
-    assert work and work["task"]["title"] == "Set yourself up", f"the Builder takes no work once live: {work}"
+    assert work and work["task"]["title"] == "Set yourself up", f"the Feature Owner takes no work once live: {work}"
     assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")

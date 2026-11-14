@@ -64,12 +64,12 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     }
     assert {"assistant", "botops", *ROLE_BOTS} <= set(bots)
     assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS  # spread over both subscriptions
-    assert bots["builder"]["display_name"] == "Builder"
+    assert bots["feature-owner"]["display_name"] == "Feature Owner"
     setup = {row["bot"]: row for row in rows(api, "SELECT bot,onboarding_state,reports_to FROM bot_config")}
     # Set up by the sample's own answers: not parked, so their work is claimed once a computer runs them.
     ids = bot_ids(api)
     assert all(setup[ids[slug]]["onboarding_state"] == O.ONBOARDED for slug in ROLE_BOTS)
-    assert setup[ids["builder"]]["reports_to"] == ids["head-of-product"]
+    assert setup[ids["feature-owner"]]["reports_to"] == ids["head-of-product"]
     # Their first routines stay off: only the starter tasks run on day one.
     routines = rows(
         api,
@@ -113,7 +113,7 @@ def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_
     again = start(api)
     assert again.status_code == 409, again.text
     assert again.json()["error"]["code"] == "sample_company" and "already set up" in again.json()["error"]["detail"]
-    builder = bot_ids(api)["builder"]
+    builder = bot_ids(api)["feature-owner"]
     assert len(rows(api, "SELECT id FROM tasks WHERE owner_id=?", ("bot:" + builder,))) == 1  # nothing made twice
 
 
@@ -127,7 +127,7 @@ def test_a_company_with_its_own_provider_keeps_it(environment):
         for row in rows(api, "SELECT b.slug,s.runtime AS runtime FROM bots b LEFT JOIN bot_settings s ON s.bot_id=b.id")
     }
     # Claude is off here, so the Claude bots run on the company's own default, as a wizard pick would.
-    assert bots["builder"] == "codex" and bots["head-of-product"] == "codex"
+    assert bots["feature-owner"] == "codex" and bots["head-of-product"] == "codex"
 
 
 def test_the_bots_start_once_a_computer_runs_them(environment):
@@ -210,7 +210,7 @@ def test_flag_on_loads_the_sample_company_once_and_a_restart_does_not_duplicate_
     assert again.get("/api/v2/setup", headers=signed_in()).json()["sample"] == sample
     assert len(rows(again, starter, tuple(titles))) == len(titles)
     assert rows(again, "SELECT id FROM goals ORDER BY id") == goals
-    assert len(rows(again, "SELECT slug FROM bots WHERE slug='builder'")) == 1
+    assert len(rows(again, "SELECT slug FROM bots WHERE slug='feature-owner'")) == 1
     loads = rows(again, "SELECT id FROM events WHERE action='onboarding.sample_loaded'")
     assert len(loads) == 1
 
@@ -219,7 +219,7 @@ def test_flag_off_loads_nothing(environment):
     environment()
     restarted = environment(seed_roster=False)
     assert restarted.get("/api/v2/setup", headers=signed_in()).json()["sample"] is None
-    assert not rows(restarted, "SELECT slug FROM bots WHERE slug='builder'")
+    assert not rows(restarted, "SELECT slug FROM bots WHERE slug='feature-owner'")
     assert not rows(restarted, "SELECT id FROM events WHERE action='onboarding.sample_loaded'")
 
 
@@ -229,7 +229,7 @@ def test_flag_on_leaves_a_team_that_is_set_up_alone(environment):
         c.execute("UPDATE bots SET state='active' WHERE slug='assistant'")
     restarted = environment(seed_roster=False, sample_company=True)
     assert restarted.get("/api/v2/setup", headers=signed_in()).json()["sample"] is None
-    assert not rows(restarted, "SELECT slug FROM bots WHERE slug='builder'")
+    assert not rows(restarted, "SELECT slug FROM bots WHERE slug='feature-owner'")
 
 
 def test_a_team_name_already_set_is_kept_and_the_starter_work_uses_it(environment):

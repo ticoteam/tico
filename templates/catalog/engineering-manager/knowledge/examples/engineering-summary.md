@@ -13,7 +13,7 @@ Six tasks reached Released and three stopped, each decided. One decision waits o
 | Review 2 | 2 | 1 | 0 |
 | QA | 1 | 0 | 1 (the QA OK, since 2026-09-29) |
 
-- Stopped: "Refund flow", Build, Late at 1 day. The Builder was still committing: left with it, snoozed to 2026-10-02,
+- Stopped: "Refund flow", Build, Late at 1 day. Its feature owner was still committing: left with it, snoozed to 2026-10-02,
   the date it named.
 - Stopped: "Calibration export retries", Review 2, the owner couldn't move it three times: the reviewer could not read
   the pull request. Filed the access fix for BotOps.

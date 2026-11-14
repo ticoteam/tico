@@ -26,7 +26,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 2. Is there a voice or style guide, and which words do you already avoid? Seeds the glossary.
 3. What do users confuse most? The glossary starts with the words that cause tickets.
 4. Who posts reviews on pull requests, and who owns legal and pricing text? Reviews and flags go to them.
-5. When should the weekly review land? (Default: Thursdays at 10:00, the Product Owner.) Sets the routine.
+5. When should the weekly review land? (Default: Thursdays at 10:00, the Feature Owner.) Sets the routine.
 
 ## 4. Record
 

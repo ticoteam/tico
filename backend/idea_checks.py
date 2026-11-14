@@ -68,15 +68,29 @@ def filed_snooze(snooze: Row | None) -> bool:
     return bool(snooze) and bool((snooze or {}).get("filed"))
 
 
+def asks_a_person(conn: "sqlite3.Connection", stage_id: object) -> bool:
+    """Whether the stage waits on a person's OK that no bot gives (Product's Pitch): a bot's idea there goes to a
+    person's Needs you, so it is never snoozed out of sight."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM requirements WHERE stage_id=? AND visit_id IS NULL AND withdrawn_at IS NULL AND kind='ok' "
+            "AND who_oks='people_only'",
+            (str(stage_id or ""),),
+        ).fetchone()
+        is not None
+    )
+
+
 def filed(conn: "sqlite3.Connection", row: Row, by: str, ts: str) -> None:
-    """A task entered Ideas new (task_engine.enter): its duplicate check is owed, and when nobody person asked for it,
-    it is snoozed with no end in the same write, marked `filed`."""
+    """A task entered Ideas new (task_engine.enter): its duplicate check is owed, and when no person asked for it, it
+    is snoozed with no end in the same write, marked `filed`; not where the stage asks a person's OK (`asks_a_person`):
+    a pitch waits for that OK in the person's list instead."""
     H = _h()
     visit: Row = row["visit"]
     conn.execute(
         "INSERT OR IGNORE INTO idea_checks (task_id, visit_id, owed_at) VALUES (?,?,?)", (row["id"], visit["id"], ts)
     )
-    if H.is_human(row.get("requester_id")) or row.get("snooze"):
+    if H.is_human(row.get("requester_id")) or row.get("snooze") or asks_a_person(conn, visit.get("stage_id")):
         return
     conn.execute(
         "INSERT INTO snoozes (id, task_id, visit_id, by_id, why, until_at, created_at, filed) VALUES (?,?,?,?,?,?,?,1)",
