@@ -55,6 +55,8 @@ interface OnbState {
   strat: SsStrat;
   /** Getting started's `subscription` item (backend/getting_started.py), once read; null when the server has none. */
   subscription: GsItem | null;
+  /** Getting started's `github` item, once read: required, so its line stays until GitHub is installed. */
+  github?: GsItem | null;
   dialog: HTMLDialogElement | null;
   /** Opened on a team that already exists (Finish setup in the sidebar): the last step, which may be hidden for good. */
   reopened?: boolean;
@@ -320,9 +322,10 @@ function onbTeamMode(state: OnbState, mode: OnbState['mode']) {
 }
 
 // ----------------------------------------------------------------- What your bots run on
-// The models choice while none is made, the computer in one line, and the Claude or ChatGPT subscription Getting started
-// recommends (backend/getting_started.py `subscription`) until one is signed in or skipped; on Tico Cloud Done waits for
-// one. Done lands on Tasks.
+// The models choice while none is made, the computer in one line, Connect GitHub until it is installed (Getting started's
+// `github`, which bots need for their repositories), and the Claude or ChatGPT subscription Getting started recommends
+// (backend/getting_started.py `subscription`) until one is signed in or skipped; on Tico Cloud Done waits for one.
+// Done lands on Tasks.
 function onbRunHTML(state: OnbState): string {
   const hide = state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '';
   return `${onbRunLinesHTML(state)}${onbActions(state, 'Done', false, hide)}`;
@@ -333,7 +336,13 @@ function onbRunLinesHTML(state: OnbState): string {
       <span class="onb-mark" aria-hidden="true"></span><span class="onb-line-text">
       <button type="button" class="linkish" data-onb-subscription>Add a Claude or ChatGPT subscription</button>
       ${sub?.optional === false ? '' : '<small class="muted">Recommended</small>'}</span></div>`;
-  return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>`;
+  return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${onbGithubHTML(state)}${subscription}</div>`;
+}
+// The link goes to Tools › GitHub, which closes setup on the way (route() stops it).
+function onbGithubHTML(state: OnbState): string {
+  const github = state.github;
+  return !github || github.done ? '' : `<div class="onb-line" id="onb-github"><span class="onb-mark" aria-hidden="true"></span>
+      <span class="onb-line-text"><a class="linkish" href="#/tools/github">Connect GitHub</a></span></div>`;
 }
 const ONB_CARET = '<span class="nav-icon onb-caret" aria-hidden="true">expand_more</span>';
 function onbComputerHTML(state: OnbState): string {
@@ -427,8 +436,10 @@ function onbRunStarted(state: OnbState) {
   void v2Get<GsAnswer>('/v2/setup/getting-started', {fresh: true}).then(answer => {
     if (ONB !== state) return;
     const item = answer?.items?.find(row => row.id === 'subscription') || null;
-    if (JSON.stringify(item) === JSON.stringify(state.subscription)) return;
+    const github = answer?.items?.find(row => row.id === 'github') || null;
+    if (JSON.stringify([item, github]) === JSON.stringify([state.subscription, state.github ?? null])) return;
     state.subscription = item;
+    state.github = github;
     if ((onbKey(state) === 'run' || onbKey(state) === 'welcome') && !state.busy) onbRedrawLines(state);
   });
   clearInterval(state.poll ?? undefined);
@@ -439,7 +450,7 @@ function onbRedrawLines(state: OnbState) {
   const lines = state.dialog?.querySelector('#onb-run-lines');
   // An open enrollment keeps what was picked, until a computer it set up comes online.
   if (!lines || (lines.querySelector('#onb-computer[open]') && !(state.record.machine.runners || []).some(runner => runner?.online))) return;
-  lines.innerHTML = onbComputerHTML(state) + (state.subscription && (state.subscription.done || state.subscription.skipped) ? ''
+  lines.innerHTML = onbComputerHTML(state) + onbGithubHTML(state) + (state.subscription && (state.subscription.done || state.subscription.skipped) ? ''
     : lines.querySelector('#onb-subscription')?.outerHTML || '');
   onbWireComputer(state);
 }

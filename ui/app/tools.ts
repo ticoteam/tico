@@ -84,6 +84,7 @@ async function pageTools() {
     ${pageHead({title: 'Tools', hook: 'tt-head', tools: '<span class="tt-chat"></span>',
       more: `<a href="${TOOLS_KEYS}" data-tl-keys>Keys</a><a href="#/tools/settings" data-tl-settings>Settings</a>`,
       primary: toolsAddMenu()})}
+    <div data-tl-github></div>
     <div class="tt-bar"><div class="theme-seg ph-seg tt-filters" role="radiogroup" aria-label="Show"></div>
       <input type="search" class="tt-q" placeholder="Search" aria-label="Search tools" autocomplete="off" spellcheck="false" value="${esc(TL.q)}"></div>
     <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div></div>`;
@@ -100,6 +101,8 @@ async function pageTools() {
     toolsDraw();
   };
   toolsAddBind(root);
+  // While GitHub is not connected, one card above the list says so (ui/app/github-nudge.ts).
+  void githubNudgeTools(root.querySelector<HTMLElement>('[data-tl-github]'));
   // The Tools owner's chat (page-chat.ts), which takes keys without a model seeing them (tools-key-drop.ts).
   void pageChatMount({page: 'tools', label: 'Tools', button: root.querySelector<HTMLElement>('.tt-chat')!,
     stays: r => r === TOOLS_ROUTE || r.startsWith(TOOLS_ROUTE + '?'), empty: toolsChatEmpty, keyDrop: toolsInProblem});
