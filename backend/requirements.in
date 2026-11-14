@@ -16,7 +16,7 @@ slack-sdk>=3.44,<4
 psycopg[binary]>=3.2,<4
 PyMySQL>=1.1,<2
 pymongo>=4.10,<5
-dnspython>=2.7,<3           # SRV lookups for mongodb+srv:// (Atlas); pymongo depends on it, pinned here so it is never dropped
+dnspython>=2.9.2,<3           # SRV lookups for mongodb+srv:// (Atlas); pymongo depends on it, pinned here so it is never dropped
 pypdf>=6.21.4,<7
 reportlab>=4.4,<5
 
