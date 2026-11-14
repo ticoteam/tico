@@ -48,8 +48,12 @@ def _ui(tmp_path, shell_pad=0, part_pad=0):
     (ui / "app").mkdir(parents=True, exist_ok=True)
     (ui / "styles").mkdir(exist_ok=True)
     (ui / "vendor").mkdir(exist_ok=True)
-    (ui / "app/a.js").write_text("'use strict';\nfunction aGo() { pageB(); }\n" + (_noise(shell_pad, "a") if shell_pad else ""))
-    (ui / "app/b.js").write_text("'use strict';\nfunction pageB() { return 1; }\n" + (_noise(part_pad, "b") if part_pad else ""))
+    (ui / "app/a.js").write_text(
+        "'use strict';\nfunction aGo() { pageB(); }\n" + (_noise(shell_pad, "a") if shell_pad else "")
+    )
+    (ui / "app/b.js").write_text(
+        "'use strict';\nfunction pageB() { return 1; }\n" + (_noise(part_pad, "b") if part_pad else "")
+    )
     (ui / "vendor/marked.min.js").write_text("'use strict';\n" + _noise(4000, "m"))
     (ui / "styles/a.css").write_text("a{color:red}\n")
     (ui / "index.html").write_text(
